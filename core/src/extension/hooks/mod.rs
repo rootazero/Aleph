@@ -735,6 +735,7 @@ pub fn substitute_variables(template: &str, context: &HookContext, plugin_root: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extension::HookPriority;
 
     #[test]
     fn test_substitute_variables() {

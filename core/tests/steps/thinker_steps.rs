@@ -841,7 +841,8 @@ async fn when_parse_decision(w: &mut AlephWorld) {
 async fn then_first_step_type(w: &mut AlephWorld, expected_type: String) {
     let ctx = w.thinker.as_ref().expect("No thinker context");
     let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
-    let first_step = thinking.steps.first().expect("No steps");
+    let steps = thinking.steps.as_ref().expect("No steps");
+    let first_step = steps.first().expect("No steps");
     let actual_type = format!("{:?}", first_step.step_type);
     assert!(
         actual_type.contains(&expected_type),
@@ -855,7 +856,8 @@ async fn then_first_step_type(w: &mut AlephWorld, expected_type: String) {
 async fn then_step_n_type(w: &mut AlephWorld, step_num: i32, expected_type: String) {
     let ctx = w.thinker.as_ref().expect("No thinker context");
     let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
-    let step = thinking.steps.get((step_num - 1) as usize)
+    let steps = thinking.steps.as_ref().expect("No steps");
+    let step = steps.get((step_num - 1) as usize)
         .expect(&format!("No step {}", step_num));
     let actual_type = format!("{:?}", step.step_type);
     assert!(
@@ -885,10 +887,10 @@ async fn then_alternatives_contain(w: &mut AlephWorld, expected: String) {
     let ctx = w.thinker.as_ref().expect("No thinker context");
     let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
     assert!(
-        thinking.alternatives.iter().any(|a| a.contains(&expected)),
+        thinking.alternatives_considered.iter().any(|a| a.contains(&expected)),
         "Expected alternatives to contain '{}', got {:?}",
         expected,
-        thinking.alternatives
+        thinking.alternatives_considered
     );
 }
 
@@ -908,12 +910,13 @@ async fn then_uncertainties_contain(w: &mut AlephWorld, expected: String) {
 async fn then_structured_thinking_step_count(w: &mut AlephWorld, count: i32) {
     let ctx = w.thinker.as_ref().expect("No thinker context");
     let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
+    let steps = thinking.steps.as_ref().expect("No steps");
     assert_eq!(
-        thinking.steps.len(),
+        steps.len(),
         count as usize,
         "Expected {} steps, got {}",
         count,
-        thinking.steps.len()
+        steps.len()
     );
 }
 
@@ -939,10 +942,11 @@ async fn then_decision_no_structured(w: &mut AlephWorld) {
 async fn then_structured_thinking_at_least_steps(w: &mut AlephWorld, count: i32) {
     let ctx = w.thinker.as_ref().expect("No thinker context");
     let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
+    let steps = thinking.steps.as_ref().expect("No steps");
     assert!(
-        thinking.steps.len() >= count as usize,
+        steps.len() >= count as usize,
         "Expected at least {} steps, got {}",
         count,
-        thinking.steps.len()
+        steps.len()
     );
 }
