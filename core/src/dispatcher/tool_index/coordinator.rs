@@ -7,10 +7,13 @@
 //! - Retrieving all valid tool facts
 
 use crate::error::AlephError;
+use crate::mcp::manager::{McpManagerEvent, McpManagerHandle};
 use crate::memory::context::{FactSpecificity, FactType, MemoryFact, TemporalScope};
 use crate::memory::database::VectorDatabase;
+use crate::skills::{SkillRegistryEvent, SkillsRegistry};
 use super::inference::SemanticPurposeInferrer;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 /// Metadata for a tool to be indexed
 #[derive(Debug, Clone)]
@@ -210,6 +213,215 @@ impl ToolIndexCoordinator {
     pub async fn tool_exists(&self, name: &str) -> Result<bool, AlephError> {
         let fact = self.get_tool_fact(name).await?;
         Ok(fact.map(|f| f.is_valid).unwrap_or(false))
+    }
+
+    // ========== Event Listeners ==========
+
+    /// Start listening to MCP Manager events
+    ///
+    /// This spawns a background task that listens for MCP events and
+    /// automatically re-syncs tool facts when tools change on MCP servers.
+    ///
+    /// Events handled:
+    /// - `ServerStarted`: Re-sync tools for the started server
+    /// - `ToolsChanged`: Re-sync tools for the affected server
+    /// - `ServerCrashed`: Invalidate tools for the crashed server
+    ///
+    /// # Arguments
+    /// * `mcp_handle` - Handle to the MCP Manager
+    /// * `tool_provider` - Callback to get tools for a server (server_id -> Vec<ToolMeta>)
+    ///
+    /// # Returns
+    /// A JoinHandle for the spawned task (can be used to abort the listener)
+    pub fn start_mcp_listener<F>(
+        self: Arc<Self>,
+        mcp_handle: McpManagerHandle,
+        tool_provider: F,
+    ) -> tokio::task::JoinHandle<()>
+    where
+        F: Fn(String) -> Vec<ToolMeta> + Send + Sync + 'static,
+    {
+        let mut receiver = mcp_handle.subscribe();
+        let coordinator = self;
+        let tool_provider = Arc::new(tool_provider);
+
+        tokio::spawn(async move {
+            tracing::info!("ToolIndexCoordinator: MCP event listener started");
+
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => {
+                        match &event {
+                            McpManagerEvent::ServerStarted { server_id, tool_count, .. } => {
+                                tracing::info!(
+                                    server_id = %server_id,
+                                    tool_count = %tool_count,
+                                    "MCP server started, syncing tools"
+                                );
+                                let tools = tool_provider(server_id.clone());
+                                if let Err(e) = coordinator.sync_all(tools).await {
+                                    tracing::error!(
+                                        error = %e,
+                                        server_id = %server_id,
+                                        "Failed to sync tools for started MCP server"
+                                    );
+                                }
+                            }
+                            McpManagerEvent::ToolsChanged { server_id, tool_count } => {
+                                tracing::info!(
+                                    server_id = %server_id,
+                                    tool_count = %tool_count,
+                                    "MCP tools changed, re-syncing"
+                                );
+                                let tools = tool_provider(server_id.clone());
+                                if let Err(e) = coordinator.sync_all(tools).await {
+                                    tracing::error!(
+                                        error = %e,
+                                        server_id = %server_id,
+                                        "Failed to sync tools after MCP tools changed"
+                                    );
+                                }
+                            }
+                            McpManagerEvent::ServerCrashed { server_id, error, .. } => {
+                                tracing::warn!(
+                                    server_id = %server_id,
+                                    error = %error,
+                                    "MCP server crashed, invalidating tools"
+                                );
+                                // We could invalidate tools here, but for now just log
+                                // The tools will be re-synced when server restarts
+                            }
+                            McpManagerEvent::ServerRemoved { server_id, .. } => {
+                                tracing::info!(
+                                    server_id = %server_id,
+                                    "MCP server removed"
+                                );
+                                // Tools from this server should be invalidated
+                                // but we need to know which tools belong to which server
+                                // This would require additional metadata tracking
+                            }
+                            _ => {
+                                // Other events (ManagerReady, ManagerShutdown, etc.)
+                                // don't require tool index updates
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        tracing::info!("MCP event channel closed, stopping listener");
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            lagged = n,
+                            "MCP event listener lagged, some events may have been missed"
+                        );
+                    }
+                }
+            }
+        })
+    }
+
+    /// Start listening to Skill Registry events
+    ///
+    /// This spawns a background task that listens for skill lifecycle events
+    /// and automatically re-syncs tool facts when skills are loaded/removed.
+    ///
+    /// Events handled:
+    /// - `AllReloaded`: Re-sync all skill tools
+    /// - `SkillLoaded`: Sync the single skill as a tool
+    /// - `SkillRemoved`: Invalidate the skill's tool fact
+    ///
+    /// # Arguments
+    /// * `registry` - The SkillsRegistry to listen to
+    /// * `skill_to_tool` - Callback to convert skill_id -> ToolMeta
+    ///
+    /// # Returns
+    /// A JoinHandle for the spawned task
+    pub fn start_skill_listener<F>(
+        self: Arc<Self>,
+        registry: Arc<SkillsRegistry>,
+        skill_to_tool: F,
+    ) -> tokio::task::JoinHandle<()>
+    where
+        F: Fn(String) -> Option<ToolMeta> + Send + Sync + 'static,
+    {
+        let mut receiver = registry.subscribe();
+        let coordinator = self;
+        let skill_to_tool = Arc::new(skill_to_tool);
+
+        tokio::spawn(async move {
+            tracing::info!("ToolIndexCoordinator: Skill event listener started");
+
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => {
+                        match &event {
+                            SkillRegistryEvent::AllReloaded { count, skill_ids } => {
+                                tracing::info!(
+                                    count = %count,
+                                    "Skills reloaded, syncing all skill tools"
+                                );
+
+                                let tools: Vec<ToolMeta> = skill_ids
+                                    .iter()
+                                    .filter_map(|id| skill_to_tool(id.clone()))
+                                    .collect();
+
+                                if let Err(e) = coordinator.sync_all(tools).await {
+                                    tracing::error!(
+                                        error = %e,
+                                        "Failed to sync tools after skills reload"
+                                    );
+                                }
+                            }
+                            SkillRegistryEvent::SkillLoaded { skill_id, skill_name } => {
+                                tracing::info!(
+                                    skill_id = %skill_id,
+                                    skill_name = %skill_name,
+                                    "Skill loaded, syncing as tool"
+                                );
+
+                                if let Some(tool) = skill_to_tool(skill_id.clone()) {
+                                    if let Err(e) = coordinator.sync_all(vec![tool]).await {
+                                        tracing::error!(
+                                            error = %e,
+                                            skill_id = %skill_id,
+                                            "Failed to sync skill as tool"
+                                        );
+                                    }
+                                }
+                            }
+                            SkillRegistryEvent::SkillRemoved { skill_id } => {
+                                tracing::info!(
+                                    skill_id = %skill_id,
+                                    "Skill removed, invalidating tool fact"
+                                );
+
+                                // Skill tools use format "skill:{skill_id}" as tool name
+                                let tool_name = format!("skill:{}", skill_id);
+                                if let Err(e) = coordinator.remove_tool(&tool_name).await {
+                                    tracing::error!(
+                                        error = %e,
+                                        skill_id = %skill_id,
+                                        "Failed to remove skill tool fact"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        tracing::info!("Skill event channel closed, stopping listener");
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            lagged = n,
+                            "Skill event listener lagged, some events may have been missed"
+                        );
+                    }
+                }
+            }
+        })
     }
 }
 

@@ -8,10 +8,10 @@
 #[cfg(test)]
 mod tests {
     use crate::dispatcher::tool_index::{
-        HydrationLevel, SemanticPurposeInferrer, ToolIndexCoordinator, ToolMeta,
+        HydrationLevel, HydratedTool, SemanticPurposeInferrer, ToolIndexCoordinator, ToolMeta,
         ToolRetrieval, ToolRetrievalConfig,
     };
-    use crate::memory::context::FactType;
+    use crate::memory::context::{FactType, MemoryFact};
     use crate::memory::database::VectorDatabase;
     use std::sync::Arc;
 
@@ -669,5 +669,285 @@ mod tests {
                 "File tools should rank high for file-like query"
             );
         }
+    }
+
+    // ============================================================
+    // HydrationPipeline Tests
+    // ============================================================
+
+    #[test]
+    fn test_hydration_pipeline_config_default() {
+        use crate::dispatcher::tool_index::HydrationPipelineConfig;
+
+        let config = HydrationPipelineConfig::default();
+        assert_eq!(config.max_full_schema, 5);
+        assert_eq!(config.max_summary, 3);
+        assert!(config.core_tools.contains(&"file_ops".to_string()));
+        assert!(config.core_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn test_hydration_pipeline_config_builder() {
+        use crate::dispatcher::tool_index::HydrationPipelineConfig;
+
+        let config = HydrationPipelineConfig::default()
+            .with_max_full_schema(10)
+            .with_max_summary(5)
+            .with_core_tools(vec!["custom_tool".to_string()]);
+
+        assert_eq!(config.max_full_schema, 10);
+        assert_eq!(config.max_summary, 5);
+        assert_eq!(config.core_tools, vec!["custom_tool"]);
+    }
+
+    #[test]
+    fn test_hydration_result_empty() {
+        use crate::dispatcher::tool_index::HydrationResult;
+
+        let result = HydrationResult::empty();
+        assert!(result.is_empty());
+        assert_eq!(result.total_count(), 0);
+        assert!(result.all_tool_names().is_empty());
+    }
+
+    #[test]
+    fn test_hydration_result_counts() {
+        use crate::dispatcher::tool_index::HydrationResult;
+
+        let config = ToolRetrievalConfig::default();
+
+        // Create mock facts
+        let mut fact1 = MemoryFact::with_id(
+            "tool:read_file".to_string(),
+            "Read file".to_string(),
+            FactType::Tool,
+        );
+        fact1.similarity_score = Some(0.85);
+
+        let mut fact2 = MemoryFact::with_id(
+            "tool:write_file".to_string(),
+            "Write file".to_string(),
+            FactType::Tool,
+        );
+        fact2.similarity_score = Some(0.65);
+
+        let result = HydrationResult {
+            full_schema_tools: vec![HydratedTool::from_fact(fact1, &config)],
+            summary_tools: vec![HydratedTool::from_fact(fact2, &config)],
+            indexed_tool_names: vec!["delete_file".to_string()],
+        };
+
+        assert!(!result.is_empty());
+        assert_eq!(result.total_count(), 3);
+
+        let names = result.all_tool_names();
+        assert!(names.contains(&"read_file"));
+        assert!(names.contains(&"write_file"));
+        assert!(names.contains(&"delete_file"));
+    }
+
+    #[test]
+    fn test_hydrated_tool_schema_caching() {
+        let config = ToolRetrievalConfig::default();
+
+        let mut fact = MemoryFact::with_id(
+            "tool:test_tool".to_string(),
+            "Test tool description".to_string(),
+            FactType::Tool,
+        );
+        fact.similarity_score = Some(0.85);
+
+        let tool = HydratedTool::from_fact(fact, &config);
+
+        // Initially no schema
+        assert!(!tool.has_schema());
+        assert!(tool.schema_json().is_none());
+
+        // Add schema
+        let tool_with_schema = tool.with_schema(r#"{"type": "object"}"#.to_string());
+        assert!(tool_with_schema.has_schema());
+        assert_eq!(tool_with_schema.schema_json(), Some(r#"{"type": "object"}"#));
+    }
+
+    // ============================================================
+    // PromptBuilder Hydration Tests
+    // ============================================================
+
+    #[test]
+    fn test_prompt_builder_hydrated_tools_empty() {
+        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+        use crate::dispatcher::tool_index::HydrationResult;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+        let result = HydrationResult::empty();
+
+        builder.append_hydrated_tools(&mut prompt, &result);
+
+        assert!(prompt.contains("Available Tools"));
+        assert!(prompt.contains("get_tool_schema"));
+    }
+
+    #[test]
+    fn test_prompt_builder_hydrated_tools_full_schema() {
+        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+        use crate::dispatcher::tool_index::HydrationResult;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        let config = ToolRetrievalConfig::default();
+        let mut fact = MemoryFact::with_id(
+            "tool:read_file".to_string(),
+            "Read file from disk".to_string(),
+            FactType::Tool,
+        );
+        fact.similarity_score = Some(0.85);
+
+        let mut tool = HydratedTool::from_fact(fact, &config);
+        tool.cached_schema = Some(r#"{"path": "string"}"#.to_string());
+
+        let result = HydrationResult {
+            full_schema_tools: vec![tool],
+            summary_tools: vec![],
+            indexed_tool_names: vec![],
+        };
+
+        builder.append_hydrated_tools(&mut prompt, &result);
+
+        assert!(prompt.contains("#### read_file"));
+        assert!(prompt.contains("Read file from disk"));
+        assert!(prompt.contains("Parameters:"));
+        assert!(prompt.contains(r#"{"path": "string"}"#));
+    }
+
+    #[test]
+    fn test_prompt_builder_hydrated_tools_summary() {
+        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+        use crate::dispatcher::tool_index::HydrationResult;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        let config = ToolRetrievalConfig::default();
+        let mut fact = MemoryFact::with_id(
+            "tool:search_code".to_string(),
+            "Search for code patterns".to_string(),
+            FactType::Tool,
+        );
+        fact.similarity_score = Some(0.65); // Summary level
+
+        let tool = HydratedTool::from_fact(fact, &config);
+
+        let result = HydrationResult {
+            full_schema_tools: vec![],
+            summary_tools: vec![tool],
+            indexed_tool_names: vec![],
+        };
+
+        builder.append_hydrated_tools(&mut prompt, &result);
+
+        assert!(prompt.contains("summary"));
+        assert!(prompt.contains("**search_code**"));
+        assert!(prompt.contains("Search for code patterns"));
+    }
+
+    #[test]
+    fn test_prompt_builder_hydrated_tools_indexed() {
+        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+        use crate::dispatcher::tool_index::HydrationResult;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        let result = HydrationResult {
+            full_schema_tools: vec![],
+            summary_tools: vec![],
+            indexed_tool_names: vec!["tool_a".to_string(), "tool_b".to_string()],
+        };
+
+        builder.append_hydrated_tools(&mut prompt, &result);
+
+        assert!(prompt.contains("Additional Tools"));
+        assert!(prompt.contains("tool_a"));
+        assert!(prompt.contains("tool_b"));
+    }
+
+    // ============================================================
+    // Skill Registry Event Tests
+    // ============================================================
+
+    #[test]
+    fn test_skill_registry_event_creation() {
+        use crate::skills::SkillRegistryEvent;
+
+        let loaded = SkillRegistryEvent::loaded("test-skill", "Test Skill");
+        assert_eq!(loaded.skill_id(), Some("test-skill"));
+        assert!(!loaded.is_bulk_reload());
+
+        let removed = SkillRegistryEvent::removed("old-skill");
+        assert_eq!(removed.skill_id(), Some("old-skill"));
+        assert!(!removed.is_bulk_reload());
+
+        let reloaded = SkillRegistryEvent::all_reloaded(3, vec!["a".into(), "b".into(), "c".into()]);
+        assert!(reloaded.skill_id().is_none());
+        assert!(reloaded.is_bulk_reload());
+    }
+
+    #[test]
+    fn test_skill_registry_event_serialization() {
+        use crate::skills::SkillRegistryEvent;
+
+        let event = SkillRegistryEvent::loaded("test", "Test Skill");
+        let json = serde_json::to_string(&event).expect("serialize should succeed");
+
+        assert!(json.contains("skill_loaded"));
+        assert!(json.contains("test"));
+
+        let deserialized: SkillRegistryEvent =
+            serde_json::from_str(&json).expect("deserialize should succeed");
+        assert_eq!(deserialized.skill_id(), Some("test"));
+    }
+
+    #[tokio::test]
+    async fn test_skill_registry_subscribe() {
+        use crate::skills::SkillsRegistry;
+        use std::path::PathBuf;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let skills_dir = temp_dir.path().to_path_buf();
+
+        let registry = SkillsRegistry::new(skills_dir);
+
+        // Should be able to subscribe
+        let mut receiver = registry.subscribe();
+
+        // Create a skill for testing
+        let skill_dir = temp_dir.path().join("test-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: test-skill\ndescription: Test skill\n---\nInstructions",
+        )
+        .unwrap();
+
+        // Load skills (should emit AllReloaded event)
+        registry.load_all().unwrap();
+
+        // Try to receive the event (non-blocking)
+        tokio::time::timeout(std::time::Duration::from_millis(100), async {
+            if let Ok(event) = receiver.recv().await {
+                match event {
+                    crate::skills::SkillRegistryEvent::AllReloaded { count, skill_ids } => {
+                        assert_eq!(count, 1);
+                        assert!(skill_ids.contains(&"test-skill".to_string()));
+                    }
+                    _ => panic!("Expected AllReloaded event"),
+                }
+            }
+        })
+        .await
+        .expect("Should receive event within timeout");
     }
 }

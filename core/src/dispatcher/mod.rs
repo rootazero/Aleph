@@ -150,6 +150,13 @@ pub use profile_filter::{ProfileFilter, ToolPermission};
 pub use smart_filter::SmartToolFilter;
 pub use tool_filter::{FilterResult, ToolFilter, ToolFilterConfig};
 
+// === Re-exports: Tool Index (Semantic Retrieval) ===
+pub use tool_index::{
+    HydrationLevel, HydrationPipeline, HydrationPipelineConfig, HydrationResult,
+    HydratedTool, InferredPurpose, SemanticPurposeInferrer, ToolIndexCoordinator,
+    ToolMeta, ToolRetrieval, ToolRetrievalConfig,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -179,6 +179,21 @@ impl<P: ProviderRegistry> Thinker<P> {
         (system, messages)
     }
 
+    /// Build prompt using HydrationResult from semantic tool retrieval
+    ///
+    /// This is the preferred method when HydrationPipeline is available,
+    /// as it provides progressive disclosure of tool schemas based on semantic relevance.
+    fn build_prompt_with_hydration(
+        &self,
+        state: &LoopState,
+        hydration: &crate::dispatcher::tool_index::HydrationResult,
+        observation: &Observation,
+    ) -> (String, Vec<Message>) {
+        let system = self.prompt_builder.build_system_prompt_with_hydration(hydration);
+        let messages = self.prompt_builder.build_messages(&state.original_request, observation);
+        (system, messages)
+    }
+
     /// Call LLM with a specific thinking level
     async fn call_llm_with_level(
         &self,
@@ -230,6 +245,65 @@ impl<P: ProviderRegistry> Thinker<P> {
             // Normal mode: lenient parsing with fallback
             self.decision_parser.parse_with_fallback(response)
         }
+    }
+
+    /// Internal implementation for hydration-aware thinking
+    ///
+    /// This method bypasses keyword-based tool filtering in favor of
+    /// semantic similarity-based retrieval from HydrationPipeline.
+    async fn think_with_hydration_impl(
+        &self,
+        state: &LoopState,
+        hydration: &crate::dispatcher::tool_index::HydrationResult,
+        level: ThinkLevel,
+    ) -> Result<Thinking> {
+        // 1. Build observation (tools come from hydration, not filtering)
+        // Use full_schema_tools as they have complete tool info
+        let tools_for_observation: Vec<ToolInfo> = hydration
+            .full_schema_tools
+            .iter()
+            .map(|t| ToolInfo {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                parameters_schema: t.cached_schema.clone().unwrap_or_default(),
+                category: None, // Hydrated tools don't carry category info
+            })
+            .collect();
+
+        let observation = self.build_observation(state, &tools_for_observation);
+
+        // 2. Select model
+        let model_id = self.select_model(&observation);
+
+        // 3. Build prompt with hydration-based tools
+        let (system, messages) = self.build_prompt_with_hydration(state, hydration, &observation);
+
+        // 4. Get provider for model
+        let provider = self
+            .providers
+            .get(&model_id)
+            .unwrap_or_else(|| self.providers.default_provider());
+
+        // 5. Call LLM
+        let response = self
+            .call_llm_with_level(provider, &system, &messages, level)
+            .await?;
+
+        tracing::debug!(
+            response_len = response.len(),
+            response_preview = %response.chars().take(500).collect::<String>(),
+            think_level = %level,
+            hydration_tool_count = hydration.total_count(),
+            "LLM response with hydrated tools (preview)"
+        );
+
+        // 6. Parse response
+        let thinking = self.parse_response(&response)?;
+
+        // 7. Validate decision
+        self.decision_parser.validate(&thinking.decision)?;
+
+        Ok(thinking)
     }
 }
 
@@ -303,6 +377,17 @@ impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
 
     fn current_think_level(&self) -> ThinkLevel {
         self.config.think_level
+    }
+
+    async fn think_with_hydration(
+        &self,
+        state: &LoopState,
+        hydration: &crate::dispatcher::tool_index::HydrationResult,
+        _tools: &[UnifiedTool],
+        level: ThinkLevel,
+    ) -> Result<Thinking> {
+        // Use internal hydration-aware thinking method
+        self.think_with_hydration_impl(state, hydration, level).await
     }
 }
 
