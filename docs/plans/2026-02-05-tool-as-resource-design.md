@@ -601,8 +601,8 @@ core_tools = ["search", "file_read", "file_write"]  # 强制核心工具
 
 ### Phase 4: 生产就绪 (Week 4)
 
-- [ ] MCP Server 事件监听集成
-- [ ] Skill Registry 事件监听集成
+- [x] MCP Server 事件监听集成
+- [x] Skill Registry 事件监听集成
 - [ ] 配置热重载支持
 - [ ] 文档更新
 
