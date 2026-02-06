@@ -1,4 +1,40 @@
 //! CRUD operations for memory facts
+//!
+//! # Namespace Support (Personal AI Hub - Phase 4)
+//!
+//! All CRUD operations support the `namespace` column for multi-user data isolation.
+//! When implementing namespace filtering, use these patterns:
+//!
+//! ## Query Patterns by Role:
+//!
+//! **For Owner (can see all facts):**
+//! ```sql
+//! SELECT ... FROM memory_facts WHERE namespace IN ('owner', ...)
+//! -- Optionally filter: WHERE namespace LIKE 'guest:%' OR namespace = 'owner'
+//! ```
+//!
+//! **For Guest (can see only their facts):**
+//! ```sql
+//! SELECT ... FROM memory_facts WHERE namespace = 'guest:<guest_id>'
+//! -- Future: OR namespace = 'shared' (Phase 4.2)
+//! ```
+//!
+//! ## Namespace Values:
+//! - `owner`: Owner's private facts (default for all new facts)
+//! - `guest:<guest_id>`: Guest-specific facts (e.g., 'guest:abc-123-def')
+//! - `shared`: Shared facts with ACL rules (Phase 4.2+, currently unused)
+//!
+//! ## Implementation Notes:
+//! - All insert operations default namespace to 'owner' for backward compatibility
+//! - Compression/cleanup operations must filter by namespace
+//! - Retention policies apply per-namespace (facts in different namespaces don't interfere)
+//! - Use idx_facts_namespace and idx_facts_namespace_valid indexes for performance
+//!
+//! ## Migration Path:
+//! - Phase 4.1: Add column with default 'owner' (schema documentation only, no migration yet)
+//! - Phase 4.2: Implement namespace filtering in query methods
+//! - Phase 4.3: Add InvitationManager integration to set guest namespace on creation
+//! - Phase 4.4: Add sharing/ACL logic for 'shared' namespace
 
 use crate::error::AlephError;
 use crate::memory::context::{FactSpecificity, FactType, MemoryFact, TemporalScope};

@@ -70,6 +70,32 @@ impl VectorDatabase {
             -- ================================================================
 
             -- Compressed memory facts table
+            -- NAMESPACE COLUMN DESIGN (Personal AI Hub - Phase 4):
+            --
+            -- The `namespace` column enables multi-user data isolation by controlling
+            -- which user (owner or guest) can access each fact. This is the foundation
+            -- of the Personal AI Hub's Owner+Guest user model.
+            --
+            -- NAMESPACE VALUES:
+            -- - "owner": Facts owned by the system owner (private)
+            -- - "guest:<guest_id>": Facts owned by a specific guest (private to that guest)
+            -- - "shared": Facts visible to multiple users based on sharing rules (future)
+            --
+            -- ISOLATION SEMANTICS:
+            -- - Owner can access all facts (owner + any guest facts)
+            -- - Guest can access only facts in their namespace (guest:<their_id>)
+            -- - Shared facts are visible to owners/guests based on ACLs (Phase 4.2+)
+            --
+            -- QUERIES FILTERED BY NAMESPACE:
+            -- - For owner: SELECT * FROM memory_facts WHERE namespace IN ('owner', 'guest:*', 'shared')
+            -- - For guest: SELECT * FROM memory_facts WHERE namespace = 'guest:<guest_id>' OR namespace = 'shared'
+            -- - Compression only processes facts within current user's namespace
+            -- - Retention cleanup respects namespace boundaries
+            --
+            -- DEFAULT VALUE:
+            -- - All new facts default to 'owner' namespace (current behavior)
+            -- - Migration scripts will set existing facts to 'owner' for backward compatibility
+            --
             CREATE TABLE IF NOT EXISTS memory_facts (
                 id TEXT PRIMARY KEY,
                 content TEXT NOT NULL,
@@ -83,7 +109,8 @@ impl VectorDatabase {
                 invalidation_reason TEXT,
                 specificity TEXT NOT NULL DEFAULT 'pattern',
                 temporal_scope TEXT NOT NULL DEFAULT 'contextual',
-                decay_invalidated_at INTEGER
+                decay_invalidated_at INTEGER,
+                namespace TEXT NOT NULL DEFAULT 'owner'
             );
 
             -- Index for fact type queries
@@ -99,6 +126,15 @@ impl VectorDatabase {
             CREATE INDEX IF NOT EXISTS idx_facts_decay_invalidated
                 ON memory_facts(decay_invalidated_at)
                 WHERE decay_invalidated_at IS NOT NULL;
+
+            -- Index for namespace filtering (critical for multi-user queries)
+            -- Used for: listing facts by user, isolation enforcement, sharing queries
+            CREATE INDEX IF NOT EXISTS idx_facts_namespace ON memory_facts(namespace);
+
+            -- Index for combined namespace + validity queries (common operation)
+            -- Used for: retrieving user's valid facts only
+            CREATE INDEX IF NOT EXISTS idx_facts_namespace_valid
+                ON memory_facts(namespace, is_valid);
 
             -- Compression session audit table
             CREATE TABLE IF NOT EXISTS compression_sessions (
