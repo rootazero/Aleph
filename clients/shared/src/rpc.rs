@@ -23,11 +23,12 @@ struct PendingRequest {
 /// JSON-RPC client
 ///
 /// Manages request ID generation and pending request tracking.
+#[derive(Clone)]
 pub struct RpcClient {
     /// Pending requests waiting for response (id -> PendingRequest)
     pending: Arc<RwLock<HashMap<String, PendingRequest>>>,
     /// Request ID counter
-    id_counter: AtomicU64,
+    id_counter: Arc<AtomicU64>,
 }
 
 impl RpcClient {
@@ -38,7 +39,7 @@ impl RpcClient {
 
         Self {
             pending: Arc::new(RwLock::new(HashMap::new())),
-            id_counter: AtomicU64::new(1),
+            id_counter: Arc::new(AtomicU64::new(1)),
         }
     }
 
