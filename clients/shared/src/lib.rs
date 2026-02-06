@@ -60,5 +60,6 @@ pub use executor::LocalExecutor;
 // Re-export protocol types
 pub use aleph_protocol::{
     ClientManifest, ClientCapabilities, ClientEnvironment,
-    ExecutionConstraints,
+    ExecutionConstraints, JsonRpcRequest, JsonRpcResponse,
+    StreamEvent,
 };
