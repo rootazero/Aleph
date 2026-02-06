@@ -94,6 +94,8 @@ pub mod run_event_bus;
 pub mod workspace;
 #[cfg(feature = "gateway")]
 mod client_manifest;
+#[cfg(feature = "gateway")]
+mod reverse_rpc;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -185,3 +187,5 @@ pub use workspace::{
 };
 #[cfg(feature = "gateway")]
 pub use client_manifest::{ClientManifest, ClientCapabilities, ClientEnvironment, ExecutionConstraints};
+#[cfg(feature = "gateway")]
+pub use reverse_rpc::{ReverseRpcManager, ReverseRpcError, PendingRequest};
