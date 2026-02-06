@@ -7,6 +7,7 @@
 use super::category::ToolCategory;
 use super::conflict::ToolSource;
 use super::definition::{Capability, StructuredToolMeta, ToolDefinition, ToolDiff};
+use super::execution_policy::ExecutionPolicy;
 use super::index::{truncate_string, ToolIndexCategory, ToolIndexEntry};
 use super::safety::ToolSafetyLevel;
 use crate::config::ToolSafetyPolicy;
@@ -159,6 +160,16 @@ pub struct UnifiedTool {
     /// and usage guidance to help LLM make accurate tool selection decisions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_meta: Option<StructuredToolMeta>,
+
+    // =========================================================================
+    // Execution Policy Fields (for Server-Client routing)
+    // =========================================================================
+    /// Execution location policy for Server-Client mode
+    ///
+    /// Determines where this tool should execute when both Server and Client
+    /// are available. Defaults to `PreferServer`.
+    #[serde(default)]
+    pub execution_policy: ExecutionPolicy,
 }
 
 impl UnifiedTool {
@@ -203,6 +214,8 @@ impl UnifiedTool {
             was_renamed: false,
             // Structured description defaults
             structured_meta: None,
+            // Execution policy defaults
+            execution_policy: ExecutionPolicy::default(),
         }
     }
 
@@ -413,6 +426,26 @@ impl UnifiedTool {
             .structured_meta
             .get_or_insert_with(StructuredToolMeta::default);
         meta.use_when.push(scenario.into());
+        self
+    }
+
+    // =========================================================================
+    // Execution Policy Builder Methods (for Server-Client routing)
+    // =========================================================================
+
+    /// Builder method: set execution policy for Server-Client routing.
+    ///
+    /// Determines where this tool should execute when both Server and Client
+    /// are available.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let tool = UnifiedTool::new(...)
+    ///     .with_execution_policy(ExecutionPolicy::ClientOnly);
+    /// ```
+    pub fn with_execution_policy(mut self, policy: ExecutionPolicy) -> Self {
+        self.execution_policy = policy;
         self
     }
 
