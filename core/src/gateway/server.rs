@@ -14,6 +14,7 @@ use tracing::{info, warn, error, debug};
 
 use super::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, PARSE_ERROR};
 use super::event_bus::GatewayEventBus;
+use super::ClientManifest;
 use super::handlers::HandlerRegistry;
 use super::handlers::events::{
     SubscriptionManager, handle_subscribe, handle_unsubscribe, handle_list as handle_events_list,
@@ -36,6 +37,8 @@ pub struct ConnectionState {
     pub device_id: Option<String>,
     /// Permissions (set after successful connect)
     pub permissions: Vec<String>,
+    /// Client capability manifest (set during connect if provided)
+    pub manifest: Option<ClientManifest>,
 }
 
 impl ConnectionState {
@@ -47,6 +50,7 @@ impl ConnectionState {
             metadata: HashMap::new(),
             device_id: None,
             permissions: vec![],
+            manifest: None,
         }
     }
 
@@ -55,6 +59,19 @@ impl ConnectionState {
         self.authenticated = true;
         self.device_id = Some(device_id);
         self.permissions = permissions;
+    }
+
+    /// Set the client manifest after successful connect
+    pub fn set_manifest(&mut self, manifest: ClientManifest) {
+        self.manifest = Some(manifest);
+    }
+
+    /// Check if client supports a specific tool
+    pub fn supports_tool(&self, tool_name: &str) -> bool {
+        self.manifest
+            .as_ref()
+            .map(|m| m.supports_tool(tool_name))
+            .unwrap_or(false)
     }
 }
 
