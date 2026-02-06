@@ -145,7 +145,8 @@ impl ConsolidationAnalyzer {
                 FactType::Learning => "learning",
                 FactType::Project => "projects",
                 FactType::Personal => "personal",
-                FactType::SubagentRun
+                FactType::Tool
+                | FactType::SubagentRun
                 | FactType::SubagentSession
                 | FactType::SubagentCheckpoint
                 | FactType::SubagentTranscript
@@ -184,7 +185,8 @@ impl ConsolidationAnalyzer {
                 FactType::Learning => "learning",
                 FactType::Project => "projects",
                 FactType::Personal => "personal",
-                FactType::SubagentRun
+                FactType::Tool
+                | FactType::SubagentRun
                 | FactType::SubagentSession
                 | FactType::SubagentCheckpoint
                 | FactType::SubagentTranscript

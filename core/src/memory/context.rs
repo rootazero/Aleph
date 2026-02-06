@@ -1,6 +1,8 @@
 /// Context capture data structures for memory anchors
 use serde::{Deserialize, Serialize};
 
+use crate::domain::{AggregateRoot, Entity};
+
 /// Context anchor that identifies when and where an interaction occurred
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContextAnchor {
@@ -303,6 +305,16 @@ pub struct MemoryFact {
     #[serde(skip)]
     pub similarity_score: Option<f32>,
 }
+
+impl Entity for MemoryFact {
+    type Id = String;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
+}
+
+impl AggregateRoot for MemoryFact {}
 
 impl MemoryFact {
     /// Create a new valid memory fact
