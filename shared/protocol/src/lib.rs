@@ -12,7 +12,9 @@
 //! - [`policy`] - Tool execution routing policy
 //! - [`events`] - Streaming event types
 //! - [`thinking`] - Reasoning and confidence types
+//! - [`auth`] - Authentication and authorization types
 
+pub mod auth;
 pub mod events;
 pub mod jsonrpc;
 pub mod manifest;
@@ -20,6 +22,7 @@ pub mod policy;
 pub mod thinking;
 
 // Re-export commonly used types at crate root
+pub use auth::{GuestScope, Role};
 pub use events::{
     EnhancedRunSummary, RunSummary, StreamEvent, ToolErrorItem, ToolResult, ToolSummaryItem,
     UncertaintyAction,
