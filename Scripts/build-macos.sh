@@ -7,7 +7,7 @@ set -e
 CONFIG=${1:-"release"}
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-MACOS_DIR="$ROOT_DIR/platforms/macos"
+MACOS_DIR="$ROOT_DIR/clients/macos"
 
 echo "🍎 Building macOS app (${CONFIG})..."
 
