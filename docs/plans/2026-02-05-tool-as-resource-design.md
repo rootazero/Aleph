@@ -595,8 +595,8 @@ core_tools = ["search", "file_read", "file_write"]  # 强制核心工具
 
 ### Phase 3: 异步优化 (Week 3)
 
-- [ ] 实现 L2 异步 LLM 补全
-- [ ] 添加 `optimization_level` 可观测性
+- [x] 实现 L2 异步 LLM 补全
+- [x] 添加 `optimization_level` 可观测性
 - [ ] 性能测试与阈值调优
 
 ### Phase 4: 生产就绪 (Week 4)
