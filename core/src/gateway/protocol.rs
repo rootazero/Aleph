@@ -242,6 +242,76 @@ pub type JsonRpcBatchRequest = Vec<JsonRpcRequest>;
 /// A batch response is an array of response objects.
 pub type JsonRpcBatchResponse = Vec<JsonRpcResponse>;
 
+// ============================================================================
+// Tool Call Protocol Types (Server-to-Client reverse RPC)
+// ============================================================================
+
+/// Parameters for tool.call reverse RPC request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallParams {
+    /// Tool name to execute
+    pub tool: String,
+
+    /// Tool arguments as JSON
+    pub args: Value,
+
+    /// Optional execution context
+    #[serde(default)]
+    pub context: Option<ToolCallContext>,
+}
+
+/// Execution context for tool.call.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolCallContext {
+    /// Request ID for correlation
+    pub request_id: Option<String>,
+
+    /// Session ID
+    pub session_id: Option<String>,
+
+    /// Timeout override in milliseconds
+    pub timeout_ms: Option<u64>,
+}
+
+/// Result of tool.call execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallResult {
+    /// Tool execution output
+    pub output: Value,
+
+    /// Execution time in milliseconds
+    pub execution_time_ms: u64,
+
+    /// Whether execution succeeded
+    pub success: bool,
+
+    /// Error message if failed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl ToolCallResult {
+    /// Create a successful result.
+    pub fn success(output: Value, execution_time_ms: u64) -> Self {
+        Self {
+            output,
+            execution_time_ms,
+            success: true,
+            error: None,
+        }
+    }
+
+    /// Create a failed result.
+    pub fn failure(error: String, execution_time_ms: u64) -> Self {
+        Self {
+            output: Value::Null,
+            execution_time_ms,
+            success: false,
+            error: Some(error),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,5 +375,43 @@ mod tests {
             id: Some(json!(1)),
         };
         assert!(empty_method.validate().is_err());
+    }
+
+    // ========================================================================
+    // Tool Call Protocol Tests
+    // ========================================================================
+
+    #[test]
+    fn test_tool_call_params_serde() {
+        let params = ToolCallParams {
+            tool: "shell:exec".to_string(),
+            args: json!({"command": "ls -la"}),
+            context: Some(ToolCallContext {
+                request_id: Some("req_123".to_string()),
+                ..Default::default()
+            }),
+        };
+
+        let json = serde_json::to_string(&params).unwrap();
+        let parsed: ToolCallParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.tool, "shell:exec");
+    }
+
+    #[test]
+    fn test_tool_call_result_success() {
+        let result = ToolCallResult::success(json!({"files": ["a.txt", "b.txt"]}), 150);
+
+        assert!(result.success);
+        assert!(result.error.is_none());
+        assert_eq!(result.execution_time_ms, 150);
+    }
+
+    #[test]
+    fn test_tool_call_result_failure() {
+        let result = ToolCallResult::failure("Permission denied".to_string(), 50);
+
+        assert!(!result.success);
+        assert_eq!(result.error, Some("Permission denied".to_string()));
     }
 }
