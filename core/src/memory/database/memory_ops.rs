@@ -1,6 +1,69 @@
 /// Memory CRUD operations
 ///
 /// Insert, search, delete, and clear memories.
+///
+/// # Namespace Support (Personal AI Hub - Phase 4)
+///
+/// The memory system stores facts with namespace isolation to support multi-user access.
+/// While the memories table (raw interactions) is global, the compressed facts table
+/// (memory_facts) uses namespaces to provide per-user data isolation.
+///
+/// ## Namespace Isolation Flow:
+///
+/// 1. **Memory Insertion (global)**
+///    - All raw memories stored in `memories` table (no namespace)
+///    - Used by agent for RAG retrieval (all contexts matter)
+///
+/// 2. **Compression (namespace-aware)**
+///    - Compression reads facts filtered by user's namespace
+///    - New facts created in user's namespace
+///    - Owner can see facts from 'owner' + all 'guest:*' namespaces
+///    - Guest can only see facts in 'guest:<guest_id>' namespace
+///
+/// 3. **Retrieval (namespace-filtered)**
+///    - When agent asks "what do I know", filter by current user's namespace
+///    - Prevents guests from accessing owner's private facts
+///    - Prevents guests from accessing other guests' facts
+///
+/// ## Schema Design:
+///
+/// ```
+/// memories (global)
+///   └─ user interaction history (all users contribute)
+///
+/// memory_facts (namespace-isolated)
+///   ├─ namespace='owner' (owner's compressed knowledge)
+///   ├─ namespace='guest:alice' (alice's compressed knowledge)
+///   ├─ namespace='guest:bob' (bob's compressed knowledge)
+///   └─ namespace='shared' (future: ACL-controlled sharing)
+/// ```
+///
+/// ## Query Examples:
+///
+/// **Compress memories for owner:**
+/// ```sql
+/// -- Read from global memories (get context)
+/// -- Create facts in 'owner' namespace
+/// INSERT INTO memory_facts (..., namespace) VALUES (..., 'owner')
+/// ```
+///
+/// **Retrieve facts for guest 'alice':**
+/// ```sql
+/// SELECT * FROM memory_facts WHERE namespace = 'guest:alice'
+/// ```
+///
+/// **Owner views all facts:**
+/// ```sql
+/// SELECT * FROM memory_facts WHERE namespace IN ('owner', 'guest:%', 'shared')
+/// ```
+///
+/// ## Future Phases:
+///
+/// - Phase 4.2: Add namespace filtering to compression, retrieval, and cleanup
+/// - Phase 4.3: Integrate with InvitationManager to assign guest namespaces
+/// - Phase 4.4: Implement 'shared' namespace with ACL rules
+/// - Phase 5: mDNS discovery with per-client namespace filtering
+
 use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use rusqlite::params;
