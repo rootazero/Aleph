@@ -18,6 +18,7 @@
 
 pub mod crypto;
 pub mod device;
+pub mod identity_map;
 pub mod pairing;
 pub mod store;
 pub mod token;
@@ -29,6 +30,7 @@ pub use crypto::{
     PAIRING_CODE_LENGTH,
 };
 pub use device::{Device, DeviceRole, DeviceType};
+pub use identity_map::{IdentityMap, PlatformIdentity, UserId};
 pub use pairing::{PairingError, PairingManager, PairingRequest};
 pub use store::{DeviceRow, PairingRequestRow, SecurityStore, TokenRow};
 pub use token::{SignedToken, TokenError, TokenManager, TokenValidation};
