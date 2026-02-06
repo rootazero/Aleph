@@ -8,8 +8,7 @@ use crate::error::CliResult;
 #[derive(Deserialize)]
 struct HealthResponse {
     status: String,
-    version: String,
-    uptime_seconds: u64,
+    timestamp: String,
 }
 
 /// Run health check
@@ -19,8 +18,7 @@ pub async fn run(server_url: &str) -> CliResult<()> {
     let response: HealthResponse = client.call("health", None::<()>).await?;
 
     println!("Server Status: {}", response.status);
-    println!("Version: {}", response.version);
-    println!("Uptime: {} seconds", response.uptime_seconds);
+    println!("Timestamp: {}", response.timestamp);
 
     client.close().await?;
     Ok(())

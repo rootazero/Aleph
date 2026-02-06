@@ -27,13 +27,13 @@ pub async fn run(
 
     #[derive(Serialize)]
     struct RunParams {
-        session_key: String,
-        message: String,
+        session_key: Option<String>,
+        input: String,
     }
 
     let params = RunParams {
-        session_key,
-        message: message.to_string(),
+        session_key: Some(session_key),
+        input: message.to_string(),
     };
 
     // Send the message
