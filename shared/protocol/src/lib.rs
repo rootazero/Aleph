@@ -14,8 +14,10 @@
 //! - [`thinking`] - Reasoning and confidence types
 //! - [`auth`] - Authentication and authorization types
 //! - [`invitation`] - Guest invitation types
+//! - [`discovery`] - Service discovery types
 
 pub mod auth;
+pub mod discovery;
 pub mod events;
 pub mod invitation;
 pub mod jsonrpc;
@@ -25,6 +27,7 @@ pub mod thinking;
 
 // Re-export commonly used types at crate root
 pub use auth::{GuestScope, Role};
+pub use discovery::DiscoveredInstance;
 pub use events::{
     ConfigChangedEvent, EnhancedRunSummary, RunSummary, StreamEvent, ToolErrorItem, ToolResult,
     ToolSummaryItem, UncertaintyAction,
