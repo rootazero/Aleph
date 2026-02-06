@@ -9,7 +9,7 @@ pub enum CliError {
     Connection(String),
 
     #[error("WebSocket error: {0}")]
-    WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
+    WebSocket(String),
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
