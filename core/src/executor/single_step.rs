@@ -135,6 +135,14 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
         }
     }
 
+    /// Get a reference to the tool registry.
+    ///
+    /// This is useful for looking up tool metadata (e.g., execution policy)
+    /// without executing the tool.
+    pub fn tool_registry(&self) -> Option<&R> {
+        Some(&*self.tool_registry)
+    }
+
     /// Execute a tool call
     async fn execute_tool_call(&self, tool_name: &str, arguments: Value) -> ActionResult {
         let start = Instant::now();

@@ -19,8 +19,10 @@ use super::router::SessionKey;
 use crate::agent_loop::{AgentLoop, LoopConfig, LoopResult, RequestContext};
 use crate::compressor::NoOpCompressor;
 use crate::dispatcher::UnifiedTool;
-use crate::executor::{SingleStepExecutor, ToolRegistry};
+use crate::executor::{RoutedExecutor, SingleStepExecutor, ToolRegistry, ToolRouter};
 use crate::thinker::{ProviderRegistry as ThinkerProviderRegistry, SingleProviderRegistry, Thinker, ThinkerConfig};
+
+use super::{ClientManifest, JsonRpcRequest, ReverseRpcManager};
 
 /// Configuration for the execution engine
 #[derive(Debug, Clone)]
@@ -39,6 +41,35 @@ impl Default for ExecutionEngineConfig {
             max_concurrent_runs: 5,
             default_timeout_secs: 300,
             enable_tracing: true,
+        }
+    }
+}
+
+/// Client context for Server-Client routing.
+///
+/// Contains the per-connection information needed to route tool calls
+/// to the connected client.
+#[derive(Clone)]
+pub struct ClientContext {
+    /// Client's capability manifest
+    pub manifest: ClientManifest,
+    /// Reverse RPC manager for this connection
+    pub reverse_rpc: Arc<ReverseRpcManager>,
+    /// Channel to send requests to the client
+    pub sender: tokio::sync::mpsc::Sender<JsonRpcRequest>,
+}
+
+impl ClientContext {
+    /// Create a new client context.
+    pub fn new(
+        manifest: ClientManifest,
+        reverse_rpc: Arc<ReverseRpcManager>,
+        sender: tokio::sync::mpsc::Sender<JsonRpcRequest>,
+    ) -> Self {
+        Self {
+            manifest,
+            reverse_rpc,
+            sender,
         }
     }
 }
@@ -182,11 +213,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// Execute a run request
     ///
     /// Returns a stream of events for the run.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The run request containing input and metadata
+    /// * `agent` - The agent instance to execute with
+    /// * `emitter` - Event emitter for streaming events
+    /// * `client_context` - Optional client context for Server-Client routing
     pub async fn execute<E: EventEmitter + Send + Sync + 'static>(
         &self,
         request: RunRequest,
         agent: Arc<AgentInstance>,
         emitter: Arc<E>,
+        client_context: Option<ClientContext>,
     ) -> Result<(), ExecutionError> {
         let run_id = request.run_id.clone();
 
@@ -267,6 +306,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 &request,
                 agent.clone(),
                 emitter.clone(),
+                client_context,
             ) => result,
 
             _ = cancel_rx.recv() => {
@@ -411,16 +451,29 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     ///
     /// This method bridges to the actual AgentLoop infrastructure using:
     /// - Thinker for LLM decision making
-    /// - SingleStepExecutor for tool execution
+    /// - RoutedExecutor for tool execution (with Server-Client routing)
     /// - EventEmittingCallback for streaming events
+    ///
+    /// # Arguments
+    ///
+    /// * `run_id` - Unique identifier for this run
+    /// * `request` - The run request
+    /// * `agent` - Agent instance
+    /// * `emitter` - Event emitter for streaming
+    /// * `client_context` - Optional client context for routing tools to client
     async fn run_agent_loop<E: EventEmitter + Send + Sync + 'static>(
         &self,
         run_id: &str,
         request: &RunRequest,
         agent: Arc<AgentInstance>,
         emitter: Arc<E>,
+        client_context: Option<ClientContext>,
     ) -> Result<String, ExecutionError> {
-        debug!("Starting agent loop for run {}", run_id);
+        debug!(
+            run_id = run_id,
+            has_client_context = client_context.is_some(),
+            "Starting agent loop"
+        );
 
         // Get session history for context
         let history = agent.get_history(&request.session_key, Some(20)).await;
@@ -444,8 +497,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let thinker_registry = Arc::new(SingleProviderRegistry::new(provider));
         let thinker = Arc::new(Thinker::new(thinker_registry, ThinkerConfig::default()));
 
-        // Create Executor
-        let executor = Arc::new(SingleStepExecutor::new(self.tool_registry.clone()));
+        // Create Executor with routing support
+        let local_executor = Arc::new(SingleStepExecutor::new(self.tool_registry.clone()));
 
         // Create compressor (no-op for Gateway mode)
         let compressor = Arc::new(NoOpCompressor);
@@ -468,9 +521,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .cloned()
             .collect();
 
-        // Create AgentLoop with Thinker, Executor, Compressor
-        let agent_loop = AgentLoop::new(thinker, executor, compressor, loop_config);
-
         // Run the loop (history_summary as Option<String>)
         let initial_history = if history_summary.is_empty() {
             None
@@ -478,16 +528,43 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             Some(history_summary)
         };
 
-        let result = agent_loop
-            .run(
-                request.input.clone(),
-                context,
-                allowed_tools,
-                callback.as_ref(),
-                Some(abort_rx),
-                initial_history,
-            )
-            .await;
+        // Run with either RoutedExecutor or SingleStepExecutor based on client context
+        let result = if let Some(ctx) = client_context {
+            info!(
+                run_id = run_id,
+                client_type = ctx.manifest.client_type,
+                "Running agent loop with RoutedExecutor"
+            );
+            let router = ToolRouter::new();
+            let routed_executor = Arc::new(
+                RoutedExecutor::new(router, local_executor, ctx.reverse_rpc)
+                    .with_client_context(ctx.manifest, ctx.sender),
+            );
+            let agent_loop = AgentLoop::new(thinker, routed_executor, compressor, loop_config);
+            agent_loop
+                .run(
+                    request.input.clone(),
+                    context,
+                    allowed_tools,
+                    callback.as_ref(),
+                    Some(abort_rx),
+                    initial_history,
+                )
+                .await
+        } else {
+            debug!(run_id = run_id, "Running agent loop with local executor");
+            let agent_loop = AgentLoop::new(thinker, local_executor, compressor, loop_config);
+            agent_loop
+                .run(
+                    request.input.clone(),
+                    context,
+                    allowed_tools,
+                    callback.as_ref(),
+                    Some(abort_rx),
+                    initial_history,
+                )
+                .await
+        };
 
         // Clean up abort sender
         {
@@ -800,6 +877,10 @@ impl Default for SimpleExecutionEngine {
 ///
 /// This allows InboundMessageRouter to use ExecutionEngine via a trait object,
 /// enabling routing without being generic over provider and tool registry types.
+///
+/// Note: This trait implementation does not support client context for routing.
+/// For Server-Client routing, use `ExecutionEngine::execute()` directly with
+/// a `ClientContext`.
 #[async_trait]
 impl<P, R> ExecutionAdapter for ExecutionEngine<P, R>
 where
@@ -814,8 +895,9 @@ where
     ) -> Result<(), ExecutionError> {
         // Wrap the dyn trait object in DynEventEmitter to make it Sized,
         // then delegate to the existing generic execute method
+        // Note: No client context - tools execute locally only
         let wrapper = Arc::new(DynEventEmitter::new(emitter));
-        ExecutionEngine::execute(self, request, agent, wrapper).await
+        ExecutionEngine::execute(self, request, agent, wrapper, None).await
     }
 
     async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {

@@ -445,3 +445,124 @@ default_policy = "PreferServer"
 | Manifest 格式 | 完整能力描述 | 环境感知、约束传递、版本演进 |
 | 能力 vs 权限 | 分离设计 | Server 可提前拦截越权请求 |
 | 反向 RPC | oneshot channel | 标准异步请求/响应模式 |
+
+---
+
+## 7. 验证测试
+
+### 7.1 debug.tool_call 端点
+
+用于验证反向 RPC 机制的测试端点：
+
+**请求：**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "debug.tool_call",
+  "params": {
+    "tool": "shell:exec",
+    "args": {"command": "echo hello"},
+    "timeout_ms": 30000
+  },
+  "id": 1
+}
+```
+
+**响应：**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "success": true,
+    "result": {
+      "exit_code": 0,
+      "stdout": "hello\n",
+      "stderr": "",
+      "duration_ms": 15
+    },
+    "duration_ms": 20,
+    "executed_on": "client"
+  },
+  "id": 1
+}
+```
+
+### 7.2 测试步骤
+
+1. **启动 Gateway Server**
+   ```bash
+   cargo run -p alephcore --features gateway
+   ```
+
+2. **使用 CLI 连接**
+   ```bash
+   cargo run -p aleph-cli -- connect
+   ```
+
+3. **发送测试请求**（使用 websocat 或其他 WebSocket 客户端）
+   ```bash
+   echo '{"jsonrpc":"2.0","method":"debug.tool_call","params":{"tool":"shell:exec","args":{"command":"echo hello"}},"id":1}' | websocat ws://127.0.0.1:18789
+   ```
+
+4. **验证结果**
+   - CLI 应该执行本地 shell 命令
+   - Server 应该收到执行结果
+   - 调用者应该收到完整响应
+
+### 7.3 CLI 端实现
+
+CLI 的 `LocalExecutor` 实现了 `shell:exec` 工具：
+
+```rust
+// clients/cli/src/executor.rs
+pub struct LocalExecutor;
+
+impl LocalExecutor {
+    pub async fn execute(tool_name: &str, args: Value) -> Result<Value, String> {
+        match tool_name {
+            "shell:exec" | "shell_exec" | "exec" => {
+                Self::execute_shell(args).await
+            }
+            _ => Err(format!("Unknown tool: {}", tool_name))
+        }
+    }
+}
+```
+
+### 7.4 实现状态
+
+| 组件 | 状态 | 文件 |
+|------|------|------|
+| `aleph-protocol` | ✅ 完成 | `shared/protocol/` |
+| `ExecutionPolicy` | ✅ 完成 | `core/src/dispatcher/types.rs` |
+| `ClientManifest` | ✅ 完成 | `core/src/gateway/client_manifest.rs` |
+| `ReverseRpcManager` | ✅ 完成 | `core/src/gateway/reverse_rpc.rs` |
+| `ToolRouter` | ✅ 完成 | `core/src/executor/router.rs` |
+| `LocalExecutor` (CLI) | ✅ 完成 | `clients/cli/src/executor.rs` |
+| CLI 反向 RPC 处理 | ✅ 完成 | `clients/cli/src/client.rs` |
+| `debug.tool_call` | ✅ 完成 | `core/src/gateway/server.rs` |
+| Agent Loop 集成 | ⏳ 待完成 | - |
+
+---
+
+## 8. 未来演进方向
+
+### 8.1 多端拓扑
+
+当多个 Client 在线时，Server 根据 Capability Manifest 的"环境权重"自动选择执行端。
+
+### 8.2 Zero-Trust 安全
+
+- 敏感工具签名
+- Local UI Confirmation
+- Scoped Capability
+
+### 8.3 二进制流与大文件
+
+- 远程文件句柄
+- 二进制 Side-Channel
+
+### 8.4 Ghost-SDK
+
+- 跨语言协议代码生成
+- Headless Runner 核心库

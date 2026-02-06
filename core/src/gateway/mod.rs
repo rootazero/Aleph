@@ -122,7 +122,7 @@ pub use config::GatewayConfig;
 #[cfg(feature = "gateway")]
 pub use session_manager::{SessionManager, SessionManagerConfig};
 #[cfg(feature = "gateway")]
-pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus, SimpleExecutionEngine};
+pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus, SimpleExecutionEngine, ClientContext};
 #[cfg(feature = "gateway")]
 pub use loop_callback_adapter::{EventEmittingCallback, ResponseChunkEmitter, UserQuestion};
 #[cfg(feature = "gateway")]
