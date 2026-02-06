@@ -26,8 +26,8 @@ pub mod thinking;
 // Re-export commonly used types at crate root
 pub use auth::{GuestScope, Role};
 pub use events::{
-    EnhancedRunSummary, RunSummary, StreamEvent, ToolErrorItem, ToolResult, ToolSummaryItem,
-    UncertaintyAction,
+    ConfigChangedEvent, EnhancedRunSummary, RunSummary, StreamEvent, ToolErrorItem, ToolResult,
+    ToolSummaryItem, UncertaintyAction,
 };
 pub use invitation::{
     ActivateInvitationRequest, CreateInvitationRequest, GuestToken, Invitation,

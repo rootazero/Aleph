@@ -276,6 +276,18 @@ pub struct RunSummary {
     pub final_response: Option<String>,
 }
 
+/// Configuration changed event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigChangedEvent {
+    /// Changed section path (e.g., "ui.theme")
+    pub section: Option<String>,
+    /// New config value (full config if section is None)
+    pub value: Value,
+    /// Change timestamp
+    pub timestamp: i64,
+}
+
 /// Enhanced summary with tool details and errors
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnhancedRunSummary {
@@ -430,5 +442,17 @@ mod tests {
             tool_id: "t1".to_string(),
         });
         assert!(enhanced.has_errors());
+    }
+
+    #[test]
+    fn test_config_changed_event_serde() {
+        let event = ConfigChangedEvent {
+            section: Some("ui.theme".to_string()),
+            value: serde_json::json!({"color": "dark"}),
+            timestamp: 1735689600,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: ConfigChangedEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.section, Some("ui.theme".to_string()));
     }
 }
