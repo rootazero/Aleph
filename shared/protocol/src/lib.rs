@@ -13,9 +13,11 @@
 //! - [`events`] - Streaming event types
 //! - [`thinking`] - Reasoning and confidence types
 //! - [`auth`] - Authentication and authorization types
+//! - [`invitation`] - Guest invitation types
 
 pub mod auth;
 pub mod events;
+pub mod invitation;
 pub mod jsonrpc;
 pub mod manifest;
 pub mod policy;
@@ -26,6 +28,9 @@ pub use auth::{GuestScope, Role};
 pub use events::{
     EnhancedRunSummary, RunSummary, StreamEvent, ToolErrorItem, ToolResult, ToolSummaryItem,
     UncertaintyAction,
+};
+pub use invitation::{
+    ActivateInvitationRequest, CreateInvitationRequest, GuestToken, Invitation,
 };
 pub use jsonrpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallContext, ToolCallParams, ToolCallResult};
 pub use manifest::{ClientCapabilities, ClientEnvironment, ClientManifest, ExecutionConstraints};
