@@ -19,6 +19,7 @@
 mod category;
 mod conflict;
 mod definition;
+mod execution_policy;
 mod tool_info;
 mod index;
 mod result;
@@ -56,3 +57,6 @@ pub use index::{ToolIndex, ToolIndexCategory, ToolIndexEntry};
 
 // Tool Info Types (for Gateway JSON-RPC)
 pub use tool_info::{ToolSourceType, UnifiedToolInfo};
+
+// Execution Policy (for Server-Client routing)
+pub use execution_policy::ExecutionPolicy;
