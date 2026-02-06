@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use crate::domain::{AggregateRoot, Entity};
 use super::{Task, TaskStatus};
 
 /// A directed acyclic graph of tasks
@@ -21,6 +22,16 @@ pub struct TaskGraph {
     /// Graph metadata
     pub metadata: TaskGraphMeta,
 }
+
+impl Entity for TaskGraph {
+    type Id = String;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
+}
+
+impl AggregateRoot for TaskGraph {}
 
 /// Dependency relationship between tasks
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

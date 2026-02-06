@@ -49,6 +49,7 @@ pub mod conversation;
 mod core;
 pub mod discovery;
 pub mod dispatcher;
+pub mod domain;
 mod error;
 pub mod event;
 mod event_handler;
