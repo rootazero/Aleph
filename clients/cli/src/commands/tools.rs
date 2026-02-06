@@ -1,4 +1,4 @@
-//! Tools listing command
+//! Commands listing command
 
 use serde::Deserialize;
 
@@ -6,69 +6,73 @@ use crate::client::AlephClient;
 use crate::error::CliResult;
 
 #[derive(Deserialize)]
-struct Tool {
-    name: String,
+struct Command {
+    key: String,
+    description: String,
     #[serde(default)]
-    description: Option<String>,
+    source_type: String,
     #[serde(default)]
-    category: Option<String>,
+    command_type: String,
 }
 
 #[derive(Deserialize)]
-struct ToolsResponse {
-    tools: Vec<Tool>,
+struct CommandsResponse {
+    commands: Vec<Command>,
 }
 
-/// Run tools list command
+/// Run commands list
 pub async fn run(server_url: &str, category: Option<&str>) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
 
-    let response: ToolsResponse = client.call("tools.list", None::<()>).await?;
+    let response: CommandsResponse = client.call("commands.list", None::<()>).await?;
 
-    println!("=== Available Tools ===");
+    println!("=== Available Commands ===");
     println!();
 
-    let mut tools = response.tools;
+    let mut commands = response.commands;
 
     // Filter by category if specified
     if let Some(cat) = category {
-        tools.retain(|t| {
-            t.category.as_ref().map(|c| c.contains(cat)).unwrap_or(false)
-                || t.name.contains(cat)
+        commands.retain(|c| {
+            c.source_type.contains(cat)
+                || c.key.contains(cat)
+                || c.command_type.contains(cat)
         });
     }
 
-    // Group by category
-    let mut categories: std::collections::HashMap<String, Vec<&Tool>> = std::collections::HashMap::new();
-    for tool in &tools {
-        let cat = tool.category.clone().unwrap_or_else(|| "other".to_string());
-        categories.entry(cat).or_default().push(tool);
+    // Group by source type
+    let mut sources: std::collections::HashMap<String, Vec<&Command>> = std::collections::HashMap::new();
+    for cmd in &commands {
+        let src = if cmd.source_type.is_empty() {
+            "other".to_string()
+        } else {
+            cmd.source_type.clone()
+        };
+        sources.entry(src).or_default().push(cmd);
     }
 
-    let mut cat_names: Vec<_> = categories.keys().cloned().collect();
-    cat_names.sort();
+    let mut src_names: Vec<_> = sources.keys().cloned().collect();
+    src_names.sort();
 
-    for cat in cat_names {
-        println!("[{}]", cat);
-        if let Some(tools) = categories.get(&cat) {
-            for tool in tools {
-                print!("  • {}", tool.name);
-                if let Some(desc) = &tool.description {
-                    // Truncate long descriptions
-                    let desc = if desc.len() > 50 {
-                        format!("{}...", &desc[..47])
-                    } else {
-                        desc.clone()
-                    };
-                    print!(" - {}", desc);
-                }
+    for src in src_names {
+        println!("[{}]", src);
+        if let Some(cmds) = sources.get(&src) {
+            for cmd in cmds {
+                print!("  • {}", cmd.key);
+                // Truncate long descriptions
+                let desc = if cmd.description.len() > 50 {
+                    format!("{}...", &cmd.description[..47])
+                } else {
+                    cmd.description.clone()
+                };
+                print!(" - {}", desc);
                 println!();
             }
         }
         println!();
     }
 
-    println!("Total: {} tools", tools.len());
+    println!("Total: {} commands", commands.len());
 
     client.close().await?;
     Ok(())
