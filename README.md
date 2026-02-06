@@ -162,6 +162,65 @@ For detailed architecture documentation, see [ARCHITECTURE.md](docs/ARCHITECTURE
 
 ---
 
+## 🌐 Client Architecture: Server-Client Model
+
+Aleph supports a **distributed Server-Client architecture** where the "brain" (AI processing) runs on a server while "hands and feet" (UI and local tools) run on clients.
+
+### Architecture Evolution
+
+**Before (Fat Client)**:
+```
+Client → Embedded AlephCore → AI Providers
+```
+- Heavy: Each client embeds full AI processing
+- Isolated: No session sharing between devices
+- Slow updates: Core changes require client rebuild
+
+**After (Thin Client)**:
+```
+Client → aleph-client-sdk → WebSocket → Gateway → AlephCore → AI Providers
+```
+- Lightweight: Clients only handle UI and local I/O
+- Connected: Share sessions across all devices
+- Fast updates: Core updates without client changes
+
+### Available Clients
+
+| Client | Platform | Status | Description |
+|--------|----------|--------|-------------|
+| **CLI** | macOS, Linux, Windows | ✅ Production | Command-line interface with streaming support |
+| **Desktop** | macOS, Linux, Windows | ✅ Production | Cross-platform GUI built with Tauri + React |
+| **macOS Native** | macOS | 🚧 In Progress | Native Swift/SwiftUI app with system integration |
+| **Mobile** | iOS, Android | 📋 Planned | Native mobile apps |
+
+### Client SDK
+
+All clients use the **aleph-client-sdk** (Rust library) providing:
+
+- **Transport Layer**: WebSocket connection management with auto-reconnect
+- **RPC Layer**: JSON-RPC 2.0 client with request/response matching
+- **Authentication**: Token-based auth with secure storage
+- **Event Streaming**: Real-time agent feedback (reasoning, tool calls, responses)
+- **Tool Routing**: Server-Client execution policy (ServerOnly, ClientOnly, PreferServer, PreferClient)
+
+**Features**:
+```toml
+[features]
+default = ["transport", "rpc", "client"]
+transport = ["tokio-tungstenite"]
+rpc = ["serde_json"]
+client = ["transport", "rpc"]
+local-executor = []  # Enable client-side tool execution
+native-tls = ["tokio-tungstenite/native-tls"]
+rustls = ["tokio-tungstenite/rustls"]
+```
+
+### Testing
+
+See [TESTING_CLIENT_REFACTORING.md](docs/TESTING_CLIENT_REFACTORING.md) for comprehensive testing procedures.
+
+---
+
 ## ✨ Features
 
 ### Core Capabilities
@@ -199,15 +258,19 @@ For detailed architecture documentation, see [ARCHITECTURE.md](docs/ARCHITECTURE
 git clone https://github.com/rootazero/Aleph.git
 cd Aleph
 
-# Build Rust Core
-cd core
-cargo build --release --bin aleph-gateway
+# Start Gateway (required for all clients)
+cargo run -p alephcore --features gateway --bin aleph-gateway -- start
 
-# Start Gateway
-./target/release/aleph-gateway start
+# Option 1: Use CLI Client
+cargo run -p aleph-cli -- "Hello, Aleph!"
 
-# In another terminal, build macOS app
-cd platforms/macos
+# Option 2: Use Tauri Desktop (cross-platform GUI)
+cd clients/desktop
+pnpm install
+pnpm tauri dev
+
+# Option 3: Build macOS Native App
+cd clients/macos
 xcodegen generate
 xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug
 ```
