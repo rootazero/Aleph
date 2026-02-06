@@ -11,7 +11,7 @@ pub use aleph_protocol::jsonrpc::{
     JsonRpcError,
     // Error codes
     AUTH_REQUIRED, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR,
-    PERMISSION_DENIED, RATE_LIMITED, RESOURCE_NOT_FOUND, TIMEOUT_ERROR,
+    PERMISSION_DENIED, RATE_LIMITED, RESOURCE_NOT_FOUND, TIMEOUT_ERROR, TOOL_ERROR,
     // Tool call types (from aleph-protocol)
     ToolCallContext as ProtoToolCallContext, ToolCallParams as ProtoToolCallParams,
     ToolCallResult as ProtoToolCallResult,
@@ -39,9 +39,10 @@ pub struct JsonRpcRequest {
     /// Method name to invoke
     pub method: String,
     /// Optional parameters for the method
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<Value>,
     /// Request identifier (None for notifications)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Value>,
 }
 

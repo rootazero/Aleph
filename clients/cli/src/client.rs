@@ -8,31 +8,47 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aleph_protocol::{
+    jsonrpc::TOOL_ERROR,
     ClientCapabilities, ClientEnvironment, ClientManifest, ExecutionConstraints,
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, StreamEvent,
 };
 use futures_util::{SinkExt, StreamExt};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio_tungstenite::{
     connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::config::CliConfig;
 use crate::error::{CliError, CliResult};
+use crate::executor::LocalExecutor;
 
 /// Pending RPC request
 struct PendingRequest {
     tx: oneshot::Sender<Result<Value, JsonRpcError>>,
 }
 
+/// Server request parameters (tool.call)
+#[derive(Debug, Deserialize)]
+struct ToolCallRequest {
+    /// Tool name (Server uses "tool" field)
+    #[serde(alias = "tool_name")]
+    tool: String,
+    /// Tool arguments (Server uses "args" field)
+    #[serde(alias = "params")]
+    args: Value,
+}
+
+/// Type alias for WebSocket write half
+type WsWriter = Arc<Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>;
+
 /// WebSocket client for Aleph Gateway
 pub struct AlephClient {
     /// WebSocket write half
-    write: Arc<Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>,
+    write: WsWriter,
     /// Pending requests waiting for response
     pending: Arc<RwLock<HashMap<String, PendingRequest>>>,
     /// Request ID counter
@@ -59,9 +75,10 @@ impl AlephClient {
         let (event_tx, event_rx) = mpsc::channel(100);
         let pending = Arc::new(RwLock::new(HashMap::new()));
         let connected = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let write = Arc::new(Mutex::new(write));
 
         let client = Self {
-            write: Arc::new(Mutex::new(write)),
+            write: write.clone(),
             pending: pending.clone(),
             id_counter: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             event_tx: event_tx.clone(),
@@ -69,13 +86,14 @@ impl AlephClient {
             auth_token: Arc::new(RwLock::new(None)),
         };
 
-        // Spawn read task
+        // Spawn read task with write access for responding to Server requests
         let pending_clone = pending.clone();
         let event_tx_clone = event_tx.clone();
         let connected_clone = connected.clone();
+        let write_clone = write.clone();
 
         tokio::spawn(async move {
-            Self::read_loop(read, pending_clone, event_tx_clone, connected_clone).await;
+            Self::read_loop(read, pending_clone, event_tx_clone, connected_clone, write_clone).await;
         });
 
         info!("Connected to Gateway");
@@ -88,11 +106,12 @@ impl AlephClient {
         pending: Arc<RwLock<HashMap<String, PendingRequest>>>,
         event_tx: mpsc::Sender<StreamEvent>,
         connected: Arc<std::sync::atomic::AtomicBool>,
+        write: WsWriter,
     ) {
         while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
-                    Self::handle_message(&text, &pending, &event_tx).await;
+                    Self::handle_message(&text, &pending, &event_tx, &write).await;
                 }
                 Ok(Message::Close(_)) => {
                     info!("Server closed connection");
@@ -120,36 +139,137 @@ impl AlephClient {
         text: &str,
         pending: &Arc<RwLock<HashMap<String, PendingRequest>>>,
         event_tx: &mpsc::Sender<StreamEvent>,
+        write: &WsWriter,
     ) {
-        // Try to parse as response first
+        // Log all incoming messages for debugging
+        debug!("Received raw message: {}", &text[..text.len().min(500)]);
+
+        // Try to parse as response first (response to our request)
+        // Only treat as response if id is a valid string or number (not null)
         if let Ok(response) = serde_json::from_str::<JsonRpcResponse>(text) {
+            debug!("Parsed as JsonRpcResponse with id: {:?}", response.id);
             let id = match &response.id {
                 Value::String(s) => s.clone(),
                 Value::Number(n) => n.to_string(),
+                Value::Null => {
+                    // id is null, this is a notification, not a response
+                    debug!("Response has null id, treating as notification");
+                    // Fall through to try parsing as request
+                    String::new()
+                }
                 _ => return,
             };
 
-            let mut pending_guard = pending.write().await;
-            if let Some(req) = pending_guard.remove(&id) {
-                let result = if let Some(error) = response.error {
-                    Err(error)
-                } else {
-                    Ok(response.result.unwrap_or(Value::Null))
-                };
-                let _ = req.tx.send(result);
+            // Only process as response if we have a valid id
+            if !id.is_empty() {
+                let mut pending_guard = pending.write().await;
+                if let Some(req) = pending_guard.remove(&id) {
+                    let result = if let Some(error) = response.error {
+                        Err(error)
+                    } else {
+                        Ok(response.result.unwrap_or(Value::Null))
+                    };
+                    let _ = req.tx.send(result);
+                }
+                return;
             }
-            return;
+        } else {
+            debug!("Message is not a JsonRpcResponse, trying JsonRpcRequest");
         }
 
-        // Try to parse as notification (stream event)
+        // Try to parse as request (from Server)
         if let Ok(request) = serde_json::from_str::<JsonRpcRequest>(text) {
-            if request.id.is_none() {
-                // This is a notification
-                if let Some(params) = request.params {
-                    if let Ok(event) = serde_json::from_value::<StreamEvent>(params) {
+            // Check if this is a request (has non-null id) or notification (no id or null id)
+            let is_request = match &request.id {
+                Some(Value::Null) => false,  // null id means notification
+                Some(_) => true,              // non-null id means request
+                None => false,                // no id means notification
+            };
+
+            if is_request {
+                // This is a request from Server that needs a response
+                let id = request.id.clone().unwrap();
+                debug!(method = %request.method, "Received request from Server");
+                Self::handle_server_request(&request, id, write).await;
+                return;
+            }
+
+            // This is a notification (no response expected)
+            if let Some(params) = request.params {
+                debug!(method = %request.method, "Received notification");
+                match serde_json::from_value::<StreamEvent>(params.clone()) {
+                    Ok(event) => {
+                        debug!("Parsed event: {:?}", event);
                         let _ = event_tx.send(event).await;
                     }
+                    Err(e) => {
+                        debug!("Failed to parse event: {} - params: {}", e, params);
+                    }
                 }
+            }
+        } else {
+            debug!("Message is not a JsonRpcRequest either, ignoring");
+        }
+    }
+
+    /// Handle a request from Server (e.g., tool.call)
+    async fn handle_server_request(request: &JsonRpcRequest, id: Value, write: &WsWriter) {
+        let response = match request.method.as_str() {
+            "tool.call" => {
+                Self::handle_tool_call(request.params.clone()).await
+            }
+            _ => {
+                warn!(method = %request.method, "Unknown method from Server");
+                Err(JsonRpcError::method_not_found(&request.method))
+            }
+        };
+
+        // Build response
+        let rpc_response = match response {
+            Ok(result) => JsonRpcResponse::success(id, result),
+            Err(error) => JsonRpcResponse::error(id, error),
+        };
+
+        // Send response
+        let json = match serde_json::to_string(&rpc_response) {
+            Ok(j) => j,
+            Err(e) => {
+                error!("Failed to serialize response: {}", e);
+                return;
+            }
+        };
+
+        debug!("Sending response to Server: {}", json);
+        let mut write_guard = write.lock().await;
+        if let Err(e) = write_guard.send(Message::Text(json.into())).await {
+            error!("Failed to send response: {}", e);
+        }
+    }
+
+    /// Handle tool.call request from Server
+    async fn handle_tool_call(params: Option<Value>) -> Result<Value, JsonRpcError> {
+        let params = params.ok_or_else(|| {
+            JsonRpcError::invalid_params("Missing params for tool.call")
+        })?;
+
+        let tool_req: ToolCallRequest = serde_json::from_value(params)
+            .map_err(|e| JsonRpcError::invalid_params(format!("Invalid tool.call params: {}", e)))?;
+
+        info!(tool = %tool_req.tool, "Executing local tool for Server");
+
+        // Execute the tool locally
+        match LocalExecutor::execute(&tool_req.tool, tool_req.args).await {
+            Ok(result) => {
+                info!(tool = %tool_req.tool, "Tool execution succeeded");
+                Ok(result)
+            }
+            Err(e) => {
+                error!(tool = %tool_req.tool, error = %e, "Tool execution failed");
+                Err(JsonRpcError::with_data(
+                    TOOL_ERROR,
+                    format!("Tool execution failed: {}", e),
+                    serde_json::json!({"tool": tool_req.tool}),
+                ))
             }
         }
     }

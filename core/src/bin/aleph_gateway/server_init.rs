@@ -174,7 +174,7 @@ where
     let run_id_clone = run_id.clone();
     tokio::spawn(async move {
         match engine_clone
-            .execute(run_request, agent, emitter_clone)
+            .execute(run_request, agent, emitter_clone, None)
             .await
         {
             Ok(()) => {
