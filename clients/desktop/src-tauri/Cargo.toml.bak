@@ -28,7 +28,7 @@ dirs = "5"
 
 # Aleph SDK (replaces alephcore)
 aleph-protocol = { path = "../../../shared/protocol" }
-# aleph-sdk = { path = "../../shared", features = ["client", "native-tls", "tracing"] }
+aleph-client-sdk = { path = "../../shared", features = ["client", "native-tls", "tracing"] }
 
 # Async
 tokio = { version = "1", features = ["full"] }
