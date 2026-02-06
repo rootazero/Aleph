@@ -30,22 +30,18 @@
 //! let executor = SingleStepExecutor::new(tool_registry);
 //! let reverse_rpc = ReverseRpcManager::new();
 //!
-//! // Create routed executor
-//! let routed = RoutedExecutor::new(router, executor, reverse_rpc);
+//! // Create routed executor with client context
+//! let routed = RoutedExecutor::new(router, executor, reverse_rpc)
+//!     .with_client_context(client_manifest, client_sender);
 //!
-//! // Execute with routing
-//! let result = routed.execute_tool(
-//!     "shell:exec",
-//!     json!({"command": "ls"}),
-//!     Some(&client_manifest),
-//!     send_to_client_fn,
-//! ).await;
+//! // Execute via ActionExecutor trait (routing happens automatically)
+//! let result = routed.execute(&action).await;
 //! ```
 
 use serde_json::{json, Value};
 use std::future::Future;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::router::{RoutingDecision, ToolRouter};
 use super::single_step::{SingleStepExecutor, ToolRegistry};
@@ -53,7 +49,9 @@ use crate::agent_loop::ActionResult;
 use crate::dispatcher::ExecutionPolicy;
 
 #[cfg(feature = "gateway")]
-use crate::gateway::{ClientManifest, ReverseRpcManager, ReverseRpcError};
+use crate::gateway::{ClientManifest, JsonRpcRequest, ReverseRpcError, ReverseRpcManager};
+#[cfg(feature = "gateway")]
+use tokio::sync::mpsc;
 
 /// Error type for routed execution.
 #[derive(Debug, thiserror::Error)]
@@ -108,6 +106,14 @@ pub enum RoutedExecutionResult {
 ///
 /// Wraps a SingleStepExecutor and adds routing logic to determine
 /// whether tools should execute locally or be routed to the Client.
+///
+/// # Client Context
+///
+/// For routing to work in the Agent Loop, the executor needs client context:
+/// - `client_manifest`: Client's capability declaration
+/// - `client_sender`: Channel to send requests to the client
+///
+/// Use `with_client_context()` to set these after construction.
 #[cfg(feature = "gateway")]
 pub struct RoutedExecutor<R: ToolRegistry> {
     /// Tool router for making routing decisions
@@ -118,11 +124,20 @@ pub struct RoutedExecutor<R: ToolRegistry> {
 
     /// Reverse RPC manager for Client calls
     reverse_rpc: Arc<ReverseRpcManager>,
+
+    /// Client's capability manifest (set per-connection)
+    client_manifest: Option<ClientManifest>,
+
+    /// Channel to send requests to the connected client
+    client_sender: Option<mpsc::Sender<JsonRpcRequest>>,
 }
 
 #[cfg(feature = "gateway")]
 impl<R: ToolRegistry + 'static> RoutedExecutor<R> {
     /// Create a new RoutedExecutor.
+    ///
+    /// Note: Client context (manifest + sender) must be set via `with_client_context()`
+    /// for routing to Client to work. Without client context, all tools execute locally.
     pub fn new(
         router: ToolRouter,
         local_executor: Arc<SingleStepExecutor<R>>,
@@ -132,7 +147,38 @@ impl<R: ToolRegistry + 'static> RoutedExecutor<R> {
             router,
             local_executor,
             reverse_rpc,
+            client_manifest: None,
+            client_sender: None,
         }
+    }
+
+    /// Set client context for routing.
+    ///
+    /// This enables routing tools to the connected client based on their
+    /// execution policy and the client's capabilities.
+    ///
+    /// # Arguments
+    ///
+    /// * `manifest` - Client's capability declaration
+    /// * `sender` - Channel to send JSON-RPC requests to the client
+    pub fn with_client_context(
+        mut self,
+        manifest: ClientManifest,
+        sender: mpsc::Sender<JsonRpcRequest>,
+    ) -> Self {
+        self.client_manifest = Some(manifest);
+        self.client_sender = Some(sender);
+        self
+    }
+
+    /// Check if client context is available for routing.
+    pub fn has_client_context(&self) -> bool {
+        self.client_manifest.is_some() && self.client_sender.is_some()
+    }
+
+    /// Get a reference to the client manifest (if set).
+    pub fn client_manifest(&self) -> Option<&ClientManifest> {
+        self.client_manifest.as_ref()
     }
 
     /// Get a reference to the tool router.
@@ -252,12 +298,131 @@ use crate::agent_loop::ActionExecutor;
 #[cfg(feature = "gateway")]
 #[async_trait::async_trait]
 impl<R: ToolRegistry + 'static> ActionExecutor for RoutedExecutor<R> {
-    /// Execute an action.
+    /// Execute an action with routing support.
     ///
-    /// Note: This implementation only handles local execution.
-    /// For routed execution, use `execute_tool` directly.
+    /// For `ToolCall` actions, this method:
+    /// 1. Looks up the tool's execution policy from the registry
+    /// 2. Consults the router for a routing decision
+    /// 3. Executes locally or routes to Client based on decision
+    ///
+    /// If no client context is set, all tools execute locally.
     async fn execute(&self, action: &crate::agent_loop::Action) -> ActionResult {
-        self.local_executor.execute(action).await
+        match action {
+            crate::agent_loop::Action::ToolCall {
+                tool_name,
+                arguments,
+            } => {
+                // If no client context, execute locally
+                if !self.has_client_context() {
+                    debug!(tool = tool_name, "No client context, executing locally");
+                    return self.local_executor.execute(action).await;
+                }
+
+                // Look up tool's execution policy from registry
+                let execution_policy = self
+                    .local_executor
+                    .tool_registry()
+                    .and_then(|r| r.get_tool(tool_name))
+                    .map(|t| t.execution_policy)
+                    .unwrap_or(ExecutionPolicy::PreferServer);
+
+                // Get routing decision
+                let decision = self.router.resolve(
+                    tool_name,
+                    execution_policy,
+                    self.client_manifest.as_ref(),
+                );
+
+                debug!(
+                    tool = tool_name,
+                    policy = ?execution_policy,
+                    decision = ?decision,
+                    "Routing decision for tool"
+                );
+
+                match decision {
+                    RoutingDecision::ExecuteLocal => {
+                        info!(tool = tool_name, "Executing tool locally on Server");
+                        self.local_executor.execute(action).await
+                    }
+
+                    RoutingDecision::RouteToClient => {
+                        info!(tool = tool_name, "Routing tool execution to Client");
+
+                        // Get client sender (we know it exists because has_client_context() was true)
+                        let sender = self.client_sender.as_ref().unwrap();
+
+                        // Create reverse RPC request
+                        let (request, pending) = self.reverse_rpc.create_request(
+                            "tool.call",
+                            json!({
+                                "tool": tool_name,
+                                "args": arguments,
+                            }),
+                        );
+
+                        // Send request to Client
+                        if let Err(e) = sender.send(request).await {
+                            error!(tool = tool_name, error = %e, "Failed to send request to client");
+                            return ActionResult::ToolError {
+                                error: format!("Failed to send to client: {}", e),
+                                retryable: true,
+                            };
+                        }
+
+                        // Wait for response
+                        match pending.wait().await {
+                            Ok(result) => {
+                                info!(tool = tool_name, "Client execution completed");
+                                ActionResult::ToolSuccess {
+                                    output: result,
+                                    duration_ms: 0, // TODO: track actual duration
+                                }
+                            }
+                            Err(ReverseRpcError::Timeout(_)) => {
+                                error!(tool = tool_name, "Client execution timed out");
+                                ActionResult::ToolError {
+                                    error: "Client execution timed out".to_string(),
+                                    retryable: true,
+                                }
+                            }
+                            Err(ReverseRpcError::ConnectionClosed) => {
+                                error!(tool = tool_name, "Client connection closed");
+                                ActionResult::ToolError {
+                                    error: "Client connection closed".to_string(),
+                                    retryable: false,
+                                }
+                            }
+                            Err(ReverseRpcError::ClientError { message, .. }) => {
+                                error!(tool = tool_name, error = %message, "Client execution failed");
+                                ActionResult::ToolError {
+                                    error: message,
+                                    retryable: false,
+                                }
+                            }
+                            Err(ReverseRpcError::SendFailed(msg)) => {
+                                error!(tool = tool_name, error = %msg, "Failed to send to client");
+                                ActionResult::ToolError {
+                                    error: format!("Send failed: {}", msg),
+                                    retryable: true,
+                                }
+                            }
+                        }
+                    }
+
+                    RoutingDecision::CannotExecute { reason } => {
+                        warn!(tool = tool_name, reason = %reason, "Tool cannot be executed");
+                        ActionResult::ToolError {
+                            error: format!("Tool unavailable: {}", reason),
+                            retryable: false,
+                        }
+                    }
+                }
+            }
+
+            // Non-tool actions are handled by local executor
+            _ => self.local_executor.execute(action).await,
+        }
     }
 }
 

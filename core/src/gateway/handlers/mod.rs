@@ -72,6 +72,7 @@ pub mod supervisor;
 pub mod approval_bridge;
 pub mod poe;
 pub mod identity;
+pub mod debug;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
 pub use identity::SharedIdentityResolver;
