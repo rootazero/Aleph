@@ -31,6 +31,7 @@
 mod builtin_registry;
 mod cache_config;
 mod cache_store;
+mod router;
 mod single_step;
 mod types;
 
@@ -40,6 +41,7 @@ pub use builtin_registry::{
 };
 pub use cache_config::ToolCacheConfig;
 pub use cache_store::{CacheStats, ToolResultCache};
+pub use router::{RoutingDecision, ToolRouter};
 pub use single_step::{SingleStepConfig, SingleStepExecutor, ToolRegistry};
 pub use types::{
     ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
