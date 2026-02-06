@@ -38,6 +38,7 @@
 //! | browser | Browser/CDP (feature-gated) |
 //! | poe | POE (Principle-Operation-Evaluation) task execution |
 //! | identity | Identity/soul management |
+//! | guests | Guest invitation management |
 
 pub mod health;
 pub mod echo;
@@ -73,9 +74,11 @@ pub mod approval_bridge;
 pub mod poe;
 pub mod identity;
 pub mod debug;
+pub mod guests;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
 pub use identity::SharedIdentityResolver;
+pub use guests::SharedInvitationManager;
 #[cfg(feature = "browser")]
 pub mod browser;
 
