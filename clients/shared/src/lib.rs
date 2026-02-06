@@ -32,7 +32,10 @@ pub use error::{ClientError, Result};
 #[cfg(feature = "transport")]
 mod transport;
 #[cfg(feature = "transport")]
-pub use transport::Transport;
+pub use transport::{
+    Transport, ConnectionState, TransportMessage,
+    WsStream, WsWriter, WsReader, read_messages,
+};
 
 #[cfg(feature = "rpc")]
 mod rpc;
