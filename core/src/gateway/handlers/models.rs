@@ -507,7 +507,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_list_empty_config() {
         let config = Arc::new(Config::default());
-        let request = JsonRpcRequest::new("models.list", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("models.list", None, json!(1));
 
         let response = handle_list(request, config).await;
 
@@ -533,7 +533,7 @@ mod tests {
         config.general.default_provider = Some("openai".to_string());
 
         let config = Arc::new(config);
-        let request = JsonRpcRequest::new("models.list", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("models.list", None, json!(1));
 
         let response = handle_list(request, config).await;
 
@@ -616,7 +616,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_get_missing_params() {
         let config = Arc::new(Config::default());
-        let request = JsonRpcRequest::new("models.get", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("models.get", None, json!(1));
 
         let response = handle_get(request, config).await;
 

@@ -384,7 +384,7 @@ mod tests {
     async fn test_handle_approvals_get() {
         let (_dir, manager) = temp_manager();
 
-        let request = JsonRpcRequest::new("exec.approvals.get", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("exec.approvals.get", None, json!(1));
         let response = handle_approvals_get(request, manager).await;
 
         assert!(response.is_success());
@@ -398,7 +398,7 @@ mod tests {
         let (_dir, manager) = temp_manager();
 
         // First get the current hash
-        let get_request = JsonRpcRequest::new("exec.approvals.get", None, Some(json!(1)));
+        let get_request = JsonRpcRequest::with_id("exec.approvals.get", None, json!(1));
         let get_response = handle_approvals_get(get_request, manager.clone()).await;
         let hash = get_response.result.unwrap()["hash"].as_str().unwrap().to_string();
 
@@ -438,7 +438,7 @@ mod tests {
     async fn test_handle_approvals_pending() {
         let (_dir, manager) = temp_manager();
 
-        let request = JsonRpcRequest::new("exec.approvals.pending", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("exec.approvals.pending", None, json!(1));
         let response = handle_approvals_pending(request, manager).await;
 
         assert!(response.is_success());

@@ -256,7 +256,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_list_empty() {
         let store: Arc<dyn PairingStore> = Arc::new(SqlitePairingStore::in_memory().unwrap());
-        let request = JsonRpcRequest::new("pairing.list", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("pairing.list", None, json!(1));
 
         let response = handle_list(request, store).await;
         assert!(response.is_success());

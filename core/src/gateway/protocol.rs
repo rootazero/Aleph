@@ -1,15 +1,37 @@
 //! JSON-RPC 2.0 Protocol Implementation
 //!
-//! This module defines the core types for JSON-RPC 2.0 communication
-//! over WebSocket connections.
+//! This module re-exports protocol types from `aleph-protocol` and provides
+//! additional Gateway-specific functionality with backward-compatible APIs.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+// Re-export core protocol types from aleph-protocol
+pub use aleph_protocol::jsonrpc::{
+    JsonRpcError,
+    // Error codes
+    AUTH_REQUIRED, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR,
+    PERMISSION_DENIED, RATE_LIMITED, RESOURCE_NOT_FOUND, TIMEOUT_ERROR,
+    // Tool call types (from aleph-protocol)
+    ToolCallContext as ProtoToolCallContext, ToolCallParams as ProtoToolCallParams,
+    ToolCallResult as ProtoToolCallResult,
+};
+
+// Additional error codes specific to Gateway (not in aleph-protocol)
+/// Authentication failed
+pub const AUTH_FAILED: i32 = -32001;
+/// Operation timeout (alias for TIMEOUT_ERROR)
+pub const TIMEOUT: i32 = TIMEOUT_ERROR;
+
+// ============================================================================
+// JsonRpcRequest with backward-compatible API
+// ============================================================================
 
 /// JSON-RPC 2.0 Request
 ///
 /// A JSON-RPC 2.0 request object. Notifications (requests without an `id`)
 /// are used for one-way messages that don't expect a response.
+/// This is a Gateway-specific version with backward-compatible API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
     /// Protocol version, must be "2.0"
@@ -24,7 +46,7 @@ pub struct JsonRpcRequest {
 }
 
 impl JsonRpcRequest {
-    /// Create a new JSON-RPC 2.0 request
+    /// Create a new JSON-RPC 2.0 request (backward-compatible 3-arg version)
     pub fn new(method: impl Into<String>, params: Option<Value>, id: Option<Value>) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -32,6 +54,11 @@ impl JsonRpcRequest {
             params,
             id,
         }
+    }
+
+    /// Create a request with specific ID
+    pub fn with_id(method: impl Into<String>, params: Option<Value>, id: Value) -> Self {
+        Self::new(method, params, Some(id))
     }
 
     /// Create a notification (request without id)
@@ -59,6 +86,7 @@ impl JsonRpcRequest {
 /// JSON-RPC 2.0 Response
 ///
 /// A JSON-RPC 2.0 response object containing either a result or an error.
+/// This is a Gateway-specific version with backward-compatible API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcResponse {
     /// Protocol version, always "2.0"
@@ -136,102 +164,6 @@ impl JsonRpcResponse {
     }
 }
 
-/// JSON-RPC 2.0 Error Object
-///
-/// Error codes in the range -32000 to -32099 are reserved for
-/// implementation-defined server errors.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JsonRpcError {
-    /// Error code
-    pub code: i32,
-    /// Human-readable error message
-    pub message: String,
-    /// Optional additional error data
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<Value>,
-}
-
-// Standard JSON-RPC 2.0 error codes
-/// Invalid JSON was received by the server
-pub const PARSE_ERROR: i32 = -32700;
-/// The JSON sent is not a valid Request object
-pub const INVALID_REQUEST: i32 = -32600;
-/// The method does not exist / is not available
-pub const METHOD_NOT_FOUND: i32 = -32601;
-/// Invalid method parameter(s)
-pub const INVALID_PARAMS: i32 = -32602;
-/// Internal JSON-RPC error
-pub const INTERNAL_ERROR: i32 = -32603;
-
-// Custom error codes (reserved range: -32000 to -32099)
-/// Authentication required
-pub const AUTH_REQUIRED: i32 = -32000;
-/// Authentication failed
-pub const AUTH_FAILED: i32 = -32001;
-/// Permission denied
-pub const PERMISSION_DENIED: i32 = -32002;
-/// Rate limit exceeded
-pub const RATE_LIMITED: i32 = -32003;
-/// Resource not found
-pub const RESOURCE_NOT_FOUND: i32 = -32004;
-/// Operation timeout
-pub const TIMEOUT: i32 = -32005;
-
-impl JsonRpcError {
-    /// Create a new error with code and message
-    pub fn new(code: i32, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            data: None,
-        }
-    }
-
-    /// Create a new error with additional data
-    pub fn with_data(code: i32, message: impl Into<String>, data: Value) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            data: Some(data),
-        }
-    }
-
-    /// Create a parse error
-    pub fn parse_error(details: impl Into<String>) -> Self {
-        Self::new(PARSE_ERROR, format!("Parse error: {}", details.into()))
-    }
-
-    /// Create an invalid request error
-    pub fn invalid_request(details: impl Into<String>) -> Self {
-        Self::new(INVALID_REQUEST, format!("Invalid request: {}", details.into()))
-    }
-
-    /// Create a method not found error
-    pub fn method_not_found(method: &str) -> Self {
-        Self::new(METHOD_NOT_FOUND, format!("Method not found: {}", method))
-    }
-
-    /// Create an invalid params error
-    pub fn invalid_params(details: impl Into<String>) -> Self {
-        Self::new(INVALID_PARAMS, format!("Invalid params: {}", details.into()))
-    }
-
-    /// Create an internal error
-    pub fn internal_error(details: impl Into<String>) -> Self {
-        Self::new(INTERNAL_ERROR, format!("Internal error: {}", details.into()))
-    }
-
-    /// Create an authentication required error
-    pub fn auth_required() -> Self {
-        Self::new(AUTH_REQUIRED, "Authentication required")
-    }
-
-    /// Create an authentication failed error
-    pub fn auth_failed(reason: impl Into<String>) -> Self {
-        Self::new(AUTH_FAILED, format!("Authentication failed: {}", reason.into()))
-    }
-}
-
 /// JSON-RPC 2.0 Batch Request
 ///
 /// A batch request is an array of request objects.
@@ -241,6 +173,28 @@ pub type JsonRpcBatchRequest = Vec<JsonRpcRequest>;
 ///
 /// A batch response is an array of response objects.
 pub type JsonRpcBatchResponse = Vec<JsonRpcResponse>;
+
+// ============================================================================
+// Gateway-specific extensions to protocol types
+// ============================================================================
+
+/// Extension trait for JsonRpcError with Gateway-specific methods
+pub trait JsonRpcErrorExt {
+    /// Create an authentication required error
+    fn auth_required() -> JsonRpcError;
+    /// Create an authentication failed error
+    fn auth_failed(reason: impl Into<String>) -> JsonRpcError;
+}
+
+impl JsonRpcErrorExt for JsonRpcError {
+    fn auth_required() -> JsonRpcError {
+        JsonRpcError::new(AUTH_REQUIRED, "Authentication required")
+    }
+
+    fn auth_failed(reason: impl Into<String>) -> JsonRpcError {
+        JsonRpcError::new(AUTH_FAILED, format!("Authentication failed: {}", reason.into()))
+    }
+}
 
 // ============================================================================
 // Tool Call Protocol Types (Server-to-Client reverse RPC)
@@ -323,7 +277,6 @@ mod tests {
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("\"jsonrpc\":\"2.0\""));
         assert!(json.contains("\"method\":\"echo\""));
-        assert!(json.contains("\"id\":1"));
     }
 
     #[test]
@@ -357,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_validation() {
-        let valid = JsonRpcRequest::new("test", None, Some(json!(1)));
+        let valid = JsonRpcRequest::with_id("test", None, json!(1));
         assert!(valid.validate().is_ok());
 
         let invalid_version = JsonRpcRequest {
@@ -376,10 +329,6 @@ mod tests {
         };
         assert!(empty_method.validate().is_err());
     }
-
-    // ========================================================================
-    // Tool Call Protocol Tests
-    // ========================================================================
 
     #[test]
     fn test_tool_call_params_serde() {

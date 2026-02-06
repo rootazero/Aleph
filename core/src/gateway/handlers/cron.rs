@@ -67,14 +67,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_list() {
-        let request = JsonRpcRequest::new("cron.list", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("cron.list", None, json!(1));
         let response = handle_list(request).await;
         assert!(response.is_success());
     }
 
     #[tokio::test]
     async fn test_handle_status() {
-        let request = JsonRpcRequest::new("cron.status", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("cron.status", None, json!(1));
         let response = handle_status(request).await;
         assert!(response.is_success());
     }
@@ -92,7 +92,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_run_missing_job_id() {
-        let request = JsonRpcRequest::new("cron.run", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("cron.run", None, json!(1));
         let response = handle_run(request).await;
         assert!(response.is_error());
     }

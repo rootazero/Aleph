@@ -39,7 +39,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_response() {
-        let request = JsonRpcRequest::new("health", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("health", None, json!(1));
         let response = handle(request).await;
 
         assert!(response.is_success());

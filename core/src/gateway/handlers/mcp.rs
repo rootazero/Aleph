@@ -636,7 +636,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_list_pending_approvals() {
-        let request = JsonRpcRequest::new("mcp.list_pending_approvals", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("mcp.list_pending_approvals", None, json!(1));
         let response = handle_list_pending_approvals(request).await;
 
         assert!(response.is_success());
@@ -665,7 +665,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_respond_approval_missing_params() {
-        let request = JsonRpcRequest::new("mcp.respond_approval", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("mcp.respond_approval", None, json!(1));
         let response = handle_respond_approval(request).await;
 
         assert!(response.is_error());
@@ -689,7 +689,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_cancel_approval_missing_params() {
-        let request = JsonRpcRequest::new("mcp.cancel_approval", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("mcp.cancel_approval", None, json!(1));
         let response = handle_cancel_approval(request).await;
 
         assert!(response.is_error());

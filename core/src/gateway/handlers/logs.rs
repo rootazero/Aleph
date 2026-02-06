@@ -132,7 +132,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_level() {
-        let request = JsonRpcRequest::new("logs.getLevel", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("logs.getLevel", None, json!(1));
         let response = handle_get_level(request).await;
 
         assert!(response.is_success());
@@ -172,7 +172,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_directory() {
-        let request = JsonRpcRequest::new("logs.getDirectory", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("logs.getDirectory", None, json!(1));
         let response = handle_get_directory(request).await;
 
         assert!(response.is_success());

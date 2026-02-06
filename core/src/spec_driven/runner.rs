@@ -212,7 +212,7 @@ impl UnifiedTestRunner {
 
     fn discover_gherkin(&self) -> Result<Vec<TestSource>, RunnerError> {
         let mut sources = Vec::new();
-        self.walk_dir(&self.config.features_dir, "feature", |path| {
+        self.walk_dir(&self.config.features_dir, "feature", &mut |path| {
             sources.push(TestSource::Gherkin(path));
         })?;
         Ok(sources)
@@ -220,7 +220,7 @@ impl UnifiedTestRunner {
 
     fn discover_yaml_specs(&self) -> Result<Vec<TestSource>, RunnerError> {
         let mut sources = Vec::new();
-        self.walk_dir(&self.config.specs_dir, "spec.yaml", |path| {
+        self.walk_dir(&self.config.specs_dir, "spec.yaml", &mut |path| {
             sources.push(TestSource::YamlSpec(path));
         })?;
         Ok(sources)
@@ -230,7 +230,7 @@ impl UnifiedTestRunner {
         &self,
         dir: &Path,
         extension: &str,
-        mut callback: impl FnMut(PathBuf),
+        callback: &mut impl FnMut(PathBuf),
     ) -> Result<(), RunnerError> {
         if !dir.exists() {
             return Ok(());
@@ -243,7 +243,7 @@ impl UnifiedTestRunner {
             let path = entry.path();
 
             if path.is_dir() {
-                self.walk_dir(&path, extension, &mut callback)?;
+                self.walk_dir(&path, extension, callback)?;
             } else if path.to_string_lossy().ends_with(extension) {
                 if let Some(ref filter) = self.config.filter {
                     if !path.to_string_lossy().contains(filter) {

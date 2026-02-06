@@ -1343,7 +1343,7 @@ mod tests {
         let manager = Arc::new(create_test_manager());
 
         // Missing params
-        let request = JsonRpcRequest::new("poe.run", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("poe.run", None, json!(1));
         let response = handle_run(request, manager.clone()).await;
         assert!(response.is_error());
 
@@ -1450,7 +1450,7 @@ mod tests {
             manager.start_run(params).await.unwrap();
         }
 
-        let request = JsonRpcRequest::new("poe.list", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("poe.list", None, json!(1));
         let response = handle_list(request, manager).await;
         assert!(response.is_success());
 

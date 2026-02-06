@@ -811,7 +811,7 @@ mod tests {
             ))
             .unwrap();
 
-        let request = JsonRpcRequest::new("devices.list", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("devices.list", None, json!(1));
         let response = handle_devices_list(request, ctx).await;
 
         assert!(response.is_success());
