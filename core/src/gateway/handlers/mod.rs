@@ -298,6 +298,22 @@ impl HandlerRegistry {
             )
         });
 
+        // Guest handlers (placeholders - actual handlers wired with InvitationManager)
+        registry.register("guests.createInvitation", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "guests.createInvitation requires InvitationManager - wire SharedInvitationManager first".to_string(),
+            )
+        });
+        registry.register("guests.listPending", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "guests.listPending requires InvitationManager - wire SharedInvitationManager first".to_string(),
+            )
+        });
+
         registry
     }
 

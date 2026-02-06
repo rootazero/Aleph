@@ -490,6 +490,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let token_manager = Arc::new(TokenManager::new(security_store.clone()));
     let pairing_manager = Arc::new(PairingManager::new(security_store.clone()));
+    let invitation_manager = Arc::new(alephcore::gateway::security::InvitationManager::new());
     let auth_ctx = Arc::new(auth_handlers::AuthContext::new(
         token_manager,
         pairing_manager,
@@ -500,6 +501,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Register auth handlers
     register_auth_handlers(&mut server, &auth_ctx);
+
+    // Register guest handlers
+    register_guest_handlers(&mut server, &invitation_manager);
 
     if !args.daemon {
         println!("Auth methods:");
@@ -681,6 +685,28 @@ fn register_auth_handlers(
     server.handlers_mut().register("devices.revoke", move |req| {
         let ctx = auth_ctx_devices_revoke.clone();
         async move { auth_handlers::handle_devices_revoke(req, ctx).await }
+    });
+}
+
+#[cfg(feature = "gateway")]
+fn register_guest_handlers(
+    server: &mut GatewayServer,
+    invitation_manager: &Arc<alephcore::gateway::security::InvitationManager>,
+) {
+    use alephcore::gateway::handlers::guests;
+
+    // guests.createInvitation
+    let mgr_create = invitation_manager.clone();
+    server.handlers_mut().register("guests.createInvitation", move |req| {
+        let mgr = mgr_create.clone();
+        async move { guests::handle_create_invitation(req, mgr).await }
+    });
+
+    // guests.listPending
+    let mgr_list = invitation_manager.clone();
+    server.handlers_mut().register("guests.listPending", move |req| {
+        let mgr = mgr_list.clone();
+        async move { guests::handle_list_guests(req, mgr).await }
     });
 }
 
