@@ -1,0 +1,55 @@
+[package]
+name = "aleph-client-sdk"
+version = "0.1.0"
+edition = "2021"
+authors = ["Aleph Team"]
+description = "Aleph Client SDK - Shared logic for Rust clients"
+license = "MIT"
+
+[features]
+default = ["client", "native-tls"]
+
+# Basic communication capabilities
+transport = ["dep:tokio-tungstenite", "dep:futures-util", "dep:tokio"]
+rpc = ["dep:serde_json", "dep:tokio"]
+
+# Core client instance
+client = ["transport", "rpc", "dep:async-trait"]
+
+# Local tool execution
+local-executor = ["dep:tokio", "tokio/process", "dep:async-trait"]
+
+# TLS options (mutually exclusive in practice, but both can be enabled)
+native-tls = ["tokio-tungstenite/native-tls"]
+rustls = ["tokio-tungstenite/rustls-tls-native-roots"]
+
+# Optional tracing
+tracing = ["dep:tracing"]
+
+[dependencies]
+# Protocol types
+aleph-protocol = { path = "../../shared/protocol" }
+
+# Async runtime
+tokio = { workspace = true, optional = true, features = ["sync", "time"] }
+tokio-tungstenite = { version = "0.24", optional = true }
+futures-util = { version = "0.3", optional = true }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
+
+# Async traits
+async-trait = { workspace = true, optional = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true, optional = true }
+
+# Utilities
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

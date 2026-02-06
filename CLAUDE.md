@@ -213,9 +213,10 @@ aleph/
 │       ├── runtimes/               # 运行时管理 (uv, fnm, yt-dlp)
 │       ├── config/                 # 配置系统 + 热重载
 │       └── lib.rs                  # 60+ public modules
-├── platforms/
+├── clients/
+│   ├── cli/                        # Rust CLI 客户端
 │   ├── macos/                      # macOS App (Swift/SwiftUI, 45+ dirs)
-│   └── tauri/                      # Cross-platform Tauri App
+│   └── desktop/                    # Cross-platform Tauri App
 ├── docs/                           # 文档
 │   ├── ARCHITECTURE.md             # 完整架构
 │   ├── AGENT_SYSTEM.md             # Agent 系统
@@ -260,10 +261,10 @@ cd core && cargo build && cargo test
 cargo run -p alephcore --features gateway
 
 # macOS App
-cd platforms/macos && xcodegen generate && open Aleph.xcodeproj
+cd clients/macos && xcodegen generate && open Aleph.xcodeproj
 
 # Tauri App
-cd platforms/tauri && pnpm install && pnpm tauri dev
+cd clients/desktop && pnpm install && pnpm tauri dev
 ```
 
 ### Feature Flags
@@ -284,7 +285,7 @@ plugin-wasm = ["extism"]
 
 - Python path: ~/.uv/python3/bin/python
 - Install Python package: cd ~/.uv/python3 && uv pip install <package>
-- Xcode generation: cd platforms/macos && xcodegen generate
+- Xcode generation: cd clients/macos && xcodegen generate
 - Syntax validation: ~/.uv/python3/bin/python Scripts/verify_swift_syntax.py <file.swift>
 - Xcode build cache cleanup: rm -rf ~/Library/Developer/Xcode/DerivedData/(Aleph)-*
 - This project uses XcodeGen to manage the Xcode project. See docs/XCODEGEN_README.md for detailed workflow instructions.

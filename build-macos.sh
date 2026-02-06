@@ -6,7 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 CORE_DIR="$ROOT_DIR/core"
-MACOS_DIR="$ROOT_DIR/platforms/macos"
+MACOS_DIR="$ROOT_DIR/clients/macos"
 
 CONFIG=${1:-Release} # Release 或 Debug
 

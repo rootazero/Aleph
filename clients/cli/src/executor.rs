@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tokio::process::Command;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Parameters for shell execution
 #[derive(Debug, Deserialize)]
