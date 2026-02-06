@@ -1,0 +1,58 @@
+[package]
+name = "aleph-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Aleph CLI - Reference implementation of Aleph Protocol client"
+license = "MIT"
+readme = "README.md"
+
+# IMPORTANT: This crate MUST NOT depend on alephcore
+# It serves as a reference implementation showing how to build
+# a client using only the protocol types.
+
+[[bin]]
+name = "aleph"
+path = "src/main.rs"
+
+[dependencies]
+# Protocol types (the ONLY Aleph dependency allowed)
+aleph-protocol = { path = "../../shared/protocol" }
+
+# Async runtime
+tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "signal", "net"] }
+
+# WebSocket client
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+futures-util = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# CLI interface
+clap = { version = "4.4", features = ["derive"] }
+
+# Terminal UI
+crossterm = "0.28"
+ratatui = "0.29"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+uuid = { version = "1.7", features = ["v4"] }
+chrono = "0.4"
+dirs = "5.0"
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[lints.rust]
+# Ensure we don't accidentally depend on alephcore
+unexpected_cfgs = "warn"
