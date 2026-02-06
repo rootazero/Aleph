@@ -100,7 +100,7 @@ pub use integration::{
 };
 pub use registry::ToolRegistry;
 pub use types::{
-    ConflictInfo, ConflictResolution, RoutingLayer, StructuredToolMeta, ToolCategory,
+    ConflictInfo, ConflictResolution, ExecutionPolicy, RoutingLayer, StructuredToolMeta, ToolCategory,
     ToolDefinition, ToolDiff, ToolIndex, ToolIndexCategory, ToolIndexEntry, ToolPriority,
     ToolResult, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
 };
