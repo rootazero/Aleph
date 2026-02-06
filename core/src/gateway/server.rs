@@ -75,6 +75,19 @@ impl ConnectionState {
             .map(|m| m.supports_tool(tool_name))
             .unwrap_or(false)
     }
+
+    /// Check if client has a specific scope granted
+    pub fn has_scope(&self, category: &str, scope: &str) -> bool {
+        self.manifest
+            .as_ref()
+            .map(|m| m.has_scope(category, scope))
+            .unwrap_or(true) // No manifest = all allowed
+    }
+
+    /// Check if this connection has a client manifest (supports routing)
+    pub fn has_manifest(&self) -> bool {
+        self.manifest.is_some()
+    }
 }
 
 /// Configuration for the Gateway server

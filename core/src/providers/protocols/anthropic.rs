@@ -9,7 +9,7 @@ use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::anthropic::{
     ContentBlock, ErrorResponse, ImageSource, Message, MessageContent, MessagesRequest,
-    MessagesResponse, ThinkingBlock,
+    MessagesResponse, SystemBlock, ThinkingBlock,
 };
 use crate::providers::shared::{
     build_document_context, combine_with_document_context, separate_attachments,
@@ -217,7 +217,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             model: config.model.clone(),
             messages,
             max_tokens,
-            system: payload.system_prompt.map(|s| s.to_string()),
+            system: payload.system_prompt.map(|s| vec![SystemBlock::text(s)]),
             temperature: config.temperature,
             stream: if is_streaming { Some(true) } else { None },
             thinking,

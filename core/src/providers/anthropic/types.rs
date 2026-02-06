@@ -13,13 +13,31 @@ pub struct MessagesRequest {
     pub messages: Vec<Message>,
     pub max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<String>,
+    pub system: Option<Vec<SystemBlock>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingBlock>,
+}
+
+/// System prompt block (array format for compatibility)
+#[derive(Debug, Serialize)]
+pub struct SystemBlock {
+    #[serde(rename = "type")]
+    pub block_type: String,
+    pub text: String,
+}
+
+impl SystemBlock {
+    /// Create a text system block
+    pub fn text(content: impl Into<String>) -> Self {
+        Self {
+            block_type: "text".to_string(),
+            text: content.into(),
+        }
+    }
 }
 
 /// Extended thinking configuration
