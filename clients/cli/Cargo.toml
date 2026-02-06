@@ -17,7 +17,8 @@ path = "src/main.rs"
 [dependencies]
 # Aleph dependencies
 aleph-protocol = { path = "../../shared/protocol" }
-aleph-client-sdk = { path = "../shared", features = ["client", "native-tls", "tracing"] }
+# TODO: Integrate aleph-sdk for discovery when CLI uses it
+# aleph-sdk = { path = "../shared" }
 
 # Async runtime
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "signal", "net", "process"] }
