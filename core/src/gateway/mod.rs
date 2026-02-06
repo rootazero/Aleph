@@ -42,6 +42,8 @@ pub mod router;
 pub mod security;
 #[cfg(feature = "gateway")]
 pub mod handlers;
+#[cfg(feature = "gateway")]
+pub mod mdns_broadcaster;
 
 // Phase 4: Multi-Agent & Dispatcher
 #[cfg(feature = "gateway")]
@@ -113,6 +115,8 @@ pub use stream_buffer::StreamBuffer;
 pub use message_dedup::{normalize_text, is_text_duplicate, SentMessageTracker, SentRecord};
 #[cfg(feature = "gateway")]
 pub use router::AgentRouter;
+#[cfg(feature = "gateway")]
+pub use mdns_broadcaster::MdnsBroadcaster;
 
 // Phase 4 exports
 #[cfg(feature = "gateway")]
