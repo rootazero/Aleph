@@ -18,14 +18,11 @@
 mod event_handler;
 mod state;
 
-pub use event_handler::TauriEventHandler;
 pub use state::GatewayState;
 
 use aleph_client_sdk::{GatewayClient, StreamEvent};
-use aleph_protocol::{ClientManifest, ClientCapabilities, ClientEnvironment, ExecutionConstraints};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, Runtime};
-use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::error::{AlephError, Result};
@@ -77,15 +74,22 @@ pub async fn init_gateway<R: Runtime>(app: &AppHandle<R>) -> Result<Arc<GatewayC
 
 /// Handle events from Gateway
 async fn handle_gateway_event<R: Runtime>(app: AppHandle<R>, event: StreamEvent) {
+    use tauri::Emitter;
+
     // Forward event to frontend via window.emit()
     if let Some(window) = app.get_webview_window("halo") {
         let event_name = match &event {
-            StreamEvent::TextDelta { .. } => "stream:text",
-            StreamEvent::ToolCall { .. } => "stream:tool-call",
-            StreamEvent::ToolResult { .. } => "stream:tool-result",
-            StreamEvent::Complete { .. } => "stream:complete",
-            StreamEvent::Error { .. } => "stream:error",
-            _ => "stream:event",
+            StreamEvent::RunAccepted { .. } => "stream:run-accepted",
+            StreamEvent::Reasoning { .. } => "stream:reasoning",
+            StreamEvent::ToolStart { .. } => "stream:tool-start",
+            StreamEvent::ToolUpdate { .. } => "stream:tool-update",
+            StreamEvent::ToolEnd { .. } => "stream:tool-end",
+            StreamEvent::ResponseChunk { .. } => "stream:response-chunk",
+            StreamEvent::RunComplete { .. } => "stream:run-complete",
+            StreamEvent::RunError { .. } => "stream:run-error",
+            StreamEvent::AskUser { .. } => "stream:ask-user",
+            StreamEvent::ReasoningBlock { .. } => "stream:reasoning-block",
+            StreamEvent::UncertaintySignal { .. } => "stream:uncertainty-signal",
         };
 
         if let Err(e) = window.emit(event_name, &event) {
@@ -101,11 +105,11 @@ fn get_or_create_device_id() -> Result<String> {
 
     if device_id_file.exists() {
         std::fs::read_to_string(&device_id_file)
-            .map_err(|e| AlephError::IO(e))
+            .map_err(|e| AlephError::Io(e.to_string()))
     } else {
         let device_id = uuid::Uuid::new_v4().to_string();
         std::fs::write(&device_id_file, &device_id)
-            .map_err(|e| AlephError::IO(e))?;
+            .map_err(|e| AlephError::Io(e.to_string()))?;
         Ok(device_id)
     }
 }
@@ -245,7 +249,7 @@ pub async fn extract_text_from_image<R: Runtime>(
 
     #[derive(serde::Serialize)]
     struct OcrParams {
-        #[serde(with = "base64")]
+        #[serde(with = "base64_serde")]
         image_data: Vec<u8>,
     }
 
@@ -261,102 +265,223 @@ pub async fn extract_text_from_image<R: Runtime>(
 }
 
 // ============================================================================
-// Placeholder Commands
+// Provider Management Commands
 // ============================================================================
-//
-// The following commands need similar RPC proxying implementation.
-// They are stubbed here to maintain compilation.
-//
 
 #[tauri::command]
-pub fn list_generation_providers<R: Runtime>(_app: AppHandle<R>) -> Result<Vec<GenerationProviderInfo>> {
-    warn!("list_generation_providers not yet implemented for Gateway mode");
-    Ok(vec![])
+pub async fn list_generation_providers<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Vec<GenerationProviderInfo>> {
+    let state = app.state::<GatewayState>();
+    let client = state.get_client()?;
+
+    let result: serde_json::Value = client.call("list_providers", None::<serde_json::Value>)
+        .await
+        .map_err(|e| AlephError::RPC(e.to_string()))?;
+
+    let providers: Vec<GenerationProviderInfo> = serde_json::from_value(result)
+        .map_err(|e| AlephError::Serialization(e.to_string()))?;
+
+    Ok(providers)
 }
 
 #[tauri::command]
-pub async fn set_default_provider<R: Runtime>(_app: AppHandle<R>, _provider_name: String) -> Result<()> {
-    warn!("set_default_provider not yet implemented for Gateway mode");
+pub async fn set_default_provider<R: Runtime>(
+    app: AppHandle<R>,
+    provider_name: String,
+) -> Result<()> {
+    let state = app.state::<GatewayState>();
+    let client = state.get_client()?;
+
+    #[derive(serde::Serialize)]
+    struct SetProviderParams {
+        provider_name: String,
+    }
+
+    let params = SetProviderParams { provider_name };
+
+    let _: serde_json::Value = client.call("set_default_provider", Some(params))
+        .await
+        .map_err(|e| AlephError::RPC(e.to_string()))?;
+
     Ok(())
 }
 
 #[tauri::command]
-pub async fn reload_config<R: Runtime>(_app: AppHandle<R>) -> Result<()> {
-    warn!("reload_config not yet implemented for Gateway mode");
+pub async fn reload_config<R: Runtime>(app: AppHandle<R>) -> Result<()> {
+    let state = app.state::<GatewayState>();
+    let client = state.get_client()?;
+
+    let _: serde_json::Value = client.call("reload_config", None::<serde_json::Value>)
+        .await
+        .map_err(|e| AlephError::RPC(e.to_string()))?;
+
+    info!("Configuration reloaded");
     Ok(())
 }
 
+// ============================================================================
+// Memory Management Commands
+// ============================================================================
+
 #[tauri::command]
-pub async fn search_memory<R: Runtime>(_app: AppHandle<R>, _query: String, _limit: Option<u32>) -> Result<Vec<MemoryItemFFI>> {
-    warn!("search_memory not yet implemented for Gateway mode");
-    Ok(vec![])
+pub async fn search_memory<R: Runtime>(
+    app: AppHandle<R>,
+    query: String,
+    limit: Option<u32>,
+) -> Result<Vec<MemoryItemFFI>> {
+    let state = app.state::<GatewayState>();
+    let client = state.get_client()?;
+
+    #[derive(serde::Serialize)]
+    struct SearchParams {
+        query: String,
+        limit: u32,
+    }
+
+    let params = SearchParams {
+        query,
+        limit: limit.unwrap_or(10),
+    };
+
+    let result: serde_json::Value = client.call("search_memory", Some(params))
+        .await
+        .map_err(|e| AlephError::RPC(e.to_string()))?;
+
+    let items: Vec<MemoryItemFFI> = serde_json::from_value(result)
+        .map_err(|e| AlephError::Serialization(e.to_string()))?;
+
+    Ok(items)
 }
 
 #[tauri::command]
-pub fn get_memory_stats<R: Runtime>(_app: AppHandle<R>) -> Result<MemoryStatsFFI> {
-    warn!("get_memory_stats not yet implemented for Gateway mode");
-    Ok(MemoryStatsFFI {
-        total_memories: 0,
-        total_apps: 0,
-        database_size_mb: 0.0,
-        oldest_memory_timestamp: 0,
-        newest_memory_timestamp: 0,
-    })
+pub async fn get_memory_stats<R: Runtime>(app: AppHandle<R>) -> Result<MemoryStatsFFI> {
+    let state = app.state::<GatewayState>();
+    let client = state.get_client()?;
+
+    let result: serde_json::Value = client.call("memory_stats", None::<serde_json::Value>)
+        .await
+        .map_err(|e| AlephError::RPC(e.to_string()))?;
+
+    let stats: MemoryStatsFFI = serde_json::from_value(result)
+        .map_err(|e| AlephError::Serialization(e.to_string()))?;
+
+    Ok(stats)
 }
 
 #[tauri::command]
-pub async fn clear_memory<R: Runtime>(_app: AppHandle<R>) -> Result<()> {
-    warn!("clear_memory not yet implemented for Gateway mode");
+pub async fn clear_memory<R: Runtime>(app: AppHandle<R>) -> Result<()> {
+    let state = app.state::<GatewayState>();
+    let client = state.get_client()?;
+
+    let _: serde_json::Value = client.call("clear_memory", None::<serde_json::Value>)
+        .await
+        .map_err(|e| AlephError::RPC(e.to_string()))?;
+
+    info!("Memory cleared");
     Ok(())
 }
 
+// ============================================================================
+// Tool Management Commands
+// ============================================================================
+
 #[tauri::command]
-pub fn list_tools<R: Runtime>(_app: AppHandle<R>) -> Result<Vec<ToolInfoFFI>> {
-    warn!("list_tools not yet implemented for Gateway mode");
-    Ok(vec![])
+pub async fn list_tools<R: Runtime>(app: AppHandle<R>) -> Result<Vec<ToolInfoFFI>> {
+    let state = app.state::<GatewayState>();
+    let client = state.get_client()?;
+
+    let result: serde_json::Value = client.call("list_tools", None::<serde_json::Value>)
+        .await
+        .map_err(|e| AlephError::RPC(e.to_string()))?;
+
+    let tools: Vec<ToolInfoFFI> = serde_json::from_value(result)
+        .map_err(|e| AlephError::Serialization(e.to_string()))?;
+
+    Ok(tools)
 }
 
 #[tauri::command]
-pub fn get_tool_count<R: Runtime>(_app: AppHandle<R>) -> Result<u32> {
-    Ok(0)
+pub async fn get_tool_count<R: Runtime>(app: AppHandle<R>) -> Result<u32> {
+    let state = app.state::<GatewayState>();
+    let client = state.get_client()?;
+
+    let result: serde_json::Value = client.call("tool_count", None::<serde_json::Value>)
+        .await
+        .map_err(|e| AlephError::RPC(e.to_string()))?;
+
+    let count: u32 = serde_json::from_value(result)
+        .map_err(|e| AlephError::Serialization(e.to_string()))?;
+
+    Ok(count)
+}
+
+// ============================================================================
+// MCP Server Management Commands
+// ============================================================================
+
+#[tauri::command]
+pub async fn list_mcp_servers<R: Runtime>(app: AppHandle<R>) -> Result<Vec<McpServerInfoFFI>> {
+    let state = app.state::<GatewayState>();
+    let client = state.get_client()?;
+
+    let result: serde_json::Value = client.call("list_mcp_servers", None::<serde_json::Value>)
+        .await
+        .map_err(|e| AlephError::RPC(e.to_string()))?;
+
+    let servers: Vec<McpServerInfoFFI> = serde_json::from_value(result)
+        .map_err(|e| AlephError::Serialization(e.to_string()))?;
+
+    Ok(servers)
 }
 
 #[tauri::command]
-pub fn list_mcp_servers<R: Runtime>(_app: AppHandle<R>) -> Result<Vec<McpServerInfoFFI>> {
-    warn!("list_mcp_servers not yet implemented for Gateway mode");
-    Ok(vec![])
+pub async fn get_mcp_config<R: Runtime>(app: AppHandle<R>) -> Result<McpConfigFFI> {
+    let state = app.state::<GatewayState>();
+    let client = state.get_client()?;
+
+    let result: serde_json::Value = client.call("mcp_config", None::<serde_json::Value>)
+        .await
+        .map_err(|e| AlephError::RPC(e.to_string()))?;
+
+    let config: McpConfigFFI = serde_json::from_value(result)
+        .map_err(|e| AlephError::Serialization(e.to_string()))?;
+
+    Ok(config)
 }
 
-#[tauri::command]
-pub fn get_mcp_config<R: Runtime>(_app: AppHandle<R>) -> Result<McpConfigFFI> {
-    warn!("get_mcp_config not yet implemented for Gateway mode");
-    Ok(McpConfigFFI {
-        enabled: false,
-        fs_enabled: false,
-        git_enabled: false,
-        shell_enabled: false,
-        system_info_enabled: false,
-    })
-}
+// ============================================================================
+// Skills Management Commands
+// ============================================================================
 
 #[tauri::command]
-pub fn list_skills<R: Runtime>(_app: AppHandle<R>) -> Result<Vec<SkillInfoFFI>> {
-    warn!("list_skills not yet implemented for Gateway mode");
-    Ok(vec![])
+pub async fn list_skills<R: Runtime>(app: AppHandle<R>) -> Result<Vec<SkillInfoFFI>> {
+    let state = app.state::<GatewayState>();
+    let client = state.get_client()?;
+
+    let result: serde_json::Value = client.call("list_skills", None::<serde_json::Value>)
+        .await
+        .map_err(|e| AlephError::RPC(e.to_string()))?;
+
+    let skills: Vec<SkillInfoFFI> = serde_json::from_value(result)
+        .map_err(|e| AlephError::Serialization(e.to_string()))?;
+
+    Ok(skills)
 }
 
 // ============================================================================
 // FFI Types for Frontend (unchanged)
 // ============================================================================
 
-mod base64 {
-    use serde::{Deserialize, Deserializer, Serializer};
+mod base64_serde {
+    use serde::{Deserializer, Serializer};
+    use base64::{engine::general_purpose, Engine};
 
     pub fn serialize<S>(bytes: &Vec<u8>, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_str(&base64::encode(bytes))
+        serializer.serialize_str(&general_purpose::STANDARD.encode(bytes))
     }
 
     pub fn deserialize<'de, D>(_deserializer: D) -> std::result::Result<Vec<u8>, D::Error>
@@ -367,6 +492,7 @@ mod base64 {
     }
 }
 
+#[allow(dead_code)]
 fn base64_encode(data: &[u8]) -> String {
     use base64::{engine::general_purpose, Engine};
     general_purpose::STANDARD.encode(data)
