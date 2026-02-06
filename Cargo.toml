@@ -89,4 +89,7 @@ url = "2.5"
 # Caching
 lru = "0.12"
 
+# mDNS service discovery
+mdns-sd = "0.11"
+
 # UniFFI removed - using Gateway WebSocket architecture
