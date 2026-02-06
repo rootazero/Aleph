@@ -41,6 +41,10 @@ pub struct ConnectionState {
     pub permissions: Vec<String>,
     /// Client capability manifest (set during connect if provided)
     pub manifest: Option<ClientManifest>,
+    /// Reverse RPC manager for Server-Client tool routing
+    pub reverse_rpc: Option<Arc<ReverseRpcManager>>,
+    /// Channel sender for sending requests to the client
+    pub client_sender: Option<tokio::sync::mpsc::Sender<JsonRpcRequest>>,
 }
 
 impl ConnectionState {
@@ -53,6 +57,26 @@ impl ConnectionState {
             device_id: None,
             permissions: vec![],
             manifest: None,
+            reverse_rpc: None,
+            client_sender: None,
+        }
+    }
+
+    /// Create a new connection state with Server-Client routing support
+    fn with_routing(
+        reverse_rpc: Arc<ReverseRpcManager>,
+        client_sender: tokio::sync::mpsc::Sender<JsonRpcRequest>,
+    ) -> Self {
+        Self {
+            authenticated: false,
+            first_message: true,
+            subscriptions: vec![],
+            metadata: HashMap::new(),
+            device_id: None,
+            permissions: vec![],
+            manifest: None,
+            reverse_rpc: Some(reverse_rpc),
+            client_sender: Some(client_sender),
         }
     }
 
@@ -87,6 +111,26 @@ impl ConnectionState {
     /// Check if this connection has a client manifest (supports routing)
     pub fn has_manifest(&self) -> bool {
         self.manifest.is_some()
+    }
+
+    /// Check if this connection supports Server-Client routing
+    ///
+    /// Returns true if the connection has all required components:
+    /// - Client manifest (capability declaration)
+    /// - Reverse RPC manager
+    /// - Client sender channel
+    pub fn supports_routing(&self) -> bool {
+        self.manifest.is_some() && self.reverse_rpc.is_some() && self.client_sender.is_some()
+    }
+
+    /// Create a ClientContext for Server-Client routing
+    ///
+    /// Returns None if the connection doesn't have all required components.
+    pub fn client_context(&self) -> Option<super::execution_engine::ClientContext> {
+        let manifest = self.manifest.clone()?;
+        let reverse_rpc = self.reverse_rpc.clone()?;
+        let sender = self.client_sender.clone()?;
+        Some(super::execution_engine::ClientContext::new(manifest, reverse_rpc, sender))
     }
 }
 
@@ -347,17 +391,24 @@ async fn handle_connection(
 
     info!("New WebSocket connection: {}", conn_id);
 
-    // Initialize connection state
-    {
-        let mut conns = connections.write().await;
-        conns.insert(conn_id.clone(), ConnectionState::new());
-    }
-
     // Subscribe to event bus for this connection
     let mut event_rx = event_bus.subscribe();
 
     // Create reverse RPC manager for this connection
     let reverse_rpc = Arc::new(ReverseRpcManager::new());
+
+    // Create channel for sending requests to the client (for Server-Client routing)
+    // This allows ExecutionEngine to send tool.call requests to the client
+    let (client_tx, mut client_rx) = tokio::sync::mpsc::channel::<JsonRpcRequest>(32);
+
+    // Initialize connection state with routing support
+    {
+        let mut conns = connections.write().await;
+        conns.insert(
+            conn_id.clone(),
+            ConnectionState::with_routing(reverse_rpc.clone(), client_tx.clone()),
+        );
+    }
 
     loop {
         tokio::select! {
@@ -569,6 +620,30 @@ async fn handle_connection(
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         debug!("Event bus closed for {}", conn_id);
                         break;
+                    }
+                }
+            }
+            // Forward requests to client (for Server-Client reverse RPC)
+            // This handles tool.call requests from ExecutionEngine
+            request = client_rx.recv() => {
+                match request {
+                    Some(req) => {
+                        debug!("Sending request to client {}: {}", conn_id, req.method);
+                        match serde_json::to_string(&req) {
+                            Ok(json) => {
+                                if let Err(e) = write.send(Message::Text(json.into())).await {
+                                    error!("Failed to send request to {}: {}", conn_id, e);
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to serialize request for {}: {}", conn_id, e);
+                            }
+                        }
+                    }
+                    None => {
+                        // Channel closed, this is normal during shutdown
+                        debug!("Client request channel closed for {}", conn_id);
                     }
                 }
             }
