@@ -589,20 +589,20 @@ core_tools = ["search", "file_read", "file_write"]  # 强制核心工具
 
 ### Phase 2: 检索集成 (Week 2)
 
-- [ ] 实现 `ToolRetrieval` 双阈值逻辑
-- [ ] 集成 `HydrationPipeline` 到 Dispatcher
-- [ ] 修改 `PromptBuilder` 支持动态工具注入
+- [x] 实现 `ToolRetrieval` 双阈值逻辑
+- [x] 集成 `HydrationPipeline` 到 Dispatcher
+- [x] 修改 `PromptBuilder` 支持动态工具注入
 
 ### Phase 3: 异步优化 (Week 3)
 
-- [ ] 实现 L2 异步 LLM 补全
-- [ ] 添加 `optimization_level` 可观测性
+- [x] 实现 L2 异步 LLM 补全
+- [x] 添加 `optimization_level` 可观测性
 - [ ] 性能测试与阈值调优
 
 ### Phase 4: 生产就绪 (Week 4)
 
-- [ ] MCP Server 事件监听集成
-- [ ] Skill Registry 事件监听集成
+- [x] MCP Server 事件监听集成
+- [x] Skill Registry 事件监听集成
 - [ ] 配置热重载支持
 - [ ] 文档更新
 

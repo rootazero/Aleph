@@ -73,7 +73,7 @@ impl ToolMeta {
 /// Uses SemanticPurposeInferrer to generate rich content descriptions.
 pub struct ToolIndexCoordinator {
     db: Arc<VectorDatabase>,
-    inferrer: SemanticPurposeInferrer,
+    inferrer: Arc<SemanticPurposeInferrer>,
 }
 
 impl ToolIndexCoordinator {
@@ -81,7 +81,15 @@ impl ToolIndexCoordinator {
     pub fn new(db: Arc<VectorDatabase>) -> Self {
         Self {
             db,
-            inferrer: SemanticPurposeInferrer::new(),
+            inferrer: Arc::new(SemanticPurposeInferrer::new()),
+        }
+    }
+
+    /// Create a new coordinator with LLM support for L2 optimization
+    pub fn with_llm(db: Arc<VectorDatabase>, llm_provider: Arc<dyn crate::providers::AiProvider>) -> Self {
+        Self {
+            db,
+            inferrer: Arc::new(SemanticPurposeInferrer::with_llm(llm_provider)),
         }
     }
 
@@ -121,6 +129,14 @@ impl ToolIndexCoordinator {
     ) -> Result<String, AlephError> {
         // Infer semantic purpose using ranked strategy (L0 -> L1)
         let inferred = self.inferrer.infer(name, description, category, structured_meta);
+
+        // Log optimization level for observability
+        tracing::info!(
+            tool_name = %name,
+            optimization_level = %format!("L{}", inferred.level),
+            confidence = %inferred.confidence,
+            "Tool indexed with semantic inference"
+        );
 
         // Build content: inferred purpose + original description for context
         let content = if let Some(desc) = description {
@@ -162,6 +178,56 @@ impl ToolIndexCoordinator {
             };
 
             self.db.insert_fact(fact).await?;
+        }
+
+        // Schedule L2 optimization if needed (async, non-blocking)
+        if self.inferrer.should_trigger_l2(&inferred) {
+            tracing::debug!(
+                tool_name = %name,
+                "Scheduling L2 async optimization"
+            );
+
+            let db = Arc::clone(&self.db);
+            let inferrer = Arc::clone(&self.inferrer);
+            let tool_name = name.to_string();
+            let tool_desc = description.map(|s| s.to_string());
+            let tool_cat = category.map(|s| s.to_string());
+            let tool_id = fact_id.clone();
+
+            // Spawn background task for L2 optimization
+            tokio::spawn(async move {
+                match inferrer.enhance_with_llm(
+                    &tool_id,
+                    &tool_name,
+                    tool_desc.as_deref(),
+                    tool_cat.as_deref(),
+                ).await {
+                    Ok(l2_result) => {
+                        tracing::info!(
+                            tool_name = %tool_name,
+                            optimization_level = "L2",
+                            confidence = %l2_result.confidence,
+                            "L2 optimization completed"
+                        );
+
+                        // Update fact with L2-enhanced content
+                        if let Err(e) = db.update_fact_content(&tool_id, &l2_result.description, None).await {
+                            tracing::warn!(
+                                tool_name = %tool_name,
+                                error = %e,
+                                "Failed to update fact with L2 content"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            tool_name = %tool_name,
+                            error = %e,
+                            "L2 optimization failed, keeping L1 description"
+                        );
+                    }
+                }
+            });
         }
 
         Ok(fact_id)
