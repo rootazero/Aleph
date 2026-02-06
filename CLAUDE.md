@@ -150,6 +150,41 @@ pub trait ValueObject: Eq + Clone {}
 
 详见：[完整架构文档](docs/ARCHITECTURE.md)
 
+### 🌐 Server-Client 模式
+
+Aleph 支持 **Server-Client 分布式架构**，实现"大脑在云端，手脚在身边"：
+
+```
+┌─────────────────┐                    ┌─────────────────┐
+│  Client (手脚)   │                    │  Server (大脑)   │
+├─────────────────┤                    ├─────────────────┤
+│ 本地工具执行     │ ←── tool.call ──── │ Agent Loop      │
+│ Shell/文件系统   │ ── tool.result ──→ │ LLM 交互        │
+│ UI 交互         │                    │ 任务调度        │
+└─────────────────┘                    └─────────────────┘
+```
+
+#### 核心组件
+
+| 组件 | 位置 | 职责 |
+|------|------|------|
+| **ExecutionPolicy** | `dispatcher/types/` | 工具执行位置策略 (ServerOnly/ClientOnly/PreferServer/PreferClient) |
+| **ClientManifest** | `gateway/` | Client 能力声明 (工具类别、约束、环境) |
+| **ToolRouter** | `executor/` | 路由决策引擎 (Policy + 能力 → 决策) |
+| **ReverseRpcManager** | `gateway/` | Server→Client 反向 RPC 调用 |
+| **RoutedExecutor** | `executor/` | 集成路由的工具执行器 |
+
+#### 路由决策矩阵
+
+| Policy | Client 有能力 | Client 无能力 |
+|--------|--------------|--------------|
+| **ServerOnly** | Server 执行 | Server 执行 |
+| **ClientOnly** | Client 执行 | ❌ Error |
+| **PreferServer** | Server 执行 | Server 执行 |
+| **PreferClient** | Client 执行 | Server 回退 |
+
+详见：[Server-Client 架构设计](docs/plans/2026-02-06-server-client-architecture-design.md) | [实施计划](docs/plans/2026-02-06-server-client-implementation.md)
+
 ---
 
 ## 📁 项目结构
@@ -293,6 +328,7 @@ Example: `gateway: add WebSocket server foundation`
 |------|------|
 | [AGENT_DESIGN_PHILOSOPHY.md](docs/AGENT_DESIGN_PHILOSOPHY.md) | 四大设计思想：第一性原理、启发式、自学习、POE |
 | [POE Architecture](docs/plans/2026-02-01-poe-architecture-design.md) | POE 架构详细设计 |
+| [Server-Client Architecture](docs/plans/2026-02-06-server-client-architecture-design.md) | Server-Client 分布式架构设计 |
 
 ---
 
@@ -304,7 +340,7 @@ Example: `gateway: add WebSocket server foundation`
 - **项目定位**: 自托管个人 AI 助手，Gateway 控制面架构
 - **核心循环**: Observe → Think → Act → Feedback → Compress
 - **技术栈**: Rust (Gateway + Agent) + Swift (macOS) + React (Tauri)
-- **当前状态**: Phase 8 (Multi-Channel)，Gateway 完整实现
+- **当前状态**: Phase 8 (Multi-Channel)，Gateway 完整实现，Server-Client 架构已实现
 
 ### Memory Prompt
 
