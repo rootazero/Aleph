@@ -1,0 +1,139 @@
+# DAG Scheduling Behavior Specification
+# Tests TaskGraph aggregate root behavior and scheduling decisions
+
+name: "DAG Scheduling Behavior"
+version: "1.0"
+context:
+  description: "Validates TaskGraph scheduling decisions conform to DAG semantics"
+  aggregate_root: "TaskGraph"
+  module: "dispatcher"
+
+scenarios:
+  # Deterministic scenarios - can be validated with assertions
+  - name: "Sequential dependency execution"
+    description: "Tasks with dependencies execute in correct order"
+    given:
+      - task_graph:
+          id: "graph-seq-001"
+          tasks:
+            - { id: "A", name: "Task A", status: "Pending" }
+            - { id: "B", name: "Task B", status: "Pending" }
+            - { id: "C", name: "Task C", status: "Pending" }
+          dependencies:
+            B: ["A"]
+            C: ["B"]
+    when:
+      action: "execute_graph"
+    then:
+      - assertion_type: "deterministic"
+        check: "execution_order"
+        expected: ["A", "B", "C"]
+      - assertion_type: "deterministic"
+        check: "all_completed"
+        expected: true
+
+  - name: "Parallel independent tasks"
+    description: "Tasks without dependencies can execute in parallel"
+    given:
+      - task_graph:
+          id: "graph-par-001"
+          tasks:
+            - { id: "A", name: "Task A", status: "Pending" }
+            - { id: "B", name: "Task B", status: "Pending" }
+            - { id: "C", name: "Task C", status: "Pending" }
+          dependencies:
+            C: ["A", "B"]
+    when:
+      action: "execute_graph"
+      config:
+        max_parallelism: 4
+    then:
+      - assertion_type: "deterministic"
+        check: "parallel_execution"
+        tasks: ["A", "B"]
+        max_time_diff_ms: 100
+      - assertion_type: "deterministic"
+        check: "executed_after"
+        task: "C"
+        after: ["A", "B"]
+
+  - name: "Cycle detection prevents execution"
+    description: "TaskGraph with cycles should fail validation"
+    given:
+      - task_graph:
+          id: "graph-cycle-001"
+          tasks:
+            - { id: "A", name: "Task A", status: "Pending" }
+            - { id: "B", name: "Task B", status: "Pending" }
+            - { id: "C", name: "Task C", status: "Pending" }
+          dependencies:
+            A: ["C"]
+            B: ["A"]
+            C: ["B"]
+    when:
+      action: "validate_graph"
+    then:
+      - assertion_type: "deterministic"
+        check: "validation_error"
+        error_type: "CycleDetected"
+
+  # Semantic scenarios - require LlmJudge for validation
+  - name: "Retry behavior on transient failure"
+    description: "Failed tasks should retry with exponential backoff"
+    given:
+      - task_graph:
+          id: "graph-retry-001"
+          tasks:
+            - { id: "flaky", name: "Flaky Task", status: "Pending" }
+          dependencies: {}
+      - mock_executor:
+          task_id: "flaky"
+          fail_count: 2
+          then_succeed: true
+    when:
+      action: "execute_graph"
+      config:
+        max_retries: 3
+        initial_backoff_ms: 100
+    then:
+      - assertion_type: "deterministic"
+        check: "final_status"
+        task: "flaky"
+        expected: "Completed"
+      - llm_judge:
+          prompt: |
+            Analyze the execution log and verify:
+            1. The task was retried exactly 2 times before succeeding
+            2. Backoff intervals increased exponentially (approximately 100ms, 200ms)
+            3. Jitter was applied (±10% variance acceptable)
+          criteria: "All three conditions must be satisfied"
+          evidence_required: ["execution_log", "timestamps"]
+
+  - name: "Risk evaluation before execution"
+    description: "High-risk tasks should trigger user confirmation"
+    given:
+      - task_graph:
+          id: "graph-risk-001"
+          tasks:
+            - { id: "delete", name: "Delete Files", task_type: "FileOperation", risk_level: "high" }
+          dependencies: {}
+      - user_approval: "pending"
+    when:
+      action: "execute_graph"
+    then:
+      - assertion_type: "deterministic"
+        check: "approval_requested"
+        expected: true
+      - llm_judge:
+          prompt: |
+            Review the approval request message and verify:
+            1. It clearly describes the risky operation
+            2. It lists affected resources
+            3. It provides options to approve, reject, or modify
+          criteria: "Message must be clear, complete, and actionable"
+          evidence_required: ["approval_message"]
+
+metadata:
+  created: "2026-02-06"
+  author: "DDD+BDD Dual-Wheel Design"
+  related_feature: "core/tests/features/domain/task_graph_aggregate.feature"
