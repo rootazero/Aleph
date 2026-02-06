@@ -61,7 +61,9 @@ use alephcore::poe::{
     create_gateway_worker,
 };
 #[cfg(feature = "gateway")]
-use alephcore::gateway::create_claude_provider_from_env;
+use alephcore::gateway::{
+    create_claude_provider_from_env, available_provider_from_env,
+};
 
 use crate::cli::DEFAULT_LOG_FILE;
 use crate::server_init::{serve_webchat, handle_run_with_engine};
@@ -285,7 +287,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
 
                 if !args.daemon {
-                    println!("  Mode: Real AgentLoop (Claude API)");
+                    let provider_name = available_provider_from_env().unwrap_or("unknown");
+                    println!("  Mode: Real AgentLoop ({} API)", provider_name);
                     println!();
                 }
 
@@ -318,7 +321,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     } else {
         if !args.daemon {
-            println!("  Mode: Simulated (set ANTHROPIC_API_KEY for real execution)");
+            println!("  Mode: Simulated (set ANTHROPIC_API_KEY or OPENAI_API_KEY for real execution)");
             println!();
         }
 
@@ -451,7 +454,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             println!();
         }
     } else if !args.daemon {
-        println!("POE methods: Disabled (requires ANTHROPIC_API_KEY)");
+        println!("POE methods: Disabled (requires ANTHROPIC_API_KEY or OPENAI_API_KEY)");
         println!();
     }
 
