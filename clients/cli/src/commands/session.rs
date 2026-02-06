@@ -29,7 +29,7 @@ pub async fn list(server_url: &str, config: &CliConfig) -> CliResult<()> {
     // Authenticate first
     client.authenticate(config).await?;
 
-    let response: SessionListResponse = client.call("session.list", None::<()>).await?;
+    let response: SessionListResponse = client.call("sessions.list", None::<()>).await?;
 
     println!("=== Sessions ===");
     println!();
@@ -77,7 +77,7 @@ pub async fn create(server_url: &str, name: Option<&str>, config: &CliConfig) ->
         name: name.map(|s| s.to_string()),
     };
 
-    let response: CreateResponse = client.call("session.create", Some(params)).await?;
+    let response: CreateResponse = client.call("sessions.create", Some(params)).await?;
 
     println!("✓ Session created: {}", response.session_key);
 
@@ -101,7 +101,7 @@ pub async fn delete(server_url: &str, key: &str, config: &CliConfig) -> CliResul
         session_key: key.to_string(),
     };
 
-    let _: serde_json::Value = client.call("session.delete", Some(params)).await?;
+    let _: serde_json::Value = client.call("sessions.delete", Some(params)).await?;
 
     println!("✓ Session deleted: {}", key);
 
