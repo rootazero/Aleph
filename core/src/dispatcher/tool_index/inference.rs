@@ -3,25 +3,58 @@
 //! Implements ranked inference strategy:
 //! - L0: Extract from tool's structured_meta (preferred, already curated)
 //! - L1: Rule-based template using name, category, description (fallback)
+//! - L2: Async LLM enhancement (eventual consistency, background optimization)
+
+use std::sync::Arc;
+use crate::providers::AiProvider;
 
 /// Result of semantic purpose inference
 #[derive(Debug, Clone)]
 pub struct InferredPurpose {
     /// The inferred semantic description
     pub description: String,
-    /// Which inference level was used (0 = structured_meta, 1 = template)
+    /// Which inference level was used (0 = structured_meta, 1 = template, 2 = LLM)
     pub level: u8,
     /// Confidence score (0.0 to 1.0)
     pub confidence: f32,
 }
 
 /// Infers semantic purpose descriptions for tools
-pub struct SemanticPurposeInferrer;
+pub struct SemanticPurposeInferrer {
+    /// Optional LLM provider for L2 async enhancement
+    llm_provider: Option<Arc<dyn AiProvider>>,
+}
 
 impl SemanticPurposeInferrer {
-    /// Create a new inferrer
+    /// Create a new inferrer without LLM support (L0/L1 only)
     pub fn new() -> Self {
-        Self
+        Self {
+            llm_provider: None,
+        }
+    }
+
+    /// Create a new inferrer with LLM support for L2 optimization
+    pub fn with_llm(llm_provider: Arc<dyn AiProvider>) -> Self {
+        Self {
+            llm_provider: Some(llm_provider),
+        }
+    }
+
+    /// Check if L2 optimization is available
+    pub fn has_l2_support(&self) -> bool {
+        self.llm_provider.is_some()
+    }
+
+    /// Determine if L2 optimization should be triggered
+    ///
+    /// L2 is triggered when:
+    /// - LLM provider is available
+    /// - L1 confidence is below threshold (< 0.7)
+    /// - No structured_meta available (level != 0)
+    pub fn should_trigger_l2(&self, inferred: &InferredPurpose) -> bool {
+        self.llm_provider.is_some()
+            && inferred.level != 0  // Not L0 (already high quality)
+            && inferred.confidence < 0.7  // Low confidence from L1
     }
 
     /// Infer semantic purpose using ranked strategy
@@ -136,6 +169,92 @@ impl SemanticPurposeInferrer {
         }
 
         confidence.min(0.85) // Cap at 0.85 for template-based
+    }
+
+    /// L2: Async LLM-based semantic enhancement
+    ///
+    /// Generates a high-quality semantic description using LLM.
+    /// This is meant to be called asynchronously in the background.
+    ///
+    /// # Arguments
+    /// * `tool_id` - Unique tool identifier
+    /// * `name` - Tool name
+    /// * `description` - Tool's existing description
+    /// * `category` - Tool category
+    ///
+    /// # Returns
+    /// Enhanced semantic description with L2 confidence (0.9)
+    pub async fn enhance_with_llm(
+        &self,
+        tool_id: &str,
+        name: &str,
+        description: Option<&str>,
+        category: Option<&str>,
+    ) -> Result<InferredPurpose, crate::error::AlephError> {
+        let provider = self.llm_provider.as_ref().ok_or_else(|| {
+            crate::error::AlephError::config("LLM provider not configured for L2 optimization")
+        })?;
+
+        // Build LLM prompt for semantic enhancement
+        let (system_prompt, user_prompt) = self.build_l2_prompts(tool_id, name, description, category);
+
+        // Call LLM using process method
+        let response = provider
+            .process(&user_prompt, Some(&system_prompt))
+            .await
+            .map_err(|e| {
+                crate::error::AlephError::provider(format!("L2 LLM enhancement failed: {}", e))
+            })?;
+
+        // Extract and clean the response
+        let enhanced_description = response.trim().to_string();
+
+        // Validate response quality
+        if enhanced_description.is_empty() || enhanced_description.len() < 10 {
+            return Err(crate::error::AlephError::provider(
+                "L2 LLM returned invalid description",
+            ));
+        }
+
+        Ok(InferredPurpose {
+            description: enhanced_description,
+            level: 2,
+            confidence: 0.9, // High confidence for LLM-generated
+        })
+    }
+
+    /// Build prompts for L2 LLM enhancement
+    fn build_l2_prompts(
+        &self,
+        tool_id: &str,
+        name: &str,
+        description: Option<&str>,
+        category: Option<&str>,
+    ) -> (String, String) {
+        let system_prompt = String::from(
+            "You are a technical writer specializing in tool documentation. \
+             Generate concise, actionable descriptions that explain WHEN to use a tool \
+             and WHAT problems it solves. Keep responses under 100 words."
+        );
+
+        let mut user_prompt = String::from("Generate a semantic description for this tool:\n\n");
+        user_prompt.push_str(&format!("Tool ID: {}\n", tool_id));
+        user_prompt.push_str(&format!("Name: {}\n", name));
+
+        if let Some(cat) = category {
+            user_prompt.push_str(&format!("Category: {}\n", cat));
+        }
+
+        if let Some(desc) = description {
+            user_prompt.push_str(&format!("Current Description: {}\n", desc));
+        }
+
+        user_prompt.push_str(
+            "\nProvide a single-sentence description in this format:\n\
+             \"Use this tool when you need to [specific use case].\""
+        );
+
+        (system_prompt, user_prompt)
     }
 }
 
