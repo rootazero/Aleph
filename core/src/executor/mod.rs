@@ -10,6 +10,7 @@
 //! - [`ExecutionContext`]: Context information for execution
 //! - [`ExecutorError`]: Error types for executor operations
 //! - [`SingleStepExecutor`]: Single-step task executor
+//! - [`RoutedExecutor`]: Executor with Server-Client routing (gateway feature)
 //!
 //! # Usage
 //!
@@ -27,11 +28,30 @@
 //! // Create a failed result
 //! let result = ExecutionResult::failure("Connection timeout");
 //! ```
+//!
+//! # Server-Client Routing (gateway feature)
+//!
+//! When the `gateway` feature is enabled, the [`RoutedExecutor`] provides
+//! routing capabilities to execute tools either locally on Server or
+//! remotely on Client based on execution policies and client capabilities.
+//!
+//! ```ignore
+//! use alephcore::executor::{RoutedExecutor, ToolRouter, SingleStepExecutor};
+//! use alephcore::gateway::{ReverseRpcManager, ClientManifest};
+//!
+//! let router = ToolRouter::new();
+//! let executor = SingleStepExecutor::new(tool_registry);
+//! let reverse_rpc = ReverseRpcManager::new();
+//!
+//! let routed = RoutedExecutor::new(router, executor, reverse_rpc);
+//! ```
 
 mod builtin_registry;
 mod cache_config;
 mod cache_store;
 mod router;
+#[cfg(feature = "gateway")]
+mod routed_executor;
 mod single_step;
 mod types;
 
@@ -42,6 +62,8 @@ pub use builtin_registry::{
 pub use cache_config::ToolCacheConfig;
 pub use cache_store::{CacheStats, ToolResultCache};
 pub use router::{RoutingDecision, ToolRouter};
+#[cfg(feature = "gateway")]
+pub use routed_executor::{RoutedExecutionError, RoutedExecutionResult, RoutedExecutor};
 pub use single_step::{SingleStepConfig, SingleStepExecutor, ToolRegistry};
 pub use types::{
     ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
