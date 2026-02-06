@@ -12,7 +12,7 @@ name = "alephcore"
 # Default: Gateway-only architecture (no FFI)
 default = ["gateway"]
 # Gateway: WebSocket control plane for Moltbot-style architecture
-gateway = ["dep:tokio-tungstenite", "dep:futures-util", "dep:clap", "dep:tower-http", "dep:axum", "dep:hyper", "dep:hyper-util", "dep:tower", "dep:mime_guess"]
+gateway = ["dep:tokio-tungstenite", "dep:futures-util", "dep:clap", "dep:tower-http", "dep:axum", "dep:hyper", "dep:hyper-util", "dep:tower", "dep:mime_guess", "dep:mdns-sd"]
 # Telegram channel support
 telegram = ["dep:teloxide", "gateway"]
 # Discord channel support
@@ -170,6 +170,7 @@ hyper = { version = "1.6", features = ["server", "http1"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 tower = { version = "0.5", optional = true }
 mime_guess = { version = "2.0", optional = true }
+mdns-sd = { workspace = true, optional = true }
 
 # Channel dependencies (optional)
 teloxide = { version = "0.13", features = ["macros"], optional = true }
