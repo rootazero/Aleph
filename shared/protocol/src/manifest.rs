@@ -133,6 +133,54 @@ impl ClientManifest {
             .tool_categories
             .contains(&category.to_string())
     }
+
+    /// Check if a specific scope is granted for a category.
+    ///
+    /// # Arguments
+    ///
+    /// * `category` - Tool category (e.g., "file_system", "shell")
+    /// * `scope` - Scope to check (e.g., "read:~/Documents", "write:/tmp")
+    ///
+    /// # Returns
+    ///
+    /// - `true` if scope is explicitly granted
+    /// - `true` if no scopes are defined for the category (permissive default)
+    /// - `false` if scopes are defined but the requested scope is not included
+    pub fn has_scope(&self, category: &str, scope: &str) -> bool {
+        match &self.capabilities.granted_scopes {
+            None => true, // No scopes defined = all allowed
+            Some(scopes) => {
+                match scopes.get(category) {
+                    None => true, // Category not in scopes = all allowed for this category
+                    Some(granted) => {
+                        // Check exact match
+                        if granted.contains(&scope.to_string()) {
+                            return true;
+                        }
+                        // Check wildcard (e.g., "*" grants all)
+                        if granted.contains(&"*".to_string()) {
+                            return true;
+                        }
+                        // Check prefix match (e.g., "read:~/" matches "read:~/Documents")
+                        for g in granted {
+                            if scope.starts_with(g) {
+                                return true;
+                            }
+                        }
+                        false
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get all granted scopes for a category.
+    pub fn get_scopes(&self, category: &str) -> Option<&Vec<String>> {
+        self.capabilities
+            .granted_scopes
+            .as_ref()
+            .and_then(|s| s.get(category))
+    }
 }
 
 #[cfg(test)]
@@ -216,5 +264,93 @@ mod tests {
 
         assert_eq!(parsed.client_type, "macos_native");
         assert_eq!(parsed.capabilities.constraints.max_concurrent_tools, 5);
+    }
+
+    #[test]
+    fn test_has_scope_no_scopes_defined() {
+        let manifest = ClientManifest::default();
+        // No scopes defined = all allowed
+        assert!(manifest.has_scope("file_system", "read:~/Documents"));
+        assert!(manifest.has_scope("shell", "exec:/bin/ls"));
+    }
+
+    #[test]
+    fn test_has_scope_category_not_in_scopes() {
+        let mut scopes = HashMap::new();
+        scopes.insert("file_system".to_string(), vec!["read:~/".to_string()]);
+
+        let manifest = ClientManifest {
+            capabilities: ClientCapabilities {
+                granted_scopes: Some(scopes),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // file_system has scopes, shell doesn't
+        assert!(manifest.has_scope("shell", "exec:/bin/ls")); // Not in scopes = allowed
+        assert!(manifest.has_scope("file_system", "read:~/Documents")); // Prefix match
+    }
+
+    #[test]
+    fn test_has_scope_exact_match() {
+        let mut scopes = HashMap::new();
+        scopes.insert(
+            "file_system".to_string(),
+            vec!["read:~/Documents".to_string(), "write:/tmp".to_string()],
+        );
+
+        let manifest = ClientManifest {
+            capabilities: ClientCapabilities {
+                granted_scopes: Some(scopes),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(manifest.has_scope("file_system", "read:~/Documents"));
+        assert!(manifest.has_scope("file_system", "write:/tmp"));
+        assert!(!manifest.has_scope("file_system", "read:~/Desktop")); // Not granted
+        assert!(!manifest.has_scope("file_system", "write:~/Documents")); // Wrong action
+    }
+
+    #[test]
+    fn test_has_scope_wildcard() {
+        let mut scopes = HashMap::new();
+        scopes.insert("shell".to_string(), vec!["*".to_string()]);
+
+        let manifest = ClientManifest {
+            capabilities: ClientCapabilities {
+                granted_scopes: Some(scopes),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(manifest.has_scope("shell", "exec:/bin/ls"));
+        assert!(manifest.has_scope("shell", "exec:/usr/bin/rm"));
+        assert!(manifest.has_scope("shell", "anything"));
+    }
+
+    #[test]
+    fn test_has_scope_prefix_match() {
+        let mut scopes = HashMap::new();
+        scopes.insert(
+            "file_system".to_string(),
+            vec!["read:~/".to_string()], // Prefix grants all under ~/
+        );
+
+        let manifest = ClientManifest {
+            capabilities: ClientCapabilities {
+                granted_scopes: Some(scopes),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(manifest.has_scope("file_system", "read:~/Documents"));
+        assert!(manifest.has_scope("file_system", "read:~/Desktop/file.txt"));
+        assert!(!manifest.has_scope("file_system", "read:/etc/passwd")); // Outside ~/
+        assert!(!manifest.has_scope("file_system", "write:~/Documents")); // Wrong action
     }
 }

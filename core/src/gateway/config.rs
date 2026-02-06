@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 use super::agent_instance::AgentInstanceConfig;
+use crate::dispatcher::ExecutionPolicy;
 
 /// Root Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +37,10 @@ pub struct GatewayConfig {
     /// Tool configurations
     #[serde(default)]
     pub tools: ToolsConfig,
+
+    /// Tool routing configuration for Server-Client architecture
+    #[serde(default)]
+    pub tool_routing: ToolRoutingConfig,
 }
 
 impl Default for GatewayConfig {
@@ -50,6 +55,7 @@ impl Default for GatewayConfig {
             channels: ChannelsConfig::default(),
             sandbox: SandboxConfig::default(),
             tools: ToolsConfig::default(),
+            tool_routing: ToolRoutingConfig::default(),
         }
     }
 }
@@ -299,6 +305,90 @@ impl Default for WebhookConfig {
     }
 }
 
+/// Tool routing configuration for Server-Client architecture.
+///
+/// Allows overriding the default execution policy for specific tools.
+///
+/// # Example TOML
+///
+/// ```toml
+/// [tool_routing]
+/// # Force shell tools to always execute on Client
+/// "shell:exec" = "client_only"
+/// "shell:sudo" = "client_only"
+///
+/// # Force database tools to always execute on Server
+/// "database:query" = "server_only"
+///
+/// # Prefer Client for file operations (with Server fallback)
+/// "file_system:read" = "prefer_client"
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolRoutingConfig {
+    /// Policy overrides: tool_name -> execution policy
+    ///
+    /// Valid policy values:
+    /// - "server_only": Always execute on Server
+    /// - "client_only": Always execute on Client
+    /// - "prefer_server": Prefer Server, fallback to Client
+    /// - "prefer_client": Prefer Client, fallback to Server
+    #[serde(default)]
+    pub policy_overrides: HashMap<String, PolicyOverride>,
+
+    /// Default policy for tools without explicit override
+    #[serde(default)]
+    pub default_policy: Option<PolicyOverride>,
+
+    /// Tools that should be registered as available on Server
+    #[serde(default)]
+    pub server_tools: Vec<String>,
+}
+
+/// Policy override value (string representation for TOML)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyOverride {
+    ServerOnly,
+    ClientOnly,
+    PreferServer,
+    PreferClient,
+}
+
+impl From<PolicyOverride> for ExecutionPolicy {
+    fn from(override_policy: PolicyOverride) -> Self {
+        match override_policy {
+            PolicyOverride::ServerOnly => ExecutionPolicy::ServerOnly,
+            PolicyOverride::ClientOnly => ExecutionPolicy::ClientOnly,
+            PolicyOverride::PreferServer => ExecutionPolicy::PreferServer,
+            PolicyOverride::PreferClient => ExecutionPolicy::PreferClient,
+        }
+    }
+}
+
+impl ToolRoutingConfig {
+    /// Get the policy override for a tool, if any.
+    pub fn get_policy(&self, tool_name: &str) -> Option<ExecutionPolicy> {
+        self.policy_overrides
+            .get(tool_name)
+            .cloned()
+            .map(ExecutionPolicy::from)
+    }
+
+    /// Apply this configuration to a ToolRouter.
+    pub fn apply_to_router(&self, router: &mut crate::executor::ToolRouter) {
+        // Apply policy overrides
+        for (tool_name, policy) in &self.policy_overrides {
+            router.add_override(tool_name, policy.clone().into());
+        }
+
+        // Register server tools
+        for tool_name in &self.server_tools {
+            router.register_server_tool(tool_name);
+        }
+    }
+}
+
 // Helper functions for serde defaults
 fn default_true() -> bool {
     true
@@ -540,5 +630,51 @@ model = "test"
         std::env::set_var("TEST_VAR", "hello");
         let result = expand_env_var("prefix_${TEST_VAR}_suffix");
         assert_eq!(result, "prefix_hello_suffix");
+    }
+
+    #[test]
+    fn test_tool_routing_config() {
+        let toml = r#"
+[agents.main]
+model = "test"
+
+[tool_routing.policy_overrides]
+"shell:exec" = "client_only"
+"database:query" = "server_only"
+"file_system:read" = "prefer_client"
+
+[tool_routing]
+server_tools = ["database", "memory"]
+"#;
+        let config = GatewayConfig::from_toml(toml).unwrap();
+
+        assert_eq!(config.tool_routing.policy_overrides.len(), 3);
+        assert!(matches!(
+            config.tool_routing.policy_overrides.get("shell:exec"),
+            Some(PolicyOverride::ClientOnly)
+        ));
+        assert!(matches!(
+            config.tool_routing.policy_overrides.get("database:query"),
+            Some(PolicyOverride::ServerOnly)
+        ));
+        assert_eq!(config.tool_routing.server_tools.len(), 2);
+    }
+
+    #[test]
+    fn test_tool_routing_config_apply_to_router() {
+        use crate::executor::ToolRouter;
+
+        let mut config = ToolRoutingConfig::default();
+        config.policy_overrides.insert(
+            "shell:exec".to_string(),
+            PolicyOverride::ClientOnly,
+        );
+        config.server_tools.push("database".to_string());
+
+        let mut router = ToolRouter::new();
+        config.apply_to_router(&mut router);
+
+        // Verify server tool was registered
+        assert!(router.server_has_tool("database"));
     }
 }
