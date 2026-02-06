@@ -3,8 +3,13 @@
 
 [workspace]
 resolver = "2"
-members = ["core", "shared/protocol", "clients/cli"]
-exclude = ["platforms/tauri/src-tauri"]
+members = [
+    "core",
+    "shared/protocol",
+    "clients/cli",
+    "clients/shared",
+    "clients/desktop/src-tauri",
+]
 
 [workspace.package]
 version = "0.1.0"

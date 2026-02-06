@@ -38,6 +38,22 @@ pub enum AlephError {
 
     #[error("Unknown error: {0}")]
     Unknown(String),
+
+    // Gateway-specific errors
+    #[error("Connection error: {0}")]
+    Connection(String),
+
+    #[error("Authentication error: {0}")]
+    Auth(String),
+
+    #[error("RPC error: {0}")]
+    RPC(String),
+
+    #[error("Not initialized: {0}")]
+    NotInitialized(String),
+
+    #[error("Invalid response: {0}")]
+    InvalidResponse(String),
 }
 
 impl From<std::io::Error> for AlephError {

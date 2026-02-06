@@ -1,5 +1,7 @@
 //! Configuration management for Aleph CLI
 
+use aleph_client_sdk::{ConfigStore, Result as SdkResult};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -124,6 +126,36 @@ impl CliConfig {
     pub fn set_auth_token(&mut self, token: String, path: Option<&str>) -> CliResult<()> {
         self.auth_token = Some(token);
         self.save(path)
+    }
+}
+
+/// Implement ConfigStore trait for SDK integration
+#[async_trait]
+impl ConfigStore for CliConfig {
+    async fn load_token(&self) -> SdkResult<Option<String>> {
+        Ok(self.auth_token.clone())
+    }
+
+    async fn save_token(&self, token: &str) -> SdkResult<()> {
+        // Note: This creates a mutable copy to save
+        // In practice, the caller should hold a mutable reference
+        let mut config = self.clone();
+        config.auth_token = Some(token.to_string());
+        config.save(None).map_err(|e| {
+            aleph_client_sdk::ClientError::ConfigError(e.to_string())
+        })
+    }
+
+    async fn clear_token(&self) -> SdkResult<()> {
+        let mut config = self.clone();
+        config.auth_token = None;
+        config.save(None).map_err(|e| {
+            aleph_client_sdk::ClientError::ConfigError(e.to_string())
+        })
+    }
+
+    async fn get_or_create_device_id(&self) -> String {
+        self.device_id.clone()
     }
 }
 
