@@ -20,6 +20,7 @@ pub mod crypto;
 pub mod device;
 pub mod identity_map;
 pub mod pairing;
+pub mod policy_engine;
 pub mod store;
 pub mod token;
 
@@ -32,5 +33,6 @@ pub use crypto::{
 pub use device::{Device, DeviceRole, DeviceType};
 pub use identity_map::{IdentityMap, PlatformIdentity, UserId};
 pub use pairing::{PairingError, PairingManager, PairingRequest};
+pub use policy_engine::{PermissionResult, PolicyEngine};
 pub use store::{DeviceRow, PairingRequestRow, SecurityStore, TokenRow};
 pub use token::{SignedToken, TokenError, TokenManager, TokenValidation};
