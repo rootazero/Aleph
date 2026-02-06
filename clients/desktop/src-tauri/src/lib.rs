@@ -33,8 +33,8 @@ pub fn run() {
             Some(vec!["--minimized"]),
         ))
         .plugin(tauri_plugin_store::Builder::new().build())
-        // Manage CoreState for AI functionality
-        .manage(core::CoreState::new())
+        // Manage GatewayState for AI functionality
+        .manage(core::GatewayState::new())
         .setup(|app| {
             // Create system tray
             let _tray = tray::create_tray(app.handle())?;
@@ -44,18 +44,21 @@ pub fn run() {
                 tracing::error!("Failed to register shortcuts: {:?}", e);
             }
 
-            // Initialize Aleph core
-            match core::init_aleph_core(app.handle()) {
-                Ok(aleph_core) => {
-                    let state = app.state::<core::CoreState>();
-                    state.initialize(aleph_core);
-                    tracing::info!("Aleph core initialized successfully");
+            // Initialize Gateway connection (async)
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match core::init_gateway(&app_handle).await {
+                    Ok(gateway_client) => {
+                        let state = app_handle.state::<core::GatewayState>();
+                        state.initialize(gateway_client).await;
+                        tracing::info!("Gateway initialized successfully");
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to initialize Gateway: {:?}", e);
+                        // Continue without gateway - some features will be unavailable
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Failed to initialize Aleph core: {:?}", e);
-                    // Continue without core - some features will be unavailable
-                }
-            }
+            });
 
             // Get windows
             let halo_window = app.get_webview_window("halo");

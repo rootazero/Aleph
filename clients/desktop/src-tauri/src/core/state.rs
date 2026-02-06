@@ -1,74 +1,52 @@
-//! CoreState - manages the AlephCore instance lifecycle
-//!
-//! This module provides thread-safe access to the AlephCore instance
-//! for use across multiple Tauri commands.
+//! Gateway client state management for Tauri
 
-use std::sync::{Arc, RwLock};
-use tracing::warn;
+use aleph_client_sdk::GatewayClient;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use crate::error::{AlephError, Result};
 
-/// Thread-safe state wrapper for AlephCore
-pub struct CoreState {
-    core: RwLock<Option<Arc<alephcore::AlephCore>>>,
+/// Gateway client state
+///
+/// Holds the shared GatewayClient instance for use across Tauri commands.
+pub struct GatewayState {
+    client: RwLock<Option<Arc<GatewayClient>>>,
 }
 
-impl CoreState {
-    /// Create a new empty CoreState
+impl GatewayState {
+    /// Create a new empty state
     pub fn new() -> Self {
         Self {
-            core: RwLock::new(None),
+            client: RwLock::new(None),
         }
     }
 
-    /// Initialize the core with an AlephCore instance
-    pub fn initialize(&self, core: Arc<alephcore::AlephCore>) {
-        let mut guard = self.core.write().unwrap_or_else(|e| {
-            warn!("CoreState write lock poisoned, recovering");
-            e.into_inner()
-        });
-        *guard = Some(core);
+    /// Initialize with a gateway client
+    pub async fn initialize(&self, client: Arc<GatewayClient>) {
+        *self.client.write().await = Some(client);
     }
 
-    /// Get a reference to the core, or error if not initialized
-    pub fn get_core(&self) -> Result<Arc<alephcore::AlephCore>> {
-        let guard = self.core.read().unwrap_or_else(|e| {
-            warn!("CoreState read lock poisoned, recovering");
-            e.into_inner()
-        });
-
-        guard
-            .clone()
-            .ok_or_else(|| AlephError::Core("Aleph core not initialized".to_string()))
+    /// Get the gateway client
+    pub fn get_client(&self) -> Result<Arc<GatewayClient>> {
+        // Try non-blocking read first
+        match self.client.try_read() {
+            Ok(guard) => guard.clone().ok_or_else(|| {
+                AlephError::NotInitialized("Gateway client not initialized".to_string())
+            }),
+            Err(_) => Err(AlephError::NotInitialized(
+                "Gateway client locked".to_string(),
+            )),
+        }
     }
 
-    /// Check if the core is initialized
-    #[allow(dead_code)]
+    /// Check if initialized
     pub fn is_initialized(&self) -> bool {
-        let guard = self.core.read().unwrap_or_else(|e| {
-            warn!("CoreState read lock poisoned, recovering");
-            e.into_inner()
-        });
-        guard.is_some()
-    }
-
-    /// Shutdown the core (clears the reference)
-    #[allow(dead_code)]
-    pub fn shutdown(&self) {
-        let mut guard = self.core.write().unwrap_or_else(|e| {
-            warn!("CoreState write lock poisoned, recovering");
-            e.into_inner()
-        });
-        *guard = None;
+        self.client.try_read().map(|g| g.is_some()).unwrap_or(false)
     }
 }
 
-impl Default for CoreState {
+impl Default for GatewayState {
     fn default() -> Self {
         Self::new()
     }
 }
-
-// Safety: CoreState uses RwLock which provides thread-safety
-unsafe impl Send for CoreState {}
-unsafe impl Sync for CoreState {}
