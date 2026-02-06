@@ -73,6 +73,7 @@ use crate::server_init::{serve_webchat, handle_run_with_engine};
 pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::server::GatewayConfig as ServerConfig;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+    use tracing::{info, warn};
 
     // Handle daemon mode
     if args.daemon {
@@ -491,6 +492,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let token_manager = Arc::new(TokenManager::new(security_store.clone()));
     let pairing_manager = Arc::new(PairingManager::new(security_store.clone()));
     let invitation_manager = Arc::new(alephcore::gateway::security::InvitationManager::new());
+
+    // Start mDNS broadcaster for local network discovery
+    let mdns_broadcaster = match alephcore::gateway::MdnsBroadcaster::new(args.port, "aleph") {
+        Ok(broadcaster) => {
+            info!("mDNS service discovery enabled");
+            Some(broadcaster)
+        }
+        Err(e) => {
+            warn!("Failed to start mDNS broadcaster: {} (discovery disabled)", e);
+            None
+        }
+    };
+
     let auth_ctx = Arc::new(auth_handlers::AuthContext::new(
         token_manager,
         pairing_manager,
@@ -636,6 +650,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     server.run_until_shutdown(shutdown_rx).await?;
+
+    // Clean shutdown: unregister mDNS service
+    if let Some(broadcaster) = mdns_broadcaster {
+        broadcaster.shutdown();
+    }
 
     Ok(())
 }
