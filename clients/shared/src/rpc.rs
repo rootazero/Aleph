@@ -71,6 +71,18 @@ impl RpcClient {
     /// Register a pending request
     ///
     /// Returns a receiver that will be resolved when the response arrives
+    pub async fn register_pending_async(&self, id: String) -> oneshot::Receiver<std::result::Result<Value, JsonRpcError>> {
+        let (tx, rx) = oneshot::channel();
+
+        let mut pending_guard = self.pending.write().await;
+        pending_guard.insert(id, PendingRequest { tx });
+
+        rx
+    }
+
+    /// Register a pending request (sync version for compatibility)
+    ///
+    /// Returns a receiver that will be resolved when the response arrives
     pub fn register_pending(&self, id: String) -> oneshot::Receiver<std::result::Result<Value, JsonRpcError>> {
         let (tx, rx) = oneshot::channel();
 
@@ -187,7 +199,7 @@ mod tests {
     async fn test_pending_tracking() {
         let rpc = RpcClient::new();
 
-        let rx = rpc.register_pending("test-id".to_string());
+        let rx = rpc.register_pending_async("test-id".to_string()).await;
         assert_eq!(rpc.pending_count().await, 1);
 
         // Simulate response
