@@ -10,8 +10,8 @@ license = "MIT"
 default = ["client", "native-tls"]
 
 # Basic communication capabilities
-transport = ["dep:tokio-tungstenite", "dep:futures-util"]
-rpc = ["dep:serde_json"]
+transport = ["dep:tokio-tungstenite", "dep:futures-util", "dep:tokio"]
+rpc = ["dep:serde_json", "dep:tokio"]
 
 # Core client instance
 client = ["transport", "rpc", "dep:async-trait"]
@@ -50,3 +50,6 @@ tracing = { workspace = true, optional = true }
 
 # Utilities
 uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
