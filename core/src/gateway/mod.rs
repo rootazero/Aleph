@@ -92,6 +92,8 @@ pub mod webhooks;
 pub mod run_event_bus;
 #[cfg(feature = "gateway")]
 pub mod workspace;
+#[cfg(feature = "gateway")]
+mod client_manifest;
 
 #[cfg(feature = "gateway")]
 pub use server::GatewayServer;
@@ -181,3 +183,5 @@ pub use workspace::{
     Workspace, WorkspaceManager, WorkspaceManagerConfig, WorkspaceError,
     CacheState, UserActiveWorkspace,
 };
+#[cfg(feature = "gateway")]
+pub use client_manifest::{ClientManifest, ClientCapabilities, ClientEnvironment, ExecutionConstraints};
