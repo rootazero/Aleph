@@ -254,7 +254,7 @@ mod tests {
     async fn test_list_all_profiles() {
         let (_temp, manager) = create_test_manager();
 
-        let request = JsonRpcRequest::new("profiles.list", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("profiles.list", None, json!(1));
         let response = handle_list(request, manager).await;
 
         assert!(response.is_success());
@@ -320,7 +320,7 @@ mod tests {
     async fn test_status_missing_params() {
         let (_temp, manager) = create_test_manager();
 
-        let request = JsonRpcRequest::new("profiles.status", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("profiles.status", None, json!(1));
         let response = handle_status(request, manager).await;
 
         assert!(response.is_error());

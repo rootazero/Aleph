@@ -386,7 +386,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_run_wait_missing_params() {
         let active_runs = Arc::new(RwLock::new(HashMap::new()));
-        let request = JsonRpcRequest::new("run.wait", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("run.wait", None, json!(1));
 
         let response = handle_run_wait(request, active_runs).await;
         assert!(response.is_error());

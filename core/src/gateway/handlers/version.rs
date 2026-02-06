@@ -41,7 +41,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_version_response() {
-        let request = JsonRpcRequest::new("version", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("version", None, json!(1));
         let response = handle(request).await;
 
         assert!(response.is_success());

@@ -812,7 +812,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_call_tool_missing_params() {
-        let request = JsonRpcRequest::new("plugins.callTool", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("plugins.callTool", None, json!(1));
         let response = handle_call_tool(request).await;
 
         assert!(response.is_error());
@@ -886,7 +886,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_load_missing_params() {
-        let request = JsonRpcRequest::new("plugins.load", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("plugins.load", None, json!(1));
         let response = handle_load(request).await;
 
         assert!(response.is_error());
@@ -940,7 +940,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_unload_missing_params() {
-        let request = JsonRpcRequest::new("plugins.unload", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("plugins.unload", None, json!(1));
         let response = handle_unload(request).await;
 
         assert!(response.is_error());
@@ -1019,7 +1019,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_execute_command_missing_params() {
-        let request = JsonRpcRequest::new("plugins.executeCommand", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("plugins.executeCommand", None, json!(1));
         let response = handle_execute_command(request).await;
 
         assert!(response.is_error());

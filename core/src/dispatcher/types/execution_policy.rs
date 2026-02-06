@@ -1,47 +1,9 @@
 //! Tool execution location policy for Server-Client architecture.
+//!
+//! Re-exports types from `aleph-protocol` for backward compatibility.
 
-use serde::{Deserialize, Serialize};
-
-/// Determines where a tool should be executed in Server-Client mode.
-///
-/// This policy drives the routing decision when both Server and Client
-/// could potentially execute a tool.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExecutionPolicy {
-    /// Tool MUST execute on Server (e.g., internal database access).
-    /// If Server lacks capability, returns error.
-    ServerOnly,
-
-    /// Tool MUST execute on Client (e.g., screenshots, system notifications).
-    /// If Client lacks capability, returns error.
-    ClientOnly,
-
-    /// Prefer Server execution, fall back to Client if Server unavailable.
-    #[default]
-    PreferServer,
-
-    /// Prefer Client execution, fall back to Server if Client unavailable.
-    /// Best for local file operations, shell commands.
-    PreferClient,
-}
-
-impl ExecutionPolicy {
-    /// Returns true if this policy allows Server execution.
-    pub fn allows_server(&self) -> bool {
-        !matches!(self, Self::ClientOnly)
-    }
-
-    /// Returns true if this policy allows Client execution.
-    pub fn allows_client(&self) -> bool {
-        !matches!(self, Self::ServerOnly)
-    }
-
-    /// Returns true if this policy prefers Client over Server.
-    pub fn prefers_client(&self) -> bool {
-        matches!(self, Self::PreferClient | Self::ClientOnly)
-    }
-}
+// Re-export ExecutionPolicy from aleph-protocol
+pub use aleph_protocol::policy::ExecutionPolicy;
 
 #[cfg(test)]
 mod tests {

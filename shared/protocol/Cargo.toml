@@ -1,0 +1,21 @@
+[package]
+name = "aleph-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "Aleph Agent Protocol - Pure type definitions for Server-Client communication"
+license = "MIT"
+readme = "README.md"
+
+# This crate is intentionally minimal - pure types only, no runtime dependencies
+# Clients in any language can use these type definitions as a reference
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+
+[dev-dependencies]
+serde_json = "1.0"
+
+[features]
+default = []

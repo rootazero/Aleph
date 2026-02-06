@@ -404,7 +404,7 @@ mod tests {
             JsonRpcResponse::success(req.id, json!({"custom": true}))
         });
 
-        let request = JsonRpcRequest::new("custom", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("custom", None, json!(1));
         let response = registry.handle(&request).await;
 
         assert!(response.is_success());
@@ -414,7 +414,7 @@ mod tests {
     async fn test_method_not_found() {
         let registry = HandlerRegistry::empty();
 
-        let request = JsonRpcRequest::new("nonexistent", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("nonexistent", None, json!(1));
         let response = registry.handle(&request).await;
 
         assert!(response.is_error());

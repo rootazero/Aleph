@@ -3,7 +3,7 @@
 
 [workspace]
 resolver = "2"
-members = ["core"]
+members = ["core", "shared/protocol"]
 exclude = ["platforms/tauri/src-tauri"]
 
 [workspace.package]
@@ -25,7 +25,7 @@ serde_yaml = "0.9"
 toml = "0.8"
 
 # Error handling
-thiserror = "1.0"
+thiserror = "2.0"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }

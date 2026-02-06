@@ -53,7 +53,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_echo_without_params() {
-        let request = JsonRpcRequest::new("echo", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("echo", None, json!(1));
         let response = handle(request).await;
 
         assert!(response.is_success());

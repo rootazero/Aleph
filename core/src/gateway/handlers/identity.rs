@@ -241,7 +241,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_get_default() {
         let resolver = create_test_resolver().await;
-        let request = JsonRpcRequest::new("identity.get", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("identity.get", None, json!(1));
 
         let response = handle_get(request, resolver).await;
 
@@ -278,7 +278,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_set_missing_params() {
         let resolver = create_test_resolver().await;
-        let request = JsonRpcRequest::new("identity.set", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("identity.set", None, json!(1));
 
         let response = handle_set(request, resolver).await;
 
@@ -299,7 +299,7 @@ mod tests {
             });
         }
 
-        let request = JsonRpcRequest::new("identity.clear", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("identity.clear", None, json!(1));
         let response = handle_clear(request, resolver.clone()).await;
 
         assert!(response.is_success());
@@ -314,7 +314,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_clear_no_override() {
         let resolver = create_test_resolver().await;
-        let request = JsonRpcRequest::new("identity.clear", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("identity.clear", None, json!(1));
 
         let response = handle_clear(request, resolver).await;
 
@@ -326,7 +326,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_list_empty() {
         let resolver = create_test_resolver().await;
-        let request = JsonRpcRequest::new("identity.list", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("identity.list", None, json!(1));
 
         let response = handle_list(request, resolver).await;
 
@@ -349,7 +349,7 @@ mod tests {
             });
         }
 
-        let request = JsonRpcRequest::new("identity.list", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("identity.list", None, json!(1));
         let response = handle_list(request, resolver).await;
 
         assert!(response.is_success());

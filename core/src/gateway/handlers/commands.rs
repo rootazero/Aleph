@@ -115,7 +115,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_commands() {
-        let request = JsonRpcRequest::new("commands.list", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("commands.list", None, json!(1));
         let response = handle_list(request).await;
 
         assert!(response.is_success());

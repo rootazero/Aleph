@@ -44,7 +44,9 @@ plugin-all = ["plugin-wasm", "plugin-nodejs"]
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util", "signal", "net"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 serde = { version = "1.0", features = ["derive"] }
-thiserror = "1.0"
+thiserror = "2.0"
+# Protocol types (shared with clients)
+aleph-protocol = { path = "../shared/protocol" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 sqlite-vec = "0.1.6"
 uuid = { version = "1.7", features = ["v4", "serde"] }

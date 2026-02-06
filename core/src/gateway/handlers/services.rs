@@ -458,7 +458,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_start_missing_params() {
-        let request = JsonRpcRequest::new("services.start", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("services.start", None, json!(1));
         let response = handle_start(request).await;
 
         assert!(response.is_error());
@@ -486,7 +486,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_stop_missing_params() {
-        let request = JsonRpcRequest::new("services.stop", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("services.stop", None, json!(1));
         let response = handle_stop(request).await;
 
         assert!(response.is_error());
@@ -514,7 +514,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_status_missing_params() {
-        let request = JsonRpcRequest::new("services.status", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("services.status", None, json!(1));
         let response = handle_status(request).await;
 
         assert!(response.is_error());
@@ -535,7 +535,7 @@ mod tests {
             let _ = init_extension_manager(Arc::new(manager));
         }
 
-        let request = JsonRpcRequest::new("services.list", None, Some(json!(1)));
+        let request = JsonRpcRequest::with_id("services.list", None, json!(1));
         let response = handle_list(request).await;
 
         assert!(response.is_success());
