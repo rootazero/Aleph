@@ -112,7 +112,13 @@ struct GuestsSettingsView: View {
             }
             .scrollEdge(edges: [.top, .bottom], style: .hard())
         }
-        .onAppear { loadInvitations() }
+        .onAppear {
+            loadInvitations()
+            subscribeToEvents()
+        }
+        .onDisappear {
+            unsubscribeFromEvents()
+        }
         .sheet(isPresented: $showingCreateSheet) {
             CreateInvitationSheet(
                 core: core,
@@ -369,6 +375,64 @@ struct GuestsSettingsView: View {
                     errorMessage = "Failed to revoke invitation: \(error.localizedDescription)"
                 }
             }
+        }
+    }
+
+    // MARK: - Event Subscription
+
+    private func subscribeToEvents() {
+        guard let core = core else { return }
+
+        Task {
+            do {
+                // Subscribe to guest events
+                try await core.gatewayClient.subscribe(topic: "guest.**")
+
+                // Set up event callback
+                await MainActor.run {
+                    core.gatewayClient.setGuestEventCallback { [weak self] event in
+                        Task { @MainActor in
+                            self?.handleGuestEvent(event)
+                        }
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Failed to subscribe to events: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func unsubscribeFromEvents() {
+        guard let core = core else { return }
+
+        Task {
+            do {
+                // Clear callback
+                await MainActor.run {
+                    core.gatewayClient.clearGuestEventCallback()
+                }
+
+                // Unsubscribe from events
+                try await core.gatewayClient.unsubscribe(topic: "guest.**")
+            } catch {
+                // Silently fail on unsubscribe
+            }
+        }
+    }
+
+    private func handleGuestEvent(_ event: GuestEvent) {
+        switch event {
+        case .invitationCreated(let invitation):
+            // Add new invitation to the list if not already present
+            if !invitations.contains(where: { $0.id == invitation.id }) {
+                invitations.insert(invitation, at: 0)
+            }
+
+        case .invitationRevoked(let token):
+            // Remove invitation from the list
+            invitations.removeAll { $0.token == token }
         }
     }
 }
