@@ -76,3 +76,13 @@ struct GWCreateInvitationResult: Codable, Sendable {
 struct GWListPendingResult: Codable, Sendable {
     let invitations: [GWInvitation]
 }
+
+/// Request to revoke guest invitation
+struct GWRevokeInvitationParams: Codable, Sendable {
+    let token: String
+}
+
+/// Response for guests.revokeInvitation
+struct GWRevokeInvitationResult: Codable, Sendable {
+    let success: Bool
+}

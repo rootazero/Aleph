@@ -177,8 +177,25 @@ struct GuestsSettingsView: View {
     }
 
     private func deleteInvitation(_ invitation: GWInvitation) {
-        // TODO: Implement delete RPC method
-        invitations.removeAll { $0.id == invitation.id }
+        guard let core = core else { return }
+
+        Task {
+            do {
+                let success = try await core.gatewayClient.guestsRevokeInvitation(token: invitation.token)
+
+                await MainActor.run {
+                    if success {
+                        invitations.removeAll { $0.id == invitation.id }
+                    } else {
+                        errorMessage = "Failed to revoke invitation"
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Failed to revoke invitation: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 }
 

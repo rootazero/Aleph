@@ -314,6 +314,13 @@ impl HandlerRegistry {
                 "guests.listPending requires InvitationManager - wire SharedInvitationManager first".to_string(),
             )
         });
+        registry.register("guests.revokeInvitation", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "guests.revokeInvitation requires InvitationManager - wire SharedInvitationManager first".to_string(),
+            )
+        });
 
         registry
     }

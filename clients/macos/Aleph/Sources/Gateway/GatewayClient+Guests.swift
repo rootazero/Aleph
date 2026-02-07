@@ -29,4 +29,14 @@ extension GatewayClient {
         let result: GWListPendingResult = try await call(method: "guests.listPending")
         return result.invitations
     }
+
+    /// Revoke a guest invitation
+    ///
+    /// - Parameter token: The invitation token to revoke
+    /// - Returns: Success status
+    func guestsRevokeInvitation(token: String) async throws -> Bool {
+        let params = GWRevokeInvitationParams(token: token)
+        let result: GWRevokeInvitationResult = try await call(method: "guests.revokeInvitation", params: params)
+        return result.success
+    }
 }

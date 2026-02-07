@@ -189,6 +189,20 @@ impl InvitationManager {
             .collect()
     }
 
+    /// Revoke an invitation by token
+    ///
+    /// # Arguments
+    /// * `token` - The invitation token to revoke
+    ///
+    /// # Returns
+    /// `Ok(())` if invitation was revoked, `Err(InvitationError::InvalidToken)` if not found
+    pub fn revoke_invitation(&self, token: &str) -> Result<(), InvitationError> {
+        self.pending
+            .remove(token)
+            .ok_or(InvitationError::InvalidToken)?;
+        Ok(())
+    }
+
     /// Clean up expired invitations
     ///
     /// # Returns
