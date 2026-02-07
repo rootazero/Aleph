@@ -88,6 +88,12 @@ enum Commands {
         action: SessionAction,
     },
 
+    /// Manage guest invitations and permissions
+    Guests {
+        #[command(subcommand)]
+        action: commands::guests::GuestsAction,
+    },
+
     /// Show server information
     Info,
 
@@ -168,6 +174,9 @@ async fn main() -> CliResult<()> {
                 commands::session::delete(&server_url, &key, &config).await?;
             }
         },
+        Some(Commands::Guests { action }) => {
+            commands::guests::handle_guests(&server_url, action, &config).await?;
+        }
         None => {
             // Default: start interactive chat
             commands::chat::run(&server_url, None, &config).await?;
