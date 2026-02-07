@@ -1,6 +1,6 @@
 //! Guest Management Handlers
 //!
-//! Provides RPC methods for creating and managing guest invitations.
+//! Provides RPC methods for creating and managing guest invitations and sessions.
 //!
 //! ## Methods
 //!
@@ -9,8 +9,10 @@
 //! | guests.createInvitation | Creates a new guest invitation with 15-minute expiry |
 //! | guests.listPending | Lists all pending (non-activated) invitations |
 //! | guests.revokeInvitation | Revokes a pending invitation by token |
+//! | guests.listSessions | Lists all active guest sessions |
+//! | guests.terminateSession | Terminates an active guest session |
 //!
-//! These handlers require an InvitationManager to be wired at Gateway initialization.
+//! These handlers require an InvitationManager and GuestSessionManager to be wired at Gateway initialization.
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -18,11 +20,14 @@ use std::sync::Arc;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::event_bus::{GatewayEventBus, TopicEvent};
-use crate::gateway::security::InvitationManager;
+use crate::gateway::security::{GuestSessionManager, InvitationManager};
 use aleph_protocol::{CreateInvitationRequest, Invitation};
 
 /// Shared invitation manager for handlers
 pub type SharedInvitationManager = Arc<InvitationManager>;
+
+/// Shared guest session manager for handlers
+pub type SharedGuestSessionManager = Arc<GuestSessionManager>;
 
 // ============================================================================
 // Response Types
@@ -289,6 +294,175 @@ pub async fn handle_revoke_invitation(
             request.id,
             INTERNAL_ERROR,
             format!("Failed to revoke invitation: {}", e),
+        ),
+    }
+}
+
+// ============================================================================
+// Session Management Handlers
+// ============================================================================
+
+/// Response for guests.listSessions
+#[derive(Debug, Clone, Serialize)]
+pub struct ListSessionsResponse {
+    /// Array of active guest sessions
+    pub sessions: Vec<crate::gateway::security::GuestSession>,
+}
+
+/// Request for guests.terminateSession
+#[derive(Debug, Clone, Deserialize)]
+pub struct TerminateSessionRequest {
+    /// The session ID to terminate
+    pub session_id: String,
+}
+
+/// Response for guests.terminateSession
+#[derive(Debug, Clone, Serialize)]
+pub struct TerminateSessionResponse {
+    /// Success message
+    pub success: bool,
+}
+
+/// Handle guests.listSessions - lists all active guest sessions
+///
+/// Returns an array of all active guest sessions with connection details.
+///
+/// # Example Request
+///
+/// ```json
+/// {"jsonrpc":"2.0","method":"guests.listSessions","id":1}
+/// ```
+///
+/// # Example Response
+///
+/// ```json
+/// {
+///     "jsonrpc": "2.0",
+///     "result": {
+///         "sessions": [
+///             {
+///                 "session_id": "550e8400-e29b-41d4-a716-446655440000",
+///                 "guest_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+///                 "guest_name": "Mom",
+///                 "connection_id": "127.0.0.1:50943",
+///                 "scope": {
+///                     "allowed_tools": ["translate", "summarize"],
+///                     "expires_at": null,
+///                     "display_name": "Mom"
+///                 },
+///                 "connected_at": 1735689600000,
+///                 "last_active_at": 1735689700000,
+///                 "tools_used": ["translate"],
+///                 "request_count": 5
+///             }
+///         ]
+///     },
+///     "id": 1
+/// }
+/// ```
+pub async fn handle_list_sessions(
+    request: JsonRpcRequest,
+    session_manager: SharedGuestSessionManager,
+) -> JsonRpcResponse {
+    let sessions = session_manager.list_sessions();
+
+    let response = ListSessionsResponse { sessions };
+
+    match serde_json::to_value(&response) {
+        Ok(value) => JsonRpcResponse::success(request.id, value),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize response: {}", e),
+        ),
+    }
+}
+
+/// Handle guests.terminateSession - terminates an active guest session
+///
+/// Forcefully disconnects a guest session and removes it from the active sessions list.
+///
+/// # Example Request
+///
+/// ```json
+/// {
+///     "jsonrpc": "2.0",
+///     "method": "guests.terminateSession",
+///     "params": {
+///         "session_id": "550e8400-e29b-41d4-a716-446655440000"
+///     },
+///     "id": 1
+/// }
+/// ```
+///
+/// # Example Response
+///
+/// ```json
+/// {
+///     "jsonrpc": "2.0",
+///     "result": {
+///         "success": true
+///     },
+///     "id": 1
+/// }
+/// ```
+pub async fn handle_terminate_session(
+    request: JsonRpcRequest,
+    session_manager: SharedGuestSessionManager,
+    event_bus: Arc<GatewayEventBus>,
+) -> JsonRpcResponse {
+    let params = match &request.params {
+        Some(params) => params,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing required parameter: params".to_string(),
+            );
+        }
+    };
+
+    let terminate_request: TerminateSessionRequest = match serde_json::from_value(params.clone()) {
+        Ok(r) => r,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Invalid parameters: {}", e),
+            );
+        }
+    };
+
+    match session_manager.terminate_session(&terminate_request.session_id) {
+        Ok(session) => {
+            // Emit event for real-time updates
+            let event = TopicEvent {
+                topic: "guest.session.terminated".to_string(),
+                data: json!({
+                    "session_id": session.session_id,
+                    "guest_id": session.guest_id
+                }),
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64,
+            };
+            let _ = event_bus.publish_json(&event);
+
+            let response = TerminateSessionResponse { success: true };
+            match serde_json::to_value(&response) {
+                Ok(value) => JsonRpcResponse::success(request.id, value),
+                Err(e) => JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to serialize response: {}", e),
+                ),
+            }
+        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to terminate session: {}", e),
         ),
     }
 }

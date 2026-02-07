@@ -18,6 +18,7 @@
 
 pub mod crypto;
 pub mod device;
+pub mod guest_session_manager;
 pub mod identity_map;
 pub mod invitation_manager;
 pub mod pairing;
@@ -32,6 +33,7 @@ pub use crypto::{
     PAIRING_CODE_LENGTH,
 };
 pub use device::{Device, DeviceRole, DeviceType};
+pub use guest_session_manager::{GuestSession, GuestSessionError, GuestSessionManager};
 pub use identity_map::{IdentityMap, PlatformIdentity, UserId};
 pub use invitation_manager::{InvitationError, InvitationManager};
 pub use pairing::{PairingError, PairingManager, PairingRequest};
