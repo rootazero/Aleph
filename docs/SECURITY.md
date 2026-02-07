@@ -1,19 +1,285 @@
 # Security System
 
-> Shell execution safety, approval workflows, and permission management
+> Shell execution safety, approval workflows, identity-based permission enforcement, and guest access control
 
 ---
 
 ## Overview
 
 Aleph's security system provides:
+- **Identity Context**: Immutable identity snapshots for permission enforcement
+- **Guest Access Control**: Invitation-based temporary access with scoped permissions
+- **Tool Permission Enforcement**: Role-based access control for all tool executions
 - **Exec Approval**: Human-in-the-loop for shell commands
 - **Command Analysis**: Static analysis of command risk
 - **Allowlist/Blocklist**: Fine-grained command control
-- **Permission Rules**: Role-based access control
 - **Output Masking**: Sensitive data protection
 
-**Location**: `core/src/exec/`, `core/src/permission/`
+**Location**: `core/src/gateway/security/`, `core/src/exec/`
+
+---
+
+## Identity Context & Permission Enforcement
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                  Identity-Based Permission Flow                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │                  Session Creation                          │  │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐          │  │
+│  │  │ Invitation │→ │  Activate  │→ │  Identity  │          │  │
+│  │  │  Manager   │  │  Session   │  │  Context   │          │  │
+│  │  └────────────┘  └────────────┘  └────────────┘          │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                           │                                      │
+│                           ▼                                      │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │                  Execution Chain                           │  │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐          │  │
+│  │  │   Agent    │→ │  Executor  │→ │   Policy   │          │  │
+│  │  │   Loop     │  │  (Single/  │  │   Engine   │          │  │
+│  │  │            │  │   Routed)  │  │            │          │  │
+│  │  └────────────┘  └────────────┘  └────────────┘          │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                           │                                      │
+│                           ▼                                      │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │                  Permission Check                          │  │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐          │  │
+│  │  │   Owner    │  │   Guest    │  │ Anonymous  │          │  │
+│  │  │  (Allow)   │  │  (Scope)   │  │  (Deny)    │          │  │
+│  │  └────────────┘  └────────────┘  └────────────┘          │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### IdentityContext
+
+**Location**: `shared/protocol/src/auth.rs`
+
+Immutable identity snapshot that flows through the execution chain:
+
+```rust
+pub struct IdentityContext {
+    /// Unique request identifier
+    pub request_id: String,
+
+    /// Session key for this request
+    pub session_key: String,
+
+    /// Role of the requester
+    pub role: Role,
+
+    /// Identity ID (\"owner\" or guest_id)
+    pub identity_id: String,
+
+    /// Guest permission scope (frozen at session creation)
+    pub scope: Option<GuestScope>,
+
+    /// Request creation timestamp (Unix seconds, UTC)
+    pub created_at: i64,
+
+    /// Source channel (\"cli\", \"gateway\", \"telegram\", etc.)
+    pub source_channel: String,
+}
+
+pub enum Role {
+    Owner,      // Full access to all tools
+    Guest,      // Limited access based on scope
+    Anonymous,  // No access (authentication required)
+}
+```
+
+### Guest Scope
+
+**Location**: `shared/protocol/src/auth.rs`
+
+Defines what a guest can access:
+
+```rust
+pub struct GuestScope {
+    /// Allowed tool names or categories
+    /// Examples: [\"translate\"], [\"shell\"], [\"*\"]
+    pub allowed_tools: Vec<String>,
+
+    /// Token expiration timestamp (Unix seconds, UTC)
+    pub expires_at: Option<i64>,
+
+    /// Human-readable name for UI display
+    pub display_name: Option<String>,
+}
+```
+
+### Permission Matching Rules
+
+1. **Exact Match**: `\"translate\"` matches tool `\"translate\"`
+2. **Category Match**: `\"shell\"` matches `\"shell:exec\"`, `\"shell:read\"`, etc.
+3. **Wildcard**: `\"*\"` matches any tool
+
+### PolicyEngine
+
+**Location**: `core/src/gateway/security/policy_engine.rs`
+
+Stateless permission checker:
+
+```rust
+impl PolicyEngine {
+    /// Check if identity has permission to execute a tool
+    pub fn check_tool_permission(
+        identity: &IdentityContext,
+        tool_name: &str,
+    ) -> PermissionResult {
+        match identity.role {
+            Role::Owner => PermissionResult::Allowed,
+
+            Role::Guest => {
+                // Check scope, expiration, and tool permission
+                Self::check_guest_scope(scope, tool_name, guest_id)
+            }
+
+            Role::Anonymous => PermissionResult::Denied {
+                reason: \"Authentication required\".to_string(),
+            },
+        }
+    }
+}
+
+pub enum PermissionResult {
+    Allowed,
+    Denied { reason: String },
+}
+```
+
+### Invitation Manager
+
+**Location**: `core/src/gateway/security/invitation_manager.rs`
+
+Manages guest invitation lifecycle:
+
+```rust
+impl InvitationManager {
+    /// Create a new guest invitation
+    pub fn create_invitation(
+        &self,
+        request: CreateInvitationRequest,
+    ) -> Result<Invitation, InvitationError> {
+        // Generate unique token and guest_id
+        // Store pending invitation
+        // Return invitation with URL
+    }
+
+    /// Activate an invitation (one-time use)
+    pub fn activate_invitation(
+        &self,
+        token: &str,
+    ) -> Result<GuestToken, InvitationError> {
+        // Validate token
+        // Check expiration
+        // Mark as activated
+        // Return guest token with scope
+    }
+}
+```
+
+### Session Identity Metadata
+
+**Location**: `core/src/gateway/session_manager.rs`
+
+Identity metadata stored in session database:
+
+```rust
+pub struct SessionIdentityMeta {
+    /// Role of the session owner
+    pub role: Role,
+
+    /// Identity ID (\"owner\" or guest_id)
+    pub identity_id: String,
+
+    /// Guest scope (frozen at session creation)
+    pub scope: Option<GuestScope>,
+
+    /// Source channel
+    pub source_channel: String,
+}
+```
+
+### Execution Flow
+
+1. **Session Creation**
+   - Owner: Default identity with full access
+   - Guest: Activate invitation → Store identity in session metadata
+
+2. **Request Processing**
+   - Gateway receives request with session_key
+   - SessionManager constructs IdentityContext from metadata
+   - IdentityContext passed to AgentLoop
+
+3. **Tool Execution**
+   - AgentLoop passes IdentityContext to Executor
+   - Executor checks permission via PolicyEngine
+   - If allowed: Execute tool
+   - If denied: Return ToolError with reason
+
+### Example: Guest Invitation Flow
+
+```rust
+// 1. Create invitation (Owner only)
+let scope = GuestScope {
+    allowed_tools: vec![\"translate\".to_string()],
+    expires_at: Some(now + 3600), // 1 hour
+    display_name: Some(\"Mom\".to_string()),
+};
+
+let invitation = manager.create_invitation(CreateInvitationRequest {
+    guest_name: \"Mom\".to_string(),
+    scope,
+})?;
+
+// invitation.token: \"abc123...\"
+// invitation.url: \"https://aleph.local/join?t=abc123...\"
+
+// 2. Guest activates invitation
+let guest_token = manager.activate_invitation(&invitation.token)?;
+
+// 3. Guest creates session with token
+// SessionManager stores identity metadata
+
+// 4. Guest executes tool
+let identity = session_manager.get_identity_context(&session_key, \"gateway\")?;
+// identity.role = Role::Guest
+// identity.scope = Some(GuestScope { allowed_tools: [\"translate\"], ... })
+
+let result = executor.execute(&action, &identity).await;
+// If action.tool_name = \"translate\" → Allowed
+// If action.tool_name = \"shell_exec\" → Denied
+```
+
+### CLI Commands
+
+```bash
+# Create guest invitation
+aleph guests invite --scope translate --ttl 30d --name \"Mom\"
+
+# List pending invitations
+aleph guests list
+
+# Revoke invitation
+aleph guests revoke <guest_id>
+```
+
+### Security Guarantees
+
+1. **Immutability**: IdentityContext is immutable once created
+2. **Frozen Permissions**: Guest scope is frozen at session creation
+3. **One-Time Use**: Invitations can only be activated once
+4. **Expiration**: Both invitations and guest tokens can expire
+5. **Stateless Checks**: PolicyEngine has no mutable state
+6. **Audit Trail**: All permission checks are logged
 
 ---
 
