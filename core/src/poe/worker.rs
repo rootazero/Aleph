@@ -508,12 +508,19 @@ where
             ..Default::default()
         };
 
+        // Create Owner identity for POE worker (internal execution)
+        let identity = aleph_protocol::IdentityContext::owner(
+            "poe-worker".to_string(),
+            "internal".to_string(),
+        );
+
         // Execute via AgentLoop
         let result = agent_loop
             .run(
                 prompt,
                 context,
                 self.tools.clone(),
+                identity,
                 callback,
                 Some(self.abort_rx.clone()),
                 None,

@@ -265,6 +265,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     provider_registry,
                     tool_registry,
                     tools,
+                    session_manager.clone(),
                 ));
 
                 // Create agent registry with agents from config (using SessionManager for persistence)
