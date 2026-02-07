@@ -8,6 +8,7 @@
 //! |--------|-------------|
 //! | guests.createInvitation | Creates a new guest invitation with 15-minute expiry |
 //! | guests.listPending | Lists all pending (non-activated) invitations |
+//! | guests.revokeInvitation | Revokes a pending invitation by token |
 //!
 //! These handlers require an InvitationManager to be wired at Gateway initialization.
 
@@ -38,6 +39,20 @@ pub struct CreateInvitationResponse {
 pub struct ListPendingResponse {
     /// Array of pending invitations
     pub invitations: Vec<Invitation>,
+}
+
+/// Request for guests.revokeInvitation
+#[derive(Debug, Clone, Deserialize)]
+pub struct RevokeInvitationRequest {
+    /// The invitation token to revoke
+    pub token: String,
+}
+
+/// Response for guests.revokeInvitation
+#[derive(Debug, Clone, Serialize)]
+pub struct RevokeInvitationResponse {
+    /// Success message
+    pub success: bool,
 }
 
 // ============================================================================
@@ -175,6 +190,80 @@ pub async fn handle_list_guests(
     }
 }
 
+/// Handle guests.revokeInvitation - revokes a pending invitation
+///
+/// Removes an invitation from the pending list, preventing it from being activated.
+///
+/// # Example Request
+///
+/// ```json
+/// {
+///     "jsonrpc": "2.0",
+///     "method": "guests.revokeInvitation",
+///     "params": {
+///         "token": "550e8400-e29b-41d4-a716-446655440000"
+///     },
+///     "id": 1
+/// }
+/// ```
+///
+/// # Example Response
+///
+/// ```json
+/// {
+///     "jsonrpc": "2.0",
+///     "result": {
+///         "success": true
+///     },
+///     "id": 1
+/// }
+/// ```
+pub async fn handle_revoke_invitation(
+    request: JsonRpcRequest,
+    manager: SharedInvitationManager,
+) -> JsonRpcResponse {
+    let params = match &request.params {
+        Some(params) => params,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing required parameter: params".to_string(),
+            );
+        }
+    };
+
+    let revoke_request: RevokeInvitationRequest = match serde_json::from_value(params.clone()) {
+        Ok(r) => r,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Invalid parameters: {}", e),
+            );
+        }
+    };
+
+    match manager.revoke_invitation(&revoke_request.token) {
+        Ok(()) => {
+            let response = RevokeInvitationResponse { success: true };
+            match serde_json::to_value(&response) {
+                Ok(value) => JsonRpcResponse::success(request.id, value),
+                Err(e) => JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to serialize response: {}", e),
+                ),
+            }
+        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to revoke invitation: {}", e),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +324,49 @@ mod tests {
         assert!(invitations.is_array());
         assert_eq!(invitations.as_array().unwrap().len(), 1);
         assert!(invitations[0]["token"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_revoke_invitation() {
+        let manager = Arc::new(InvitationManager::new());
+
+        // Create an invitation
+        let invitation = manager
+            .create_invitation(CreateInvitationRequest {
+                guest_name: "Guest to Revoke".to_string(),
+                scope: GuestScope {
+                    allowed_tools: vec!["translate".to_string()],
+                    expires_at: None,
+                    display_name: None,
+                },
+            })
+            .unwrap();
+
+        let token = invitation.token.clone();
+
+        // Revoke the invitation
+        let request = JsonRpcRequest::with_id(
+            "guests.revokeInvitation",
+            Some(
+                serde_json::to_value(&RevokeInvitationRequest { token: token.clone() }).unwrap(),
+            ),
+            serde_json::json!(1),
+        );
+
+        let response = handle_revoke_invitation(request, manager.clone()).await;
+
+        assert!(response.is_success());
+        let result = response.result.unwrap();
+        assert_eq!(result["success"], true);
+
+        // Verify invitation is no longer in pending list
+        let list_request =
+            JsonRpcRequest::with_id("guests.listPending", None, serde_json::json!(2));
+        let list_response = handle_list_guests(list_request, manager).await;
+
+        assert!(list_response.is_success());
+        let list_result = list_response.result.unwrap();
+        let invitations = &list_result["invitations"];
+        assert_eq!(invitations.as_array().unwrap().len(), 0);
     }
 }

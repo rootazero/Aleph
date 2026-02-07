@@ -732,6 +732,13 @@ fn register_guest_handlers(
         let mgr = mgr_list.clone();
         async move { guests::handle_list_guests(req, mgr).await }
     });
+
+    // guests.revokeInvitation
+    let mgr_revoke = invitation_manager.clone();
+    server.handlers_mut().register("guests.revokeInvitation", move |req| {
+        let mgr = mgr_revoke.clone();
+        async move { guests::handle_revoke_invitation(req, mgr).await }
+    });
 }
 
 #[cfg(feature = "gateway")]
