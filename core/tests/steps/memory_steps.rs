@@ -2,7 +2,7 @@
 
 use crate::world::{AlephWorld, MemoryContext};
 use alephcore::memory::database::VectorDatabase;
-use alephcore::memory::{ContextAnchor, FactType, MemoryEntry, EMBEDDING_DIM};
+use alephcore::memory::{ContextAnchor, FactType, MemoryEntry, NamespaceScope, EMBEDDING_DIM};
 use alephcore::MemoryStats;
 use cucumber::{gherkin::Step, given, then, when};
 use std::sync::Arc;
@@ -180,7 +180,7 @@ async fn when_search_zero_embedding(w: &mut AlephWorld, limit: i32) {
 
     let query = vec![0.0f32; EMBEDDING_DIM];
     let results = db
-        .search_facts(&query, limit as u32, false)
+        .search_facts(&query, NamespaceScope::Owner, limit as u32, false)
         .await
         .expect("Search failed");
     ctx.search_results = results;
@@ -291,7 +291,7 @@ async fn then_can_search_fact(w: &mut AlephWorld) {
 
     // Search should find the fact (this uses facts_vec internally)
     let results = db
-        .search_facts(&embedding, 10, false)
+        .search_facts(&embedding, NamespaceScope::Owner, 10, false)
         .await
         .expect("Search failed");
     assert!(

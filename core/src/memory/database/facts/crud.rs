@@ -502,12 +502,22 @@ impl VectorDatabase {
                 return Err(AlephError::config(format!("Fact not found: {}", fact_id)));
             }
 
-            // Also update vec table
+            // Also update vec table (virtual table uses rowid, not id)
+            let rowid: i64 = conn
+                .query_row(
+                    "SELECT rowid FROM memory_facts WHERE id = ?1",
+                    params![fact_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| {
+                    AlephError::config(format!("Failed to get rowid for fact {}: {}", fact_id, e))
+                })?;
+
             conn.execute(
                 r#"
-                UPDATE facts_vec SET embedding = vec_f32(?2) WHERE id = ?1
+                UPDATE facts_vec SET embedding = vec_f32(?2) WHERE rowid = ?1
                 "#,
-                params![fact_id, embedding_bytes],
+                params![rowid, embedding_bytes],
             )
             .map_err(|e| AlephError::config(format!("Failed to update fact vector: {}", e)))?;
         } else {
