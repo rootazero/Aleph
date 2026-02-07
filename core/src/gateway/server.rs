@@ -574,7 +574,41 @@ async fn handle_connection(
                                         ).await;
                                         serde_json::to_string(&resp).unwrap_or_default()
                                     } else {
-                                        process_request(&text, &handlers).await
+                                        let response = process_request(&text, &handlers).await;
+
+                                        // Log RPC request for guest sessions
+                                        if let Some(ref gsm) = guest_session_manager {
+                                            let conns = connections.read().await;
+                                            if let Some(state) = conns.get(&conn_id) {
+                                                if let Some(ref session_id) = state.guest_session_id {
+                                                    if let Some(session) = gsm.get_session(session_id) {
+                                                        // Parse response to determine status
+                                                        let status = if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
+                                                            if resp.is_success() {
+                                                                crate::gateway::security::ActivityStatus::Success
+                                                            } else {
+                                                                crate::gateway::security::ActivityStatus::Failed
+                                                            }
+                                                        } else {
+                                                            crate::gateway::security::ActivityStatus::Failed
+                                                        };
+
+                                                        gsm.activity_logger().log_rpc_request(
+                                                            session_id.clone(),
+                                                            session.guest_id.clone(),
+                                                            req.method.clone(),
+                                                            serde_json::json!({
+                                                                "params": req.params,
+                                                            }),
+                                                            status,
+                                                            None,
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        response
                                     }
                                 }
                             }
