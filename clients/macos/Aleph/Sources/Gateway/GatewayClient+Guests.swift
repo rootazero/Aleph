@@ -59,4 +59,39 @@ extension GatewayClient {
         let result: GWTerminateSessionResult = try await call(method: "guests.terminateSession", params: params)
         return result.success
     }
+
+    // MARK: - Activity Logs
+
+    /// Get activity logs for a guest session
+    ///
+    /// - Parameters:
+    ///   - sessionId: The session ID to query
+    ///   - activityType: Optional filter by activity type (e.g., "ToolCall", "RpcRequest")
+    ///   - status: Optional filter by status
+    ///   - limit: Maximum number of results (default: 100)
+    ///   - offset: Offset for pagination (default: 0)
+    ///   - startTime: Optional start time filter (Unix milliseconds)
+    ///   - endTime: Optional end time filter (Unix milliseconds)
+    /// - Returns: Activity log query result with logs and pagination info
+    func guestsGetActivityLogs(
+        sessionId: String,
+        activityType: String? = nil,
+        status: GWActivityStatus? = nil,
+        limit: Int? = nil,
+        offset: Int? = nil,
+        startTime: Int64? = nil,
+        endTime: Int64? = nil
+    ) async throws -> GWActivityLogQueryResult {
+        let params = GWGetActivityLogsParams(
+            sessionId: sessionId,
+            activityType: activityType,
+            status: status,
+            limit: limit,
+            offset: offset,
+            startTime: startTime,
+            endTime: endTime
+        )
+        let result: GWGetActivityLogsResult = try await call(method: "guests.getActivityLogs", params: params)
+        return result.result
+    }
 }
