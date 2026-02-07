@@ -3,7 +3,7 @@
 //! Manages sessions with SQLite persistence, automatic compaction,
 //! and lifecycle management.
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -552,6 +552,67 @@ impl SessionManager {
         }
 
         Ok(0)
+    }
+
+    /// Get IdentityContext for a session
+    ///
+    /// Retrieves the session's identity metadata from the database and constructs
+    /// an IdentityContext. Falls back to Owner identity if metadata is missing or invalid.
+    pub async fn get_identity_context(
+        &self,
+        session_key: &str,
+        source_channel: &str,
+    ) -> Result<IdentityContext, SessionManagerError> {
+        let conn = self.conn.lock().map_err(|e| {
+            SessionManagerError::DatabaseError(format!("Lock error: {}", e))
+        })?;
+
+        // Query session metadata
+        let metadata_json: Option<String> = {
+            let mut stmt = conn
+                .prepare("SELECT metadata FROM sessions WHERE key = ?")
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+            stmt.query_row(params![session_key], |row| row.get(0))
+                .optional()
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+        };
+
+        // Parse metadata or use default (Owner)
+        let identity_meta: SessionIdentityMeta = metadata_json
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_else(|| SessionIdentityMeta::owner(source_channel));
+
+        // Construct IdentityContext
+        let identity = match identity_meta.role {
+            Role::Owner => IdentityContext::owner(
+                session_key.to_string(),
+                identity_meta.source_channel,
+            ),
+            Role::Guest => {
+                // Guest must have a scope; if missing, create minimal scope
+                let scope = identity_meta.scope.unwrap_or_else(|| GuestScope {
+                    allowed_tools: vec![],
+                    expires_at: None,
+                    display_name: None,
+                });
+                IdentityContext::guest(
+                    session_key.to_string(),
+                    identity_meta.identity_id,
+                    scope,
+                    identity_meta.source_channel,
+                )
+            }
+            Role::Anonymous => {
+                // Anonymous sessions are treated as Owner for backward compatibility
+                IdentityContext::owner(
+                    session_key.to_string(),
+                    identity_meta.source_channel,
+                )
+            }
+        };
+
+        Ok(identity)
     }
 
     /// Cleanup expired sessions

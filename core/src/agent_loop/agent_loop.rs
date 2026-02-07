@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use tokio::sync::watch;
 
+use aleph_protocol::IdentityContext;
 use crate::agents::thinking::{is_thinking_level_error, ThinkingFallbackState};
 use crate::event::{EventBus, StopReason};
 
@@ -215,6 +216,7 @@ where
         request: String,
         context: RequestContext,
         tools: Vec<crate::dispatcher::UnifiedTool>,
+        identity: IdentityContext,
         callback: impl LoopCallback,
         abort_signal: Option<watch::Receiver<bool>>,
         initial_history: Option<String>,
@@ -589,7 +591,7 @@ where
 
             let start_time = std::time::Instant::now();
             let started_at = chrono::Utc::now().timestamp_millis();
-            let result = self.executor.execute(&action).await;
+            let result = self.executor.execute(&action, &identity).await;
             let duration_ms = start_time.elapsed().as_millis() as u64;
             let completed_at = chrono::Utc::now().timestamp_millis();
 

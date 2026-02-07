@@ -21,6 +21,7 @@ use crate::compressor::NoOpCompressor;
 use crate::dispatcher::UnifiedTool;
 use crate::executor::{RoutedExecutor, SingleStepExecutor, ToolRegistry, ToolRouter};
 use crate::thinker::{ProviderRegistry as ThinkerProviderRegistry, SingleProviderRegistry, Thinker, ThinkerConfig};
+use aleph_protocol::IdentityContext;
 
 use super::{ClientManifest, JsonRpcRequest, ReverseRpcManager};
 
@@ -151,6 +152,8 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     tool_registry: Arc<R>,
     /// Available tools for all agents
     tools: Arc<Vec<UnifiedTool>>,
+    /// Session manager for identity context
+    session_manager: Arc<crate::gateway::SessionManager>,
 }
 
 /// Simple execution engine without full AgentLoop integration
@@ -167,6 +170,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         provider_registry: Arc<P>,
         tool_registry: Arc<R>,
         tools: Vec<UnifiedTool>,
+        session_manager: Arc<crate::gateway::SessionManager>,
     ) -> Self {
         Self {
             config,
@@ -175,6 +179,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             provider_registry,
             tool_registry,
             tools: Arc::new(tools),
+            session_manager,
         }
     }
 
@@ -528,6 +533,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             Some(history_summary)
         };
 
+        // Construct IdentityContext from session metadata
+        let session_key_str = request.session_key.to_key_string();
+        let identity = self
+            .session_manager
+            .get_identity_context(&session_key_str, "gateway")
+            .await
+            .unwrap_or_else(|_| {
+                IdentityContext::owner(session_key_str.clone(), "gateway".to_string())
+            });
+
         // Run with either RoutedExecutor or SingleStepExecutor based on client context
         let result = if let Some(ctx) = client_context {
             info!(
@@ -546,6 +561,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     request.input.clone(),
                     context,
                     allowed_tools,
+                    identity.clone(),
                     callback.as_ref(),
                     Some(abort_rx),
                     initial_history,
@@ -559,6 +575,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     request.input.clone(),
                     context,
                     allowed_tools,
+                    identity.clone(),
                     callback.as_ref(),
                     Some(abort_rx),
                     initial_history,
