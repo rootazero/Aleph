@@ -3,6 +3,7 @@
 use crate::error::AlephError;
 use crate::memory::context::{FactSpecificity, FactType, MemoryFact, TemporalScope};
 use crate::memory::database::core::VectorDatabase;
+use crate::memory::NamespaceScope;
 use rusqlite::params;
 
 impl VectorDatabase {
@@ -10,14 +11,19 @@ impl VectorDatabase {
     pub async fn search_facts(
         &self,
         query_embedding: &[f32],
+        scope: NamespaceScope,
         limit: u32,
         include_invalid: bool,
     ) -> Result<Vec<MemoryFact>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let query_bytes = Self::serialize_embedding(query_embedding);
 
+        // Get namespace filter
+        let (namespace_filter, namespace_params) = scope.to_sql_filter();
+
         let query = if include_invalid {
-            r#"
+            format!(
+                r#"
             WITH vec_matches AS (
                 SELECT rowid, distance
                 FROM facts_vec
@@ -32,10 +38,14 @@ impl VectorDatabase {
                 1.0 / (1.0 + vm.distance) as score
             FROM memory_facts f
             INNER JOIN vec_matches vm ON f.rowid = vm.rowid
+            WHERE {}
             ORDER BY vm.distance
-            "#
+            "#,
+                namespace_filter
+            )
         } else {
-            r#"
+            format!(
+                r#"
             WITH vec_matches AS (
                 SELECT rowid, distance
                 FROM facts_vec
@@ -50,17 +60,29 @@ impl VectorDatabase {
                 1.0 / (1.0 + vm.distance) as score
             FROM memory_facts f
             INNER JOIN vec_matches vm ON f.rowid = vm.rowid
-            WHERE f.is_valid = 1
+            WHERE f.is_valid = 1 AND {}
             ORDER BY vm.distance
-            "#
+            "#,
+                namespace_filter
+            )
         };
 
         let mut stmt = conn
-            .prepare(query)
+            .prepare(&query)
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
+        // Build params: query_bytes, limit, namespace_params
+        let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = vec![
+            Box::new(query_bytes),
+            Box::new(limit),
+        ];
+        for np in namespace_params {
+            param_values.push(Box::new(np));
+        }
+        let params_refs: Vec<&dyn rusqlite::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+
         let facts = stmt
-            .query_map(params![query_bytes, limit], |row| {
+            .query_map(params_refs.as_slice(), |row| {
                 let id: String = row.get(0)?;
                 let content: String = row.get(1)?;
                 let fact_type_str: String = row.get(2)?;
@@ -172,6 +194,7 @@ impl VectorDatabase {
     pub async fn find_similar_facts(
         &self,
         query_embedding: &[f32],
+        scope: NamespaceScope,
         threshold: f32,
         exclude_id: Option<&str>,
     ) -> Result<Vec<MemoryFact>, AlephError> {
@@ -181,9 +204,11 @@ impl VectorDatabase {
         // Fetch more candidates than needed, filter by threshold after
         let limit = 50u32;
 
-        let mut stmt = conn
-            .prepare(
-                r#"
+        // Get namespace filter
+        let (namespace_filter, namespace_params) = scope.to_sql_filter();
+
+        let query = format!(
+            r#"
                 WITH vec_matches AS (
                     SELECT rowid, distance
                     FROM facts_vec
@@ -198,14 +223,28 @@ impl VectorDatabase {
                     1.0 / (1.0 + vm.distance) as score
                 FROM memory_facts f
                 INNER JOIN vec_matches vm ON f.rowid = vm.rowid
-                WHERE f.is_valid = 1
+                WHERE f.is_valid = 1 AND {}
                 ORDER BY vm.distance
                 "#,
-            )
+            namespace_filter
+        );
+
+        let mut stmt = conn
+            .prepare(&query)
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
+        // Build params: query_bytes, limit, namespace_params
+        let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = vec![
+            Box::new(query_bytes),
+            Box::new(limit),
+        ];
+        for np in namespace_params {
+            param_values.push(Box::new(np));
+        }
+        let params_refs: Vec<&dyn rusqlite::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+
         let facts = stmt
-            .query_map(params![query_bytes, limit], |row| {
+            .query_map(params_refs.as_slice(), |row| {
                 let id: String = row.get(0)?;
                 let content: String = row.get(1)?;
                 let fact_type_str: String = row.get(2)?;

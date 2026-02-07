@@ -119,6 +119,7 @@ impl ToolRetrieval {
         let candidate_limit = self.config.max_tools * 3;
         let facts: Vec<MemoryFact> = self.db.search_facts(
             query_embedding,
+            crate::memory::NamespaceScope::Owner, // TODO: Pass from context
             candidate_limit as u32,
             false, // only valid facts
         ).await?;

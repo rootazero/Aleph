@@ -86,7 +86,7 @@ impl ContradictionDetector {
         // Search for similar facts
         let similar = self
             .database
-            .search_facts(embedding, 10, false)
+            .search_facts(embedding, crate::memory::NamespaceScope::Owner, 10, false)
             .await?;
 
         // Filter by similarity threshold and exclude the fact itself
