@@ -11,8 +11,12 @@
 //! - Click elements, type text
 //! - Run JavaScript evaluation
 //! - Tab management
+//! - Multi-context management (BrowserPool)
+//! - Persistent session support
 //!
 //! # Usage
+//!
+//! ## Legacy BrowserService (single-session)
 //!
 //! ```rust,ignore
 //! use alephcore::browser::{BrowserService, BrowserConfig};
@@ -35,8 +39,28 @@
 //! // Stop browser
 //! service.stop().await?;
 //! ```
+//!
+//! ## BrowserPool (multi-context, recommended)
+//!
+//! ```rust,ignore
+//! use alephcore::browser::{BrowserPool, BrowserConfig, AllocationPolicy};
+//!
+//! let config = BrowserConfig::default();
+//! let mut pool = BrowserPool::new(config, AllocationPolicy::Adaptive)?;
+//!
+//! // Start primary instance
+//! pool.start().await?;
+//!
+//! // Get primary context for user operations
+//! let primary_ctx = pool.get_primary_context().await?;
+//!
+//! // Create ephemeral context for isolated task
+//! let task_ctx = pool.create_ephemeral_context("task-123").await?;
+//! ```
 
 pub mod config;
+pub mod context_registry;
+pub mod resource_monitor;
 
 pub use config::{
     ActionResult, BrowserConfig, ClickOptions, PageSnapshot, ScreenshotOptions,
@@ -749,5 +773,306 @@ mod tests {
     #[test]
     fn test_resolve_target() {
         // This would need an async runtime to test properly
+    }
+}
+
+// ============================================================================
+// BrowserPool - Multi-Context Browser Management
+// ============================================================================
+
+use context_registry::{ContextRegistry, TaskId};
+use resource_monitor::ResourceMonitor;
+
+/// Allocation policy for browser instances
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllocationPolicy {
+    /// All contexts share one browser process
+    SingleInstance,
+    /// Each context gets a dedicated browser process
+    MultiInstance,
+    /// Automatically decide based on system resources
+    Adaptive,
+}
+
+/// Browser pool for managing multiple browser instances and contexts
+pub struct BrowserPool {
+    /// Configuration
+    config: BrowserConfig,
+
+    /// Allocation policy
+    allocation_policy: AllocationPolicy,
+
+    /// Primary browser instance (persistent user context)
+    #[cfg(feature = "browser")]
+    primary_instance: Arc<RwLock<Option<Browser>>>,
+
+    /// Shared browser instance pool (for normal tasks)
+    #[cfg(feature = "browser")]
+    shared_instances: Arc<RwLock<Vec<Browser>>>,
+
+    /// Dedicated browser instances (for high-risk tasks)
+    #[cfg(feature = "browser")]
+    dedicated_instances: Arc<RwLock<HashMap<TaskId, Browser>>>,
+
+    /// Context registry
+    context_registry: Arc<ContextRegistry>,
+
+    /// Resource monitor
+    resource_monitor: Arc<ResourceMonitor>,
+
+    /// Chrome processes
+    processes: Arc<RwLock<Vec<Child>>>,
+}
+
+impl BrowserPool {
+    /// Create a new browser pool
+    pub fn new(config: BrowserConfig, allocation_policy: AllocationPolicy) -> BrowserResult<Self> {
+        config.validate().map_err(BrowserError::ConfigError)?;
+
+        Ok(Self {
+            config,
+            allocation_policy,
+            #[cfg(feature = "browser")]
+            primary_instance: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "browser")]
+            shared_instances: Arc::new(RwLock::new(Vec::new())),
+            #[cfg(feature = "browser")]
+            dedicated_instances: Arc::new(RwLock::new(HashMap::new())),
+            context_registry: Arc::new(ContextRegistry::new()),
+            resource_monitor: Arc::new(ResourceMonitor::new()),
+            processes: Arc::new(RwLock::new(Vec::new())),
+        })
+    }
+
+    /// Start the browser pool (launches primary instance)
+    #[cfg(feature = "browser")]
+    pub async fn start(&mut self) -> BrowserResult<()> {
+        // Update resource monitor
+        self.resource_monitor.update().await;
+
+        // Launch primary browser instance
+        let executable = self.config.find_executable()
+            .ok_or(BrowserError::ExecutableNotFound)?;
+
+        let user_data_dir = self.config.expand_user_data_dir();
+
+        // Ensure user data directory exists
+        if let Err(e) = std::fs::create_dir_all(&user_data_dir) {
+            return Err(BrowserError::LaunchFailed(format!(
+                "Failed to create user data dir: {}", e
+            )));
+        }
+
+        tracing::info!(
+            "Starting primary browser instance: {} (headless: {}, port: {})",
+            executable.display(),
+            self.config.headless,
+            self.config.cdp_port
+        );
+
+        // Build browser config
+        let mut builder = CdpBrowserConfig::builder()
+            .chrome_executable(executable)
+            .arg(format!("--remote-debugging-port={}", self.config.cdp_port))
+            .arg(format!("--user-data-dir={}", user_data_dir.display()))
+            .arg("--no-first-run")
+            .arg("--disable-sync")
+            .arg("--disable-background-networking")
+            .arg("--disable-component-update")
+            .arg("--disable-features=Translate,MediaRouter");
+
+        if self.config.headless {
+            builder = builder.arg("--headless=new");
+        }
+
+        // Add extra args
+        for arg in &self.config.extra_args {
+            builder = builder.arg(arg);
+        }
+
+        // Set viewport
+        builder = builder.viewport(Viewport {
+            width: self.config.viewport_width,
+            height: self.config.viewport_height,
+            device_scale_factor: None,
+            emulating_mobile: false,
+            is_landscape: true,
+            has_touch: false,
+        });
+
+        let browser_config = builder.build()
+            .map_err(|e| BrowserError::LaunchFailed(e.to_string()))?;
+
+        // Launch browser
+        let (browser, mut handler) = Browser::launch(browser_config)
+            .await
+            .map_err(|e| BrowserError::LaunchFailed(e.to_string()))?;
+
+        // Spawn handler task
+        tokio::spawn(async move {
+            loop {
+                match handler.next().await {
+                    Some(Ok(_)) => continue,
+                    Some(Err(_)) => break,
+                    None => break,
+                }
+            }
+        });
+
+        // Get default page (primary context)
+        let primary_page = browser.new_page("about:blank")
+            .await
+            .map_err(|e| BrowserError::LaunchFailed(e.to_string()))?;
+
+        self.context_registry.set_primary_context(
+            Arc::new(primary_page),
+            Some(user_data_dir)
+        ).await;
+
+        // Store primary instance
+        *self.primary_instance.write().await = Some(browser);
+
+        // Update resource monitor
+        self.resource_monitor.set_active_instances(1).await;
+
+        tracing::info!("Primary browser instance started successfully");
+        Ok(())
+    }
+
+    #[cfg(not(feature = "browser"))]
+    pub async fn start(&mut self) -> BrowserResult<()> {
+        Err(BrowserError::Internal("Browser feature not enabled".to_string()))
+    }
+
+    /// Stop the browser pool
+    #[cfg(feature = "browser")]
+    pub async fn stop(&mut self) -> BrowserResult<()> {
+        // Close primary instance
+        if let Some(mut browser) = self.primary_instance.write().await.take() {
+            if let Err(e) = browser.close().await {
+                tracing::warn!("Error closing primary browser: {}", e);
+            }
+        }
+
+        // Close shared instances
+        let mut shared = self.shared_instances.write().await;
+        for mut browser in shared.drain(..) {
+            if let Err(e) = browser.close().await {
+                tracing::warn!("Error closing shared browser: {}", e);
+            }
+        }
+
+        // Close dedicated instances
+        let mut dedicated = self.dedicated_instances.write().await;
+        for (task_id, mut browser) in dedicated.drain() {
+            tracing::debug!("Closing dedicated browser for task: {}", task_id);
+            if let Err(e) = browser.close().await {
+                tracing::warn!("Error closing dedicated browser: {}", e);
+            }
+        }
+
+        // Kill processes
+        let mut processes = self.processes.write().await;
+        for mut proc in processes.drain(..) {
+            let _ = proc.kill();
+        }
+
+        // Clear context registry
+        self.context_registry.clear_ephemeral_contexts().await;
+
+        // Update resource monitor
+        self.resource_monitor.set_active_instances(0).await;
+
+        tracing::info!("Browser pool stopped");
+        Ok(())
+    }
+
+    #[cfg(not(feature = "browser"))]
+    pub async fn stop(&mut self) -> BrowserResult<()> {
+        Ok(())
+    }
+
+    /// Get the primary context
+    pub async fn get_primary_context(&self) -> BrowserResult<context_registry::ContextHandle> {
+        self.context_registry.get_primary_context().await
+            .ok_or(BrowserError::NotStarted)
+    }
+
+    /// Create an ephemeral context for a task
+    #[cfg(feature = "browser")]
+    pub async fn create_ephemeral_context(&self, task_id: TaskId) -> BrowserResult<context_registry::ContextHandle> {
+        // Check allocation policy
+        let should_use_dedicated = match self.allocation_policy {
+            AllocationPolicy::SingleInstance => false,
+            AllocationPolicy::MultiInstance => true,
+            AllocationPolicy::Adaptive => {
+                self.resource_monitor.can_handle_multi_instance().await
+            }
+        };
+
+        if should_use_dedicated {
+            // Create dedicated browser instance
+            // TODO: Implement dedicated instance creation
+            return Err(BrowserError::Internal("Dedicated instances not yet implemented".to_string()));
+        }
+
+        // Use primary instance to create new page
+        let primary = self.primary_instance.read().await;
+        let browser = primary.as_ref().ok_or(BrowserError::NotStarted)?;
+
+        let page = browser.new_page("about:blank")
+            .await
+            .map_err(|e| BrowserError::ActionFailed(e.to_string()))?;
+        let context_handle = Arc::new(page);
+
+        self.context_registry.create_ephemeral_context(task_id, context_handle.clone()).await;
+
+        Ok(context_handle)
+    }
+
+    #[cfg(not(feature = "browser"))]
+    pub async fn create_ephemeral_context(&self, _task_id: TaskId) -> BrowserResult<context_registry::ContextHandle> {
+        Err(BrowserError::Internal("Browser feature not enabled".to_string()))
+    }
+
+    /// Get an ephemeral context by task ID
+    pub async fn get_ephemeral_context(&self, task_id: &TaskId) -> Option<context_registry::ContextHandle> {
+        self.context_registry.get_ephemeral_context(task_id).await
+    }
+
+    /// Remove an ephemeral context
+    pub async fn remove_ephemeral_context(&self, task_id: &TaskId) -> Option<context_registry::ContextHandle> {
+        self.context_registry.remove_ephemeral_context(task_id).await
+    }
+
+    /// Get the context registry
+    pub fn context_registry(&self) -> &Arc<ContextRegistry> {
+        &self.context_registry
+    }
+
+    /// Get the resource monitor
+    pub fn resource_monitor(&self) -> &Arc<ResourceMonitor> {
+        &self.resource_monitor
+    }
+
+    /// Get current allocation policy
+    pub fn allocation_policy(&self) -> AllocationPolicy {
+        self.allocation_policy
+    }
+
+    /// Update allocation policy
+    pub fn set_allocation_policy(&mut self, policy: AllocationPolicy) {
+        self.allocation_policy = policy;
+    }
+}
+
+impl Drop for BrowserPool {
+    fn drop(&mut self) {
+        // Kill processes if still running
+        if let Ok(mut processes) = self.processes.try_write() {
+            for mut proc in processes.drain(..) {
+                let _ = proc.kill();
+            }
+        }
     }
 }
