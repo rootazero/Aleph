@@ -581,7 +581,7 @@ mod tests {
         // Should be denied because guest doesn't have permission for shell_exec
         assert!(matches!(result, ActionResult::ToolError { retryable: false, .. }));
         if let ActionResult::ToolError { error, .. } = result {
-            assert!(error.contains("Permission denied") || error.contains("not allowed"));
+            assert!(error.contains("not in guest") || error.contains("scope"));
         }
     }
 
