@@ -34,10 +34,12 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info};
 
+use aleph_protocol::IdentityContext;
 use crate::agent_loop::{Action, ActionExecutor, ActionResult};
 use crate::config::ProfileConfig;
 use crate::dispatcher::UnifiedTool;
 use crate::error::{AlephError, Result};
+use crate::gateway::security::policy_engine::PolicyEngine;
 
 /// Normalize tool name by extracting base tool name from various formats
 ///
@@ -229,12 +231,37 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
 
 #[async_trait]
 impl<R: ToolRegistry + 'static> ActionExecutor for SingleStepExecutor<R> {
-    async fn execute(&self, action: &Action) -> ActionResult {
+    async fn execute(&self, action: &Action, identity: &IdentityContext) -> ActionResult {
         match action {
             Action::ToolCall {
                 tool_name,
                 arguments,
-            } => self.execute_tool_call(tool_name, arguments.clone()).await,
+            } => {
+                // Check permission before execution (Layer 3: Identity-based permission)
+                let normalized_tool_name = normalize_tool_name(tool_name);
+                let permission_result = PolicyEngine::check_tool_permission(identity, &normalized_tool_name);
+
+                match permission_result {
+                    crate::gateway::security::policy_engine::PermissionResult::Allowed => {
+                        // Permission granted, proceed with execution
+                        self.execute_tool_call(tool_name, arguments.clone()).await
+                    }
+                    crate::gateway::security::policy_engine::PermissionResult::Denied { reason } => {
+                        // Permission denied
+                        error!(
+                            tool = tool_name,
+                            identity_id = %identity.identity_id,
+                            role = ?identity.role,
+                            reason = %reason,
+                            "Tool execution blocked by PolicyEngine"
+                        );
+                        ActionResult::ToolError {
+                            error: reason,
+                            retryable: false,
+                        }
+                    }
+                }
+            }
 
             Action::UserInteraction { question, .. } => {
                 // UserInteraction is handled by the callback system, not executor
@@ -405,6 +432,10 @@ mod tests {
         )
     }
 
+    fn create_owner_identity() -> IdentityContext {
+        IdentityContext::owner("test-session".to_string(), "test-channel".to_string())
+    }
+
     #[tokio::test]
     async fn test_successful_tool_execution() {
         let mut registry = MockToolRegistry::new();
@@ -418,7 +449,8 @@ mod tests {
             arguments: json!({"query": "test"}),
         };
 
-        let result = executor.execute(&action).await;
+        let identity = create_owner_identity();
+        let result = executor.execute(&action, &identity).await;
 
         assert!(matches!(result, ActionResult::ToolSuccess { .. }));
         if let ActionResult::ToolSuccess { output, .. } = result {
@@ -436,7 +468,8 @@ mod tests {
             arguments: json!({}),
         };
 
-        let result = executor.execute(&action).await;
+        let identity = create_owner_identity();
+        let result = executor.execute(&action, &identity).await;
 
         assert!(matches!(result, ActionResult::ToolError { retryable: false, .. }));
     }
@@ -450,7 +483,8 @@ mod tests {
             summary: "Task done".to_string(),
         };
 
-        let result = executor.execute(&action).await;
+        let identity = create_owner_identity();
+        let result = executor.execute(&action, &identity).await;
 
         assert!(matches!(result, ActionResult::Completed));
     }
@@ -465,7 +499,8 @@ mod tests {
             options: Some(vec!["A".to_string(), "B".to_string()]),
         };
 
-        let result = executor.execute(&action).await;
+        let identity = create_owner_identity();
+        let result = executor.execute(&action, &identity).await;
 
         assert!(matches!(result, ActionResult::UserResponse { .. }));
     }
@@ -504,9 +539,85 @@ mod tests {
             arguments: json!({"operation": "mkdir", "path": "/tmp/test"}),
         };
 
-        let result = executor.execute(&action).await;
+        let identity = create_owner_identity();
+        let result = executor.execute(&action, &identity).await;
 
         // Should succeed because "file_ops:mkdir" is normalized to "file_ops"
         assert!(matches!(result, ActionResult::ToolSuccess { .. }), "Expected ToolSuccess, got {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_guest_permission_denied() {
+        use aleph_protocol::{GuestScope, Role};
+
+        let mut registry = MockToolRegistry::new();
+        registry.add_tool(create_test_tool("shell_exec"));
+        registry.set_result("shell_exec", json!({"output": "command executed"}));
+
+        let executor = SingleStepExecutor::new(Arc::new(registry));
+
+        // Create guest identity with limited scope (only translate tool)
+        let guest_identity = IdentityContext {
+            request_id: "test-request".to_string(),
+            session_key: "test-session".to_string(),
+            role: Role::Guest,
+            identity_id: "guest-123".to_string(),
+            scope: Some(GuestScope {
+                allowed_tools: vec!["translate".to_string()],
+                expires_at: None,
+                display_name: Some("Test Guest".to_string()),
+            }),
+            created_at: chrono::Utc::now().timestamp(),
+            source_channel: "test".to_string(),
+        };
+
+        let action = Action::ToolCall {
+            tool_name: "shell_exec".to_string(),
+            arguments: json!({"command": "ls"}),
+        };
+
+        let result = executor.execute(&action, &guest_identity).await;
+
+        // Should be denied because guest doesn't have permission for shell_exec
+        assert!(matches!(result, ActionResult::ToolError { retryable: false, .. }));
+        if let ActionResult::ToolError { error, .. } = result {
+            assert!(error.contains("Permission denied") || error.contains("not allowed"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_guest_permission_granted() {
+        use aleph_protocol::{GuestScope, Role};
+
+        let mut registry = MockToolRegistry::new();
+        registry.add_tool(create_test_tool("translate"));
+        registry.set_result("translate", json!({"translated": "Hello"}));
+
+        let executor = SingleStepExecutor::new(Arc::new(registry));
+
+        // Create guest identity with translate permission
+        let guest_identity = IdentityContext {
+            request_id: "test-request".to_string(),
+            session_key: "test-session".to_string(),
+            role: Role::Guest,
+            identity_id: "guest-123".to_string(),
+            scope: Some(GuestScope {
+                allowed_tools: vec!["translate".to_string()],
+                expires_at: None,
+                display_name: Some("Test Guest".to_string()),
+            }),
+            created_at: chrono::Utc::now().timestamp(),
+            source_channel: "test".to_string(),
+        };
+
+        let action = Action::ToolCall {
+            tool_name: "translate".to_string(),
+            arguments: json!({"text": "你好"}),
+        };
+
+        let result = executor.execute(&action, &guest_identity).await;
+
+        // Should succeed because guest has permission for translate
+        assert!(matches!(result, ActionResult::ToolSuccess { .. }));
     }
 }
