@@ -1112,7 +1112,7 @@ impl BrowserPool {
         let mut snapshot = PoolSnapshot::new();
 
         // Get primary context info
-        if let Some(primary) = self.context_registry.get_primary_context().await {
+        if let Some(_primary) = self.context_registry.get_primary_context().await {
             snapshot.primary_context = Some(PersistedContext {
                 context_id: "primary".to_string(),
                 task_id: None,
@@ -1169,5 +1169,223 @@ impl Drop for BrowserPool {
                 let _ = proc.kill();
             }
         }
+    }
+}
+
+// ============================================================================
+// Integration Tests
+// ============================================================================
+
+#[cfg(all(test, feature = "browser"))]
+mod integration_tests {
+    use super::*;
+
+    #[test]
+    fn test_browser_pool_creation() {
+        let config = BrowserConfig::default();
+        let pool = BrowserPool::new(config, AllocationPolicy::Adaptive);
+        assert!(pool.is_ok());
+
+        let pool = pool.unwrap();
+        assert_eq!(pool.allocation_policy(), AllocationPolicy::Adaptive);
+    }
+
+    #[test]
+    fn test_browser_pool_allocation_policies() {
+        let config = BrowserConfig::default();
+
+        // Test SingleInstance
+        let pool = BrowserPool::new(config.clone(), AllocationPolicy::SingleInstance);
+        assert!(pool.is_ok());
+        assert_eq!(pool.unwrap().allocation_policy(), AllocationPolicy::SingleInstance);
+
+        // Test MultiInstance
+        let pool = BrowserPool::new(config.clone(), AllocationPolicy::MultiInstance);
+        assert!(pool.is_ok());
+        assert_eq!(pool.unwrap().allocation_policy(), AllocationPolicy::MultiInstance);
+
+        // Test Adaptive
+        let pool = BrowserPool::new(config, AllocationPolicy::Adaptive);
+        assert!(pool.is_ok());
+        assert_eq!(pool.unwrap().allocation_policy(), AllocationPolicy::Adaptive);
+    }
+
+    #[test]
+    fn test_browser_pool_policy_update() {
+        let config = BrowserConfig::default();
+        let mut pool = BrowserPool::new(config, AllocationPolicy::SingleInstance).unwrap();
+
+        assert_eq!(pool.allocation_policy(), AllocationPolicy::SingleInstance);
+
+        pool.set_allocation_policy(AllocationPolicy::Adaptive);
+        assert_eq!(pool.allocation_policy(), AllocationPolicy::Adaptive);
+    }
+
+    #[tokio::test]
+    async fn test_browser_pool_context_registry_access() {
+        let config = BrowserConfig::default();
+        let pool = BrowserPool::new(config, AllocationPolicy::Adaptive).unwrap();
+
+        let registry = pool.context_registry();
+        assert!(registry.get_primary_context().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_browser_pool_resource_monitor_access() {
+        let config = BrowserConfig::default();
+        let pool = BrowserPool::new(config, AllocationPolicy::Adaptive).unwrap();
+
+        let monitor = pool.resource_monitor();
+        monitor.update().await;
+
+        assert!(!monitor.is_high_load().await);
+    }
+
+    #[tokio::test]
+    async fn test_browser_pool_persistence_manager_access() {
+        let config = BrowserConfig::default();
+        let pool = BrowserPool::new(config, AllocationPolicy::Adaptive).unwrap();
+
+        let persistence = pool.persistence_manager();
+        assert!(persistence.init().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_browser_pool_snapshot_creation() {
+        let config = BrowserConfig::default();
+        let pool = BrowserPool::new(config, AllocationPolicy::Adaptive).unwrap();
+
+        // Create snapshot without starting pool
+        let snapshot = pool.create_snapshot().await;
+        assert_eq!(snapshot.version, 1);
+        assert!(snapshot.primary_context.is_none());
+        assert_eq!(snapshot.ephemeral_contexts.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_browser_pool_save_load_snapshot() {
+        let mut config = BrowserConfig::default();
+        // Use unique temp directory for this test
+        let temp_dir = std::env::temp_dir().join(format!("aleph_pool_test_{}", std::process::id()));
+        config.user_data_dir = temp_dir.to_string_lossy().to_string();
+
+        let pool = BrowserPool::new(config, AllocationPolicy::Adaptive).unwrap();
+
+        // Initialize persistence
+        pool.persistence_manager().init().await.unwrap();
+
+        // Save snapshot
+        assert!(pool.save_snapshot().await.is_ok());
+
+        // Load snapshot
+        let loaded = pool.load_snapshot().await.unwrap();
+        assert!(loaded.is_some());
+
+        let snapshot = loaded.unwrap();
+        assert_eq!(snapshot.version, 1);
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_browser_pool_ephemeral_context_tracking() {
+        let config = BrowserConfig::default();
+        let pool = BrowserPool::new(config, AllocationPolicy::Adaptive).unwrap();
+
+        // Initially no ephemeral contexts
+        assert!(pool.get_ephemeral_context(&"task-1".to_string()).await.is_none());
+
+        // After creating snapshot, should still be empty
+        let snapshot = pool.create_snapshot().await;
+        assert_eq!(snapshot.ephemeral_contexts.len(), 0);
+    }
+
+    #[test]
+    fn test_allocation_policy_enum() {
+        // Test enum variants
+        assert_eq!(AllocationPolicy::SingleInstance, AllocationPolicy::SingleInstance);
+        assert_ne!(AllocationPolicy::SingleInstance, AllocationPolicy::MultiInstance);
+        assert_ne!(AllocationPolicy::SingleInstance, AllocationPolicy::Adaptive);
+
+        // Test Debug
+        let policy = AllocationPolicy::Adaptive;
+        let debug_str = format!("{:?}", policy);
+        assert!(debug_str.contains("Adaptive"));
+    }
+
+    #[tokio::test]
+    async fn test_browser_pool_persistence_integration() {
+        let mut config = BrowserConfig::default();
+        let temp_dir = std::env::temp_dir().join(format!("aleph_pool_persist_{}", std::process::id()));
+        config.user_data_dir = temp_dir.to_string_lossy().to_string();
+
+        {
+            // Create pool and save snapshot
+            let pool = BrowserPool::new(config.clone(), AllocationPolicy::Adaptive).unwrap();
+            pool.persistence_manager().init().await.unwrap();
+            pool.save_snapshot().await.unwrap();
+        }
+
+        {
+            // Create new pool and load snapshot
+            let pool = BrowserPool::new(config, AllocationPolicy::Adaptive).unwrap();
+            pool.persistence_manager().init().await.unwrap();
+
+            let snapshot = pool.load_snapshot().await.unwrap();
+            assert!(snapshot.is_some());
+        }
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_browser_pool_resource_monitor_integration() {
+        let config = BrowserConfig::default();
+        let pool = BrowserPool::new(config, AllocationPolicy::Adaptive).unwrap();
+
+        let monitor = pool.resource_monitor();
+
+        // Update monitor
+        monitor.update().await;
+
+        // Check initial state
+        assert_eq!(monitor.active_instances().await, 0);
+
+        // Set active instances
+        monitor.set_active_instances(2).await;
+        assert_eq!(monitor.active_instances().await, 2);
+
+        // Check recommendations
+        let max_instances = monitor.recommended_max_instances().await;
+        assert!(max_instances > 0);
+    }
+
+    #[tokio::test]
+    async fn test_browser_pool_context_registry_integration() {
+        let config = BrowserConfig::default();
+        let pool = BrowserPool::new(config, AllocationPolicy::Adaptive).unwrap();
+
+        let registry = pool.context_registry();
+
+        // Initially no contexts
+        assert!(registry.get_primary_context().await.is_none());
+        assert_eq!(registry.list_ephemeral_contexts().await.len(), 0);
+
+        // Test domain locking
+        let result = registry.lock_domain("example.com".to_string(), "task-1".to_string()).await;
+        assert!(result.is_ok());
+
+        // Try to lock same domain with different task
+        let result = registry.lock_domain("example.com".to_string(), "task-2".to_string()).await;
+        assert!(result.is_err());
+
+        // Unlock domain
+        registry.unlock_domain(&"example.com".to_string()).await;
+
+        // Now should be able to lock again
+        let result = registry.lock_domain("example.com".to_string(), "task-2".to_string()).await;
+        assert!(result.is_ok());
     }
 }
