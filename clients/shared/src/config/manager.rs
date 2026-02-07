@@ -9,7 +9,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::RwLock;
+use tokio::sync::RwLock;
 
 /// Configuration Manager with 4-layer priority stack
 pub struct ConfigManager {
@@ -51,30 +51,45 @@ impl ConfigManager {
     /// # Returns
     /// * `Some(Value)` if found in any layer
     /// * `None` if key doesn't exist
-    pub fn get(&self, key: &str) -> Option<Value> {
+    pub async fn get(&self, key: &str) -> Option<Value> {
         // Layer 3: Session override (highest priority)
-        if let Ok(session) = self.session.read() {
-            if let Some(value) = session.get(key) {
-                return Some(value.clone());
-            }
+        if let Some(value) = self.session.read().await.get(key) {
+            return Some(value.clone());
         }
 
         // Layer 2: Server synced
-        if let Ok(server) = self.server.read() {
-            if let Some(value) = server.get(key) {
-                return Some(value.clone());
-            }
+        if let Some(value) = self.server.read().await.get(key) {
+            return Some(value.clone());
         }
 
         // Layer 1: Local persistent
-        if let Ok(local) = self.local.read() {
-            if let Some(value) = local.get(key) {
-                return Some(value.clone());
-            }
+        if let Some(value) = self.local.read().await.get(key) {
+            return Some(value.clone());
         }
 
         // Layer 0: Hardcoded defaults
         self.defaults.get(key).cloned()
+    }
+
+    /// Load local configuration from disk
+    ///
+    /// # Returns
+    /// * `Ok(())` if file loaded successfully or doesn't exist
+    /// * `Err(String)` on I/O or parse errors
+    pub async fn load_local(&self) -> Result<(), String> {
+        if !self.local_path.exists() {
+            return Ok(());
+        }
+
+        let content = tokio::fs::read_to_string(&self.local_path)
+            .await
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let config: HashMap<String, Value> = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse config JSON: {}", e))?;
+
+        *self.local.write().await = config;
+        Ok(())
     }
 
     /// Set local configuration value
@@ -86,27 +101,27 @@ impl ConfigManager {
     /// # Returns
     /// * `Ok(())` on success
     /// * `Err(String)` on failure
-    ///
-    /// # Note
-    /// Persistence to disk will be added in Task 6
-    pub fn set_local(&self, key: &str, value: Value) -> Result<(), String> {
-        if let Ok(mut local) = self.local.write() {
-            local.insert(key.to_string(), value);
-            // TODO: Persist to disk (Task 6)
-            Ok(())
-        } else {
-            Err("Failed to acquire write lock on local config".to_string())
-        }
+    pub async fn set_local(&self, key: &str, value: Value) -> Result<(), String> {
+        self.local.write().await.insert(key.to_string(), value);
+
+        // Persist to disk
+        let local_snapshot = self.local.read().await.clone();
+        let json_str = serde_json::to_string_pretty(&local_snapshot)
+            .map_err(|e| format!("Failed to serialize config: {}", e))?;
+
+        tokio::fs::write(&self.local_path, json_str)
+            .await
+            .map_err(|e| format!("Failed to write config file: {}", e))?;
+
+        Ok(())
     }
 
     /// Sync configuration from server
     ///
     /// # Arguments
     /// * `server_config` - Server configuration to sync
-    pub fn sync_from_server(&self, server_config: HashMap<String, Value>) {
-        if let Ok(mut server) = self.server.write() {
-            *server = server_config;
-        }
+    pub async fn sync_from_server(&self, server_config: HashMap<String, Value>) {
+        *self.server.write().await = server_config;
     }
 
     /// Set session override (runtime-only)
@@ -121,7 +136,7 @@ impl ConfigManager {
     ///
     /// # Security
     /// Tier 1 keys (auth.*, security.*, identity.*) cannot be overridden
-    pub fn set_session(&self, key: &str, value: Value) -> Result<(), String> {
+    pub async fn set_session(&self, key: &str, value: Value) -> Result<(), String> {
         if is_tier1_key(key) {
             return Err(format!(
                 "Cannot override Tier 1 key '{}' in session",
@@ -129,19 +144,13 @@ impl ConfigManager {
             ));
         }
 
-        if let Ok(mut session) = self.session.write() {
-            session.insert(key.to_string(), value);
-            Ok(())
-        } else {
-            Err("Failed to acquire write lock on session config".to_string())
-        }
+        self.session.write().await.insert(key.to_string(), value);
+        Ok(())
     }
 
     /// Clear all session overrides
-    pub fn clear_session_overrides(&self) {
-        if let Ok(mut session) = self.session.write() {
-            session.clear();
-        }
+    pub async fn clear_session_overrides(&self) {
+        self.session.write().await.clear();
     }
 }
 
@@ -161,128 +170,178 @@ fn is_tier1_key(key: &str) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_default_layer() {
+    #[tokio::test]
+    async fn test_default_layer() {
         let config = ConfigManager::new(PathBuf::from("/tmp/config.json"));
 
         // Test hardcoded defaults
         assert_eq!(
-            config.get("ui.theme"),
+            config.get("ui.theme").await,
             Some(Value::String("system".to_string()))
         );
         assert_eq!(
-            config.get("log.level"),
+            config.get("log.level").await,
             Some(Value::String("info".to_string()))
         );
 
         // Non-existent key
-        assert_eq!(config.get("non.existent"), None);
+        assert_eq!(config.get("non.existent").await, None);
     }
 
-    #[test]
-    fn test_local_overrides_default() {
+    #[tokio::test]
+    async fn test_local_overrides_default() {
         let config = ConfigManager::new(PathBuf::from("/tmp/config.json"));
 
         // Set local override
-        config.set_local("ui.theme", Value::String("dark".to_string())).unwrap();
+        config.set_local("ui.theme", Value::String("dark".to_string())).await.unwrap();
 
         // Local should override default
         assert_eq!(
-            config.get("ui.theme"),
+            config.get("ui.theme").await,
             Some(Value::String("dark".to_string()))
         );
 
         // Other default should remain
         assert_eq!(
-            config.get("log.level"),
+            config.get("log.level").await,
             Some(Value::String("info".to_string()))
         );
     }
 
-    #[test]
-    fn test_server_overrides_local() {
+    #[tokio::test]
+    async fn test_server_overrides_local() {
         let config = ConfigManager::new(PathBuf::from("/tmp/config.json"));
 
         // Set local
-        config.set_local("ui.theme", Value::String("dark".to_string())).unwrap();
+        config.set_local("ui.theme", Value::String("dark".to_string())).await.unwrap();
 
         // Sync from server
         let mut server_config = HashMap::new();
         server_config.insert("ui.theme".to_string(), Value::String("light".to_string()));
-        config.sync_from_server(server_config);
+        config.sync_from_server(server_config).await;
 
         // Server should override local
         assert_eq!(
-            config.get("ui.theme"),
+            config.get("ui.theme").await,
             Some(Value::String("light".to_string()))
         );
     }
 
-    #[test]
-    fn test_session_overrides_all() {
+    #[tokio::test]
+    async fn test_session_overrides_all() {
         let config = ConfigManager::new(PathBuf::from("/tmp/config.json"));
 
         // Set local
-        config.set_local("ui.theme", Value::String("dark".to_string())).unwrap();
+        config.set_local("ui.theme", Value::String("dark".to_string())).await.unwrap();
 
         // Sync from server
         let mut server_config = HashMap::new();
         server_config.insert("ui.theme".to_string(), Value::String("light".to_string()));
-        config.sync_from_server(server_config);
+        config.sync_from_server(server_config).await;
 
         // Set session override
-        config.set_session("ui.theme", Value::String("auto".to_string())).unwrap();
+        config.set_session("ui.theme", Value::String("auto".to_string())).await.unwrap();
 
         // Session should override all
         assert_eq!(
-            config.get("ui.theme"),
+            config.get("ui.theme").await,
             Some(Value::String("auto".to_string()))
         );
     }
 
-    #[test]
-    fn test_tier1_cannot_be_overridden() {
+    #[tokio::test]
+    async fn test_tier1_cannot_be_overridden() {
         let config = ConfigManager::new(PathBuf::from("/tmp/config.json"));
 
         // Try to set Tier 1 keys in session
-        let auth_result = config.set_session("auth.token", Value::String("fake".to_string()));
+        let auth_result = config.set_session("auth.token", Value::String("fake".to_string())).await;
         assert!(auth_result.is_err());
         assert!(auth_result.unwrap_err().contains("Tier 1"));
 
-        let security_result = config.set_session("security.level", Value::String("low".to_string()));
+        let security_result = config.set_session("security.level", Value::String("low".to_string())).await;
         assert!(security_result.is_err());
         assert!(security_result.unwrap_err().contains("Tier 1"));
 
-        let identity_result = config.set_session("identity.user", Value::String("fake".to_string()));
+        let identity_result = config.set_session("identity.user", Value::String("fake".to_string())).await;
         assert!(identity_result.is_err());
         assert!(identity_result.unwrap_err().contains("Tier 1"));
 
         // Non-Tier 1 key should work
-        let ui_result = config.set_session("ui.theme", Value::String("dark".to_string()));
+        let ui_result = config.set_session("ui.theme", Value::String("dark".to_string())).await;
         assert!(ui_result.is_ok());
     }
 
-    #[test]
-    fn test_clear_session_overrides() {
+    #[tokio::test]
+    async fn test_clear_session_overrides() {
         let config = ConfigManager::new(PathBuf::from("/tmp/config.json"));
 
         // Set local
-        config.set_local("ui.theme", Value::String("dark".to_string())).unwrap();
+        config.set_local("ui.theme", Value::String("dark".to_string())).await.unwrap();
 
         // Set session override
-        config.set_session("ui.theme", Value::String("auto".to_string())).unwrap();
+        config.set_session("ui.theme", Value::String("auto".to_string())).await.unwrap();
         assert_eq!(
-            config.get("ui.theme"),
+            config.get("ui.theme").await,
             Some(Value::String("auto".to_string()))
         );
 
         // Clear session overrides
-        config.clear_session_overrides();
+        config.clear_session_overrides().await;
 
         // Should fall back to local
         assert_eq!(
-            config.get("ui.theme"),
+            config.get("ui.theme").await,
             Some(Value::String("dark".to_string()))
         );
+    }
+
+    #[tokio::test]
+    async fn test_local_persistence() {
+        // Use unique temp file to avoid conflicts
+        let temp_file = format!("/tmp/config_test_{}.json", std::process::id());
+        let config_path = PathBuf::from(&temp_file);
+
+        // Clean up any existing file
+        let _ = std::fs::remove_file(&config_path);
+
+        // Create first manager and set config
+        {
+            let manager1 = ConfigManager::new(config_path.clone());
+            manager1.set_local("ui.theme", Value::String("dark".to_string()))
+                .await
+                .unwrap();
+            manager1.set_local("log.level", Value::String("debug".to_string()))
+                .await
+                .unwrap();
+
+            // Verify values are set
+            assert_eq!(
+                manager1.get("ui.theme").await,
+                Some(Value::String("dark".to_string()))
+            );
+            assert_eq!(
+                manager1.get("log.level").await,
+                Some(Value::String("debug".to_string()))
+            );
+        } // manager1 dropped here
+
+        // Create second manager and load from disk
+        {
+            let manager2 = ConfigManager::new(config_path.clone());
+            manager2.load_local().await.unwrap();
+
+            // Verify values persisted
+            assert_eq!(
+                manager2.get("ui.theme").await,
+                Some(Value::String("dark".to_string()))
+            );
+            assert_eq!(
+                manager2.get("log.level").await,
+                Some(Value::String("debug".to_string()))
+            );
+        }
+
+        // Clean up
+        let _ = std::fs::remove_file(&config_path);
     }
 }
