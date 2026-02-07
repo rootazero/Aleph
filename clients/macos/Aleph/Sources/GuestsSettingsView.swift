@@ -18,6 +18,66 @@ struct GuestsSettingsView: View {
     @State private var errorMessage: String?
     @State private var showingCreateSheet = false
 
+    // MARK: - UI Enhancement State
+    @State private var searchText = ""
+    @State private var filterOption: FilterOption = .all
+    @State private var sortOption: SortOption = .dateDescending
+
+    // MARK: - Filter & Sort Options
+    enum FilterOption: String, CaseIterable, Identifiable {
+        case all = "All"
+        case active = "Active"
+        case expired = "Expired"
+
+        var id: String { rawValue }
+    }
+
+    enum SortOption: String, CaseIterable, Identifiable {
+        case dateDescending = "Newest First"
+        case dateAscending = "Oldest First"
+        case nameAscending = "Name A-Z"
+        case nameDescending = "Name Z-A"
+
+        var id: String { rawValue }
+    }
+
+    // MARK: - Computed Properties
+    private var filteredAndSortedInvitations: [GWInvitation] {
+        var result = invitations
+
+        // Apply search filter
+        if !searchText.isEmpty {
+            result = result.filter { invitation in
+                invitation.guestId.localizedCaseInsensitiveContains(searchText) ||
+                invitation.token.localizedCaseInsensitiveContains(searchText)
+            }
+        }
+
+        // Apply status filter
+        switch filterOption {
+        case .all:
+            break
+        case .active:
+            result = result.filter { !$0.isExpired }
+        case .expired:
+            result = result.filter { $0.isExpired }
+        }
+
+        // Apply sorting
+        switch sortOption {
+        case .dateDescending:
+            result.sort { ($0.expiresAt ?? Int64.max) > ($1.expiresAt ?? Int64.max) }
+        case .dateAscending:
+            result.sort { ($0.expiresAt ?? Int64.max) < ($1.expiresAt ?? Int64.max) }
+        case .nameAscending:
+            result.sort { $0.guestId.localizedCompare($1.guestId) == .orderedAscending }
+        case .nameDescending:
+            result.sort { $0.guestId.localizedCompare($1.guestId) == .orderedDescending }
+        }
+
+        return result
+    }
+
     // MARK: - Body
     var body: some View {
         VStack(spacing: 0) {
@@ -27,11 +87,18 @@ struct GuestsSettingsView: View {
                     // Header with create button
                     headerSection
 
+                    // Search and filters
+                    searchAndFilterSection
+
                     // Invitations list
                     if isLoading {
                         loadingView
-                    } else if invitations.isEmpty {
-                        emptyStateView
+                    } else if filteredAndSortedInvitations.isEmpty {
+                        if invitations.isEmpty {
+                            emptyStateView
+                        } else {
+                            noResultsView
+                        }
                     } else {
                         invitationsListView
                     }
@@ -71,6 +138,14 @@ struct GuestsSettingsView: View {
 
             Spacer()
 
+            // Refresh button
+            Button(action: { loadInvitations() }) {
+                Label("Refresh", systemImage: "arrow.clockwise")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.bordered)
+            .disabled(core == nil || isLoading)
+
             Button(action: { showingCreateSheet = true }) {
                 Label("Create Invitation", systemImage: "plus.circle.fill")
             }
@@ -82,16 +157,115 @@ struct GuestsSettingsView: View {
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card))
     }
 
+    // MARK: - Search and Filter Section
+    @ViewBuilder
+    private var searchAndFilterSection: some View {
+        VStack(spacing: DesignTokens.Spacing.sm) {
+            // Search bar
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                TextField("Search by guest name or token", text: $searchText)
+                    .textFieldStyle(.plain)
+                if !searchText.isEmpty {
+                    Button(action: { searchText = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(DesignTokens.Spacing.sm)
+            .background(DesignTokens.Colors.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.input))
+
+            // Filter and sort controls
+            HStack {
+                // Filter picker
+                HStack(spacing: DesignTokens.Spacing.xs) {
+                    Text("Show:")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                    Picker("Filter", selection: $filterOption) {
+                        ForEach(FilterOption.allCases) { option in
+                            Text(option.rawValue).tag(option)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 120)
+                }
+
+                Spacer()
+
+                // Sort picker
+                HStack(spacing: DesignTokens.Spacing.xs) {
+                    Text("Sort:")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                    Picker("Sort", selection: $sortOption) {
+                        ForEach(SortOption.allCases) { option in
+                            Text(option.rawValue).tag(option)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 140)
+                }
+            }
+            .padding(.horizontal, DesignTokens.Spacing.sm)
+
+            // Results count
+            if !invitations.isEmpty {
+                HStack {
+                    Text("\(filteredAndSortedInvitations.count) of \(invitations.count) invitations")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                    Spacer()
+                }
+                .padding(.horizontal, DesignTokens.Spacing.sm)
+            }
+        }
+    }
+
     // MARK: - Invitations List
     @ViewBuilder
     private var invitationsListView: some View {
         VStack(spacing: DesignTokens.Spacing.md) {
-            ForEach(invitations) { invitation in
+            ForEach(filteredAndSortedInvitations) { invitation in
                 InvitationCard(invitation: invitation, onDelete: {
                     deleteInvitation(invitation)
                 })
             }
         }
+    }
+
+    // MARK: - No Results View
+    @ViewBuilder
+    private var noResultsView: some View {
+        VStack(spacing: DesignTokens.Spacing.md) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 48))
+                .foregroundColor(DesignTokens.Colors.textTertiary)
+
+            Text("No Matching Invitations")
+                .font(DesignTokens.Typography.title3)
+
+            Text("Try adjusting your search or filter criteria")
+                .font(DesignTokens.Typography.body)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+
+            Button(action: {
+                searchText = ""
+                filterOption = .all
+            }) {
+                Label("Clear Filters", systemImage: "xmark.circle")
+            }
+            .buttonStyle(.bordered)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(DesignTokens.Spacing.xl)
+        .background(DesignTokens.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card))
     }
 
     // MARK: - Empty State
