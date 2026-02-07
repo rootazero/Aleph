@@ -346,3 +346,6 @@ Example: `gateway: add WebSocket server foundation`
 ### Memory Prompt
 
 When token is low to 10%, summarize this session to generate a "memory prompt" for next session inheritance.
+
+## 📝 语言
+使用中文对话
