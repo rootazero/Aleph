@@ -520,6 +520,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Register guest handlers
     register_guest_handlers(&mut server, &invitation_manager);
 
+    // Register config handlers (for ConfigManager SDK)
+    let app_config = Arc::new(tokio::sync::RwLock::new(alephcore::Config::default()));
+    register_config_handlers(&mut server, app_config, event_bus.clone());
+
     if !args.daemon {
         println!("Auth methods:");
         println!("  - connect         : Authenticate connection");
@@ -985,4 +989,29 @@ async fn start_webchat_server(args: &Args, final_bind: &str, final_port: u16) {
             println!();
         }
     }
+}
+
+#[cfg(feature = "gateway")]
+fn register_config_handlers(
+    server: &mut GatewayServer,
+    config: Arc<tokio::sync::RwLock<alephcore::Config>>,
+    event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
+) {
+    use alephcore::gateway::handlers::config::{handle_get_full_config, handle_patch_config};
+
+    // config.get
+    let config_get = config.clone();
+    server.handlers_mut().register("config.get", move |req| {
+        let cfg = config_get.clone();
+        async move { handle_get_full_config(req, cfg).await }
+    });
+
+    // config.patch
+    let config_patch = config.clone();
+    let event_bus_patch = event_bus.clone();
+    server.handlers_mut().register("config.patch", move |req| {
+        let cfg = config_patch.clone();
+        let bus = event_bus_patch.clone();
+        async move { handle_patch_config(req, cfg, bus).await }
+    });
 }
