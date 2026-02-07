@@ -1,10 +1,16 @@
 //! Task Scheduler module
 //!
-//! This module provides DAG-based task scheduling with parallel execution support.
+//! This module provides DAG-based task scheduling with parallel execution support,
+//! and priority-based scheduling for browser tasks.
 
 mod dag;
+mod priority;
+pub mod integration;
 
 pub use dag::{DagScheduler, ExecutionResult, GraphTaskExecutor};
+pub use priority::{
+    PriorityScheduler, PrioritySchedulerConfig, PriorityTier, RiskLevel, TaskMetadata,
+};
 
 use crate::dispatcher::agent_types::{Task, TaskGraph};
 use super::engine::{MAX_PARALLELISM, MAX_TASK_RETRIES};
