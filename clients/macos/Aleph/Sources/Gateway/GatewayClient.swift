@@ -70,6 +70,9 @@ final class GatewayClient: ObservableObject {
 
     private var reconnectAttempt = 0
 
+    // Guest event callback
+    private var guestEventCallback: ((GuestEvent) -> Void)?
+
     // MARK: - Initialization
 
     init(config: GatewayClientConfig = .default) {
@@ -342,6 +345,16 @@ final class GatewayClient: ObservableObject {
         let _: EmptyResult = try await call(method: "events.unsubscribe", params: params)
     }
 
+    /// Set callback for guest events
+    func setGuestEventCallback(_ callback: @escaping (GuestEvent) -> Void) {
+        guestEventCallback = callback
+    }
+
+    /// Clear guest event callback
+    func clearGuestEventCallback() {
+        guestEventCallback = nil
+    }
+
     // MARK: - Private Methods
 
     private func waitForConnection() async throws {
@@ -451,28 +464,40 @@ final class GatewayClient: ObservableObject {
 
     private func handleNotification(_ notification: JsonRpcRequest) {
         // Check if it's a stream event
-        guard notification.method.hasPrefix("stream.") else { return }
+        if notification.method.hasPrefix("stream.") {
+            guard let params = notification.params,
+                  let paramsData = try? JSONSerialization.data(withJSONObject: params.value),
+                  let event = try? JSONDecoder().decode(StreamEvent.self, from: paramsData) else {
+                logger.warning("Failed to decode stream event: \(notification.method)")
+                return
+            }
 
-        guard let params = notification.params,
-              let paramsData = try? JSONSerialization.data(withJSONObject: params.value),
-              let event = try? JSONDecoder().decode(StreamEvent.self, from: paramsData) else {
-            logger.warning("Failed to decode stream event: \(notification.method)")
+            // Forward to all event continuations
+            for (_, continuation) in eventContinuations {
+                continuation.yield(event)
+            }
+
+            // Complete streams on run complete/error
+            switch event {
+            case .runComplete, .runError:
+                // Events will be completed when the stream is closed by the consumer
+                break
+            default:
+                break
+            }
             return
         }
 
-        // Forward to all event continuations
-        for (_, continuation) in eventContinuations {
-            continuation.yield(event)
+        // Check if it's a guest event (topic-based event)
+        if let params = notification.params?.value as? [String: Any],
+           let topic = params["topic"] as? String,
+           let data = params["data"] as? [String: Any],
+           let guestEvent = GuestEvent.parse(topic: topic, params: data) {
+            guestEventCallback?(guestEvent)
+            return
         }
 
-        // Complete streams on run complete/error
-        switch event {
-        case .runComplete, .runError:
-            // Events will be completed when the stream is closed by the consumer
-            break
-        default:
-            break
-        }
+        logger.debug("Unhandled notification: \(notification.method)")
     }
 
     private func handleDisconnection(error: Error) {
