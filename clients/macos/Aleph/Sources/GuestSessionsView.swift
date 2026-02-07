@@ -91,6 +91,7 @@ struct GuestSessionsView: View {
             ForEach(sessions) { session in
                 SessionCard(
                     session: session,
+                    core: core,
                     onTerminate: { terminateSession(session.sessionId) }
                 )
             }
@@ -246,10 +247,12 @@ struct GuestSessionsView: View {
 
 struct SessionCard: View {
     let session: GWGuestSession
+    let core: AlephCore?
     let onTerminate: () -> Void
 
     @State private var showingDetails = false
     @State private var showingTerminateConfirmation = false
+    @State private var showingActivityLog = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
@@ -362,6 +365,13 @@ struct SessionCard: View {
                             }
                         }
                     }
+
+                    // View Activity button
+                    Button(action: { showingActivityLog = true }) {
+                        Label("View Activity Log", systemImage: "list.bullet.rectangle")
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(.top, DesignTokens.Spacing.xs)
                 }
             }
         }
@@ -375,6 +385,13 @@ struct SessionCard: View {
             }
         } message: {
             Text("Are you sure you want to terminate this guest session? The guest will be disconnected immediately.")
+        }
+        .sheet(isPresented: $showingActivityLog) {
+            GuestSessionActivityView(
+                core: core,
+                sessionId: session.sessionId,
+                guestName: session.guestName
+            )
         }
     }
 
