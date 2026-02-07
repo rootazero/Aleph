@@ -84,6 +84,13 @@ struct GuestsSettingsView: View {
             // Main content
             ScrollView {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    // Active Sessions Section
+                    GuestSessionsView(core: core)
+
+                    // Divider
+                    Divider()
+                        .padding(.vertical, DesignTokens.Spacing.md)
+
                     // Header with create button
                     headerSection
 
