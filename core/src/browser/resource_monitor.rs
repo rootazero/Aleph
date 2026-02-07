@@ -117,6 +117,12 @@ impl ResourceMonitor {
         let load = self.current_load.read().await;
         load.recommended_max_instances()
     }
+
+    /// Get current active instance count
+    pub async fn active_instances(&self) -> usize {
+        let load = self.current_load.read().await;
+        load.active_instances
+    }
 }
 
 impl Default for ResourceMonitor {

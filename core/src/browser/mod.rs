@@ -61,6 +61,7 @@
 pub mod config;
 pub mod context_registry;
 pub mod resource_monitor;
+pub mod persistence;
 
 pub use config::{
     ActionResult, BrowserConfig, ClickOptions, PageSnapshot, ScreenshotOptions,
@@ -70,7 +71,7 @@ pub use config::{
 use std::collections::HashMap;
 use std::process::Child;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 
@@ -782,6 +783,7 @@ mod tests {
 
 use context_registry::{ContextRegistry, TaskId};
 use resource_monitor::ResourceMonitor;
+use persistence::{PersistenceManager, PoolSnapshot, PersistedContext};
 
 /// Allocation policy for browser instances
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -820,6 +822,9 @@ pub struct BrowserPool {
     /// Resource monitor
     resource_monitor: Arc<ResourceMonitor>,
 
+    /// Persistence manager
+    persistence_manager: Arc<PersistenceManager>,
+
     /// Chrome processes
     processes: Arc<RwLock<Vec<Child>>>,
 }
@@ -828,6 +833,9 @@ impl BrowserPool {
     /// Create a new browser pool
     pub fn new(config: BrowserConfig, allocation_policy: AllocationPolicy) -> BrowserResult<Self> {
         config.validate().map_err(BrowserError::ConfigError)?;
+
+        // Create persistence directory in user data dir
+        let persistence_dir = config.expand_user_data_dir().join("pool_state");
 
         Ok(Self {
             config,
@@ -840,6 +848,7 @@ impl BrowserPool {
             dedicated_instances: Arc::new(RwLock::new(HashMap::new())),
             context_registry: Arc::new(ContextRegistry::new()),
             resource_monitor: Arc::new(ResourceMonitor::new()),
+            persistence_manager: Arc::new(PersistenceManager::new(persistence_dir)),
             processes: Arc::new(RwLock::new(Vec::new())),
         })
     }
@@ -847,6 +856,28 @@ impl BrowserPool {
     /// Start the browser pool (launches primary instance)
     #[cfg(feature = "browser")]
     pub async fn start(&mut self) -> BrowserResult<()> {
+        // Initialize persistence
+        self.persistence_manager.init().await?;
+
+        // Check for existing snapshot (hot recovery)
+        let snapshot = self.persistence_manager.load_snapshot().await?;
+        if let Some(snapshot) = snapshot {
+            let age = self.persistence_manager.snapshot_age().await?.unwrap_or(0);
+            tracing::info!(
+                "Found existing pool snapshot (age: {}s, contexts: {})",
+                age,
+                snapshot.ephemeral_contexts.len()
+            );
+
+            // TODO: Implement full recovery logic
+            // For now, we just log and start fresh
+            if age < 300 {  // 5 minutes
+                tracing::info!("Snapshot is recent, could attempt recovery");
+            } else {
+                tracing::info!("Snapshot is stale, starting fresh");
+            }
+        }
+
         // Update resource monitor
         self.resource_monitor.update().await;
 
@@ -947,6 +978,12 @@ impl BrowserPool {
     /// Stop the browser pool
     #[cfg(feature = "browser")]
     pub async fn stop(&mut self) -> BrowserResult<()> {
+        // Save snapshot before stopping
+        let snapshot = self.create_snapshot().await;
+        if let Err(e) = self.persistence_manager.save_snapshot(&snapshot).await {
+            tracing::warn!("Failed to save pool snapshot: {}", e);
+        }
+
         // Close primary instance
         if let Some(mut browser) = self.primary_instance.write().await.take() {
             if let Err(e) = browser.close().await {
@@ -1063,6 +1100,64 @@ impl BrowserPool {
     /// Update allocation policy
     pub fn set_allocation_policy(&mut self, policy: AllocationPolicy) {
         self.allocation_policy = policy;
+    }
+
+    /// Get the persistence manager
+    pub fn persistence_manager(&self) -> &Arc<PersistenceManager> {
+        &self.persistence_manager
+    }
+
+    /// Create a snapshot of current pool state
+    async fn create_snapshot(&self) -> PoolSnapshot {
+        let mut snapshot = PoolSnapshot::new();
+
+        // Get primary context info
+        if let Some(primary) = self.context_registry.get_primary_context().await {
+            snapshot.primary_context = Some(PersistedContext {
+                context_id: "primary".to_string(),
+                task_id: None,
+                is_primary: true,
+                user_data_dir: Some(self.config.expand_user_data_dir()),
+                last_accessed: SystemTime::now(),
+                created_at: SystemTime::now(),
+                domain_locks: vec![],
+            });
+        }
+
+        // Get ephemeral contexts
+        let ephemeral_ids = self.context_registry.list_ephemeral_contexts().await;
+        for task_id in ephemeral_ids {
+            if self.context_registry.get_ephemeral_context(&task_id).await.is_some() {
+                snapshot.ephemeral_contexts.insert(
+                    task_id.clone(),
+                    PersistedContext {
+                        context_id: task_id.clone(),
+                        task_id: Some(task_id),
+                        is_primary: false,
+                        user_data_dir: None,
+                        last_accessed: SystemTime::now(),
+                        created_at: SystemTime::now(),
+                        domain_locks: vec![],
+                    },
+                );
+            }
+        }
+
+        // Get active instance count
+        snapshot.active_instances = self.resource_monitor.active_instances().await;
+
+        snapshot
+    }
+
+    /// Save current state snapshot
+    pub async fn save_snapshot(&self) -> BrowserResult<()> {
+        let snapshot = self.create_snapshot().await;
+        self.persistence_manager.save_snapshot(&snapshot).await
+    }
+
+    /// Load and apply snapshot (hot recovery)
+    pub async fn load_snapshot(&self) -> BrowserResult<Option<PoolSnapshot>> {
+        self.persistence_manager.load_snapshot().await
     }
 }
 
