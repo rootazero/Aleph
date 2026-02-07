@@ -79,6 +79,7 @@ pub mod guests;
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
 pub use identity::SharedIdentityResolver;
 pub use guests::SharedInvitationManager;
+pub use config::handle_get_full_config;
 #[cfg(feature = "browser")]
 pub mod browser;
 
