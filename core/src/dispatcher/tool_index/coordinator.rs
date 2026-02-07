@@ -264,9 +264,12 @@ impl ToolIndexCoordinator {
     /// Get all valid tool facts from Memory
     ///
     /// Returns facts ordered by updated_at descending.
+    /// Tool facts are system-level and use Owner namespace.
     pub async fn get_tool_facts(&self) -> Result<Vec<MemoryFact>, AlephError> {
+        use crate::memory::NamespaceScope;
         // Use a large limit to get all tools (typical systems have <100 tools)
-        self.db.get_facts_by_type(FactType::Tool, 1000).await
+        // Tool facts are system-level, so use Owner namespace
+        self.db.get_facts_by_type(FactType::Tool, NamespaceScope::Owner, 1000).await
     }
 
     /// Get a specific tool fact by name

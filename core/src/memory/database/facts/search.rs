@@ -125,30 +125,57 @@ impl VectorDatabase {
         Ok(facts)
     }
 
-    /// Get facts by type
+    /// Get facts by type with namespace isolation
     pub async fn get_facts_by_type(
         &self,
         fact_type: FactType,
+        scope: NamespaceScope,
         limit: u32,
     ) -> Result<Vec<MemoryFact>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
-        let mut stmt = conn
-            .prepare(
-                r#"
+        // Get namespace filter
+        let (namespace_filter, namespace_params) = scope.to_sql_filter();
+
+        // Build the WHERE clause with proper parameter numbering
+        // ?1 = fact_type, ?2 = limit, ?3+ = namespace params (if any)
+        let where_clause = if namespace_params.is_empty() {
+            // Owner scope: no namespace filter needed
+            format!("fact_type = ?1 AND is_valid = 1 AND {}", namespace_filter)
+        } else {
+            // Guest/Shared scope: namespace filter with parameter
+            format!("fact_type = ?1 AND is_valid = 1 AND namespace = ?3")
+        };
+
+        let query = format!(
+            r#"
                 SELECT id, content, fact_type, embedding, source_memory_ids,
                        created_at, updated_at, confidence, is_valid, invalidation_reason,
                        specificity, temporal_scope
                 FROM memory_facts
-                WHERE fact_type = ?1 AND is_valid = 1
+                WHERE {}
                 ORDER BY updated_at DESC
                 LIMIT ?2
                 "#,
-            )
+            where_clause
+        );
+
+        let mut stmt = conn
+            .prepare(&query)
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
+        // Build params: fact_type, limit, namespace_params
+        let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = vec![
+            Box::new(fact_type.as_str().to_string()),
+            Box::new(limit),
+        ];
+        for np in namespace_params {
+            param_values.push(Box::new(np));
+        }
+        let params_refs: Vec<&dyn rusqlite::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+
         let facts = stmt
-            .query_map(params![fact_type.as_str(), limit], |row| {
+            .query_map(params_refs.as_slice(), |row| {
                 let id: String = row.get(0)?;
                 let content: String = row.get(1)?;
                 let fact_type_str: String = row.get(2)?;
@@ -298,5 +325,159 @@ impl VectorDatabase {
             .collect();
 
         Ok(similar_facts)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::database::core::VectorDatabase;
+    use crate::memory::NamespaceScope;
+    use tempfile::TempDir;
+
+    /// Helper to create a test database
+    async fn create_test_db() -> (VectorDatabase, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new(db_path).unwrap();
+        (db, temp_dir)
+    }
+
+    /// Helper to insert a test fact with namespace
+    async fn insert_fact_with_namespace(
+        db: &VectorDatabase,
+        content: &str,
+        fact_type: FactType,
+        namespace: &str,
+    ) -> String {
+        let conn = db.conn.lock().unwrap();
+        let fact_id = uuid::Uuid::new_v4().to_string();
+        let source_ids_json = serde_json::to_string(&Vec::<String>::new()).unwrap();
+
+        conn.execute(
+            r#"
+            INSERT INTO memory_facts (
+                id, content, fact_type, source_memory_ids, created_at, updated_at,
+                confidence, is_valid, specificity, temporal_scope, namespace
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            "#,
+            rusqlite::params![
+                fact_id,
+                content,
+                fact_type.as_str(),
+                source_ids_json,
+                chrono::Utc::now().timestamp(),
+                chrono::Utc::now().timestamp(),
+                1.0,
+                1,
+                "general",
+                "permanent",
+                namespace,
+            ],
+        ).unwrap();
+
+        fact_id
+    }
+
+    #[tokio::test]
+    async fn test_get_facts_by_type_owner_sees_all() {
+        let (db, _temp_dir) = create_test_db().await;
+
+        // Insert facts in different namespaces
+        insert_fact_with_namespace(&db, "Owner fact", FactType::Preference, "owner").await;
+        insert_fact_with_namespace(&db, "Guest1 fact", FactType::Preference, "guest:guest1").await;
+        insert_fact_with_namespace(&db, "Guest2 fact", FactType::Preference, "guest:guest2").await;
+
+        // Owner should see all facts (no namespace filter)
+        let facts = db
+            .get_facts_by_type(FactType::Preference, NamespaceScope::Owner, 100)
+            .await
+            .unwrap();
+
+        assert_eq!(facts.len(), 3, "Owner should see all 3 facts");
+    }
+
+    #[tokio::test]
+    async fn test_get_facts_by_type_guest_isolation() {
+        let (db, _temp_dir) = create_test_db().await;
+
+        // Insert facts in different namespaces
+        insert_fact_with_namespace(&db, "Owner fact", FactType::Preference, "owner").await;
+        insert_fact_with_namespace(&db, "Guest1 fact", FactType::Preference, "guest:guest1").await;
+        insert_fact_with_namespace(&db, "Guest2 fact", FactType::Preference, "guest:guest2").await;
+
+        // Guest1 should only see their own facts
+        let guest1_facts = db
+            .get_facts_by_type(
+                FactType::Preference,
+                NamespaceScope::Guest("guest1".to_string()),
+                100,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(guest1_facts.len(), 1, "Guest1 should only see 1 fact");
+        assert!(
+            guest1_facts[0].content.contains("Guest1"),
+            "Guest1 should only see their own fact"
+        );
+
+        // Guest2 should only see their own facts
+        let guest2_facts = db
+            .get_facts_by_type(
+                FactType::Preference,
+                NamespaceScope::Guest("guest2".to_string()),
+                100,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(guest2_facts.len(), 1, "Guest2 should only see 1 fact");
+        assert!(
+            guest2_facts[0].content.contains("Guest2"),
+            "Guest2 should only see their own fact"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_facts_by_type_guest_cannot_see_owner() {
+        let (db, _temp_dir) = create_test_db().await;
+
+        // Insert owner fact
+        insert_fact_with_namespace(&db, "Owner secret", FactType::Preference, "owner").await;
+
+        // Guest should not see owner's fact
+        let guest_facts = db
+            .get_facts_by_type(
+                FactType::Preference,
+                NamespaceScope::Guest("guest1".to_string()),
+                100,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(guest_facts.len(), 0, "Guest should not see owner's facts");
+    }
+
+    #[tokio::test]
+    async fn test_get_facts_by_type_shared_namespace() {
+        let (db, _temp_dir) = create_test_db().await;
+
+        // Insert facts in different namespaces
+        insert_fact_with_namespace(&db, "Owner fact", FactType::Preference, "owner").await;
+        insert_fact_with_namespace(&db, "Shared fact", FactType::Preference, "shared").await;
+        insert_fact_with_namespace(&db, "Guest fact", FactType::Preference, "guest:guest1").await;
+
+        // Shared scope should only see shared facts
+        let shared_facts = db
+            .get_facts_by_type(FactType::Preference, NamespaceScope::Shared, 100)
+            .await
+            .unwrap();
+
+        assert_eq!(shared_facts.len(), 1, "Shared scope should only see 1 fact");
+        assert!(
+            shared_facts[0].content.contains("Shared"),
+            "Should only see shared fact"
+        );
     }
 }
