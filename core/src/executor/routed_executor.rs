@@ -43,6 +43,7 @@ use std::future::Future;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+use aleph_protocol::IdentityContext;
 use super::router::{RoutingDecision, ToolRouter};
 use super::single_step::{SingleStepExecutor, ToolRegistry};
 use crate::agent_loop::ActionResult;
@@ -221,6 +222,7 @@ impl<R: ToolRegistry + 'static> RoutedExecutor<R> {
         args: Value,
         execution_policy: ExecutionPolicy,
         client_manifest: Option<&ClientManifest>,
+        identity: &IdentityContext,
         send_to_client: F,
     ) -> std::result::Result<RoutedExecutionResult, RoutedExecutionError>
     where
@@ -246,7 +248,7 @@ impl<R: ToolRegistry + 'static> RoutedExecutor<R> {
                     arguments: args,
                 };
 
-                let result = self.local_executor.execute(&action).await;
+                let result = self.local_executor.execute(&action, identity).await;
                 Ok(RoutedExecutionResult::Local(result))
             }
 
@@ -282,12 +284,12 @@ impl<R: ToolRegistry + 'static> RoutedExecutor<R> {
     /// Execute a tool locally, bypassing routing.
     ///
     /// Useful when you know the tool should execute on Server.
-    pub async fn execute_local(&self, tool_name: &str, args: Value) -> ActionResult {
+    pub async fn execute_local(&self, tool_name: &str, args: Value, identity: &IdentityContext) -> ActionResult {
         let action = crate::agent_loop::Action::ToolCall {
             tool_name: tool_name.to_string(),
             arguments: args,
         };
-        self.local_executor.execute(&action).await
+        self.local_executor.execute(&action, identity).await
     }
 }
 
@@ -306,7 +308,7 @@ impl<R: ToolRegistry + 'static> ActionExecutor for RoutedExecutor<R> {
     /// 3. Executes locally or routes to Client based on decision
     ///
     /// If no client context is set, all tools execute locally.
-    async fn execute(&self, action: &crate::agent_loop::Action) -> ActionResult {
+    async fn execute(&self, action: &crate::agent_loop::Action, identity: &IdentityContext) -> ActionResult {
         match action {
             crate::agent_loop::Action::ToolCall {
                 tool_name,
@@ -315,7 +317,7 @@ impl<R: ToolRegistry + 'static> ActionExecutor for RoutedExecutor<R> {
                 // If no client context, execute locally
                 if !self.has_client_context() {
                     debug!(tool = tool_name, "No client context, executing locally");
-                    return self.local_executor.execute(action).await;
+                    return self.local_executor.execute(action, identity).await;
                 }
 
                 // Look up tool's execution policy from registry
@@ -343,7 +345,7 @@ impl<R: ToolRegistry + 'static> ActionExecutor for RoutedExecutor<R> {
                 match decision {
                     RoutingDecision::ExecuteLocal => {
                         info!(tool = tool_name, "Executing tool locally on Server");
-                        self.local_executor.execute(action).await
+                        self.local_executor.execute(action, identity).await
                     }
 
                     RoutingDecision::RouteToClient => {
@@ -421,7 +423,7 @@ impl<R: ToolRegistry + 'static> ActionExecutor for RoutedExecutor<R> {
             }
 
             // Non-tool actions are handled by local executor
-            _ => self.local_executor.execute(action).await,
+            _ => self.local_executor.execute(action, identity).await,
         }
     }
 }
@@ -436,6 +438,10 @@ mod tests {
     use std::collections::HashMap;
     use std::pin::Pin;
     use std::sync::Mutex;
+
+    fn create_owner_identity() -> IdentityContext {
+        IdentityContext::owner("test-session".to_string(), "test-channel".to_string())
+    }
 
     /// Mock tool registry for testing
     struct MockRegistry {
@@ -514,6 +520,8 @@ mod tests {
 
         let routed = RoutedExecutor::new(router, executor, reverse_rpc);
 
+        let identity = create_owner_identity();
+
         // Execute with ServerOnly policy - should execute locally
         let result = routed
             .execute_tool(
@@ -521,6 +529,7 @@ mod tests {
                 json!({"query": "test"}),
                 ExecutionPolicy::ServerOnly,
                 None,
+                &identity,
                 |_req| async { Ok(()) },
             )
             .await;
@@ -543,6 +552,7 @@ mod tests {
         let routed = RoutedExecutor::new(router, executor, reverse_rpc.clone());
 
         let manifest = make_manifest(vec!["shell"]);
+        let identity = create_owner_identity();
 
         // Track if send was called
         let send_called = Arc::new(Mutex::new(false));
@@ -567,6 +577,7 @@ mod tests {
                 json!({"command": "ls"}),
                 ExecutionPolicy::ClientOnly,
                 Some(&manifest),
+                &identity,
                 |_req| {
                     let called = send_called_clone.clone();
                     async move {
@@ -597,6 +608,8 @@ mod tests {
 
         let routed = RoutedExecutor::new(router, executor, reverse_rpc);
 
+        let identity = create_owner_identity();
+
         // No manifest, no server capability - should fail
         let result = routed
             .execute_tool(
@@ -604,6 +617,7 @@ mod tests {
                 json!({}),
                 ExecutionPolicy::PreferServer,
                 None,
+                &identity,
                 |_req| async { Ok(()) },
             )
             .await;
