@@ -48,7 +48,7 @@ pub struct ListPendingResponse {
 }
 
 /// Request for guests.revokeInvitation
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RevokeInvitationRequest {
     /// The invitation token to revoke
     pub token: String,
