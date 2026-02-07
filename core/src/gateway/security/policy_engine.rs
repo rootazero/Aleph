@@ -1,7 +1,10 @@
-//! Permission policy engine for Owner+Guest model
+//! Stateless permission policy engine for Owner+Guest model
+//!
+//! This module provides pure-function permission checking based on IdentityContext.
+//! No internal state is maintained - all permission information is carried in the
+//! IdentityContext parameter.
 
-use aleph_protocol::auth::{Role, GuestScope};
-use dashmap::DashMap;
+use aleph_protocol::{IdentityContext, Role, GuestScope};
 
 /// Permission check result
 #[derive(Debug, Clone, PartialEq)]
@@ -16,58 +19,87 @@ impl PermissionResult {
     }
 }
 
-/// Policy engine for checking tool execution permissions
-pub struct PolicyEngine {
-    /// guest_id -> GuestScope
-    guest_scopes: DashMap<String, GuestScope>,
-}
+/// Stateless policy engine for tool permission evaluation
+///
+/// All permission checks are pure functions based on IdentityContext.
+/// No internal state is maintained.
+///
+/// # Philosophy
+///
+/// This engine embodies the "stateless security" pattern:
+/// - **Pure functions**: Same input always produces same output
+/// - **No side effects**: No state mutation, no external queries
+/// - **Audit-friendly**: Permission decision is deterministic and reproducible
+///
+/// # Usage
+///
+/// ```ignore
+/// use aleph_protocol::IdentityContext;
+/// use alephcore::gateway::security::{PolicyEngine, PermissionResult};
+///
+/// let identity = IdentityContext::owner("session:main".into(), "cli".into());
+/// let result = PolicyEngine::check_tool_permission(&identity, "shell:exec");
+/// assert!(result.is_allowed());
+/// ```
+pub struct PolicyEngine;
 
 impl PolicyEngine {
-    pub fn new() -> Self {
-        Self {
-            guest_scopes: DashMap::new(),
-        }
-    }
-
-    /// Register or update guest scope
-    pub fn set_guest_scope(&self, guest_id: String, scope: GuestScope) {
-        self.guest_scopes.insert(guest_id, scope);
-    }
-
-    /// Remove guest scope
-    pub fn remove_guest_scope(&self, guest_id: &str) {
-        self.guest_scopes.remove(guest_id);
-    }
-
-    /// Check if role can execute tool
+    /// Check if identity can execute a tool (pure function)
+    ///
+    /// This is a stateless permission check - all information needed for the
+    /// decision is contained in the IdentityContext parameter.
+    ///
+    /// # Arguments
+    ///
+    /// * `identity` - Complete identity context with frozen permissions
+    /// * `tool_name` - Tool to check (e.g., "shell:exec", "translate")
+    ///
+    /// # Returns
+    ///
+    /// - `PermissionResult::Allowed` if permitted
+    /// - `PermissionResult::Denied` with reason if denied
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Owner always allowed
+    /// let owner = IdentityContext::owner("s1".into(), "cli".into());
+    /// assert!(PolicyEngine::check_tool_permission(&owner, "any_tool").is_allowed());
+    ///
+    /// // Guest with scope
+    /// let scope = GuestScope {
+    ///     allowed_tools: vec!["translate".into()],
+    ///     expires_at: None,
+    ///     display_name: None,
+    /// };
+    /// let guest = IdentityContext::guest("s2".into(), "g1".into(), scope, "web".into());
+    /// assert!(PolicyEngine::check_tool_permission(&guest, "translate").is_allowed());
+    /// assert!(!PolicyEngine::check_tool_permission(&guest, "shell:exec").is_allowed());
+    /// ```
     pub fn check_tool_permission(
-        &self,
-        role: &Role,
-        guest_id: Option<&str>,
+        identity: &IdentityContext,
         tool_name: &str,
     ) -> PermissionResult {
-        match role {
-            Role::Owner => PermissionResult::Allowed,
+        match identity.role {
+            Role::Owner => {
+                // Owner has unrestricted access
+                PermissionResult::Allowed
+            }
+
             Role::Guest => {
-                let Some(guest_id) = guest_id else {
+                // Guest must have a scope
+                let Some(ref scope) = identity.scope else {
                     return PermissionResult::Denied {
-                        reason: "Guest ID required for Guest role".to_string(),
+                        reason: format!(
+                            "Guest '{}' has no permission scope",
+                            identity.identity_id
+                        ),
                     };
                 };
 
-                let Some(scope) = self.guest_scopes.get(guest_id) else {
-                    return PermissionResult::Denied {
-                        reason: format!("No scope found for guest '{}'", guest_id),
-                    };
-                };
-
-                // Check expiry
+                // Check expiration
                 if let Some(expires_at) = scope.expires_at {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs() as i64;
-                    if now > expires_at {
+                    if identity.created_at > expires_at {
                         return PermissionResult::Denied {
                             reason: "Guest token expired".to_string(),
                         };
@@ -75,29 +107,96 @@ impl PolicyEngine {
                 }
 
                 // Check tool permission
-                let tool_category = tool_name.split(':').next().unwrap_or(tool_name);
-                let allowed = scope.allowed_tools.iter().any(|allowed| {
-                    allowed == tool_name || allowed == tool_category || allowed == "*"
-                });
-
-                if allowed {
-                    PermissionResult::Allowed
-                } else {
-                    PermissionResult::Denied {
-                        reason: format!("Tool '{}' not in guest scope", tool_name),
-                    }
-                }
+                Self::check_guest_scope(scope, tool_name, &identity.identity_id)
             }
+
             Role::Anonymous => PermissionResult::Denied {
                 reason: "Authentication required".to_string(),
             },
         }
     }
+
+    /// Check if a tool is allowed by guest scope (pure function)
+    ///
+    /// # Arguments
+    ///
+    /// * `scope` - Guest permission scope
+    /// * `tool_name` - Tool to check
+    /// * `guest_id` - Guest identifier (for error messages)
+    ///
+    /// # Returns
+    ///
+    /// Permission result with detailed reason if denied
+    ///
+    /// # Matching Rules
+    ///
+    /// - Exact match: "translate" matches "translate"
+    /// - Category match: "shell" matches "shell:exec"
+    /// - Wildcard: "*" matches any tool
+    fn check_guest_scope(
+        scope: &GuestScope,
+        tool_name: &str,
+        guest_id: &str,
+    ) -> PermissionResult {
+        // Extract tool category (e.g., "shell:exec" -> "shell")
+        let tool_category = tool_name.split(':').next().unwrap_or(tool_name);
+
+        // Check if tool or category is in allowed list
+        let allowed = scope.allowed_tools.iter().any(|allowed| {
+            allowed == tool_name       // Exact match
+            || allowed == tool_category // Category match
+            || allowed == "*"           // Wildcard
+        });
+
+        if allowed {
+            PermissionResult::Allowed
+        } else {
+            PermissionResult::Denied {
+                reason: format!(
+                    "Tool '{}' not in guest '{}' scope (allowed: {:?})",
+                    tool_name, guest_id, scope.allowed_tools
+                ),
+            }
+        }
+    }
+
+    /// Deprecated: PolicyEngine is now stateless
+    ///
+    /// This method is kept for backward compatibility but does nothing.
+    /// The PolicyEngine no longer maintains internal state.
+    #[deprecated(
+        since = "0.2.0",
+        note = "PolicyEngine is now stateless. Use PolicyEngine::check_tool_permission directly."
+    )]
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Deprecated: PolicyEngine no longer maintains guest scopes
+    ///
+    /// Guest scopes are now stored in SessionIdentityMeta and passed via IdentityContext.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Guest scopes are now stored in SessionIdentityMeta. This method does nothing."
+    )]
+    pub fn set_guest_scope(&self, _guest_id: String, _scope: GuestScope) {
+        // No-op: Scopes are now in IdentityContext
+    }
+
+    /// Deprecated: PolicyEngine no longer maintains guest scopes
+    #[deprecated(
+        since = "0.2.0",
+        note = "Guest scopes are now stored in SessionIdentityMeta. This method does nothing."
+    )]
+    pub fn remove_guest_scope(&self, _guest_id: &str) {
+        // No-op: Scopes are now in IdentityContext
+    }
 }
 
 impl Default for PolicyEngine {
     fn default() -> Self {
-        Self::new()
+        Self
     }
 }
 
@@ -105,82 +204,199 @@ impl Default for PolicyEngine {
 mod tests {
     use super::*;
 
+    // Helper to create a test scope
+    fn test_scope(tools: Vec<&str>) -> GuestScope {
+        GuestScope {
+            allowed_tools: tools.iter().map(|s| s.to_string()).collect(),
+            expires_at: None,
+            display_name: None,
+        }
+    }
+
     #[test]
     fn test_owner_always_allowed() {
-        let engine = PolicyEngine::new();
-        let result = engine.check_tool_permission(&Role::Owner, None, "shell:exec");
+        let identity = IdentityContext::owner("session:main".to_string(), "cli".to_string());
+        let result = PolicyEngine::check_tool_permission(&identity, "shell:exec");
         assert!(result.is_allowed());
     }
 
     #[test]
+    fn test_owner_allowed_any_tool() {
+        let identity = IdentityContext::owner("s1".to_string(), "cli".to_string());
+        assert!(PolicyEngine::check_tool_permission(&identity, "dangerous_tool").is_allowed());
+        assert!(PolicyEngine::check_tool_permission(&identity, "shell:rm").is_allowed());
+        assert!(PolicyEngine::check_tool_permission(&identity, "*").is_allowed());
+    }
+
+    #[test]
     fn test_anonymous_always_denied() {
-        let engine = PolicyEngine::new();
-        let result = engine.check_tool_permission(&Role::Anonymous, None, "translate");
+        let identity = IdentityContext::anonymous("session:temp".to_string(), "web".to_string());
+        let result = PolicyEngine::check_tool_permission(&identity, "translate");
         assert!(!result.is_allowed());
+        assert!(matches!(result, PermissionResult::Denied { .. }));
     }
 
     #[test]
     fn test_guest_with_scope_allowed() {
-        let engine = PolicyEngine::new();
-        engine.set_guest_scope(
+        let scope = test_scope(vec!["translate"]);
+        let identity = IdentityContext::guest(
+            "session:guest1".to_string(),
             "guest1".to_string(),
-            GuestScope {
-                allowed_tools: vec!["translate".to_string()],
-                expires_at: None,
-                display_name: None,
-            },
+            scope,
+            "telegram".to_string(),
         );
 
-        let result = engine.check_tool_permission(&Role::Guest, Some("guest1"), "translate");
+        let result = PolicyEngine::check_tool_permission(&identity, "translate");
         assert!(result.is_allowed());
     }
 
     #[test]
     fn test_guest_without_permission_denied() {
-        let engine = PolicyEngine::new();
-        engine.set_guest_scope(
+        let scope = test_scope(vec!["translate"]);
+        let identity = IdentityContext::guest(
+            "session:guest1".to_string(),
             "guest1".to_string(),
-            GuestScope {
-                allowed_tools: vec!["translate".to_string()],
-                expires_at: None,
-                display_name: None,
-            },
+            scope,
+            "telegram".to_string(),
         );
 
-        let result = engine.check_tool_permission(&Role::Guest, Some("guest1"), "shell:exec");
+        let result = PolicyEngine::check_tool_permission(&identity, "shell:exec");
         assert!(!result.is_allowed());
+
+        if let PermissionResult::Denied { reason } = result {
+            assert!(reason.contains("not in guest"));
+            assert!(reason.contains("shell:exec"));
+        } else {
+            panic!("Expected Denied result");
+        }
+    }
+
+    #[test]
+    fn test_guest_without_scope_denied() {
+        // Manually create identity with no scope (shouldn't happen in practice)
+        let mut identity = IdentityContext::owner("s1".to_string(), "cli".to_string());
+        identity.role = Role::Guest;
+        identity.identity_id = "guest1".to_string();
+        identity.scope = None;
+
+        let result = PolicyEngine::check_tool_permission(&identity, "translate");
+        assert!(!result.is_allowed());
+
+        if let PermissionResult::Denied { reason } = result {
+            assert!(reason.contains("no permission scope"));
+        }
     }
 
     #[test]
     fn test_guest_expired_token_denied() {
-        let engine = PolicyEngine::new();
-        let past_timestamp = 1000000000; // Year 2001
-        engine.set_guest_scope(
+        let scope = GuestScope {
+            allowed_tools: vec!["*".to_string()],
+            expires_at: Some(1000), // Past timestamp
+            display_name: None,
+        };
+
+        let mut identity = IdentityContext::guest(
+            "session:guest1".to_string(),
             "guest1".to_string(),
-            GuestScope {
-                allowed_tools: vec!["*".to_string()],
-                expires_at: Some(past_timestamp),
-                display_name: None,
-            },
+            scope,
+            "telegram".to_string(),
         );
 
-        let result = engine.check_tool_permission(&Role::Guest, Some("guest1"), "translate");
+        // Set created_at to be after expiry
+        identity.created_at = 2000;
+
+        let result = PolicyEngine::check_tool_permission(&identity, "translate");
         assert!(!result.is_allowed());
+
+        if let PermissionResult::Denied { reason } = result {
+            assert!(reason.contains("expired"));
+        }
+    }
+
+    #[test]
+    fn test_guest_not_expired_allowed() {
+        let scope = GuestScope {
+            allowed_tools: vec!["translate".to_string()],
+            expires_at: Some(3000), // Future timestamp
+            display_name: None,
+        };
+
+        let mut identity = IdentityContext::guest(
+            "session:guest1".to_string(),
+            "guest1".to_string(),
+            scope,
+            "telegram".to_string(),
+        );
+
+        // Set created_at to be before expiry
+        identity.created_at = 2000;
+
+        let result = PolicyEngine::check_tool_permission(&identity, "translate");
+        assert!(result.is_allowed());
     }
 
     #[test]
     fn test_tool_category_matching() {
-        let engine = PolicyEngine::new();
-        engine.set_guest_scope(
+        let scope = test_scope(vec!["shell"]);
+        let identity = IdentityContext::guest(
+            "session:guest1".to_string(),
             "guest1".to_string(),
-            GuestScope {
-                allowed_tools: vec!["shell".to_string()],
-                expires_at: None,
-                display_name: None,
-            },
+            scope,
+            "cli".to_string(),
         );
 
-        let result = engine.check_tool_permission(&Role::Guest, Some("guest1"), "shell:exec");
+        // Category "shell" should match "shell:exec"
+        let result = PolicyEngine::check_tool_permission(&identity, "shell:exec");
         assert!(result.is_allowed());
+
+        // But not other categories
+        let result2 = PolicyEngine::check_tool_permission(&identity, "file:read");
+        assert!(!result2.is_allowed());
+    }
+
+    #[test]
+    fn test_wildcard_matching() {
+        let scope = test_scope(vec!["*"]);
+        let identity = IdentityContext::guest(
+            "session:guest1".to_string(),
+            "guest1".to_string(),
+            scope,
+            "cli".to_string(),
+        );
+
+        assert!(PolicyEngine::check_tool_permission(&identity, "any_tool").is_allowed());
+        assert!(PolicyEngine::check_tool_permission(&identity, "shell:exec").is_allowed());
+        assert!(PolicyEngine::check_tool_permission(&identity, "translate").is_allowed());
+    }
+
+    #[test]
+    fn test_multiple_allowed_tools() {
+        let scope = test_scope(vec!["translate", "summarize", "search"]);
+        let identity = IdentityContext::guest(
+            "session:guest1".to_string(),
+            "guest1".to_string(),
+            scope,
+            "web".to_string(),
+        );
+
+        assert!(PolicyEngine::check_tool_permission(&identity, "translate").is_allowed());
+        assert!(PolicyEngine::check_tool_permission(&identity, "summarize").is_allowed());
+        assert!(PolicyEngine::check_tool_permission(&identity, "search").is_allowed());
+        assert!(!PolicyEngine::check_tool_permission(&identity, "delete").is_allowed());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_deprecated_new_still_works() {
+        let _engine = PolicyEngine::new();
+        // Should compile with deprecation warning
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_deprecated_set_guest_scope_noop() {
+        let engine = PolicyEngine::new();
+        engine.set_guest_scope("guest1".to_string(), test_scope(vec!["tool1"]));
+        // Should not panic, just no-op
     }
 }
