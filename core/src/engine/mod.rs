@@ -10,6 +10,12 @@ mod patch;
 mod reflex_bench;
 mod reflex_layer;
 
+#[cfg(test)]
+mod integration_tests;
+
+#[cfg(test)]
+mod performance_benchmarks;
+
 pub use atomic_action::{AtomicAction, LineRange, WriteMode};
 pub use atomic_engine::{AtomicEngine, ExecutionResult, RoutingLayer, RoutingResult, RoutingStats};
 pub use atomic_executor::AtomicExecutor;
