@@ -5,9 +5,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use crate::config::{build_ui_hints, generate_config_schema_json, ConfigUiHints};
+use crate::config::{build_ui_hints, generate_config_schema_json, Config, ConfigUiHints};
 use crate::gateway::hot_reload::ConfigWatcher;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 
@@ -317,6 +318,60 @@ pub async fn handle_schema(request: JsonRpcRequest) -> JsonRpcResponse {
     }
 }
 
+// ============================================================================
+// Full Config Handler (for ConfigManager SDK)
+// ============================================================================
+
+/// Handle config.get RPC method
+///
+/// Returns full configuration snapshot (Tier 1/2 only).
+///
+/// # Request
+///
+/// ```json
+/// { "jsonrpc": "2.0", "method": "config.get", "id": 1 }
+/// ```
+///
+/// # Response
+///
+/// ```json
+/// {
+///   "jsonrpc": "2.0",
+///   "id": 1,
+///   "result": {
+///     "config": {
+///       "ui.theme": "dark",
+///       "auth.identity": "owner@local"
+///     }
+///   }
+/// }
+/// ```
+pub async fn handle_get_full_config(
+    req: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+) -> JsonRpcResponse {
+    let config_snapshot = config.read().await.clone();
+
+    // Convert Config to JSON (Tier 1/2 fields only)
+    let config_json = match serde_json::to_value(&config_snapshot) {
+        Ok(v) => v,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                format!("Failed to serialize config: {}", e),
+            );
+        }
+    };
+
+    JsonRpcResponse::success(
+        req.id,
+        json!({
+            "config": config_json
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,5 +528,25 @@ model = "claude-opus-4-5"
 
         let result = response.result.unwrap();
         assert!(result.get("schema").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_full_config() {
+        let config = Config::default();
+        let config = Arc::new(RwLock::new(config));
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "config.get".to_string(),
+            params: None,
+            id: Some(json!(1)),
+        };
+
+        let response = handle_get_full_config(req, config).await;
+
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+        let result = response.result.unwrap();
+        assert!(result.get("config").is_some());
     }
 }
