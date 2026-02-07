@@ -39,4 +39,24 @@ extension GatewayClient {
         let result: GWRevokeInvitationResult = try await call(method: "guests.revokeInvitation", params: params)
         return result.success
     }
+
+    // MARK: - Guest Sessions
+
+    /// List all active guest sessions
+    ///
+    /// - Returns: Array of active guest sessions
+    func guestsListSessions() async throws -> [GWGuestSession] {
+        let result: GWListSessionsResult = try await call(method: "guests.listSessions")
+        return result.sessions
+    }
+
+    /// Terminate a guest session
+    ///
+    /// - Parameter sessionId: The session ID to terminate
+    /// - Returns: Success status
+    func guestsTerminateSession(sessionId: String) async throws -> Bool {
+        let params = GWTerminateSessionParams(sessionId: sessionId)
+        let result: GWTerminateSessionResult = try await call(method: "guests.terminateSession", params: params)
+        return result.success
+    }
 }

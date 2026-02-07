@@ -86,3 +86,71 @@ struct GWRevokeInvitationParams: Codable, Sendable {
 struct GWRevokeInvitationResult: Codable, Sendable {
     let success: Bool
 }
+
+// MARK: - Guest Session
+
+/// Active guest session information
+struct GWGuestSession: Codable, Sendable, Identifiable {
+    let sessionId: String
+    let guestId: String
+    let guestName: String
+    let connectionId: String
+    let scope: GWGuestScope
+    let connectedAt: Int64
+    let lastActiveAt: Int64
+    let toolsUsed: [String]
+    let requestCount: UInt32
+
+    var id: String { sessionId }
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case guestId = "guest_id"
+        case guestName = "guest_name"
+        case connectionId = "connection_id"
+        case scope
+        case connectedAt = "connected_at"
+        case lastActiveAt = "last_active_at"
+        case toolsUsed = "tools_used"
+        case requestCount = "request_count"
+    }
+
+    /// Connection duration in seconds
+    var connectionDuration: TimeInterval {
+        let now = Date().timeIntervalSince1970 * 1000 // Convert to milliseconds
+        return (now - Double(connectedAt)) / 1000
+    }
+
+    /// Time since last activity in seconds
+    var timeSinceLastActivity: TimeInterval {
+        let now = Date().timeIntervalSince1970 * 1000 // Convert to milliseconds
+        return (now - Double(lastActiveAt)) / 1000
+    }
+
+    /// Check if session is expired based on scope expiration
+    var isExpired: Bool {
+        guard let expiresAt = scope.expiresAt else { return false }
+        return Date().timeIntervalSince1970 > Double(expiresAt)
+    }
+}
+
+// MARK: - Session RPC Request/Response
+
+/// Response for guests.listSessions
+struct GWListSessionsResult: Codable, Sendable {
+    let sessions: [GWGuestSession]
+}
+
+/// Request to terminate guest session
+struct GWTerminateSessionParams: Codable, Sendable {
+    let sessionId: String
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+    }
+}
+
+/// Response for guests.terminateSession
+struct GWTerminateSessionResult: Codable, Sendable {
+    let success: Bool
+}
