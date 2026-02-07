@@ -796,11 +796,19 @@ mod tests {
         store
             .upsert_device("test-dev", "Test", None, &[1u8; 32], "fp", "operator", &[])
             .unwrap();
+
+        let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
+        let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
+        let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+
         Arc::new(AuthContext::new(
             Arc::new(TokenManager::new(store.clone())),
             Arc::new(PairingManager::new(store.clone())),
             Arc::new(DeviceStore::in_memory().unwrap()),
             store,
+            invitation_manager,
+            guest_session_manager,
+            event_bus,
             true,
         ))
     }
@@ -812,11 +820,19 @@ mod tests {
         store
             .upsert_device("test-dev", "Test", None, &[1u8; 32], "fp", "operator", &[])
             .unwrap();
+
+        let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
+        let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
+        let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+
         let ctx = Arc::new(AuthContext::new(
             Arc::new(TokenManager::new(store.clone())),
             Arc::new(PairingManager::new(store.clone())),
             Arc::new(DeviceStore::in_memory().unwrap()),
             store,
+            invitation_manager,
+            guest_session_manager,
+            event_bus,
             false, // Auth not required
         ));
 
