@@ -12,5 +12,6 @@ name = "aleph_sdk"
 [dependencies]
 aleph-protocol = { path = "../../shared/protocol" }
 mdns-sd = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
 tracing = { workspace = true }
