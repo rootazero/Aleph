@@ -46,6 +46,30 @@ impl AtomicExecutor {
             AtomicAction::Bash { command, cwd } => {
                 self.execute_bash(command, cwd.as_ref()).await?
             }
+            AtomicAction::Search { .. } => {
+                // TODO: Implement search operation
+                AtomicResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("Search operation not yet implemented".to_string()),
+                }
+            }
+            AtomicAction::Replace { .. } => {
+                // TODO: Implement replace operation
+                AtomicResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("Replace operation not yet implemented".to_string()),
+                }
+            }
+            AtomicAction::Move { .. } => {
+                // TODO: Implement move operation
+                AtomicResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("Move operation not yet implemented".to_string()),
+                }
+            }
         };
 
         Ok(result)
