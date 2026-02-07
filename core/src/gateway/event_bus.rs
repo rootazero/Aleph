@@ -21,6 +21,21 @@ use tracing::debug;
 /// Default channel capacity for event broadcasting
 const EVENT_CHANNEL_SIZE: usize = 1024;
 
+/// Configuration changed event
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigChangedEvent {
+    pub section: Option<String>,
+    pub value: Value,
+    pub timestamp: i64,
+}
+
+/// Gateway Event types
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+pub enum GatewayEvent {
+    ConfigChanged(ConfigChangedEvent),
+}
+
 /// A topic-aware event that can be filtered by subscribers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopicEvent {
