@@ -2,4 +2,6 @@
 //!
 //! Handles client-side configuration synchronization with the Gateway.
 
-// Placeholder for future ConfigManager implementation
+pub mod manager;
+
+pub use manager::ConfigManager;
