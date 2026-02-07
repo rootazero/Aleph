@@ -493,6 +493,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let token_manager = Arc::new(TokenManager::new(security_store.clone()));
     let pairing_manager = Arc::new(PairingManager::new(security_store.clone()));
     let invitation_manager = Arc::new(alephcore::gateway::security::InvitationManager::new());
+    let guest_session_manager = Arc::new(alephcore::gateway::security::GuestSessionManager::new());
 
     // Start mDNS broadcaster for local network discovery
     let mdns_broadcaster = match alephcore::gateway::MdnsBroadcaster::new(args.port, "aleph") {
@@ -518,7 +519,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     register_auth_handlers(&mut server, &auth_ctx);
 
     // Register guest handlers
-    register_guest_handlers(&mut server, &invitation_manager, &event_bus);
+    register_guest_handlers(&mut server, &invitation_manager, &guest_session_manager, &event_bus);
 
     // Register config handlers (for ConfigManager SDK)
     let app_config = Arc::new(tokio::sync::RwLock::new(alephcore::Config::default()));
@@ -716,6 +717,7 @@ fn register_auth_handlers(
 fn register_guest_handlers(
     server: &mut GatewayServer,
     invitation_manager: &Arc<alephcore::gateway::security::InvitationManager>,
+    session_manager: &Arc<alephcore::gateway::security::GuestSessionManager>,
     event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
 ) {
     use alephcore::gateway::handlers::guests;
@@ -743,6 +745,22 @@ fn register_guest_handlers(
         let mgr = mgr_revoke.clone();
         let bus = bus_revoke.clone();
         async move { guests::handle_revoke_invitation(req, mgr, bus).await }
+    });
+
+    // guests.listSessions
+    let sess_list = session_manager.clone();
+    server.handlers_mut().register("guests.listSessions", move |req| {
+        let sess = sess_list.clone();
+        async move { guests::handle_list_sessions(req, sess).await }
+    });
+
+    // guests.terminateSession
+    let sess_terminate = session_manager.clone();
+    let bus_terminate = event_bus.clone();
+    server.handlers_mut().register("guests.terminateSession", move |req| {
+        let sess = sess_terminate.clone();
+        let bus = bus_terminate.clone();
+        async move { guests::handle_terminate_session(req, sess, bus).await }
     });
 }
 
