@@ -1,5 +1,6 @@
 //! Trait abstractions for agent loop components
 
+use aleph_protocol::IdentityContext;
 use crate::agent_loop::{Action, ActionResult, LoopState, LoopStep, Thinking};
 use crate::agents::thinking::ThinkLevel;
 use crate::error::Result;
@@ -67,8 +68,15 @@ pub trait ThinkerTrait: Send + Sync {
 /// - `dispatcher::scheduler::GraphTaskExecutor` - for DAG node execution
 #[async_trait::async_trait]
 pub trait ActionExecutor: Send + Sync {
-    /// Execute a single action
-    async fn execute(&self, action: &Action) -> ActionResult;
+    /// Execute a single action with identity context for permission checking
+    ///
+    /// # Arguments
+    /// * `action` - The action to execute
+    /// * `identity` - Identity context for permission validation
+    ///
+    /// # Returns
+    /// ActionResult indicating success, failure, or permission denial
+    async fn execute(&self, action: &Action, identity: &IdentityContext) -> ActionResult;
 }
 
 /// Deprecated alias for backward compatibility
