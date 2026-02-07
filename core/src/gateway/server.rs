@@ -496,7 +496,9 @@ async fn handle_connection(
 
                                         // If connect succeeded, mark as authenticated
                                         if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
+                                            debug!("Parsed connect response: success={}, method={}", resp.is_success(), req.method);
                                             if resp.is_success() && req.method == "connect" {
+                                                debug!("Connect succeeded, extracting device_id and permissions");
                                                 // Extract device_id and permissions from result
                                                 let device_id = resp.result
                                                     .as_ref()
@@ -521,10 +523,14 @@ async fn handle_connection(
                                                     .and_then(|r| r.get("token"))
                                                     .and_then(|v| v.as_str())
                                                     .and_then(|token| {
+                                                        debug!("Extracting guest_session_id from token: {}", token);
                                                         // Guest tokens have format: guest:{session_id}:{token}
                                                         if token.starts_with("guest:") {
-                                                            token.split(':').nth(1).map(String::from)
+                                                            let session_id = token.split(':').nth(1).map(String::from);
+                                                            debug!("Extracted guest_session_id: {:?}", session_id);
+                                                            session_id
                                                         } else {
+                                                            debug!("Token does not start with 'guest:'");
                                                             None
                                                         }
                                                     });
@@ -576,12 +582,47 @@ async fn handle_connection(
                                     } else {
                                         let response = process_request(&text, &handlers).await;
 
+                                        // Extract guest_session_id from connect response (when require_auth=false)
+                                        if req.method == "connect" {
+                                            if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
+                                                if resp.is_success() {
+                                                    let guest_session_id = resp.result
+                                                        .as_ref()
+                                                        .and_then(|r| r.get("token"))
+                                                        .and_then(|v| v.as_str())
+                                                        .and_then(|token| {
+                                                            debug!("Extracting guest_session_id from token: {}", token);
+                                                            // Guest tokens have format: guest:{session_id}:{token}
+                                                            if token.starts_with("guest:") {
+                                                                let session_id = token.split(':').nth(1).map(String::from);
+                                                                debug!("Extracted guest_session_id: {:?}", session_id);
+                                                                session_id
+                                                            } else {
+                                                                debug!("Token does not start with 'guest:'");
+                                                                None
+                                                            }
+                                                        });
+
+                                                    if let Some(session_id) = guest_session_id {
+                                                        let mut conns = connections.write().await;
+                                                        if let Some(state) = conns.get_mut(&conn_id) {
+                                                            state.guest_session_id = Some(session_id.clone());
+                                                            info!("Connection {} authenticated as guest (session: {})", conn_id, session_id);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
                                         // Log RPC request for guest sessions
                                         if let Some(ref gsm) = guest_session_manager {
                                             let conns = connections.read().await;
                                             if let Some(state) = conns.get(&conn_id) {
+                                                debug!("Checking for guest_session_id in connection state: {:?}", state.guest_session_id);
                                                 if let Some(ref session_id) = state.guest_session_id {
+                                                    debug!("Found guest_session_id: {}, looking up session", session_id);
                                                     if let Some(session) = gsm.get_session(session_id) {
+                                                        debug!("Found guest session, logging RPC request: {}", req.method);
                                                         // Parse response to determine status
                                                         let status = if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
                                                             if resp.is_success() {
