@@ -110,6 +110,7 @@ impl ConflictDetector {
             .database
             .find_similar_facts(
                 embedding,
+                crate::memory::NamespaceScope::Owner, // TODO: Pass from context
                 self.config.similarity_threshold,
                 Some(&new_fact.id),
             )

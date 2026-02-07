@@ -49,6 +49,7 @@ impl RippleTask {
                     .database
                     .search_facts(
                         embedding,
+                        crate::memory::NamespaceScope::Owner, // TODO: Pass from context
                         self.config.max_facts_per_hop as u32,
                         false,
                     )

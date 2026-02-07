@@ -93,7 +93,7 @@ impl FactRetrieval {
         // 1. Search facts first
         let facts = self
             .database
-            .search_facts(&query_embedding, self.config.max_facts, false)
+            .search_facts(&query_embedding, crate::memory::NamespaceScope::Owner, self.config.max_facts, false)
             .await?;
 
         // Filter by similarity threshold
@@ -142,7 +142,7 @@ impl FactRetrieval {
 
         let facts = self
             .database
-            .search_facts(&query_embedding, max_facts, false)
+            .search_facts(&query_embedding, crate::memory::NamespaceScope::Owner, max_facts, false)
             .await?;
 
         let facts: Vec<MemoryFact> = facts
