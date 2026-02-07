@@ -12,6 +12,8 @@ use thiserror::Error;
 
 use aleph_protocol::GuestScope;
 
+use super::activity_logger::GuestActivityLogger;
+
 /// Guest session-related errors
 #[derive(Debug, Error)]
 pub enum GuestSessionError {
@@ -50,6 +52,8 @@ pub struct GuestSessionManager {
     sessions: Arc<DashMap<String, GuestSession>>,
     /// Session ID lookup by connection ID
     connection_to_session: Arc<DashMap<String, String>>,
+    /// Activity logger for tracking guest actions
+    activity_logger: Arc<GuestActivityLogger>,
 }
 
 impl GuestSessionManager {
@@ -58,7 +62,22 @@ impl GuestSessionManager {
         Self {
             sessions: Arc::new(DashMap::new()),
             connection_to_session: Arc::new(DashMap::new()),
+            activity_logger: Arc::new(GuestActivityLogger::new()),
         }
+    }
+
+    /// Create a new guest session manager with a shared activity logger
+    pub fn with_logger(activity_logger: Arc<GuestActivityLogger>) -> Self {
+        Self {
+            sessions: Arc::new(DashMap::new()),
+            connection_to_session: Arc::new(DashMap::new()),
+            activity_logger,
+        }
+    }
+
+    /// Get a reference to the activity logger
+    pub fn activity_logger(&self) -> &Arc<GuestActivityLogger> {
+        &self.activity_logger
     }
 
     /// Register a new guest session
@@ -84,8 +103,8 @@ impl GuestSessionManager {
 
         let session = GuestSession {
             session_id: session_id.clone(),
-            guest_id,
-            guest_name,
+            guest_id: guest_id.clone(),
+            guest_name: guest_name.clone(),
             connection_id: connection_id.clone(),
             scope,
             connected_at: now,
@@ -96,7 +115,18 @@ impl GuestSessionManager {
 
         self.sessions.insert(session_id.clone(), session.clone());
         self.connection_to_session
-            .insert(connection_id, session_id);
+            .insert(connection_id.clone(), session_id.clone());
+
+        // Log session connection event
+        self.activity_logger.log_session_event(
+            session_id.clone(),
+            guest_id.clone(),
+            "connected".to_string(),
+            serde_json::json!({
+                "guest_name": guest_name,
+                "connection_id": connection_id,
+            }),
+        );
 
         session
     }
@@ -106,6 +136,16 @@ impl GuestSessionManager {
         if let Some(mut session) = self.sessions.get_mut(session_id) {
             session.last_active_at = current_timestamp_ms();
             session.request_count += 1;
+
+            // Log RPC request activity
+            self.activity_logger.log_rpc_request(
+                session_id.to_string(),
+                session.guest_id.clone(),
+                "activity_update".to_string(),
+                serde_json::json!({}),
+                super::activity_log::ActivityStatus::Success,
+                None,
+            );
         }
     }
 
@@ -113,8 +153,18 @@ impl GuestSessionManager {
     pub fn record_tool_usage(&self, session_id: &str, tool_name: String) {
         if let Some(mut session) = self.sessions.get_mut(session_id) {
             if !session.tools_used.contains(&tool_name) {
-                session.tools_used.push(tool_name);
+                session.tools_used.push(tool_name.clone());
             }
+
+            // Log tool call activity
+            self.activity_logger.log_tool_call(
+                session_id.to_string(),
+                session.guest_id.clone(),
+                tool_name,
+                serde_json::json!({}),
+                super::activity_log::ActivityStatus::Success,
+                None,
+            );
         }
     }
 
@@ -164,13 +214,45 @@ impl GuestSessionManager {
         // Remove connection mapping
         self.connection_to_session.remove(&session.connection_id);
 
+        // Log session disconnection event
+        self.activity_logger.log_session_event(
+            session_id.to_string(),
+            session.guest_id.clone(),
+            "disconnected".to_string(),
+            serde_json::json!({
+                "duration_ms": current_timestamp_ms() - session.connected_at,
+                "request_count": session.request_count,
+                "tools_used": session.tools_used,
+            }),
+        );
+
+        // Mark session as ended for log retention
+        self.activity_logger.mark_session_ended(session_id);
+
         Ok(session)
     }
 
     /// Terminate session by connection ID (called on disconnect)
     pub fn terminate_by_connection(&self, connection_id: &str) -> Option<GuestSession> {
         let session_id = self.connection_to_session.remove(connection_id)?;
-        self.sessions.remove(&session_id.1).map(|(_, s)| s)
+        let session = self.sessions.remove(&session_id.1).map(|(_, s)| s)?;
+
+        // Log session disconnection event
+        self.activity_logger.log_session_event(
+            session_id.1.clone(),
+            session.guest_id.clone(),
+            "disconnected".to_string(),
+            serde_json::json!({
+                "duration_ms": current_timestamp_ms() - session.connected_at,
+                "request_count": session.request_count,
+                "tools_used": session.tools_used,
+            }),
+        );
+
+        // Mark session as ended for log retention
+        self.activity_logger.mark_session_ended(&session_id.1);
+
+        Some(session)
     }
 
     /// Get session count

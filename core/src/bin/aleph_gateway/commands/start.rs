@@ -768,6 +768,13 @@ fn register_guest_handlers(
         let bus = bus_terminate.clone();
         async move { guests::handle_terminate_session(req, sess, bus).await }
     });
+
+    // guests.getActivityLogs
+    let sess_logs = session_manager.clone();
+    server.handlers_mut().register("guests.getActivityLogs", move |req| {
+        let sess = sess_logs.clone();
+        async move { guests::handle_get_activity_logs(req, sess).await }
+    });
 }
 
 #[cfg(feature = "gateway")]

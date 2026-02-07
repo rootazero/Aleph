@@ -18,6 +18,8 @@
 
 pub mod crypto;
 pub mod device;
+pub mod activity_log;
+pub mod activity_logger;
 pub mod guest_session_manager;
 pub mod identity_map;
 pub mod invitation_manager;
@@ -33,6 +35,10 @@ pub use crypto::{
     PAIRING_CODE_LENGTH,
 };
 pub use device::{Device, DeviceRole, DeviceType};
+pub use activity_log::{
+    ActivityLogQuery, ActivityLogQueryResult, ActivityStatus, ActivityType, GuestActivityLog,
+};
+pub use activity_logger::GuestActivityLogger;
 pub use guest_session_manager::{GuestSession, GuestSessionError, GuestSessionManager};
 pub use identity_map::{IdentityMap, PlatformIdentity, UserId};
 pub use invitation_manager::{InvitationError, InvitationManager};
