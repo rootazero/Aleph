@@ -27,7 +27,7 @@ settings:
     SUPPORTED_PLATFORMS: macosx
     ENABLE_PREVIEWS: YES
     # Development team for stable code signing (avoids re-authorization on each build)
-    DEVELOPMENT_TEAM: DVMQ798AGH
+    # DEVELOPMENT_TEAM: DVMQ798AGH  # Temporarily disabled for local testing
     SWIFT_APPROACHABLE_CONCURRENCY: YES
     SWIFT_EMIT_LOC_STRINGS: YES
     SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
@@ -94,6 +94,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: Rootazero.Aleph
         PRODUCT_NAME: $(TARGET_NAME)
         CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"  # Use ad-hoc signing for local testing
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: NO
