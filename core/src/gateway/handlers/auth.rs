@@ -135,121 +135,14 @@ pub async fn handle_connect(
         },
     };
 
-    // If authentication is not required, allow any connection
-    if !ctx.require_auth {
-        let device_id = params
-            .device_id
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-        // Register device in SecurityStore first (required for FK constraint on tokens)
-        let device_name = params.device_name.as_deref().unwrap_or("Auto-Device");
-        if let Err(e) = ctx.security_store.upsert_device(
-            &device_id,
-            device_name,
-            None,
-            &[0u8; 32], // Placeholder public key
-            &device_id[..16.min(device_id.len())], // Use prefix as fingerprint
-            DeviceRole::Operator.as_str(),
-            &["*".to_string()],
-        ) {
-            warn!(error = %e, "Failed to register device");
-            return JsonRpcResponse::error(request.id, -32603, format!("Failed to register device: {}", e));
-        }
-
-        let signed_token = match ctx
-            .token_manager
-            .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
-        {
-            Ok(t) => t,
-            Err(e) => {
-                warn!(error = %e, "Failed to issue token");
-                return JsonRpcResponse::error(request.id, -32603, format!("Failed to issue token: {}", e));
-            }
-        };
-
-        info!(device_id = %device_id, "Connection accepted (auth not required)");
-
-        // Check if manifest was provided
-        let manifest_accepted = params.manifest.is_some();
-        if let Some(ref manifest) = params.manifest {
-            tracing::info!(
-                client_type = %manifest.client_type,
-                client_version = %manifest.client_version,
-                tool_categories = ?manifest.capabilities.tool_categories,
-                "Client manifest received"
-            );
-        }
-
-        return JsonRpcResponse::success(
-            request.id,
-            json!(ConnectResult {
-                token: format!("{}:{}", signed_token.token, signed_token.signature),
-                device_id,
-                permissions: vec!["*".to_string()],
-                expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at)
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()),
-                manifest_accepted,
-            }),
-        );
-    }
-
-    // Case 1: Client has a token - validate it
-    if let Some(token_str) = &params.token {
-        // Token format: "{token}:{signature}"
-        if let Some((token, signature)) = token_str.split_once(':') {
-            match ctx.token_manager.validate_token(token, signature) {
-                Ok(validation) => {
-                    let device_id = params
-                        .device_id
-                        .unwrap_or_else(|| validation.device_id.clone());
-
-                    // Update last seen time if device is in store
-                    let _ = ctx.device_store.update_last_seen(&device_id);
-
-                    info!(device_id = %device_id, "Connection authenticated via token");
-
-                    // Check if manifest was provided
-                    let manifest_accepted = params.manifest.is_some();
-                    if let Some(ref manifest) = params.manifest {
-                        tracing::info!(
-                            client_type = %manifest.client_type,
-                            client_version = %manifest.client_version,
-                            tool_categories = ?manifest.capabilities.tool_categories,
-                            "Client manifest received"
-                        );
-                    }
-
-                    return JsonRpcResponse::success(
-                        request.id,
-                        json!(ConnectResult {
-                            token: token_str.clone(),
-                            device_id,
-                            permissions: validation.scopes,
-                            expires_at: chrono::DateTime::from_timestamp_millis(
-                                chrono::Utc::now().timestamp_millis() + validation.remaining_ms
-                            )
-                            .map(|dt| dt.to_rfc3339())
-                            .unwrap_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()),
-                            manifest_accepted,
-                        }),
-                    );
-                }
-                Err(e) => {
-                    debug!(error = %e, "Invalid token provided");
-                    // Token invalid, fall through to pairing
-                }
-            }
-        } else {
-            debug!("Invalid token format (expected token:signature)");
-            // Token invalid, fall through to pairing
-        }
-    }
-
-    // Case 1.5: Guest invitation token - activate and create session
+    // Check for guest invitation token FIRST (before require_auth bypass)
+    // Guest invitations should work regardless of require_auth setting
     if let Some(invitation_token) = &params.invitation_token {
+        debug!("Processing guest invitation token: {}", invitation_token);
         match ctx.invitation_manager.activate_invitation(invitation_token) {
             Ok(guest_token) => {
+                debug!("Guest invitation activated successfully for guest_id: {}", guest_token.guest_id);
+
                 // Generate a unique session ID
                 let session_id = uuid::Uuid::new_v4().to_string();
                 let connection_id = "pending".to_string(); // Will be updated by server
@@ -327,9 +220,126 @@ pub async fn handle_connect(
         }
     }
 
+    // If authentication is not required, allow any connection
+    if !ctx.require_auth {
+        let device_id = params
+            .device_id
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        // Register device in SecurityStore first (required for FK constraint on tokens)
+        let device_name = params.device_name.as_deref().unwrap_or("Auto-Device");
+        if let Err(e) = ctx.security_store.upsert_device(
+            &device_id,
+            device_name,
+            None,
+            &[0u8; 32], // Placeholder public key
+            &device_id[..16.min(device_id.len())], // Use prefix as fingerprint
+            DeviceRole::Operator.as_str(),
+            &["*".to_string()],
+        ) {
+            warn!(error = %e, "Failed to register device");
+            return JsonRpcResponse::error(request.id, -32603, format!("Failed to register device: {}", e));
+        }
+
+        let signed_token = match ctx
+            .token_manager
+            .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
+        {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(error = %e, "Failed to issue token");
+                return JsonRpcResponse::error(request.id, -32603, format!("Failed to issue token: {}", e));
+            }
+        };
+
+        info!(device_id = %device_id, "Connection accepted (auth not required)");
+
+        // Check if manifest was provided
+        let manifest_accepted = params.manifest.is_some();
+        if let Some(ref manifest) = params.manifest {
+            tracing::info!(
+                client_type = %manifest.client_type,
+                client_version = %manifest.client_version,
+                tool_categories = ?manifest.capabilities.tool_categories,
+                "Client manifest received"
+            );
+        }
+
+        return JsonRpcResponse::success(
+            request.id,
+            json!(ConnectResult {
+                token: format!("{}:{}", signed_token.token, signed_token.signature),
+                device_id,
+                permissions: vec!["*".to_string()],
+                expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()),
+                manifest_accepted,
+            }),
+        );
+    }
+
+    debug!("Processing connect request: device_id={:?}, has_token={}, has_invitation_token={}",
+        params.device_id, params.token.is_some(), params.invitation_token.is_some());
+
+    // Case 1: Client has a token - validate it
+    if let Some(token_str) = &params.token {
+        debug!("Case 1: Validating existing token");
+        // Token format: "{token}:{signature}"
+        if let Some((token, signature)) = token_str.split_once(':') {
+            match ctx.token_manager.validate_token(token, signature) {
+                Ok(validation) => {
+                    let device_id = params
+                        .device_id
+                        .unwrap_or_else(|| validation.device_id.clone());
+
+                    // Update last seen time if device is in store
+                    let _ = ctx.device_store.update_last_seen(&device_id);
+
+                    info!(device_id = %device_id, "Connection authenticated via token");
+
+                    // Check if manifest was provided
+                    let manifest_accepted = params.manifest.is_some();
+                    if let Some(ref manifest) = params.manifest {
+                        tracing::info!(
+                            client_type = %manifest.client_type,
+                            client_version = %manifest.client_version,
+                            tool_categories = ?manifest.capabilities.tool_categories,
+                            "Client manifest received"
+                        );
+                    }
+
+                    return JsonRpcResponse::success(
+                        request.id,
+                        json!(ConnectResult {
+                            token: token_str.clone(),
+                            device_id,
+                            permissions: validation.scopes,
+                            expires_at: chrono::DateTime::from_timestamp_millis(
+                                chrono::Utc::now().timestamp_millis() + validation.remaining_ms
+                            )
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()),
+                            manifest_accepted,
+                        }),
+                    );
+                }
+                Err(e) => {
+                    debug!(error = %e, "Invalid token provided");
+                    // Token invalid, fall through to pairing
+                }
+            }
+        } else {
+            debug!("Invalid token format (expected token:signature)");
+            // Token invalid, fall through to pairing
+        }
+    }
+
     // Case 2: Check if device_id is already approved
     if let Some(device_id) = &params.device_id {
+        debug!("Case 2: Checking if device is approved: {}", device_id);
         if ctx.device_store.is_approved(device_id) {
+            debug!("Device is approved, issuing token");
             // Device is approved, generate new token
             let device = ctx.device_store.get_device(device_id);
             let permissions = device
@@ -380,6 +390,7 @@ pub async fn handle_connect(
     }
 
     // Case 3: New device - initiate pairing
+    debug!("Case 3: Initiating new device pairing");
     let device_name = params
         .device_name
         .unwrap_or_else(|| "Unknown Device".to_string());
