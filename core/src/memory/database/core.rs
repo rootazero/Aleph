@@ -2,6 +2,7 @@
 ///
 /// Contains the database connection, schema setup, and migration logic.
 use crate::error::AlephError;
+use crate::memory::database::migration;
 use rusqlite::{params, Connection, OptionalExtension};
 use sqlite_vec::sqlite3_vec_init;
 use std::path::PathBuf;
@@ -453,6 +454,9 @@ impl VectorDatabase {
 
         // Create schema with version metadata
         Self::create_schema(&conn)?;
+
+        // Migrate existing databases to add namespace support (idempotent)
+        migration::migrate_add_namespace(&conn)?;
 
         // Migrate existing data to vec0 tables (for upgrades from old schema)
         Self::migrate_to_vec0(&conn)?;
