@@ -54,6 +54,7 @@ mod router;
 mod routed_executor;
 mod single_step;
 mod types;
+mod atomic_action_executor;
 
 pub use builtin_registry::{
     create_tool_boxed, get_builtin_tool_names, is_builtin_tool, BuiltinToolConfig,
@@ -68,3 +69,4 @@ pub use single_step::{SingleStepConfig, SingleStepExecutor, ToolRegistry};
 pub use types::{
     ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
 };
+pub use atomic_action_executor::AtomicActionExecutor;
