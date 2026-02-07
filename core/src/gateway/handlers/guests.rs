@@ -17,6 +17,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::super::event_bus::{GatewayEventBus, TopicEvent};
 use crate::gateway::security::InvitationManager;
 use aleph_protocol::{CreateInvitationRequest, Invitation};
 
@@ -101,6 +102,7 @@ pub struct RevokeInvitationResponse {
 pub async fn handle_create_invitation(
     request: JsonRpcRequest,
     manager: SharedInvitationManager,
+    event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params = match &request.params {
         Some(params) => params,
@@ -126,6 +128,19 @@ pub async fn handle_create_invitation(
 
     match manager.create_invitation(create_request) {
         Ok(invitation) => {
+            // Emit event for real-time updates
+            let event = TopicEvent {
+                topic: "guest.invitation.created".to_string(),
+                data: json!({
+                    "invitation": invitation
+                }),
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64,
+            };
+            let _ = event_bus.publish_json(&event);
+
             let response = CreateInvitationResponse { invitation };
             match serde_json::to_value(&response) {
                 Ok(value) => JsonRpcResponse::success(request.id, value),
@@ -221,6 +236,7 @@ pub async fn handle_list_guests(
 pub async fn handle_revoke_invitation(
     request: JsonRpcRequest,
     manager: SharedInvitationManager,
+    event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params = match &request.params {
         Some(params) => params,
@@ -246,6 +262,19 @@ pub async fn handle_revoke_invitation(
 
     match manager.revoke_invitation(&revoke_request.token) {
         Ok(()) => {
+            // Emit event for real-time updates
+            let event = TopicEvent {
+                topic: "guest.invitation.revoked".to_string(),
+                data: json!({
+                    "token": revoke_request.token
+                }),
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64,
+            };
+            let _ = event_bus.publish_json(&event);
+
             let response = RevokeInvitationResponse { success: true };
             match serde_json::to_value(&response) {
                 Ok(value) => JsonRpcResponse::success(request.id, value),
@@ -272,6 +301,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_invitation() {
         let manager = Arc::new(InvitationManager::new());
+        let event_bus = Arc::new(GatewayEventBus::new());
 
         let request = JsonRpcRequest::with_id(
             "guests.createInvitation",
@@ -289,7 +319,7 @@ mod tests {
             serde_json::json!(1),
         );
 
-        let response = handle_create_invitation(request, manager).await;
+        let response = handle_create_invitation(request, manager, event_bus).await;
 
         assert!(response.is_success());
         let result = response.result.unwrap();
@@ -329,6 +359,7 @@ mod tests {
     #[tokio::test]
     async fn test_revoke_invitation() {
         let manager = Arc::new(InvitationManager::new());
+        let event_bus = Arc::new(GatewayEventBus::new());
 
         // Create an invitation
         let invitation = manager
@@ -353,7 +384,7 @@ mod tests {
             serde_json::json!(1),
         );
 
-        let response = handle_revoke_invitation(request, manager.clone()).await;
+        let response = handle_revoke_invitation(request, manager.clone(), event_bus).await;
 
         assert!(response.is_success());
         let result = response.result.unwrap();

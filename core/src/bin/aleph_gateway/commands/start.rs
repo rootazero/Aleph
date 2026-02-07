@@ -518,7 +518,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     register_auth_handlers(&mut server, &auth_ctx);
 
     // Register guest handlers
-    register_guest_handlers(&mut server, &invitation_manager);
+    register_guest_handlers(&mut server, &invitation_manager, &event_bus);
 
     // Register config handlers (for ConfigManager SDK)
     let app_config = Arc::new(tokio::sync::RwLock::new(alephcore::Config::default()));
@@ -716,14 +716,17 @@ fn register_auth_handlers(
 fn register_guest_handlers(
     server: &mut GatewayServer,
     invitation_manager: &Arc<alephcore::gateway::security::InvitationManager>,
+    event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
 ) {
     use alephcore::gateway::handlers::guests;
 
     // guests.createInvitation
     let mgr_create = invitation_manager.clone();
+    let bus_create = event_bus.clone();
     server.handlers_mut().register("guests.createInvitation", move |req| {
         let mgr = mgr_create.clone();
-        async move { guests::handle_create_invitation(req, mgr).await }
+        let bus = bus_create.clone();
+        async move { guests::handle_create_invitation(req, mgr, bus).await }
     });
 
     // guests.listPending
@@ -735,9 +738,11 @@ fn register_guest_handlers(
 
     // guests.revokeInvitation
     let mgr_revoke = invitation_manager.clone();
+    let bus_revoke = event_bus.clone();
     server.handlers_mut().register("guests.revokeInvitation", move |req| {
         let mgr = mgr_revoke.clone();
-        async move { guests::handle_revoke_invitation(req, mgr).await }
+        let bus = bus_revoke.clone();
+        async move { guests::handle_revoke_invitation(req, mgr, bus).await }
     });
 }
 
