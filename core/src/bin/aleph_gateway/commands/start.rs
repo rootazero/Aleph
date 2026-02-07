@@ -512,6 +512,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         pairing_manager,
         device_store,
         security_store,
+        invitation_manager.clone(),
+        guest_session_manager.clone(),
+        event_bus.clone(),
         full_config.gateway.require_auth,
     ));
 
@@ -520,6 +523,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Register guest handlers
     register_guest_handlers(&mut server, &invitation_manager, &guest_session_manager, &event_bus);
+
+    // Set guest session manager on server for disconnect cleanup
+    server.set_guest_session_manager(guest_session_manager.clone());
 
     // Register config handlers (for ConfigManager SDK)
     let app_config = Arc::new(tokio::sync::RwLock::new(alephcore::Config::default()));

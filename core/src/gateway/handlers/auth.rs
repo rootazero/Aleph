@@ -30,6 +30,8 @@ pub struct HelloParams {
 pub struct ConnectParams {
     /// Device token (for returning devices)
     pub token: Option<String>,
+    /// Guest invitation token (for guest access)
+    pub invitation_token: Option<String>,
     /// Device name (for new devices)
     pub device_name: Option<String>,
     /// Device type (macos, ios, android, cli, web)
@@ -72,6 +74,9 @@ pub struct AuthContext {
     pub pairing_manager: Arc<PairingManager>,
     pub device_store: Arc<DeviceStore>,
     pub security_store: Arc<SecurityStore>,
+    pub invitation_manager: Arc<crate::gateway::security::InvitationManager>,
+    pub guest_session_manager: Arc<crate::gateway::security::GuestSessionManager>,
+    pub event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
     pub require_auth: bool,
 }
 
@@ -82,6 +87,9 @@ impl AuthContext {
         pairing_manager: Arc<PairingManager>,
         device_store: Arc<DeviceStore>,
         security_store: Arc<SecurityStore>,
+        invitation_manager: Arc<crate::gateway::security::InvitationManager>,
+        guest_session_manager: Arc<crate::gateway::security::GuestSessionManager>,
+        event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
         require_auth: bool,
     ) -> Self {
         Self {
@@ -89,6 +97,9 @@ impl AuthContext {
             pairing_manager,
             device_store,
             security_store,
+            invitation_manager,
+            guest_session_manager,
+            event_bus,
             require_auth,
         }
     }
@@ -116,6 +127,7 @@ pub async fn handle_connect(
         },
         _ => ConnectParams {
             token: None,
+            invitation_token: None,
             device_name: None,
             device_type: None,
             device_id: None,
@@ -231,6 +243,87 @@ pub async fn handle_connect(
         } else {
             debug!("Invalid token format (expected token:signature)");
             // Token invalid, fall through to pairing
+        }
+    }
+
+    // Case 1.5: Guest invitation token - activate and create session
+    if let Some(invitation_token) = &params.invitation_token {
+        match ctx.invitation_manager.activate_invitation(invitation_token) {
+            Ok(guest_token) => {
+                // Generate a unique session ID
+                let session_id = uuid::Uuid::new_v4().to_string();
+                let connection_id = "pending".to_string(); // Will be updated by server
+
+                // Get guest name from scope or use default
+                let guest_name = guest_token
+                    .scope
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| "Guest".to_string());
+
+                // Register guest session
+                let session = ctx.guest_session_manager.register_session(
+                    session_id.clone(),
+                    guest_token.guest_id.clone(),
+                    guest_name.clone(),
+                    connection_id,
+                    guest_token.scope.clone(),
+                );
+
+                // Emit session connected event
+                let event = crate::gateway::event_bus::TopicEvent {
+                    topic: "guest.session.connected".to_string(),
+                    data: serde_json::json!({
+                        "session_id": session.session_id,
+                        "guest_id": session.guest_id,
+                        "guest_name": session.guest_name,
+                        "connected_at": session.connected_at
+                    }),
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                };
+                let _ = ctx.event_bus.publish_json(&event);
+
+                info!(
+                    guest_id = %guest_token.guest_id,
+                    session_id = %session_id,
+                    "Guest session created via invitation"
+                );
+
+                // Return session info (no persistent token for guests)
+                return JsonRpcResponse::success(
+                    request.id,
+                    json!(ConnectResult {
+                        token: format!("guest:{}:{}", session_id, guest_token.token),
+                        device_id: format!("guest-{}", guest_token.guest_id),
+                        permissions: guest_token
+                            .scope
+                            .allowed_tools
+                            .iter()
+                            .map(|t| format!("tool:{}", t))
+                            .collect(),
+                        expires_at: guest_token
+                            .scope
+                            .expires_at
+                            .and_then(|ts| chrono::DateTime::from_timestamp_millis(ts))
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_else(|| {
+                                (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
+                            }),
+                        manifest_accepted: params.manifest.is_some(),
+                    }),
+                );
+            }
+            Err(e) => {
+                debug!(error = %e, "Invalid invitation token");
+                return JsonRpcResponse::error(
+                    request.id,
+                    -32001,
+                    format!("Invalid invitation: {}", e),
+                );
+            }
         }
     }
 
