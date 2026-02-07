@@ -26,7 +26,7 @@ pub mod policy;
 pub mod thinking;
 
 // Re-export commonly used types at crate root
-pub use auth::{GuestScope, Role};
+pub use auth::{GuestScope, IdentityContext, Role};
 pub use discovery::DiscoveredInstance;
 pub use events::{
     ConfigChangedEvent, EnhancedRunSummary, RunSummary, StreamEvent, ToolErrorItem, ToolResult,
