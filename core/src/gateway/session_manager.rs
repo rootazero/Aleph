@@ -5,11 +5,13 @@
 
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
 
 use super::router::SessionKey;
+use aleph_protocol::{IdentityContext, Role, GuestScope};
 
 /// Session message stored in database
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +34,109 @@ pub struct SessionMetadata {
     pub message_count: i64,
     pub total_tokens: i64,
     pub auto_reset_at: Option<i64>,
+}
+
+/// Session identity metadata stored in database
+///
+/// This structure is serialized to JSON and stored in the `sessions.metadata` column.
+/// It contains the frozen identity and permission snapshot for the session.
+///
+/// # Backward Compatibility
+///
+/// Old sessions with `metadata=NULL` or unparseable JSON will use `Default::default()`
+/// which creates an Owner session. This ensures backward compatibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionIdentityMeta {
+    /// Role of the session owner
+    pub role: Role,
+
+    /// Identity ID ("owner" or guest_id)
+    pub identity_id: String,
+
+    /// Guest scope (frozen at session creation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<GuestScope>,
+
+    /// Source channel
+    pub source_channel: String,
+
+    /// Custom metadata (preserved from old format)
+    #[serde(flatten)]
+    pub custom: HashMap<String, serde_json::Value>,
+}
+
+impl Default for SessionIdentityMeta {
+    fn default() -> Self {
+        Self {
+            role: Role::Owner,
+            identity_id: "owner".to_string(),
+            scope: None,
+            source_channel: "unknown".to_string(),
+            custom: HashMap::new(),
+        }
+    }
+}
+
+impl SessionIdentityMeta {
+    /// Create identity metadata for an Owner session
+    pub fn owner(source_channel: impl Into<String>) -> Self {
+        Self {
+            role: Role::Owner,
+            identity_id: "owner".to_string(),
+            scope: None,
+            source_channel: source_channel.into(),
+            custom: HashMap::new(),
+        }
+    }
+
+    /// Create identity metadata for a Guest session
+    pub fn guest(
+        guest_id: impl Into<String>,
+        scope: GuestScope,
+        source_channel: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: Role::Guest,
+            identity_id: guest_id.into(),
+            scope: Some(scope),
+            source_channel: source_channel.into(),
+            custom: HashMap::new(),
+        }
+    }
+
+    /// Parse from JSON string (with fallback to default)
+    pub fn from_json_str(json: Option<&str>) -> Self {
+        json.and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default()
+    }
+
+    /// Serialize to JSON string
+    pub fn to_json_string(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    /// Convert to IdentityContext for a specific request
+    pub fn to_identity_context(&self, session_key: String) -> IdentityContext {
+        match self.role {
+            Role::Owner => IdentityContext::owner(session_key, self.source_channel.clone()),
+            Role::Guest => {
+                let scope = self.scope.clone().unwrap_or_else(|| GuestScope {
+                    allowed_tools: vec![],
+                    expires_at: None,
+                    display_name: None,
+                });
+                IdentityContext::guest(
+                    session_key,
+                    self.identity_id.clone(),
+                    scope,
+                    self.source_channel.clone(),
+                )
+            }
+            Role::Anonymous => {
+                IdentityContext::anonymous(session_key, self.source_channel.clone())
+            }
+        }
+    }
 }
 
 /// Session manager configuration
@@ -627,5 +732,99 @@ mod tests {
 
         let agent1_only = manager.list_sessions(Some("agent1")).await.unwrap();
         assert_eq!(agent1_only.len(), 2);
+    }
+
+    #[test]
+    fn test_session_identity_meta_default() {
+        let meta = SessionIdentityMeta::default();
+        assert_eq!(meta.role, Role::Owner);
+        assert_eq!(meta.identity_id, "owner");
+        assert!(meta.scope.is_none());
+        assert_eq!(meta.source_channel, "unknown");
+    }
+
+    #[test]
+    fn test_session_identity_meta_owner_factory() {
+        let meta = SessionIdentityMeta::owner("cli");
+        assert_eq!(meta.role, Role::Owner);
+        assert_eq!(meta.identity_id, "owner");
+        assert!(meta.scope.is_none());
+        assert_eq!(meta.source_channel, "cli");
+    }
+
+    #[test]
+    fn test_session_identity_meta_guest_factory() {
+        let scope = GuestScope {
+            allowed_tools: vec!["translate".to_string()],
+            expires_at: Some(2000),
+            display_name: Some("Test Guest".to_string()),
+        };
+
+        let meta = SessionIdentityMeta::guest("guest-123", scope.clone(), "telegram");
+        assert_eq!(meta.role, Role::Guest);
+        assert_eq!(meta.identity_id, "guest-123");
+        assert_eq!(meta.scope, Some(scope));
+        assert_eq!(meta.source_channel, "telegram");
+    }
+
+    #[test]
+    fn test_session_identity_meta_json_roundtrip() {
+        let scope = GuestScope {
+            allowed_tools: vec!["tool1".to_string(), "tool2".to_string()],
+            expires_at: None,
+            display_name: None,
+        };
+
+        let meta = SessionIdentityMeta::guest("guest-456", scope, "web");
+        let json = meta.to_json_string().unwrap();
+        let parsed = SessionIdentityMeta::from_json_str(Some(&json));
+
+        assert_eq!(parsed.role, meta.role);
+        assert_eq!(parsed.identity_id, meta.identity_id);
+        assert_eq!(parsed.scope, meta.scope);
+        assert_eq!(parsed.source_channel, meta.source_channel);
+    }
+
+    #[test]
+    fn test_session_identity_meta_from_null_json() {
+        let meta = SessionIdentityMeta::from_json_str(None);
+        assert_eq!(meta.role, Role::Owner); // Default
+        assert_eq!(meta.identity_id, "owner");
+    }
+
+    #[test]
+    fn test_session_identity_meta_from_invalid_json() {
+        let meta = SessionIdentityMeta::from_json_str(Some("{invalid json}"));
+        assert_eq!(meta.role, Role::Owner); // Fallback to default
+    }
+
+    #[test]
+    fn test_session_identity_meta_to_identity_context_owner() {
+        let meta = SessionIdentityMeta::owner("cli");
+        let ctx = meta.to_identity_context("session:main".to_string());
+
+        assert_eq!(ctx.session_key, "session:main");
+        assert_eq!(ctx.role, Role::Owner);
+        assert_eq!(ctx.identity_id, "owner");
+        assert_eq!(ctx.source_channel, "cli");
+        assert!(ctx.scope.is_none());
+    }
+
+    #[test]
+    fn test_session_identity_meta_to_identity_context_guest() {
+        let scope = GuestScope {
+            allowed_tools: vec!["translate".to_string()],
+            expires_at: Some(3000),
+            display_name: Some("Guest".to_string()),
+        };
+
+        let meta = SessionIdentityMeta::guest("guest-789", scope.clone(), "telegram");
+        let ctx = meta.to_identity_context("session:guest".to_string());
+
+        assert_eq!(ctx.session_key, "session:guest");
+        assert_eq!(ctx.role, Role::Guest);
+        assert_eq!(ctx.identity_id, "guest-789");
+        assert_eq!(ctx.source_channel, "telegram");
+        assert_eq!(ctx.scope, Some(scope));
     }
 }
