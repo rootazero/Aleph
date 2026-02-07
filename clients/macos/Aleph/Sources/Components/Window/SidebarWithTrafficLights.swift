@@ -200,7 +200,8 @@ struct SidebarWithTrafficLights: View {
             NavigationItemConfig(tab: .skills, iconName: "wand.and.stars", titleKey: "settings.skills.title"),
             NavigationItemConfig(tab: .plugins, iconName: "puzzlepiece.extension", titleKey: "settings.plugins.title"),
             NavigationItemConfig(tab: .security, iconName: "lock.shield", titleKey: "settings.security.title"),
-            NavigationItemConfig(tab: .policies, iconName: "gearshape.2", titleKey: "settings.policies.title")
+            NavigationItemConfig(tab: .policies, iconName: "gearshape.2", titleKey: "settings.policies.title"),
+            NavigationItemConfig(tab: .guests, iconName: "person.2.badge.key", titleKey: "settings.guests.title")
         ]
     }
 }
@@ -232,6 +233,7 @@ private struct NavigationItemConfig {
         case .plugins: return "Plugins"
         case .security: return "Security"
         case .policies: return "Policies"
+        case .guests: return "Guests"
         }
     }
 }

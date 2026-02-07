@@ -24,6 +24,7 @@ enum SettingsTab: Hashable {
     case plugins     // Claude Code compatible plugins
     case security    // File operations & code execution permissions
     case policies
+    case guests      // Guest access management
 }
 
 // MARK: - UTType Extension

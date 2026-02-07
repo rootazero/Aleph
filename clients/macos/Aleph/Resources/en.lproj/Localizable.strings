@@ -979,6 +979,10 @@
 "settings.policies.readonly" = "Read-only";
 "settings.policies.fallback_levels" = "Fallback Safety Levels";
 
+// MARK: - Settings Window - Guests Tab
+"settings.guests.title" = "Guests";
+"settings.guests.description" = "Manage guest access and invitations";
+
 // Runtime update notifications
 "notification.runtime_updates_title" = "Runtime Updates Available";
 "notification.runtime_update_single" = "%@ can be updated to %@";

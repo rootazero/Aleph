@@ -146,6 +146,8 @@ struct RootContentView: View {
             return L("settings.security.title")
         case .policies:
             return L("settings.policies.title")
+        case .guests:
+            return L("settings.guests.title")
         }
     }
 
@@ -176,6 +178,8 @@ struct RootContentView: View {
             return L("settings.security.description")
         case .policies:
             return L("settings.policies.description")
+        case .guests:
+            return L("settings.guests.description")
         }
     }
 
@@ -316,6 +320,15 @@ struct RootContentView: View {
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Policies settings requires AlephCore initialization")
+            }
+
+        case .guests:
+            // core used for guests settings
+            if let core = core {
+                GuestsSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
+                    .id(configReloadTrigger)
+            } else {
+                placeholderView("Guest management requires AlephCore initialization")
             }
         }
     }

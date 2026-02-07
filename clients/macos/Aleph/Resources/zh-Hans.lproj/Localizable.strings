@@ -1038,3 +1038,8 @@
 "result.errors" = "错误";
 "result.reasoning" = "推理";
 "button.close" = "关闭";
+
+// MARK: - Settings Window - Guests Tab
+"settings.guests.title" = "访客管理";
+"settings.guests.description" = "管理访客访问权限和邀请";
+
