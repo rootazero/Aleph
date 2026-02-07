@@ -202,6 +202,7 @@ cucumber = { version = "0.21", features = ["macros"] }
 tempfile = "3.8"
 filetime = "0.2"
 serial_test = "3.0"
+aleph-sdk = { path = "../clients/shared" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 accessibility-sys = "0.1"
