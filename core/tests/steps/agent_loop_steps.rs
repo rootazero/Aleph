@@ -64,7 +64,7 @@ struct MockExecutor;
 
 #[async_trait]
 impl ActionExecutor for MockExecutor {
-    async fn execute(&self, action: &Action) -> ActionResult {
+    async fn execute(&self, action: &Action, _identity: &aleph_protocol::IdentityContext) -> ActionResult {
         match action {
             Action::ToolCall { tool_name, .. } => ActionResult::ToolSuccess {
                 output: json!({"tool": tool_name, "result": "success"}),
@@ -269,11 +269,18 @@ async fn when_run_loop(w: &mut AlephWorld, request: String) {
 
     let callback = CollectingCallback::new();
 
+    // Create Owner identity for test
+    let identity = aleph_protocol::IdentityContext::owner(
+        "test-session".to_string(),
+        "test".to_string(),
+    );
+
     let result = agent_loop
         .run(
             request,
             RequestContext::empty(),
             vec![],
+            identity,
             &callback,
             None,
             None,
@@ -303,11 +310,18 @@ async fn when_run_loop_with_event_bus(w: &mut AlephWorld) {
 
     let agent_loop = AgentLoop::with_event_bus(thinker, executor, compressor, config, event_bus);
 
+    // Create Owner identity for test
+    let identity = aleph_protocol::IdentityContext::owner(
+        "test-session".to_string(),
+        "test".to_string(),
+    );
+
     let result = agent_loop
         .run(
             "Test request".to_string(),
             RequestContext::empty(),
             vec![],
+            identity,
             NoOpLoopCallback,
             None,
             None,
@@ -340,11 +354,18 @@ async fn when_run_loop_with_overflow(w: &mut AlephWorld) {
     let agent_loop =
         AgentLoop::with_unified_session(thinker, executor, compressor, config, None, detector);
 
+    // Create Owner identity for test
+    let identity = aleph_protocol::IdentityContext::owner(
+        "test-session".to_string(),
+        "test".to_string(),
+    );
+
     let result = agent_loop
         .run(
             "Test request".to_string(),
             RequestContext::empty(),
             vec![],
+            identity,
             NoOpLoopCallback,
             None,
             None,
