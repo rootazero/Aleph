@@ -17,6 +17,7 @@ mod core;
 mod dreaming;
 mod facts;
 mod memory_ops;
+pub mod migration;
 pub mod resilience;
 mod retention;
 
