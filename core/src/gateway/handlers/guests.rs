@@ -11,6 +11,7 @@
 //! | guests.revokeInvitation | Revokes a pending invitation by token |
 //! | guests.listSessions | Lists all active guest sessions |
 //! | guests.terminateSession | Terminates an active guest session |
+//! | guests.getActivityLogs | Retrieves activity logs for guest sessions with filtering |
 //!
 //! These handlers require an InvitationManager and GuestSessionManager to be wired at Gateway initialization.
 
@@ -20,7 +21,10 @@ use std::sync::Arc;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::event_bus::{GatewayEventBus, TopicEvent};
-use crate::gateway::security::{GuestSessionManager, InvitationManager};
+use crate::gateway::security::{
+    ActivityLogQuery, ActivityLogQueryResult, ActivityStatus, ActivityType, GuestSessionManager,
+    InvitationManager,
+};
 use aleph_protocol::{CreateInvitationRequest, Invitation};
 
 /// Shared invitation manager for handlers
@@ -323,6 +327,32 @@ pub struct TerminateSessionResponse {
     pub success: bool,
 }
 
+/// Request for guests.getActivityLogs
+#[derive(Debug, Clone, Deserialize)]
+pub struct GetActivityLogsRequest {
+    /// Session ID to query (required)
+    pub session_id: String,
+    /// Filter by activity type (optional, serialized string like "ToolCall", "RpcRequest")
+    pub activity_type: Option<String>,
+    /// Filter by status (optional)
+    pub status: Option<ActivityStatus>,
+    /// Maximum number of results (default: 100)
+    pub limit: Option<usize>,
+    /// Offset for pagination (default: 0)
+    pub offset: Option<usize>,
+    /// Start time filter (Unix milliseconds, optional)
+    pub start_time: Option<i64>,
+    /// End time filter (Unix milliseconds, optional)
+    pub end_time: Option<i64>,
+}
+
+/// Response for guests.getActivityLogs
+#[derive(Debug, Clone, Serialize)]
+pub struct GetActivityLogsResponse {
+    /// Query results with logs and pagination info
+    pub result: ActivityLogQueryResult,
+}
+
 /// Handle guests.listSessions - lists all active guest sessions
 ///
 /// Returns an array of all active guest sessions with connection details.
@@ -463,6 +493,120 @@ pub async fn handle_terminate_session(
             request.id,
             INTERNAL_ERROR,
             format!("Failed to terminate session: {}", e),
+        ),
+    }
+}
+
+/// Handle guests.getActivityLogs - retrieves activity logs for guest sessions
+///
+/// Returns activity logs with optional filtering by session ID, activity type, and status.
+/// Supports pagination with limit and offset parameters.
+///
+/// # Example Request
+///
+/// ```json
+/// {
+///     "jsonrpc": "2.0",
+///     "method": "guests.getActivityLogs",
+///     "params": {
+///         "session_id": "550e8400-e29b-41d4-a716-446655440000",
+///         "limit": 50,
+///         "offset": 0
+///     },
+///     "id": 1
+/// }
+/// ```
+///
+/// # Example Response
+///
+/// ```json
+/// {
+///     "jsonrpc": "2.0",
+///     "result": {
+///         "result": {
+///             "logs": [
+///                 {
+///                     "id": "log-123",
+///                     "session_id": "550e8400-e29b-41d4-a716-446655440000",
+///                     "guest_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+///                     "activity_type": {
+///                         "ToolCall": {
+///                             "tool_name": "translate"
+///                         }
+///                     },
+///                     "timestamp": 1735689600000,
+///                     "details": {
+///                         "input": "Hello",
+///                         "output": "你好"
+///                     },
+///                     "status": "Success",
+///                     "error": null
+///                 }
+///             ],
+///             "total": 1,
+///             "limit": 50,
+///             "offset": 0
+///         }
+///     },
+///     "id": 1
+/// }
+/// ```
+pub async fn handle_get_activity_logs(
+    request: JsonRpcRequest,
+    session_manager: SharedGuestSessionManager,
+) -> JsonRpcResponse {
+    // Parse request parameters
+    let params = match &request.params {
+        Some(params) => params,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing required parameter: params".to_string(),
+            );
+        }
+    };
+
+    let query_request: GetActivityLogsRequest = match serde_json::from_value(params.clone()) {
+        Ok(r) => r,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Invalid parameters: {}", e),
+            );
+        }
+    };
+
+    // Build query
+    let mut query = ActivityLogQuery::new()
+        .with_limit(query_request.limit.unwrap_or(100))
+        .with_offset(query_request.offset.unwrap_or(0));
+
+    if let Some(activity_type) = query_request.activity_type {
+        query = query.with_activity_type(activity_type);
+    }
+
+    if let Some(status) = query_request.status {
+        query = query.with_status(status);
+    }
+
+    if let (Some(start), Some(end)) = (query_request.start_time, query_request.end_time) {
+        query = query.with_time_range(start, end);
+    }
+
+    // Query activity logs
+    let activity_logger = session_manager.activity_logger();
+    let result = activity_logger.query_logs(&query_request.session_id, &query);
+
+    let response = GetActivityLogsResponse { result };
+
+    match serde_json::to_value(&response) {
+        Ok(value) => JsonRpcResponse::success(request.id, value),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize response: {}", e),
         ),
     }
 }
