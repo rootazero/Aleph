@@ -203,6 +203,7 @@ tempfile = "3.8"
 filetime = "0.2"
 serial_test = "3.0"
 aleph-sdk = { path = "../clients/shared" }
+aleph-protocol = { path = "../shared/protocol" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 accessibility-sys = "0.1"

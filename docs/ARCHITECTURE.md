@@ -334,6 +334,219 @@ platforms/tauri/
 
 ---
 
+## Identity Context Flow
+
+### Overview
+
+IdentityContext is an immutable identity snapshot that flows through the entire execution chain, enabling identity-based permission enforcement at the tool execution level.
+
+### Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Identity Context Flow                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. Session Creation                                             │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  SessionManager                                           │  │
+│  │  ┌────────────────────────────────────────────────────┐  │  │
+│  │  │ Owner Session:                                      │  │  │
+│  │  │   metadata = SessionIdentityMeta {                  │  │  │
+│  │  │     role: Owner,                                    │  │  │
+│  │  │     identity_id: \"owner\",                           │  │  │
+│  │  │     scope: None                                     │  │  │
+│  │  │   }                                                 │  │  │
+│  │  │                                                     │  │  │
+│  │  │ Guest Session:                                      │  │  │
+│  │  │   metadata = SessionIdentityMeta {                  │  │  │
+│  │  │     role: Guest,                                    │  │  │
+│  │  │     identity_id: \"guest-123\",                       │  │  │
+│  │  │     scope: Some(GuestScope {                        │  │  │
+│  │  │       allowed_tools: [\"translate\"],                │  │  │
+│  │  │       expires_at: Some(1735689600)                  │  │  │
+│  │  │     })                                              │  │  │
+│  │  │   }                                                 │  │  │
+│  │  └────────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                           │                                      │
+│                           ▼                                      │
+│  2. Request Processing                                           │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  ExecutionEngine                                          │  │
+│  │  ┌────────────────────────────────────────────────────┐  │  │
+│  │  │ let identity = session_manager                      │  │  │
+│  │  │     .get_identity_context(&session_key, \"gateway\")  │  │  │
+│  │  │     .await?;                                        │  │  │
+│  │  │                                                     │  │  │
+│  │  │ // IdentityContext {                               │  │  │
+│  │  │ //   request_id: \"req-456\",                        │  │  │
+│  │  │ //   session_key: \"session-123\",                   │  │  │
+│  │  │ //   role: Guest,                                  │  │  │
+│  │  │ //   identity_id: \"guest-123\",                     │  │  │
+│  │  │ //   scope: Some(GuestScope { ... }),              │  │  │
+│  │  │ //   created_at: 1735689000,                       │  │  │
+│  │  │ //   source_channel: \"gateway\"                     │  │  │
+│  │  │ // }                                               │  │  │
+│  │  └────────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                           │                                      │
+│                           ▼                                      │
+│  3. Agent Loop Execution                                         │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  AgentLoop::run(                                          │  │
+│  │      request,                                             │  │
+│  │      context,                                             │  │
+│  │      tools,                                               │  │
+│  │      identity,  // ← IdentityContext passed here         │  │
+│  │      callback,                                            │  │
+│  │      abort_signal,                                        │  │
+│  │      initial_history                                      │  │
+│  │  )                                                        │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                           │                                      │
+│                           ▼                                      │
+│  4. Tool Execution                                               │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  Executor::execute(&action, &identity)                    │  │
+│  │  ┌────────────────────────────────────────────────────┐  │  │
+│  │  │ // Normalize tool name                             │  │  │
+│  │  │ let normalized = normalize_tool_name(tool_name);   │  │  │
+│  │  │                                                     │  │  │
+│  │  │ // Check permission                                │  │  │
+│  │  │ let result = PolicyEngine::check_tool_permission(  │  │  │
+│  │  │     &identity,                                     │  │  │
+│  │  │     &normalized                                    │  │  │
+│  │  │ );                                                 │  │  │
+│  │  │                                                     │  │  │
+│  │  │ match result {                                     │  │  │
+│  │  │     Allowed => execute_tool(...),                  │  │  │
+│  │  │     Denied { reason } => ToolError { error: reason }│  │  │
+│  │  │ }                                                  │  │  │
+│  │  └────────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                           │                                      │
+│                           ▼                                      │
+│  5. Permission Check                                             │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  PolicyEngine::check_tool_permission                      │  │
+│  │  ┌────────────────────────────────────────────────────┐  │  │
+│  │  │ match identity.role {                              │  │  │
+│  │  │     Role::Owner => Allowed,                        │  │  │
+│  │  │                                                     │  │  │
+│  │  │     Role::Guest => {                               │  │  │
+│  │  │         // Check scope                             │  │  │
+│  │  │         if scope.is_none() {                       │  │  │
+│  │  │             return Denied { \"no scope\" };          │  │  │
+│  │  │         }                                          │  │  │
+│  │  │                                                     │  │  │
+│  │  │         // Check expiration                        │  │  │
+│  │  │         if is_expired() {                          │  │  │
+│  │  │             return Denied { \"expired\" };           │  │  │
+│  │  │         }                                          │  │  │
+│  │  │                                                     │  │  │
+│  │  │         // Check tool permission                   │  │  │
+│  │  │         if allowed_tools.contains(tool_name) {     │  │  │
+│  │  │             Allowed                                │  │  │
+│  │  │         } else {                                   │  │  │
+│  │  │             Denied { \"not in scope\" }              │  │  │
+│  │  │         }                                          │  │  │
+│  │  │     }                                              │  │  │
+│  │  │                                                     │  │  │
+│  │  │     Role::Anonymous => Denied { \"auth required\" }  │  │  │
+│  │  │ }                                                  │  │  │
+│  │  └────────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Example: Owner Request
+
+```rust
+// 1. Owner creates session (default)
+let session_key = "owner-session-1";
+let metadata = SessionIdentityMeta::owner("gateway");
+
+// 2. Request arrives
+let identity = session_manager.get_identity_context(session_key, "gateway").await?;
+// identity.role = Role::Owner
+
+// 3. Execute tool
+let action = Action::ToolCall {
+    tool_name: "shell_exec".to_string(),
+    arguments: json!({"command": "ls"}),
+};
+
+let result = executor.execute(&action, &identity).await;
+// Result: ToolSuccess (Owner bypasses all checks)
+```
+
+### Example: Guest Request
+
+```rust
+// 1. Guest activates invitation
+let invitation = manager.create_invitation(CreateInvitationRequest {
+    guest_name: "Alice".to_string(),
+    scope: GuestScope {
+        allowed_tools: vec!["translate".to_string()],
+        expires_at: Some(now + 3600),
+        display_name: Some("Alice".to_string()),
+    },
+})?;
+
+let guest_token = manager.activate_invitation(&invitation.token)?;
+
+// 2. Guest creates session
+// SessionManager stores metadata with guest scope
+
+// 3. Request arrives
+let identity = session_manager.get_identity_context(session_key, "gateway").await?;
+// identity.role = Role::Guest
+// identity.scope = Some(GuestScope { allowed_tools: ["translate"], ... })
+
+// 4. Execute allowed tool
+let action1 = Action::ToolCall {
+    tool_name: "translate".to_string(),
+    arguments: json!({"text": "Hello"}),
+};
+
+let result1 = executor.execute(&action1, &identity).await;
+// Result: ToolSuccess (tool in allowed_tools)
+
+// 5. Execute denied tool
+let action2 = Action::ToolCall {
+    tool_name: "shell_exec".to_string(),
+    arguments: json!({"command": "ls"}),
+};
+
+let result2 = executor.execute(&action2, &identity).await;
+// Result: ToolError { error: "Tool 'shell_exec' not in guest 'guest-123' scope" }
+```
+
+### Key Components
+
+| Component | Location | Responsibility |
+|-----------|----------|----------------|
+| **IdentityContext** | `shared/protocol/src/auth.rs` | Immutable identity snapshot |
+| **SessionIdentityMeta** | `core/src/gateway/session_manager.rs` | Persistent identity metadata |
+| **PolicyEngine** | `core/src/gateway/security/policy_engine.rs` | Stateless permission checker |
+| **InvitationManager** | `core/src/gateway/security/invitation_manager.rs` | Guest invitation lifecycle |
+| **SessionManager** | `core/src/gateway/session_manager.rs` | Identity construction |
+| **ExecutionEngine** | `core/src/gateway/execution_engine.rs` | Identity injection |
+| **AgentLoop** | `core/src/agent_loop/agent_loop.rs` | Identity propagation |
+| **Executor** | `core/src/executor/` | Permission enforcement |
+
+### Security Properties
+
+1. **Immutability**: IdentityContext cannot be modified after creation
+2. **Frozen Permissions**: Guest scope is frozen at session creation time
+3. **Stateless Checks**: PolicyEngine has no mutable state
+4. **Certificate of Authority**: Identity is constructed once and passed down
+5. **Fail-Safe**: Missing or invalid metadata defaults to Owner (backward compatible)
+
+---
+
 ## See Also
 
 - [Agent System](AGENT_SYSTEM.md) - Agent loop internals
