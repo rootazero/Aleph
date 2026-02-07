@@ -45,6 +45,8 @@ pub struct ConnectionState {
     pub reverse_rpc: Option<Arc<ReverseRpcManager>>,
     /// Channel sender for sending requests to the client
     pub client_sender: Option<tokio::sync::mpsc::Sender<JsonRpcRequest>>,
+    /// Guest session ID (set for guest connections)
+    pub guest_session_id: Option<String>,
 }
 
 impl ConnectionState {
@@ -59,6 +61,7 @@ impl ConnectionState {
             manifest: None,
             reverse_rpc: None,
             client_sender: None,
+            guest_session_id: None,
         }
     }
 
@@ -77,6 +80,7 @@ impl ConnectionState {
             manifest: None,
             reverse_rpc: Some(reverse_rpc),
             client_sender: Some(client_sender),
+            guest_session_id: None,
         }
     }
 
@@ -181,6 +185,8 @@ pub struct GatewayServer {
     connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
     /// Subscription manager for per-connection event filtering
     subscription_manager: Arc<SubscriptionManager>,
+    /// Guest session manager for tracking guest connections
+    guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
     /// Protocol file watcher for hot-reload (None if watching disabled/failed)
     #[allow(dead_code)]
     protocol_watcher: Option<Debouncer<RecommendedWatcher, FileIdMap>>,
@@ -206,6 +212,7 @@ impl GatewayServer {
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             subscription_manager: Arc::new(SubscriptionManager::new()),
+            guest_session_manager: None,
             protocol_watcher,
         }
     }
@@ -228,6 +235,7 @@ impl GatewayServer {
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             subscription_manager: Arc::new(SubscriptionManager::new()),
+            guest_session_manager: None,
             protocol_watcher,
         }
     }
@@ -254,6 +262,11 @@ impl GatewayServer {
     /// Get a reference to the event bus for publishing events
     pub fn event_bus(&self) -> &Arc<GatewayEventBus> {
         &self.event_bus
+    }
+
+    /// Set the guest session manager
+    pub fn set_guest_session_manager(&mut self, manager: Arc<crate::gateway::security::GuestSessionManager>) {
+        self.guest_session_manager = Some(manager);
     }
 
     /// Get the current number of active connections
@@ -288,6 +301,7 @@ impl GatewayServer {
                     let event_bus = self.event_bus.clone();
                     let connections = self.connections.clone();
                     let subscription_manager = self.subscription_manager.clone();
+                    let guest_session_manager = self.guest_session_manager.clone();
                     let require_auth = self.config.require_auth;
 
                     tokio::spawn(async move {
@@ -298,6 +312,7 @@ impl GatewayServer {
                             event_bus,
                             connections,
                             subscription_manager,
+                            guest_session_manager,
                             require_auth,
                         )
                         .await
@@ -349,6 +364,7 @@ impl GatewayServer {
                     let event_bus = self.event_bus.clone();
                     let connections = self.connections.clone();
                     let subscription_manager = self.subscription_manager.clone();
+                    let guest_session_manager = self.guest_session_manager.clone();
                     let require_auth = self.config.require_auth;
 
                     tokio::spawn(async move {
@@ -359,6 +375,7 @@ impl GatewayServer {
                             event_bus,
                             connections,
                             subscription_manager,
+                            guest_session_manager,
                             require_auth,
                         )
                         .await
@@ -383,6 +400,7 @@ async fn handle_connection(
     event_bus: Arc<GatewayEventBus>,
     connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
     subscription_manager: Arc<SubscriptionManager>,
+    guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
     require_auth: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ws_stream = accept_async(stream).await?;
@@ -497,11 +515,30 @@ async fn handle_connection(
                                                     })
                                                     .unwrap_or_default();
 
+                                                // Extract guest_session_id if this is a guest token
+                                                let guest_session_id = resp.result
+                                                    .as_ref()
+                                                    .and_then(|r| r.get("token"))
+                                                    .and_then(|v| v.as_str())
+                                                    .and_then(|token| {
+                                                        // Guest tokens have format: guest:{session_id}:{token}
+                                                        if token.starts_with("guest:") {
+                                                            token.split(':').nth(1).map(String::from)
+                                                        } else {
+                                                            None
+                                                        }
+                                                    });
+
                                                 let mut conns = connections.write().await;
                                                 if let Some(state) = conns.get_mut(&conn_id) {
                                                     state.authenticate(device_id.clone(), permissions);
+                                                    state.guest_session_id = guest_session_id.clone();
                                                     state.first_message = false;
-                                                    info!("Connection {} authenticated (device: {})", conn_id, device_id);
+                                                    if let Some(ref session_id) = guest_session_id {
+                                                        info!("Connection {} authenticated as guest (session: {})", conn_id, session_id);
+                                                    } else {
+                                                        info!("Connection {} authenticated (device: {})", conn_id, device_id);
+                                                    }
                                                 }
                                             }
                                         }
@@ -653,6 +690,45 @@ async fn handle_connection(
     // Cleanup
     {
         let mut conns = connections.write().await;
+
+        // Check if this was a guest session and terminate it
+        if let Some(state) = conns.get(&conn_id) {
+            if let Some(ref session_id) = state.guest_session_id {
+                if let Some(ref manager) = guest_session_manager {
+                    info!("Terminating guest session: {}", session_id);
+
+                    // Get session details before terminating
+                    if let Some(session) = manager.get_session(session_id) {
+                        // Terminate the session
+                        if let Err(e) = manager.terminate_session(session_id) {
+                            warn!("Failed to terminate guest session {}: {}", session_id, e);
+                        }
+
+                        // Emit disconnection event
+                        let event = crate::gateway::event_bus::TopicEvent {
+                            topic: "guest.session.disconnected".to_string(),
+                            data: serde_json::json!({
+                                "session_id": session.session_id,
+                                "guest_id": session.guest_id,
+                                "guest_name": session.guest_name,
+                                "connected_at": session.connected_at,
+                                "disconnected_at": std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis() as u64,
+                                "request_count": session.request_count,
+                            }),
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis() as u64,
+                        };
+                        let _ = event_bus.publish_json(&event);
+                    }
+                }
+            }
+        }
+
         conns.remove(&conn_id);
     }
 
