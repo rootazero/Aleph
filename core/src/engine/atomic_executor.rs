@@ -50,13 +50,8 @@ impl AtomicExecutor {
             AtomicAction::Search { pattern, scope, filters } => {
                 self.execute_search(pattern, scope, filters).await?
             }
-            AtomicAction::Replace { .. } => {
-                // TODO: Implement replace operation
-                AtomicResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some("Replace operation not yet implemented".to_string()),
-                }
+            AtomicAction::Replace { search, replacement, scope, preview, dry_run } => {
+                self.execute_replace(search, replacement, scope, *preview, *dry_run).await?
             }
             AtomicAction::Move { .. } => {
                 // TODO: Implement move operation
@@ -330,6 +325,151 @@ impl AtomicExecutor {
         })
     }
 
+    /// Execute Replace operation
+    async fn execute_replace(
+        &self,
+        pattern: &SearchPattern,
+        replacement: &str,
+        scope: &SearchScope,
+        preview: bool,
+        dry_run: bool,
+    ) -> Result<AtomicResult> {
+        debug!(pattern = ?pattern, replacement = replacement, "Executing replace");
+
+        // First, find all matches using search logic
+        let files = self.collect_files_for_search(scope, &[]).await?;
+
+        if files.is_empty() {
+            return Ok(AtomicResult {
+                success: true,
+                output: "No files found matching the search scope".to_string(),
+                error: None,
+            });
+        }
+
+        // Perform replacement based on pattern type
+        let mut replacements = Vec::new();
+        let mut total_replacements = 0;
+
+        for file in &files {
+            // Skip files that are too large
+            if let Ok(metadata) = tokio::fs::metadata(file).await {
+                if metadata.len() > self.max_file_size {
+                    continue;
+                }
+            }
+
+            // Read file content
+            let content = match tokio::fs::read_to_string(file).await {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            // Perform replacement based on pattern type
+            let new_content = match pattern {
+                SearchPattern::Regex { pattern: regex_str } => {
+                    let regex = Regex::new(regex_str)
+                        .map_err(|e| AlephError::tool(format!("Invalid regex pattern: {}", e)))?;
+                    regex.replace_all(&content, replacement).to_string()
+                }
+                SearchPattern::Fuzzy { text, .. } => {
+                    // Simple case-insensitive replacement
+                    content.replace(text, replacement)
+                }
+                SearchPattern::Ast { .. } => {
+                    return Ok(AtomicResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some("AST-based replacement not yet implemented".to_string()),
+                    });
+                }
+            };
+
+            // Count replacements
+            if content != new_content {
+                let count = match pattern {
+                    SearchPattern::Regex { pattern: regex_str } => {
+                        let regex = Regex::new(regex_str).unwrap();
+                        regex.find_iter(&content).count()
+                    }
+                    SearchPattern::Fuzzy { text, .. } => {
+                        content.matches(text).count()
+                    }
+                    _ => 0,
+                };
+
+                total_replacements += count;
+
+                replacements.push(FileReplacement {
+                    file: file.clone(),
+                    old_content: content.clone(),
+                    new_content: new_content.clone(),
+                    replacement_count: count,
+                });
+
+                // Write back if not dry_run
+                if !dry_run {
+                    tokio::fs::write(file, &new_content).await?;
+                }
+            }
+        }
+
+        // Format output
+        let output = if replacements.is_empty() {
+            "No replacements made".to_string()
+        } else if preview {
+            // Generate preview with diffs
+            let mut preview_output = format!(
+                "Preview: {} replacements in {} files\n\n",
+                total_replacements,
+                replacements.len()
+            );
+
+            for repl in &replacements {
+                preview_output.push_str(&format!(
+                    "File: {}\nReplacements: {}\n",
+                    repl.file.display(),
+                    repl.replacement_count
+                ));
+
+                // Show first few lines of diff
+                let old_lines: Vec<&str> = repl.old_content.lines().collect();
+                let new_lines: Vec<&str> = repl.new_content.lines().collect();
+
+                for (i, (old, new)) in old_lines.iter().zip(new_lines.iter()).enumerate() {
+                    if old != new {
+                        preview_output.push_str(&format!("  Line {}:\n", i + 1));
+                        preview_output.push_str(&format!("    - {}\n", old));
+                        preview_output.push_str(&format!("    + {}\n", new));
+                    }
+                }
+                preview_output.push('\n');
+            }
+
+            preview_output
+        } else {
+            // Summary output
+            let mode = if dry_run { " (dry run)" } else { "" };
+            format!(
+                "Made {} replacements in {} files{}\n{}",
+                total_replacements,
+                replacements.len(),
+                mode,
+                replacements
+                    .iter()
+                    .map(|r| format!("  {}: {} replacements", r.file.display(), r.replacement_count))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        };
+
+        Ok(AtomicResult {
+            success: true,
+            output,
+            error: None,
+        })
+    }
+
     /// Collect files for search based on scope and filters
     async fn collect_files_for_search(
         &self,
@@ -556,6 +696,19 @@ struct SearchMatch {
     match_start: usize,
     /// End position of match in line
     match_end: usize,
+}
+
+/// File replacement result
+#[derive(Debug, Clone)]
+struct FileReplacement {
+    /// File that was modified
+    file: PathBuf,
+    /// Original content
+    old_content: String,
+    /// New content after replacement
+    new_content: String,
+    /// Number of replacements made
+    replacement_count: usize,
 }
 
 /// Result of atomic operation execution
@@ -866,5 +1019,167 @@ mod tests {
         assert!(result.success);
         assert!(result.output.contains("test.rs"));
         assert!(!result.output.contains("test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_replace_regex() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create test files
+        let test_file1 = temp_dir.path().join("test1.txt");
+        fs::write(&test_file1, "Hello world\nHello Rust\nGoodbye\n").unwrap();
+
+        let test_file2 = temp_dir.path().join("test2.txt");
+        fs::write(&test_file2, "Hello everyone\n").unwrap();
+
+        // Replace "Hello" with "Hi"
+        let action = AtomicAction::Replace {
+            search: Box::new(SearchPattern::Regex {
+                pattern: r"Hello".to_string(),
+            }),
+            replacement: "Hi".to_string(),
+            scope: SearchScope::Directory {
+                path: temp_dir.path().to_path_buf(),
+                recursive: false,
+            },
+            preview: false,
+            dry_run: false,
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("Made 3 replacements"));
+        assert!(result.output.contains("2 files"));
+
+        // Verify files were modified
+        let content1 = fs::read_to_string(&test_file1).unwrap();
+        assert_eq!(content1, "Hi world\nHi Rust\nGoodbye\n");
+
+        let content2 = fs::read_to_string(&test_file2).unwrap();
+        assert_eq!(content2, "Hi everyone\n");
+    }
+
+    #[tokio::test]
+    async fn test_execute_replace_dry_run() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create test file
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "Hello world\n").unwrap();
+
+        // Replace with dry_run
+        let action = AtomicAction::Replace {
+            search: Box::new(SearchPattern::Regex {
+                pattern: r"Hello".to_string(),
+            }),
+            replacement: "Hi".to_string(),
+            scope: SearchScope::File {
+                path: test_file.clone(),
+            },
+            preview: false,
+            dry_run: true,
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("(dry run)"));
+
+        // Verify file was NOT modified
+        let content = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(content, "Hello world\n");
+    }
+
+    #[tokio::test]
+    async fn test_execute_replace_preview() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create test file
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "Hello world\nHello Rust\n").unwrap();
+
+        // Replace with preview
+        let action = AtomicAction::Replace {
+            search: Box::new(SearchPattern::Regex {
+                pattern: r"Hello".to_string(),
+            }),
+            replacement: "Hi".to_string(),
+            scope: SearchScope::File {
+                path: test_file.clone(),
+            },
+            preview: true,
+            dry_run: false,
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("Preview:"));
+        assert!(result.output.contains("2 replacements"));
+        assert!(result.output.contains("- Hello"));
+        assert!(result.output.contains("+ Hi"));
+
+        // Verify file WAS modified (preview doesn't prevent modification)
+        let content = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(content, "Hi world\nHi Rust\n");
+    }
+
+    #[tokio::test]
+    async fn test_execute_replace_no_matches() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create test file
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "Hello world\n").unwrap();
+
+        // Replace non-existent pattern
+        let action = AtomicAction::Replace {
+            search: Box::new(SearchPattern::Regex {
+                pattern: r"NOTFOUND".to_string(),
+            }),
+            replacement: "replacement".to_string(),
+            scope: SearchScope::File {
+                path: test_file.clone(),
+            },
+            preview: false,
+            dry_run: false,
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("No replacements made"));
+
+        // Verify file was not modified
+        let content = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(content, "Hello world\n");
+    }
+
+    #[tokio::test]
+    async fn test_execute_replace_fuzzy() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create test file
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "Hello world\nHello Rust\n").unwrap();
+
+        // Fuzzy replace
+        let action = AtomicAction::Replace {
+            search: Box::new(SearchPattern::Fuzzy {
+                text: "Hello".to_string(),
+                threshold: 0.8,
+            }),
+            replacement: "Hi".to_string(),
+            scope: SearchScope::File {
+                path: test_file.clone(),
+            },
+            preview: false,
+            dry_run: false,
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("Made 2 replacements"));
+
+        // Verify file was modified
+        let content = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(content, "Hi world\nHi Rust\n");
     }
 }
