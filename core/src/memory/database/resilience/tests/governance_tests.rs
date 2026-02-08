@@ -439,7 +439,7 @@ fn test_lane_enum() {
     assert_eq!(Lane::Main.to_string(), "main");
     assert_eq!(Lane::Subagent.to_string(), "subagent");
 
-    assert_eq!(Lane::from_str("main"), Lane::Main);
-    assert_eq!(Lane::from_str("subagent"), Lane::Subagent);
-    assert_eq!(Lane::from_str("unknown"), Lane::Subagent); // Default
+    assert_eq!(Lane::from_str_or_default("main"), Lane::Main);
+    assert_eq!(Lane::from_str_or_default("subagent"), Lane::Subagent);
+    assert_eq!(Lane::from_str_or_default("unknown"), Lane::Subagent); // Default
 }

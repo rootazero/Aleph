@@ -475,7 +475,7 @@ impl ComponentLoader {
             disable_model_invocation: frontmatter.disable_model_invocation,
             source_path: prompt_path,
             source: DiscoverySource::Plugin,
-            scope: PromptScope::from_str(&prompt_config.scope),
+            scope: PromptScope::from_str_or_default(&prompt_config.scope),
             bound_tool: None,
         };
 

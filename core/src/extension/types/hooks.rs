@@ -98,11 +98,21 @@ pub enum HookKind {
 }
 
 impl HookKind {
-    pub fn from_str(s: &str) -> Self {
+    /// Parse from string with fallback to Observer
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(HookKind::Observer)
+    }
+}
+
+impl std::str::FromStr for HookKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "interceptor" => HookKind::Interceptor,
-            "resolver" => HookKind::Resolver,
-            _ => HookKind::Observer,
+            "observer" => Ok(HookKind::Observer),
+            "interceptor" => Ok(HookKind::Interceptor),
+            "resolver" => Ok(HookKind::Resolver),
+            _ => Err(format!("Unknown hook kind: {}", s)),
         }
     }
 }
@@ -125,13 +135,9 @@ pub enum HookPriority {
 
 
 impl HookPriority {
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "system" => HookPriority::System,
-            "high" => HookPriority::High,
-            "low" => HookPriority::Low,
-            _ => HookPriority::Normal,
-        }
+    /// Parse from string with fallback to Normal
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(HookPriority::Normal)
     }
 
     pub fn as_i32(&self) -> i32 {
@@ -140,6 +146,20 @@ impl HookPriority {
             HookPriority::High => -100,
             HookPriority::Normal => 0,
             HookPriority::Low => 100,
+        }
+    }
+}
+
+impl std::str::FromStr for HookPriority {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "system" => Ok(HookPriority::System),
+            "high" => Ok(HookPriority::High),
+            "normal" => Ok(HookPriority::Normal),
+            "low" => Ok(HookPriority::Low),
+            _ => Err(format!("Unknown hook priority: {}", s)),
         }
     }
 }
@@ -165,13 +185,22 @@ pub enum PromptScope {
 }
 
 impl PromptScope {
-    pub fn from_str(s: &str) -> Self {
+    /// Parse from string with fallback to System
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(PromptScope::System)
+    }
+}
+
+impl std::str::FromStr for PromptScope {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "system" => PromptScope::System,
-            "tool" => PromptScope::Tool,
-            "standalone" => PromptScope::Standalone,
-            "disabled" => PromptScope::Disabled,
-            _ => PromptScope::System,
+            "system" => Ok(PromptScope::System),
+            "tool" => Ok(PromptScope::Tool),
+            "standalone" => Ok(PromptScope::Standalone),
+            "disabled" => Ok(PromptScope::Disabled),
+            _ => Err(format!("Unknown prompt scope: {}", s)),
         }
     }
 }

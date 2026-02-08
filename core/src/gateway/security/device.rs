@@ -29,14 +29,23 @@ impl DeviceType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    /// Parse from string, returning None for unknown types
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
+impl std::str::FromStr for DeviceType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "macos" => Some(DeviceType::MacOS),
-            "ios" => Some(DeviceType::IOS),
-            "android" => Some(DeviceType::Android),
-            "cli" => Some(DeviceType::CLI),
-            "web" => Some(DeviceType::Web),
-            _ => None,
+            "macos" => Ok(DeviceType::MacOS),
+            "ios" => Ok(DeviceType::IOS),
+            "android" => Ok(DeviceType::Android),
+            "cli" => Ok(DeviceType::CLI),
+            "web" => Ok(DeviceType::Web),
+            _ => Err(format!("Unknown device type: {}", s)),
         }
     }
 }
@@ -61,11 +70,20 @@ impl DeviceRole {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    /// Parse from string, returning None for unknown roles
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
+impl std::str::FromStr for DeviceRole {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "operator" => Some(DeviceRole::Operator),
-            "node" => Some(DeviceRole::Node),
-            _ => None,
+            "operator" => Ok(DeviceRole::Operator),
+            "node" => Ok(DeviceRole::Node),
+            _ => Err(format!("Unknown device role: {}", s)),
         }
     }
 }
@@ -104,10 +122,10 @@ impl From<DeviceRow> for Device {
         Device {
             device_id: row.device_id,
             device_name: row.device_name,
-            device_type: row.device_type.and_then(|s| DeviceType::from_str(&s)),
+            device_type: row.device_type.and_then(|s| DeviceType::from_str_opt(&s)),
             public_key: row.public_key,
             fingerprint: DeviceFingerprint(row.fingerprint),
-            role: DeviceRole::from_str(&row.role).unwrap_or_default(),
+            role: DeviceRole::from_str_opt(&row.role).unwrap_or_default(),
             scopes: row.scopes,
             created_at: row.created_at,
             approved_at: row.approved_at,
@@ -124,16 +142,16 @@ mod tests {
     #[test]
     fn test_device_type_conversion() {
         assert_eq!(DeviceType::MacOS.as_str(), "macos");
-        assert_eq!(DeviceType::from_str("macos"), Some(DeviceType::MacOS));
-        assert_eq!(DeviceType::from_str("MACOS"), Some(DeviceType::MacOS));
-        assert_eq!(DeviceType::from_str("unknown"), None);
+        assert_eq!(DeviceType::from_str_opt("macos"), Some(DeviceType::MacOS));
+        assert_eq!(DeviceType::from_str_opt("MACOS"), Some(DeviceType::MacOS));
+        assert_eq!(DeviceType::from_str_opt("unknown"), None);
     }
 
     #[test]
     fn test_device_role_conversion() {
         assert_eq!(DeviceRole::Operator.as_str(), "operator");
-        assert_eq!(DeviceRole::from_str("operator"), Some(DeviceRole::Operator));
-        assert_eq!(DeviceRole::from_str("NODE"), Some(DeviceRole::Node));
+        assert_eq!(DeviceRole::from_str_opt("operator"), Some(DeviceRole::Operator));
+        assert_eq!(DeviceRole::from_str_opt("NODE"), Some(DeviceRole::Node));
     }
 
     #[test]
