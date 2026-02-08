@@ -16,7 +16,7 @@ use super::execution_adapter::ExecutionAdapter;
 use super::loop_callback_adapter::EventEmittingCallback;
 use super::router::SessionKey;
 
-use crate::agent_loop::{AgentLoop, LoopConfig, LoopResult, RequestContext};
+use crate::agent_loop::{AgentLoop, LoopConfig, LoopResult, RequestContext, RunContext};
 use crate::compressor::NoOpCompressor;
 use crate::dispatcher::UnifiedTool;
 use crate::executor::{RoutedExecutor, SingleStepExecutor, ToolRegistry, ToolRouter};
@@ -556,30 +556,34 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .with_client_context(ctx.manifest, ctx.sender),
             );
             let agent_loop = AgentLoop::new(thinker, routed_executor, compressor, loop_config);
+            let mut run_context = RunContext::new(
+                request.input.clone(),
+                context,
+                allowed_tools,
+                identity.clone(),
+            )
+            .with_abort_signal(abort_rx);
+            if let Some(history) = initial_history {
+                run_context = run_context.with_initial_history(history);
+            }
             agent_loop
-                .run(
-                    request.input.clone(),
-                    context,
-                    allowed_tools,
-                    identity.clone(),
-                    callback.as_ref(),
-                    Some(abort_rx),
-                    initial_history,
-                )
+                .run(run_context, callback.as_ref())
                 .await
         } else {
             debug!(run_id = run_id, "Running agent loop with local executor");
             let agent_loop = AgentLoop::new(thinker, local_executor, compressor, loop_config);
+            let mut run_context = RunContext::new(
+                request.input.clone(),
+                context,
+                allowed_tools,
+                identity.clone(),
+            )
+            .with_abort_signal(abort_rx);
+            if let Some(history) = initial_history {
+                run_context = run_context.with_initial_history(history);
+            }
             agent_loop
-                .run(
-                    request.input.clone(),
-                    context,
-                    allowed_tools,
-                    identity.clone(),
-                    callback.as_ref(),
-                    Some(abort_rx),
-                    initial_history,
-                )
+                .run(run_context, callback.as_ref())
                 .await
         };
 

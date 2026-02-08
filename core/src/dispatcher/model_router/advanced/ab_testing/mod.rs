@@ -208,8 +208,8 @@ mod tests {
             }
         }
 
-        let a_pct = (*counts.get("a").unwrap_or(&0) as f64 / total as f64) * 100.0;
-        let b_pct = (*counts.get("b").unwrap_or(&0) as f64 / total as f64) * 100.0;
+        let a_pct = (*counts.get(&VariantId::new("a")).unwrap_or(&0) as f64 / total as f64) * 100.0;
+        let b_pct = (*counts.get(&VariantId::new("b")).unwrap_or(&0) as f64 / total as f64) * 100.0;
 
         // Should be approximately 70/30 (within 5% tolerance)
         assert!(
@@ -260,7 +260,7 @@ mod tests {
         tracker.record(outcome);
 
         let stats = tracker.get_stats("exp-1").unwrap();
-        let control_stats = stats.get("control").unwrap();
+        let control_stats = stats.get(&VariantId::new("control")).unwrap();
 
         assert_eq!(control_stats.sample_count, 1);
         assert_eq!(
@@ -343,15 +343,15 @@ mod tests {
             if let Some(assignment) =
                 engine.assign(None, None, &request_id, &TaskIntent::GeneralChat, None)
             {
-                let latency = if assignment.variant_id == "control" {
+                let latency = if assignment.variant_id == VariantId::new("control") {
                     100.0 + (i as f64 % 20.0)
                 } else {
                     90.0 + (i as f64 % 20.0)
                 };
 
                 let outcome = ExperimentOutcome::new(
-                    &assignment.experiment_id,
-                    &assignment.variant_id,
+                    assignment.experiment_id.as_str(),
+                    assignment.variant_id.as_str(),
                     &request_id,
                     assignment.model_override.as_deref().unwrap_or("unknown"),
                 )
@@ -365,7 +365,7 @@ mod tests {
         // Get report
         let report = engine.get_report("test-exp").unwrap();
 
-        assert_eq!(report.experiment_id, "test-exp");
+        assert_eq!(report.experiment_id, ExperimentId::new("test-exp"));
         assert_eq!(report.variant_summaries.len(), 2);
         assert!(report.total_samples > 0);
     }

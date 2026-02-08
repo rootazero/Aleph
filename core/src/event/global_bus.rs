@@ -541,7 +541,7 @@ mod tests {
         assert_eq!(bus.subscription_count().await, 0);
 
         // Unsubscribe non-existent (should not panic)
-        bus.unsubscribe(&"non-existent".to_string()).await;
+        bus.unsubscribe(&SubscriptionId::new("non-existent")).await;
     }
 
     #[tokio::test]

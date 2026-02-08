@@ -228,7 +228,7 @@ mod tests {
 
         let answers = result.unwrap();
         assert_eq!(answers.len(), 1);
-        assert_eq!(answers[0], vec!["Option A"]);
+        assert_eq!(answers[0], Answer::new(vec!["Option A".to_string()]));
     }
 
     #[tokio::test]

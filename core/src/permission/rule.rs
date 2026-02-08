@@ -379,17 +379,18 @@ mod tests {
             PermissionRule::ask("bash", "*"),       // General: ask for all bash
             PermissionRule::deny("bash", "rm -rf *"), // Specific: deny rm -rf (after ask)
         ];
+        let ruleset = Ruleset::from_rules(rules);
 
         // Edit should be allowed
-        let result = evaluator.evaluate("edit", "src/main.rs", &[&rules]);
+        let result = evaluator.evaluate("edit", "src/main.rs", &[&ruleset]);
         assert_eq!(result.action, PermissionAction::Allow);
 
         // rm -rf should be denied (matches the later deny rule)
-        let result = evaluator.evaluate("bash", "rm -rf /", &[&rules]);
+        let result = evaluator.evaluate("bash", "rm -rf /", &[&ruleset]);
         assert_eq!(result.action, PermissionAction::Deny);
 
         // Other bash commands should ask (only matches the ask rule)
-        let result = evaluator.evaluate("bash", "git push", &[&rules]);
+        let result = evaluator.evaluate("bash", "git push", &[&ruleset]);
         assert_eq!(result.action, PermissionAction::Ask);
     }
 
@@ -398,8 +399,8 @@ mod tests {
         let evaluator = PermissionEvaluator::new();
 
         // Later rules should win
-        let global = vec![PermissionRule::ask("bash", "*")];
-        let approved = vec![PermissionRule::allow("bash", "git *")];
+        let global = Ruleset::from_rules(vec![PermissionRule::ask("bash", "*")]);
+        let approved = Ruleset::from_rules(vec![PermissionRule::allow("bash", "git *")]);
 
         // With only global rules, should ask
         let result = evaluator.evaluate("bash", "git push", &[&global]);
@@ -413,7 +414,7 @@ mod tests {
     #[test]
     fn test_evaluator_default_ask() {
         let evaluator = PermissionEvaluator::new();
-        let empty: Ruleset = vec![];
+        let empty = Ruleset::new();
 
         // No rules - default to ask
         let result = evaluator.evaluate("unknown", "something", &[&empty]);
@@ -424,11 +425,11 @@ mod tests {
     fn test_disabled_tools() {
         let evaluator = PermissionEvaluator::new();
 
-        let rules = vec![
+        let rules = Ruleset::from_rules(vec![
             PermissionRule::deny("edit", "*"),
             PermissionRule::allow("read", "*"),
             PermissionRule::ask("bash", "*"),
-        ];
+        ]);
 
         let tools = ["edit", "write", "read", "bash"];
         let disabled = evaluator.disabled_tools(&tools, &rules);
