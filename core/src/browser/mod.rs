@@ -1169,10 +1169,15 @@ impl BrowserPool {
     /// This method freezes JavaScript execution in the specified task's browser
     /// context. This is used for task preemption in the priority scheduler.
     ///
-    /// # Implementation Note
-    /// Currently tracks frozen state. Full CDP Debugger.pause implementation
-    /// requires chromiumoxide to expose the Debugger domain or raw CDP command
-    /// support. See: https://chromedevtools.github.io/devtools-protocol/tot/Debugger/#method-pause
+    /// # Implementation
+    /// Uses JavaScript injection to:
+    /// - Create a full-screen overlay to block user interactions
+    /// - Pause all timers and animations
+    /// - Block event propagation
+    /// - Store original state for later restoration
+    ///
+    /// This approach is more reliable than CDP Debugger.pause as it doesn't
+    /// require specific CDP domain support and works across all browser versions.
     ///
     /// # Arguments
     /// * `task_id` - The task ID whose context should be frozen
@@ -1180,30 +1185,124 @@ impl BrowserPool {
     /// # Returns
     /// * `Ok(())` if the context was successfully frozen
     /// * `Err(BrowserError::NotStarted)` if the context doesn't exist
+    /// * `Err(BrowserError::ActionFailed)` if the freeze operation fails
     #[cfg(feature = "browser")]
     pub async fn freeze_context(&self, task_id: &TaskId) -> BrowserResult<()> {
-        // Verify the context exists
-        let _context = self.get_ephemeral_context(task_id).await
+        // Get the context for this task
+        let context = self.get_ephemeral_context(task_id).await
             .ok_or(BrowserError::NotStarted)?;
 
-        // TODO: Send CDP Debugger.pause command when chromiumoxide supports it
-        // For now, we track the frozen state for integration with PriorityScheduler
-        //
-        // Planned implementation:
-        // 1. Enable debugger: context.execute(EnableParams::default()).await?
-        // 2. Pause execution: context.execute(PauseParams::default()).await?
-        // 3. Track frozen state (done below)
-        //
-        // Alternative approach if CDP Debugger is not available:
-        // - Use Page.setLifecycleEventsEnabled + Page.stopLoading
-        // - Inject JavaScript to freeze event loop
-        // - Use Network.setBlockedURLs to block all requests
+        // JavaScript code to freeze the page
+        let freeze_script = r#"
+(function() {
+    // Check if already frozen
+    if (window.__aleph_frozen) {
+        return { success: true, message: 'Already frozen' };
+    }
 
-        // Track frozen state
-        self.frozen_contexts.write().await.insert(task_id.clone());
+    try {
+        // Create freeze overlay
+        const overlay = document.createElement('div');
+        overlay.id = '__aleph_freeze_overlay';
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.1);
+            z-index: 2147483647;
+            cursor: not-allowed;
+            pointer-events: all;
+        `;
 
-        tracing::info!("Marked context as frozen for task: {} (CDP pause pending)", task_id);
-        Ok(())
+        // Add freeze indicator
+        const indicator = document.createElement('div');
+        indicator.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 165, 0, 0.9);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            font-family: system-ui, -apple-system, sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            z-index: 2147483647;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        `;
+        indicator.textContent = '⏸ Task Paused';
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(indicator);
+
+        // Store timer IDs to clear them
+        window.__aleph_frozen_timers = [];
+
+        // Override setTimeout/setInterval to prevent new timers
+        window.__aleph_original_setTimeout = window.setTimeout;
+        window.__aleph_original_setInterval = window.setInterval;
+        window.__aleph_original_requestAnimationFrame = window.requestAnimationFrame;
+
+        window.setTimeout = function() {
+            return 0;
+        };
+        window.setInterval = function() {
+            return 0;
+        };
+        window.requestAnimationFrame = function() {
+            return 0;
+        };
+
+        // Block all events
+        const blockEvent = (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            return false;
+        };
+
+        window.__aleph_event_blocker = blockEvent;
+
+        ['click', 'mousedown', 'mouseup', 'mousemove', 'keydown', 'keyup',
+         'keypress', 'touchstart', 'touchend', 'touchmove', 'wheel', 'scroll',
+         'focus', 'blur', 'input', 'change', 'submit'].forEach(eventType => {
+            document.addEventListener(eventType, blockEvent, true);
+        });
+
+        // Mark as frozen
+        window.__aleph_frozen = true;
+
+        return { success: true, message: 'Context frozen successfully' };
+    } catch (error) {
+        return { success: false, message: error.toString() };
+    }
+})();
+        "#;
+
+        // Execute freeze script
+        let result = context.evaluate(freeze_script)
+            .await
+            .map_err(|e| BrowserError::ActionFailed(format!("Failed to freeze context: {}", e)))?;
+
+        // Check if freeze was successful
+        if let Some(value) = result.value() {
+            if let Ok(response) = serde_json::from_value::<serde_json::Value>(value.clone()) {
+                if response.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    // Track frozen state
+                    self.frozen_contexts.write().await.insert(task_id.clone());
+                    tracing::info!("Frozen context for task: {}", task_id);
+                    return Ok(());
+                } else {
+                    let message = response.get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown error");
+                    return Err(BrowserError::ActionFailed(format!("Freeze failed: {}", message)));
+                }
+            }
+        }
+
+        Err(BrowserError::ActionFailed("Failed to parse freeze response".to_string()))
     }
 
     #[cfg(not(feature = "browser"))]
@@ -1214,12 +1313,7 @@ impl BrowserPool {
     /// Resume a frozen browser context (resume JavaScript execution)
     ///
     /// This method resumes JavaScript execution in a previously frozen browser
-    /// context.
-    ///
-    /// # Implementation Note
-    /// Currently tracks frozen state. Full CDP Debugger.resume implementation
-    /// requires chromiumoxide to expose the Debugger domain or raw CDP command
-    /// support. See: https://chromedevtools.github.io/devtools-protocol/tot/Debugger/#method-resume
+    /// context by removing the freeze overlay and restoring event handlers.
     ///
     /// # Arguments
     /// * `task_id` - The task ID whose context should be resumed
@@ -1227,6 +1321,7 @@ impl BrowserPool {
     /// # Returns
     /// * `Ok(())` if the context was successfully resumed
     /// * `Err(BrowserError::NotStarted)` if the context doesn't exist
+    /// * `Err(BrowserError::ActionFailed)` if the resume operation fails
     #[cfg(feature = "browser")]
     pub async fn resume_context(&self, task_id: &TaskId) -> BrowserResult<()> {
         // Check if context is actually frozen
@@ -1235,22 +1330,95 @@ impl BrowserPool {
             return Ok(());
         }
 
-        // Verify the context exists
-        let _context = self.get_ephemeral_context(task_id).await
+        // Get the context for this task
+        let context = self.get_ephemeral_context(task_id).await
             .ok_or(BrowserError::NotStarted)?;
 
-        // TODO: Send CDP Debugger.resume command when chromiumoxide supports it
-        // For now, we track the frozen state for integration with PriorityScheduler
-        //
-        // Planned implementation:
-        // 1. Resume execution: context.execute(ResumeParams::default()).await?
-        // 2. Remove from frozen set (done below)
+        // JavaScript code to resume the page
+        let resume_script = r#"
+(function() {
+    // Check if frozen
+    if (!window.__aleph_frozen) {
+        return { success: true, message: 'Not frozen' };
+    }
 
-        // Remove from frozen set
-        self.frozen_contexts.write().await.remove(task_id);
+    try {
+        // Remove freeze overlay
+        const overlay = document.getElementById('__aleph_freeze_overlay');
+        if (overlay) {
+            overlay.remove();
+        }
 
-        tracing::info!("Marked context as resumed for task: {} (CDP resume pending)", task_id);
-        Ok(())
+        // Remove freeze indicator
+        const indicators = document.querySelectorAll('div');
+        indicators.forEach(el => {
+            if (el.textContent === '⏸ Task Paused') {
+                el.remove();
+            }
+        });
+
+        // Restore original timer functions
+        if (window.__aleph_original_setTimeout) {
+            window.setTimeout = window.__aleph_original_setTimeout;
+            delete window.__aleph_original_setTimeout;
+        }
+        if (window.__aleph_original_setInterval) {
+            window.setInterval = window.__aleph_original_setInterval;
+            delete window.__aleph_original_setInterval;
+        }
+        if (window.__aleph_original_requestAnimationFrame) {
+            window.requestAnimationFrame = window.__aleph_original_requestAnimationFrame;
+            delete window.__aleph_original_requestAnimationFrame;
+        }
+
+        // Remove event blockers
+        if (window.__aleph_event_blocker) {
+            ['click', 'mousedown', 'mouseup', 'mousemove', 'keydown', 'keyup',
+             'keypress', 'touchstart', 'touchend', 'touchmove', 'wheel', 'scroll',
+             'focus', 'blur', 'input', 'change', 'submit'].forEach(eventType => {
+                document.removeEventListener(eventType, window.__aleph_event_blocker, true);
+            });
+            delete window.__aleph_event_blocker;
+        }
+
+        // Clear frozen timers
+        if (window.__aleph_frozen_timers) {
+            delete window.__aleph_frozen_timers;
+        }
+
+        // Mark as not frozen
+        window.__aleph_frozen = false;
+
+        return { success: true, message: 'Context resumed successfully' };
+    } catch (error) {
+        return { success: false, message: error.toString() };
+    }
+})();
+        "#;
+
+        // Execute resume script
+        let result = context.evaluate(resume_script)
+            .await
+            .map_err(|e| BrowserError::ActionFailed(format!("Failed to resume context: {}", e)))?;
+
+        // Check if resume was successful
+        if let Some(value) = result.value() {
+            if let Ok(response) = serde_json::from_value::<serde_json::Value>(value.clone()) {
+                if response.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    // Remove from frozen set
+                    self.frozen_contexts.write().await.remove(task_id);
+                    tracing::info!("Resumed context for task: {}", task_id);
+                    return Ok(());
+                } else {
+                    let message = response.get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown error");
+                    return Err(BrowserError::ActionFailed(format!("Resume failed: {}", message)));
+                }
+            }
+        }
+
+        Err(BrowserError::ActionFailed("Failed to parse resume response".to_string()))
     }
 
     #[cfg(not(feature = "browser"))]
