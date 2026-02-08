@@ -2,10 +2,12 @@
 //!
 //! Implements shell command execution with timeout and security checks
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use async_trait::async_trait;
-use crate::error::Result;
+use tokio::process::Command;
+use crate::error::{AlephError, Result};
 
 use super::{BashOps, ExecutorContext, AtomicResult};
 
@@ -38,7 +40,40 @@ impl BashOpsHandler {
 #[async_trait]
 impl BashOps for BashOpsHandler {
     async fn execute(&self, command: &str, cwd: Option<&str>) -> Result<AtomicResult> {
-        // TODO: Implementation will be extracted from atomic_executor.rs
-        todo!("BashOpsHandler::execute")
+        let work_dir = if let Some(cwd) = cwd {
+            PathBuf::from(cwd)
+        } else {
+            self.context.working_dir.clone()
+        };
+
+        // Execute command with timeout
+        let output = tokio::time::timeout(
+            self.command_timeout,
+            Command::new("sh")
+                .arg("-c")
+                .arg(command)
+                .current_dir(&work_dir)
+                .output(),
+        )
+        .await
+        .map_err(|_| AlephError::tool(format!("Command timeout after {:?}", self.command_timeout)))?
+        .map_err(|e| AlephError::tool(format!("Failed to execute command: {}", e)))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if output.status.success() {
+            Ok(AtomicResult {
+                success: true,
+                output: stdout,
+                error: None,
+            })
+        } else {
+            Ok(AtomicResult {
+                success: false,
+                output: stdout,
+                error: Some(stderr),
+            })
+        }
     }
 }
