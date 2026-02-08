@@ -85,7 +85,7 @@ impl VectorDatabase {
                     id: row.get(0)?,
                     task_id: row.get(1)?,
                     step_index: row.get(2)?,
-                    role: TraceRole::from_str(&row.get::<_, String>(3)?),
+                    role: TraceRole::from_str_or_default(&row.get::<_, String>(3)?),
                     content_json: row.get(4)?,
                     timestamp: row.get(5)?,
                 })
@@ -118,7 +118,7 @@ impl VectorDatabase {
                     id: row.get(0)?,
                     task_id: row.get(1)?,
                     step_index: row.get(2)?,
-                    role: TraceRole::from_str(&row.get::<_, String>(3)?),
+                    role: TraceRole::from_str_or_default(&row.get::<_, String>(3)?),
                     content_json: row.get(4)?,
                     timestamp: row.get(5)?,
                 })
@@ -153,7 +153,7 @@ impl VectorDatabase {
                     id: row.get(0)?,
                     task_id: row.get(1)?,
                     step_index: row.get(2)?,
-                    role: TraceRole::from_str(&row.get::<_, String>(3)?),
+                    role: TraceRole::from_str_or_default(&row.get::<_, String>(3)?),
                     content_json: row.get(4)?,
                     timestamp: row.get(5)?,
                 })

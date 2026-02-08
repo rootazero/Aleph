@@ -483,8 +483,8 @@ impl ExtensionManager {
 
                 HookConfig {
                     event,
-                    kind: HookKind::from_str(&h.kind),
-                    priority: HookPriority::from_str(&h.priority),
+                    kind: HookKind::from_str_or_default(&h.kind),
+                    priority: HookPriority::from_str_or_default(&h.priority),
                     matcher: h.filter.clone(),
                     actions: vec![], // Runtime hooks use handler, not actions
                     plugin_name: plugin_name.to_string(),

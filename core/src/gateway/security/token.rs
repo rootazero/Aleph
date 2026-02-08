@@ -155,7 +155,7 @@ impl TokenManager {
         Ok(TokenValidation {
             token_id: token_row.token_id,
             device_id: token_row.device_id,
-            role: DeviceRole::from_str(&token_row.role).unwrap_or_default(),
+            role: DeviceRole::from_str_opt(&token_row.role).unwrap_or_default(),
             scopes: token_row.scopes,
             remaining_ms: token_row.expires_at - now,
         })

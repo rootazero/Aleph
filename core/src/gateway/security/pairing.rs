@@ -90,7 +90,7 @@ impl From<PairingRequestRow> for PairingRequest {
                 request_id: row.request_id,
                 code: row.code,
                 device_name: row.device_name.unwrap_or_else(|| "Unknown".into()),
-                device_type: row.device_type.and_then(|s| DeviceType::from_str(&s)),
+                device_type: row.device_type.and_then(|s| DeviceType::from_str_opt(&s)),
                 public_key,
                 fingerprint,
                 remote_addr: row.remote_addr,

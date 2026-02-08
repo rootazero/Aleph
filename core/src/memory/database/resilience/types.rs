@@ -48,23 +48,31 @@ impl fmt::Display for TaskStatus {
 }
 
 impl TaskStatus {
-    /// Parse status from database string
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "pending" => TaskStatus::Pending,
-            "running" => TaskStatus::Running,
-            "completed" => TaskStatus::Completed,
-            "failed" => TaskStatus::Failed,
-            "interrupted" => TaskStatus::Interrupted,
-            "idle" => TaskStatus::Idle,
-            "swapped" => TaskStatus::Swapped,
-            _ => TaskStatus::Pending,
-        }
+    /// Parse status from database string with fallback to Pending
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(TaskStatus::Pending)
     }
 
     /// Check if task can be auto-resumed on restart
     pub fn is_recoverable(&self) -> bool {
         matches!(self, TaskStatus::Running | TaskStatus::Interrupted)
+    }
+}
+
+impl std::str::FromStr for TaskStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "pending" => Ok(TaskStatus::Pending),
+            "running" => Ok(TaskStatus::Running),
+            "completed" => Ok(TaskStatus::Completed),
+            "failed" => Ok(TaskStatus::Failed),
+            "interrupted" => Ok(TaskStatus::Interrupted),
+            "idle" => Ok(TaskStatus::Idle),
+            "swapped" => Ok(TaskStatus::Swapped),
+            _ => Err(format!("Unknown task status: {}", s)),
+        }
     }
 }
 
@@ -88,11 +96,20 @@ impl fmt::Display for RiskLevel {
 }
 
 impl RiskLevel {
-    /// Parse risk level from database string
-    pub fn from_str(s: &str) -> Self {
+    /// Parse risk level from database string with fallback to Low
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(RiskLevel::Low)
+    }
+}
+
+impl std::str::FromStr for RiskLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "high" => RiskLevel::High,
-            _ => RiskLevel::Low,
+            "low" => Ok(RiskLevel::Low),
+            "high" => Ok(RiskLevel::High),
+            _ => Err(format!("Unknown risk level: {}", s)),
         }
     }
 }
@@ -117,11 +134,20 @@ impl fmt::Display for Lane {
 }
 
 impl Lane {
-    /// Parse lane from database string
-    pub fn from_str(s: &str) -> Self {
+    /// Parse lane from database string with fallback to Subagent
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Lane::Subagent)
+    }
+}
+
+impl std::str::FromStr for Lane {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "main" => Lane::Main,
-            _ => Lane::Subagent,
+            "main" => Ok(Lane::Main),
+            "subagent" => Ok(Lane::Subagent),
+            _ => Err(format!("Unknown lane: {}", s)),
         }
     }
 }
@@ -149,13 +175,21 @@ impl fmt::Display for SessionStatus {
 }
 
 impl SessionStatus {
-    /// Parse session status from database string
-    pub fn from_str(s: &str) -> Self {
+    /// Parse session status from database string with fallback to Active
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(SessionStatus::Active)
+    }
+}
+
+impl std::str::FromStr for SessionStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "active" => SessionStatus::Active,
-            "idle" => SessionStatus::Idle,
-            "swapped" => SessionStatus::Swapped,
-            _ => SessionStatus::Active,
+            "active" => Ok(SessionStatus::Active),
+            "idle" => Ok(SessionStatus::Idle),
+            "swapped" => Ok(SessionStatus::Swapped),
+            _ => Err(format!("Unknown session status: {}", s)),
         }
     }
 }
@@ -180,11 +214,20 @@ impl fmt::Display for TraceRole {
 }
 
 impl TraceRole {
-    /// Parse role from database string
-    pub fn from_str(s: &str) -> Self {
+    /// Parse role from database string with fallback to Assistant
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(TraceRole::Assistant)
+    }
+}
+
+impl std::str::FromStr for TraceRole {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "tool" => TraceRole::Tool,
-            _ => TraceRole::Assistant,
+            "assistant" => Ok(TraceRole::Assistant),
+            "tool" => Ok(TraceRole::Tool),
+            _ => Err(format!("Unknown trace role: {}", s)),
         }
     }
 }
@@ -537,9 +580,9 @@ mod tests {
 
     #[test]
     fn test_task_status_from_str() {
-        assert_eq!(TaskStatus::from_str("RUNNING"), TaskStatus::Running);
-        assert_eq!(TaskStatus::from_str("interrupted"), TaskStatus::Interrupted);
-        assert_eq!(TaskStatus::from_str("unknown"), TaskStatus::Pending);
+        assert_eq!(TaskStatus::from_str_or_default("RUNNING"), TaskStatus::Running);
+        assert_eq!(TaskStatus::from_str_or_default("interrupted"), TaskStatus::Interrupted);
+        assert_eq!(TaskStatus::from_str_or_default("unknown"), TaskStatus::Pending);
     }
 
     #[test]

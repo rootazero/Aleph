@@ -61,7 +61,7 @@ impl VectorDatabase {
                 Ok(SubagentSession {
                     id: row.get(0)?,
                     agent_type: row.get(1)?,
-                    status: SessionStatus::from_str(&row.get::<_, String>(2)?),
+                    status: SessionStatus::from_str_or_default(&row.get::<_, String>(2)?),
                     context_path: row.get(3)?,
                     parent_session_id: row.get(4)?,
                     created_at: row.get(5)?,
@@ -120,7 +120,7 @@ impl VectorDatabase {
                 Ok(SubagentSession {
                     id: row.get(0)?,
                     agent_type: row.get(1)?,
-                    status: SessionStatus::from_str(&row.get::<_, String>(2)?),
+                    status: SessionStatus::from_str_or_default(&row.get::<_, String>(2)?),
                     context_path: row.get(3)?,
                     parent_session_id: row.get(4)?,
                     created_at: row.get(5)?,
