@@ -4,7 +4,7 @@
 //! for the WebChat UI.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum::{
     body::Body,
@@ -116,7 +116,7 @@ pub fn is_static_file_request(uri: &Uri) -> bool {
 
 /// Serve a static file from the directory
 pub async fn serve_static_file(
-    static_dir: &PathBuf,
+    static_dir: &Path,
     uri: &Uri,
     fallback_file: Option<&str>,
 ) -> Response<Body> {

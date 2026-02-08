@@ -15,7 +15,7 @@ use crate::error::{AlephError, Result};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -55,7 +55,7 @@ pub enum ExtensionChangeType {
 
 impl ExtensionChangeType {
     /// Determine change type from file path
-    fn from_path(path: &PathBuf) -> Self {
+    fn from_path(path: &Path) -> Self {
         let path_str = path.to_string_lossy();
 
         if path_str.contains("/skills/") {
@@ -177,7 +177,7 @@ impl ExtensionWatcher {
                         let changed_paths: Vec<PathBuf> = events
                             .iter()
                             .flat_map(|e| e.paths.iter().cloned())
-                            .filter(Self::should_watch_file)
+                            .filter(|p| Self::should_watch_file(p))
                             .collect::<HashSet<_>>()
                             .into_iter()
                             .collect();
@@ -189,7 +189,7 @@ impl ExtensionWatcher {
                         // Determine change type from first path
                         let change_type = changed_paths
                             .first()
-                            .map(ExtensionChangeType::from_path)
+                            .map(|p| ExtensionChangeType::from_path(p))
                             .unwrap_or(ExtensionChangeType::Unknown);
 
                         debug!(
@@ -258,7 +258,7 @@ impl ExtensionWatcher {
     }
 
     /// Check if a file should be watched based on extension
-    fn should_watch_file(path: &PathBuf) -> bool {
+    fn should_watch_file(path: &Path) -> bool {
         path.extension()
             .and_then(|ext| ext.to_str())
             .map(|ext| WATCHED_EXTENSIONS.contains(&ext))

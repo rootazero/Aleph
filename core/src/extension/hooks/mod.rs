@@ -478,7 +478,7 @@ impl HookExecutor {
         &self,
         prompt: &str,
         context: &HookContext,
-        plugin_root: &PathBuf,
+        plugin_root: &Path,
     ) -> Result<ActionResult, ExtensionError> {
         let resolved = substitute_variables(prompt, context, plugin_root);
 
