@@ -18,6 +18,58 @@ use super::session_sync::SessionSync;
 use super::state::{LoopState, LoopStep, RequestContext};
 use super::traits::{ActionExecutor, CompressorTrait, ThinkerTrait};
 
+/// Context for running an agent loop execution
+///
+/// This struct encapsulates all the parameters needed to run an agent loop,
+/// providing better API ergonomics and making it easier to add new parameters
+/// without breaking existing code.
+#[derive(Clone)]
+pub struct RunContext {
+    /// The user's request/query
+    pub request: String,
+    /// Request context (session info, metadata, etc.)
+    pub context: RequestContext,
+    /// Available tools for this loop
+    pub tools: Vec<crate::dispatcher::UnifiedTool>,
+    /// Identity context (user, device, permissions)
+    pub identity: IdentityContext,
+    /// Optional signal to abort the loop
+    pub abort_signal: Option<watch::Receiver<bool>>,
+    /// Optional history summary from previous conversations
+    pub initial_history: Option<String>,
+}
+
+impl RunContext {
+    /// Create a new RunContext with required parameters
+    pub fn new(
+        request: impl Into<String>,
+        context: RequestContext,
+        tools: Vec<crate::dispatcher::UnifiedTool>,
+        identity: IdentityContext,
+    ) -> Self {
+        Self {
+            request: request.into(),
+            context,
+            tools,
+            identity,
+            abort_signal: None,
+            initial_history: None,
+        }
+    }
+
+    /// Set the abort signal
+    pub fn with_abort_signal(mut self, signal: watch::Receiver<bool>) -> Self {
+        self.abort_signal = Some(signal);
+        self
+    }
+
+    /// Set the initial history
+    pub fn with_initial_history(mut self, history: impl Into<String>) -> Self {
+        self.initial_history = Some(history.into());
+        self
+    }
+}
+
 /// Agent Loop - Main execution controller
 ///
 /// The AgentLoop manages the observe-think-act-feedback cycle,
