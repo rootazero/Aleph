@@ -46,8 +46,78 @@ impl PermissionRule {
     }
 }
 
-/// A collection of permission rules
-pub type Ruleset = Vec<PermissionRule>;
+/// A collection of permission rules (newtype for type safety)
+#[derive(Debug, Clone)]
+pub struct Ruleset(Vec<PermissionRule>);
+
+impl Ruleset {
+    /// Create a new empty ruleset
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Create from a vector of rules
+    pub fn from_rules(rules: Vec<PermissionRule>) -> Self {
+        Self(rules)
+    }
+
+    /// Add a rule to the ruleset
+    pub fn add(&mut self, rule: PermissionRule) {
+        self.0.push(rule);
+    }
+
+    /// Get the rules
+    pub fn rules(&self) -> &[PermissionRule] {
+        &self.0
+    }
+
+    /// Convert into inner Vec
+    pub fn into_inner(self) -> Vec<PermissionRule> {
+        self.0
+    }
+
+    /// Check if empty
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Get the number of rules
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl Default for Ruleset {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl From<Vec<PermissionRule>> for Ruleset {
+    fn from(v: Vec<PermissionRule>) -> Self {
+        Self(v)
+    }
+}
+
+impl std::ops::Deref for Ruleset {
+    type Target = [PermissionRule];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Ruleset {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl std::iter::FromIterator<PermissionRule> for Ruleset {
+    fn from_iter<T: IntoIterator<Item = PermissionRule>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
 
 /// Mapping from tool names to permission types
 #[derive(Debug, Clone, Default)]

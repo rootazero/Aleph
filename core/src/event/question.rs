@@ -143,7 +143,54 @@ impl QuestionRequest {
 }
 
 /// Single question's answer (may contain multiple selections)
-pub type Answer = Vec<String>;
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Answer(Vec<String>);
+
+impl Answer {
+    /// Create a new Answer
+    pub fn new(selections: Vec<String>) -> Self {
+        Self(selections)
+    }
+
+    /// Create from a single selection
+    pub fn single(selection: impl Into<String>) -> Self {
+        Self(vec![selection.into()])
+    }
+
+    /// Get the selections
+    pub fn selections(&self) -> &[String] {
+        &self.0
+    }
+
+    /// Convert into inner Vec
+    pub fn into_inner(self) -> Vec<String> {
+        self.0
+    }
+
+    /// Check if empty
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Get the number of selections
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl From<Vec<String>> for Answer {
+    fn from(v: Vec<String>) -> Self {
+        Self(v)
+    }
+}
+
+impl std::ops::Deref for Answer {
+    type Target = [String];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 /// User's reply to a question request
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,7 +207,7 @@ impl QuestionReply {
 
     /// Create a single-answer reply
     pub fn single(answer: Vec<String>) -> Self {
-        Self::new(vec![answer])
+        Self::new(vec![Answer::from(answer)])
     }
 
     /// Create a simple single-selection reply
