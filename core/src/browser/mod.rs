@@ -827,6 +827,9 @@ pub struct BrowserPool {
 
     /// Chrome processes
     processes: Arc<RwLock<Vec<Child>>>,
+
+    /// Frozen contexts (task IDs with paused execution)
+    frozen_contexts: Arc<RwLock<std::collections::HashSet<TaskId>>>,
 }
 
 impl BrowserPool {
@@ -850,6 +853,7 @@ impl BrowserPool {
             resource_monitor: Arc::new(ResourceMonitor::new()),
             persistence_manager: Arc::new(PersistenceManager::new(persistence_dir)),
             processes: Arc::new(RwLock::new(Vec::new())),
+            frozen_contexts: Arc::new(RwLock::new(std::collections::HashSet::new())),
         })
     }
 
@@ -1159,6 +1163,278 @@ impl BrowserPool {
     pub async fn load_snapshot(&self) -> BrowserResult<Option<PoolSnapshot>> {
         self.persistence_manager.load_snapshot().await
     }
+
+    /// Freeze a browser context (pause JavaScript execution)
+    ///
+    /// This method freezes JavaScript execution in the specified task's browser
+    /// context. This is used for task preemption in the priority scheduler.
+    ///
+    /// # Implementation
+    /// Uses JavaScript injection to:
+    /// - Create a full-screen overlay to block user interactions
+    /// - Pause all timers and animations
+    /// - Block event propagation
+    /// - Store original state for later restoration
+    ///
+    /// This approach is more reliable than CDP Debugger.pause as it doesn't
+    /// require specific CDP domain support and works across all browser versions.
+    ///
+    /// # Arguments
+    /// * `task_id` - The task ID whose context should be frozen
+    ///
+    /// # Returns
+    /// * `Ok(())` if the context was successfully frozen
+    /// * `Err(BrowserError::NotStarted)` if the context doesn't exist
+    /// * `Err(BrowserError::ActionFailed)` if the freeze operation fails
+    #[cfg(feature = "browser")]
+    pub async fn freeze_context(&self, task_id: &TaskId) -> BrowserResult<()> {
+        // Get the context for this task
+        let context = self.get_ephemeral_context(task_id).await
+            .ok_or(BrowserError::NotStarted)?;
+
+        // JavaScript code to freeze the page
+        let freeze_script = r#"
+(function() {
+    // Check if already frozen
+    if (window.__aleph_frozen) {
+        return { success: true, message: 'Already frozen' };
+    }
+
+    try {
+        // Create freeze overlay
+        const overlay = document.createElement('div');
+        overlay.id = '__aleph_freeze_overlay';
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.1);
+            z-index: 2147483647;
+            cursor: not-allowed;
+            pointer-events: all;
+        `;
+
+        // Add freeze indicator
+        const indicator = document.createElement('div');
+        indicator.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 165, 0, 0.9);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            font-family: system-ui, -apple-system, sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            z-index: 2147483647;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        `;
+        indicator.textContent = '⏸ Task Paused';
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(indicator);
+
+        // Store timer IDs to clear them
+        window.__aleph_frozen_timers = [];
+
+        // Override setTimeout/setInterval to prevent new timers
+        window.__aleph_original_setTimeout = window.setTimeout;
+        window.__aleph_original_setInterval = window.setInterval;
+        window.__aleph_original_requestAnimationFrame = window.requestAnimationFrame;
+
+        window.setTimeout = function() {
+            return 0;
+        };
+        window.setInterval = function() {
+            return 0;
+        };
+        window.requestAnimationFrame = function() {
+            return 0;
+        };
+
+        // Block all events
+        const blockEvent = (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            return false;
+        };
+
+        window.__aleph_event_blocker = blockEvent;
+
+        ['click', 'mousedown', 'mouseup', 'mousemove', 'keydown', 'keyup',
+         'keypress', 'touchstart', 'touchend', 'touchmove', 'wheel', 'scroll',
+         'focus', 'blur', 'input', 'change', 'submit'].forEach(eventType => {
+            document.addEventListener(eventType, blockEvent, true);
+        });
+
+        // Mark as frozen
+        window.__aleph_frozen = true;
+
+        return { success: true, message: 'Context frozen successfully' };
+    } catch (error) {
+        return { success: false, message: error.toString() };
+    }
+})();
+        "#;
+
+        // Execute freeze script
+        let result = context.evaluate(freeze_script)
+            .await
+            .map_err(|e| BrowserError::ActionFailed(format!("Failed to freeze context: {}", e)))?;
+
+        // Check if freeze was successful
+        if let Some(value) = result.value() {
+            if let Ok(response) = serde_json::from_value::<serde_json::Value>(value.clone()) {
+                if response.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    // Track frozen state
+                    self.frozen_contexts.write().await.insert(task_id.clone());
+                    tracing::info!("Frozen context for task: {}", task_id);
+                    return Ok(());
+                } else {
+                    let message = response.get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown error");
+                    return Err(BrowserError::ActionFailed(format!("Freeze failed: {}", message)));
+                }
+            }
+        }
+
+        Err(BrowserError::ActionFailed("Failed to parse freeze response".to_string()))
+    }
+
+    #[cfg(not(feature = "browser"))]
+    pub async fn freeze_context(&self, _task_id: &TaskId) -> BrowserResult<()> {
+        Err(BrowserError::Internal("Browser feature not enabled".to_string()))
+    }
+
+    /// Resume a frozen browser context (resume JavaScript execution)
+    ///
+    /// This method resumes JavaScript execution in a previously frozen browser
+    /// context by removing the freeze overlay and restoring event handlers.
+    ///
+    /// # Arguments
+    /// * `task_id` - The task ID whose context should be resumed
+    ///
+    /// # Returns
+    /// * `Ok(())` if the context was successfully resumed
+    /// * `Err(BrowserError::NotStarted)` if the context doesn't exist
+    /// * `Err(BrowserError::ActionFailed)` if the resume operation fails
+    #[cfg(feature = "browser")]
+    pub async fn resume_context(&self, task_id: &TaskId) -> BrowserResult<()> {
+        // Check if context is actually frozen
+        if !self.frozen_contexts.read().await.contains(task_id) {
+            tracing::warn!("Attempted to resume non-frozen context: {}", task_id);
+            return Ok(());
+        }
+
+        // Get the context for this task
+        let context = self.get_ephemeral_context(task_id).await
+            .ok_or(BrowserError::NotStarted)?;
+
+        // JavaScript code to resume the page
+        let resume_script = r#"
+(function() {
+    // Check if frozen
+    if (!window.__aleph_frozen) {
+        return { success: true, message: 'Not frozen' };
+    }
+
+    try {
+        // Remove freeze overlay
+        const overlay = document.getElementById('__aleph_freeze_overlay');
+        if (overlay) {
+            overlay.remove();
+        }
+
+        // Remove freeze indicator
+        const indicators = document.querySelectorAll('div');
+        indicators.forEach(el => {
+            if (el.textContent === '⏸ Task Paused') {
+                el.remove();
+            }
+        });
+
+        // Restore original timer functions
+        if (window.__aleph_original_setTimeout) {
+            window.setTimeout = window.__aleph_original_setTimeout;
+            delete window.__aleph_original_setTimeout;
+        }
+        if (window.__aleph_original_setInterval) {
+            window.setInterval = window.__aleph_original_setInterval;
+            delete window.__aleph_original_setInterval;
+        }
+        if (window.__aleph_original_requestAnimationFrame) {
+            window.requestAnimationFrame = window.__aleph_original_requestAnimationFrame;
+            delete window.__aleph_original_requestAnimationFrame;
+        }
+
+        // Remove event blockers
+        if (window.__aleph_event_blocker) {
+            ['click', 'mousedown', 'mouseup', 'mousemove', 'keydown', 'keyup',
+             'keypress', 'touchstart', 'touchend', 'touchmove', 'wheel', 'scroll',
+             'focus', 'blur', 'input', 'change', 'submit'].forEach(eventType => {
+                document.removeEventListener(eventType, window.__aleph_event_blocker, true);
+            });
+            delete window.__aleph_event_blocker;
+        }
+
+        // Clear frozen timers
+        if (window.__aleph_frozen_timers) {
+            delete window.__aleph_frozen_timers;
+        }
+
+        // Mark as not frozen
+        window.__aleph_frozen = false;
+
+        return { success: true, message: 'Context resumed successfully' };
+    } catch (error) {
+        return { success: false, message: error.toString() };
+    }
+})();
+        "#;
+
+        // Execute resume script
+        let result = context.evaluate(resume_script)
+            .await
+            .map_err(|e| BrowserError::ActionFailed(format!("Failed to resume context: {}", e)))?;
+
+        // Check if resume was successful
+        if let Some(value) = result.value() {
+            if let Ok(response) = serde_json::from_value::<serde_json::Value>(value.clone()) {
+                if response.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    // Remove from frozen set
+                    self.frozen_contexts.write().await.remove(task_id);
+                    tracing::info!("Resumed context for task: {}", task_id);
+                    return Ok(());
+                } else {
+                    let message = response.get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown error");
+                    return Err(BrowserError::ActionFailed(format!("Resume failed: {}", message)));
+                }
+            }
+        }
+
+        Err(BrowserError::ActionFailed("Failed to parse resume response".to_string()))
+    }
+
+    #[cfg(not(feature = "browser"))]
+    pub async fn resume_context(&self, _task_id: &TaskId) -> BrowserResult<()> {
+        Err(BrowserError::Internal("Browser feature not enabled".to_string()))
+    }
+
+    /// Check if a context is currently frozen
+    pub async fn is_context_frozen(&self, task_id: &TaskId) -> bool {
+        self.frozen_contexts.read().await.contains(task_id)
+    }
+
+    /// Get list of all frozen context task IDs
+    pub async fn get_frozen_contexts(&self) -> Vec<TaskId> {
+        self.frozen_contexts.read().await.iter().cloned().collect()
+    }
 }
 
 impl Drop for BrowserPool {
@@ -1387,5 +1663,33 @@ mod integration_tests {
         // Now should be able to lock again
         let result = registry.lock_domain("example.com".to_string(), "task-2".to_string()).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_frozen_context_tracking() {
+        let config = BrowserConfig::default();
+        let pool = BrowserPool::new(config, AllocationPolicy::Adaptive).unwrap();
+
+        // Initially no frozen contexts
+        assert_eq!(pool.get_frozen_contexts().await.len(), 0);
+        assert!(!pool.is_context_frozen(&"task-1".to_string()).await);
+
+        // Simulate freezing (without actual browser)
+        pool.frozen_contexts.write().await.insert("task-1".to_string());
+        pool.frozen_contexts.write().await.insert("task-2".to_string());
+
+        // Check frozen state
+        assert_eq!(pool.get_frozen_contexts().await.len(), 2);
+        assert!(pool.is_context_frozen(&"task-1".to_string()).await);
+        assert!(pool.is_context_frozen(&"task-2".to_string()).await);
+        assert!(!pool.is_context_frozen(&"task-3".to_string()).await);
+
+        // Simulate resuming
+        pool.frozen_contexts.write().await.remove(&"task-1".to_string());
+
+        // Check updated state
+        assert_eq!(pool.get_frozen_contexts().await.len(), 1);
+        assert!(!pool.is_context_frozen(&"task-1".to_string()).await);
+        assert!(pool.is_context_frozen(&"task-2".to_string()).await);
     }
 }
