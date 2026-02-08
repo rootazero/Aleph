@@ -46,6 +46,7 @@ pub mod ripple;
 pub mod evolution;
 pub mod consolidation;
 pub mod performance_monitor;
+pub mod cortex;
 
 #[cfg(test)]
 mod integration_tests;
@@ -101,4 +102,8 @@ pub use evolution::{
 pub use consolidation::{
     ConsolidationAnalyzer, ConsolidationConfig, ConsolidatedFact, FrequentFact, ProfileCategory,
     UserProfile,
+};
+pub use cortex::{
+    DistillationMode, DistillationTask, EnvironmentContext, EvolutionStatus, Experience,
+    ExperienceBuilder, ParameterConfig, ParameterMapping, ReplayMatch,
 };
