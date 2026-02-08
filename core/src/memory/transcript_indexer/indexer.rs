@@ -7,7 +7,9 @@ use super::config::TranscriptIndexerConfig;
 
 /// Near-realtime transcript indexer
 pub struct TranscriptIndexer {
+    #[allow(dead_code)]
     database: Arc<VectorDatabase>,
+    #[allow(dead_code)]
     embedder: Arc<SmartEmbedder>,
     config: TranscriptIndexerConfig,
 }

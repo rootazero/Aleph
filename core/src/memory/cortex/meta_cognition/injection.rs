@@ -18,6 +18,7 @@ use std::sync::{Arc, RwLock};
 /// Uses heuristic rules for fast extraction, with optional LLM fallback
 /// for complex cases (currently stubbed).
 pub struct TagExtractor {
+    #[allow(dead_code)]
     llm_config: LLMConfig,
 }
 

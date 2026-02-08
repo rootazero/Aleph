@@ -21,8 +21,10 @@ struct SearchMatch {
     /// Content of the matching line
     line_content: String,
     /// Start position of match in line
+    #[allow(dead_code)]
     match_start: usize,
     /// End position of match in line
+    #[allow(dead_code)]
     match_end: usize,
 }
 

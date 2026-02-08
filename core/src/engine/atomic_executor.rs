@@ -42,6 +42,7 @@ pub struct AtomicResult {
 /// Delegates operations to specialized handlers using composition pattern.
 pub struct AtomicExecutor {
     /// Shared execution context
+    #[allow(dead_code)]
     context: Arc<ExecutorContext>,
 
     /// File operations handler

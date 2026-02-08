@@ -297,6 +297,7 @@ impl Default for RuleLearner {
 
 /// Simple parameter extractor that uses the learned action directly
 struct SimpleExtractor {
+    #[allow(dead_code)]
     action: AtomicAction,
 }
 

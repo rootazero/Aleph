@@ -112,9 +112,13 @@ impl Default for LLMConfig {
 /// and generates optimization suggestions with medium priority (50) and lower
 /// confidence (0.6) compared to reactive anchors.
 pub struct CriticAgent {
+    #[allow(dead_code)]
     db: Arc<VectorDatabase>,
+    #[allow(dead_code)]
     anchor_store: Arc<RwLock<AnchorStore>>,
+    #[allow(dead_code)]
     scan_config: CriticScanConfig,
+    #[allow(dead_code)]
     llm_config: LLMConfig,
     provider: Arc<dyn AiProvider>,
 }

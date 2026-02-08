@@ -113,6 +113,7 @@ pub struct PriorityScheduler {
     config: PrioritySchedulerConfig,
 
     /// Underlying DAG scheduler for dependency resolution
+    #[allow(dead_code)]
     dag_scheduler: DagScheduler,
 
     /// Priority queues (one per tier)
