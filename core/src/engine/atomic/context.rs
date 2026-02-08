@@ -9,7 +9,7 @@
 //! - **Shared State**: Future extensibility for global state (dry_run, audit logging, etc.)
 
 use std::path::{Path, PathBuf};
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 
 /// Shared execution context for atomic operations
 ///

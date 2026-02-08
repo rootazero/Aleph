@@ -4,10 +4,8 @@
 //! raw execution traces into reusable, parameterized patterns.
 
 use crate::error::{AlephError, Result};
-use crate::memory::cortex::{EnvironmentContext, Experience, ParameterConfig, ParameterMapping};
+use crate::memory::cortex::{EnvironmentContext, Experience, ParameterMapping};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
 use tracing::{debug, info};
 
 /// Extracted pattern from an experience
@@ -182,7 +180,7 @@ Provide ONLY the JSON object, no additional text."#,
     }
 
     /// Call LLM for pattern extraction
-    async fn call_llm(&self, model: &str, prompt: &str) -> Result<String> {
+    async fn call_llm(&self, model: &str, _prompt: &str) -> Result<String> {
         debug!("Calling LLM model: {}", model);
 
         // TODO: Implement actual LLM call through ProviderManager

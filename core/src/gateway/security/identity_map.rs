@@ -2,7 +2,6 @@
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 /// Internal user identifier
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -53,7 +52,7 @@ impl IdentityMap {
         // Update reverse mapping
         self.internal_to_external
             .entry(user_id)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(key);
     }
 

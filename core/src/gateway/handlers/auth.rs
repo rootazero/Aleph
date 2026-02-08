@@ -200,7 +200,7 @@ pub async fn handle_connect(
                         expires_at: guest_token
                             .scope
                             .expires_at
-                            .and_then(|ts| chrono::DateTime::from_timestamp_millis(ts))
+                            .and_then(chrono::DateTime::from_timestamp_millis)
                             .map(|dt| dt.to_rfc3339())
                             .unwrap_or_else(|| {
                                 (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()

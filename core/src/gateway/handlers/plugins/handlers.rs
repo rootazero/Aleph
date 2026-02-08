@@ -4,12 +4,11 @@
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use once_cell::sync::OnceCell;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::extension::{ComponentLoader, ExtensionManager, PluginInfo, SyncExtensionManager};
+use crate::extension::{ComponentLoader, ExtensionManager, SyncExtensionManager};
 
 use super::types::*;
 

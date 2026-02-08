@@ -4,7 +4,6 @@ use crate::error::AlephError;
 use crate::memory::context::{FactSpecificity, FactType, MemoryFact, TemporalScope};
 use crate::memory::database::core::VectorDatabase;
 use crate::memory::NamespaceScope;
-use rusqlite::params;
 
 impl VectorDatabase {
     /// Search facts by vector similarity using sqlite-vec
@@ -144,7 +143,7 @@ impl VectorDatabase {
             format!("fact_type = ?1 AND is_valid = 1 AND {}", namespace_filter)
         } else {
             // Guest/Shared scope: namespace filter with parameter
-            format!("fact_type = ?1 AND is_valid = 1 AND namespace = ?3")
+            "fact_type = ?1 AND is_valid = 1 AND namespace = ?3".to_string()
         };
 
         let query = format!(

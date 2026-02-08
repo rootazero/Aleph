@@ -81,7 +81,7 @@ impl DistillationService {
     }
 
     /// Start the distillation service
-    pub async fn start(&mut self, mut task_rx: mpsc::Receiver<PrioritizedTask>) -> Result<()> {
+    pub async fn start(&mut self, task_rx: mpsc::Receiver<PrioritizedTask>) -> Result<()> {
         if self.worker_handle.is_some() {
             warn!("DistillationService already started");
             return Ok(());
@@ -146,7 +146,7 @@ impl DistillationService {
     /// Worker loop that processes distillation tasks
     async fn worker_loop(
         db: Arc<VectorDatabase>,
-        config: DistillationConfig,
+        _config: DistillationConfig,
         mut task_rx: mpsc::Receiver<PrioritizedTask>,
     ) {
         info!("DistillationService worker started");
@@ -174,7 +174,7 @@ impl DistillationService {
     }
 
     /// Process a single distillation task
-    async fn process_task(db: &VectorDatabase, task: &DistillationTask) -> Result<()> {
+    async fn process_task(_db: &VectorDatabase, task: &DistillationTask) -> Result<()> {
         // Placeholder implementation
         // Will be replaced with actual pattern extraction in Task #7
         debug!("Processing task: {:?}", task);

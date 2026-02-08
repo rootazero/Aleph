@@ -90,7 +90,7 @@ impl PerceptionConfig {
 
         if path.exists() {
             let content = std::fs::read_to_string(&path)
-                .map_err(|e| DaemonError::Io(e))?;
+                .map_err(DaemonError::Io)?;
             toml::from_str(&content)
                 .map_err(|e| DaemonError::Config(format!("Invalid TOML: {}", e)))
         } else {

@@ -14,7 +14,6 @@ mod provider;
 
 // Re-export all types for backward compatibility
 pub use config::GenerationConfig;
-pub use defaults::GenerationDefaults;
 pub use provider::GenerationProviderConfig;
 
 // =============================================================================

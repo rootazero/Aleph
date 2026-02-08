@@ -106,7 +106,7 @@ impl TranscriptIndexer {
 
     /// Estimate token count for text
     pub fn estimate_tokens(&self, text: &str) -> usize {
-        (text.len() + 3) / 4  // 4 chars per token, round up
+        text.len().div_ceil(4)  // 4 chars per token, round up
     }
 
     /// Get overlap text from end of chunk

@@ -22,7 +22,6 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 /// Feature vector extracted from user input
 #[derive(Debug, Clone, Serialize, Deserialize)]

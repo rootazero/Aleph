@@ -18,25 +18,24 @@ use super::dag::DagScheduler;
 
 /// Task priority tier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Default)]
 pub enum PriorityTier {
     /// Immediate user actions (highest priority, preemptive)
     User = 0,
     /// High-priority financial operations
     Financial = 1,
     /// Normal background tasks
+    #[default]
     Background = 2,
 }
 
-impl Default for PriorityTier {
-    fn default() -> Self {
-        Self::Background
-    }
-}
 
 /// Risk level for browser tasks
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum RiskLevel {
     /// Read-only operations (safe)
+    #[default]
     Low,
     /// Form filling, navigation (moderate risk)
     Medium,
@@ -44,11 +43,6 @@ pub enum RiskLevel {
     High,
 }
 
-impl Default for RiskLevel {
-    fn default() -> Self {
-        Self::Low
-    }
-}
 
 /// Task metadata for priority scheduling
 #[derive(Debug, Clone)]

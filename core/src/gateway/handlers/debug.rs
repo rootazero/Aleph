@@ -6,9 +6,9 @@
 //! They should be disabled in production deployments.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, TOOL_ERROR};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 
 /// Parameters for debug.tool_call request
 #[derive(Debug, Deserialize)]

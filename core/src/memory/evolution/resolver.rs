@@ -13,6 +13,7 @@ pub struct EvolutionResolver {
 
 /// Resolution strategy for handling contradictions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum ResolutionStrategy {
     /// Keep the newer fact, invalidate the older one
     PreferNewer,
@@ -21,14 +22,10 @@ pub enum ResolutionStrategy {
     PreferHigherConfidence,
 
     /// Keep both facts but mark them as part of an evolution chain
+    #[default]
     CreateEvolution,
 }
 
-impl Default for ResolutionStrategy {
-    fn default() -> Self {
-        Self::CreateEvolution
-    }
-}
 
 impl EvolutionResolver {
     /// Create a new evolution resolver

@@ -45,7 +45,7 @@ impl FileOpsHandler {
         let without_ext = path_str.strip_suffix(".rs")?;
 
         // Convert path separators to ::
-        let module_name = without_ext.replace('/', "::").replace('\\', "::");
+        let module_name = without_ext.replace(['/', '\\'], "::");
 
         // Handle mod.rs files
         let module_name = module_name.strip_suffix("::mod").unwrap_or(&module_name);

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::poe::{CompositeValidator, Worker};
+use crate::poe::CompositeValidator;
 
 /// Factory function type for creating workers
 pub type WorkerFactory<W> = Arc<dyn Fn() -> W + Send + Sync>;

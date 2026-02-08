@@ -92,7 +92,7 @@ impl CliLoopCallback {
                         }
                         let indices: Vec<usize> = selected
                             .iter()
-                            .filter_map(|s| choices.iter().position(|c| &c.label == *s))
+                            .filter_map(|s| choices.iter().position(|c| c.label == *s))
                             .collect();
                         UserAnswer::MultiChoice {
                             selected_indices: indices,
@@ -157,10 +157,7 @@ impl LoopCallback for CliLoopCallback {
         }
 
         let prompt = format!("Allow execution of '{}'?", tool_name);
-        match Confirm::new(&prompt).with_default(false).prompt() {
-            Ok(confirmed) => confirmed,
-            Err(_) => false,
-        }
+        Confirm::new(&prompt).with_default(false).prompt().unwrap_or_default()
     }
 
     async fn on_user_input_required(
@@ -175,10 +172,7 @@ impl LoopCallback for CliLoopCallback {
                 Err(_) => String::new(),
             }
         } else {
-            match Text::new(question).prompt() {
-                Ok(text) => text,
-                Err(_) => String::new(),
-            }
+            Text::new(question).prompt().unwrap_or_default()
         }
     }
 
@@ -238,10 +232,7 @@ impl LoopCallback for CliLoopCallback {
             return false;
         }
 
-        match Confirm::new("Continue anyway?").with_default(false).prompt() {
-            Ok(confirmed) => confirmed,
-            Err(_) => false,
-        }
+        Confirm::new("Continue anyway?").with_default(false).prompt().unwrap_or_default()
     }
 
     async fn on_retry_scheduled(&self, attempt: u32, max_retries: u32, delay_ms: u64, error: &str) {

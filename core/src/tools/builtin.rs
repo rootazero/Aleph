@@ -102,7 +102,7 @@ impl AlephToolServer {
     ///     .with_snapshot_capture();
     /// ```
     pub fn with_snapshot_capture(self) -> Self {
-        self.tool(SnapshotCaptureTool::default())
+        self.tool(SnapshotCaptureTool)
     }
 
     // Advanced tools with dependencies - these require parameters

@@ -37,11 +37,11 @@
 //! }
 //! ```
 
-use super::{KeywordRule, ReflexLayer};
+use super::ReflexLayer;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use tracing::{debug, info, warn};
+use std::collections::HashMap;
+use tracing::info;
 
 /// Conflict detector for L2 routing rules
 pub struct ConflictDetector {
@@ -137,16 +137,14 @@ impl ConflictDetector {
         let mut matches = Vec::new();
 
         // Simulate rule matching with common patterns
-        let patterns = vec![
-            (r"git\s+status", "git status rule"),
+        let patterns = [(r"git\s+status", "git status rule"),
             (r"git.*", "git wildcard rule"),
             (r"read\s+.*", "read file rule"),
             (r"cat\s+.*", "cat file rule"),
             (r"(read|cat)\s+.*", "read/cat combined rule"),
             (r"ls.*", "ls rule"),
             (r"search.*", "search rule"),
-            (r"find.*", "find rule"),
-        ];
+            (r"find.*", "find rule")];
 
         for (idx, (pattern, name)) in patterns.iter().enumerate() {
             if let Ok(re) = Regex::new(pattern) {
@@ -161,24 +159,24 @@ impl ConflictDetector {
 
     /// Detect priority conflicts
     fn detect_priority_conflicts(&self, _reflex_layer: &ReflexLayer) -> Vec<Conflict> {
-        let mut conflicts = Vec::new();
+        
 
         // This is a simplified implementation
         // In a real implementation, we would check for rules with same priority
         // that could match the same inputs
 
-        conflicts
+        Vec::new()
     }
 
     /// Detect redundant rules
     fn detect_redundant_rules(&self, _reflex_layer: &ReflexLayer) -> Vec<Conflict> {
-        let mut conflicts = Vec::new();
+        
 
         // This is a simplified implementation
         // In a real implementation, we would check for rules that are never hit
         // due to higher priority rules matching first
 
-        conflicts
+        Vec::new()
     }
 
     /// Calculate conflict severity

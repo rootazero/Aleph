@@ -251,7 +251,7 @@ impl ShadowReplayEngine {
             }
             TraceRole::Tool => {
                 let tool_call_id = content.tool_call_id.unwrap_or_default();
-                let result = content.result.unwrap_or_else(|| content.content);
+                let result = content.result.unwrap_or(content.content);
                 Ok(Message::tool_result(tool_call_id, result))
             }
         }

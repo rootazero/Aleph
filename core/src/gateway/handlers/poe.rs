@@ -33,26 +33,19 @@
 //! | `poe.completed` | Final outcome (success/failure) |
 //! | `poe.error` | Execution error |
 
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use super::super::event_bus::GatewayEventBus;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::error::AlephError;
 use crate::poe::{
     // Core types
     Worker,
     // Contract signing types
-    SignRequest, SignResult,
+    SignRequest,
     // Service layer
-    PoeRunManager, PoeContractService, PrepareParams, PrepareContext, RejectParams,
+    PoeRunManager, PoeContractService, PrepareParams, RejectParams,
 };
-use crate::poe::handler_types::{
-    // RPC types (private - only used internally)
-    PoeRunParams, PoeStatusResult,
-};
+use crate::poe::handler_types::PoeRunParams;
 
 // Re-export types that are used by other modules
 pub use crate::poe::handler_types::{

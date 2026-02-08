@@ -34,13 +34,13 @@
 //! persistence.save_learner(&learner).await?;
 //! ```
 
-use super::{AtomicAction, NaiveBayesClassifier, RuleLearner};
+use super::{AtomicAction, NaiveBayesClassifier};
 use rusqlite::{params, Connection, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Persistence layer for learned rules
 pub struct Persistence {

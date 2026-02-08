@@ -133,7 +133,7 @@ impl ClusteringService {
         for exp in experiences {
             groups
                 .entry(exp.pattern_hash.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(exp.clone());
         }
 

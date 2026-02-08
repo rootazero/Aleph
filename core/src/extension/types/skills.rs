@@ -3,7 +3,6 @@
 //! This module contains types for skills, commands, and skill tool invocation.
 
 use crate::discovery::DiscoverySource;
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;

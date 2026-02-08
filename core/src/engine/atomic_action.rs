@@ -163,8 +163,10 @@ impl LineRange {
 /// Write mode for Write operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum WriteMode {
     /// Overwrite existing file (default)
+    #[default]
     Overwrite,
     /// Append to existing file
     Append,
@@ -172,11 +174,6 @@ pub enum WriteMode {
     CreateOnly,
 }
 
-impl Default for WriteMode {
-    fn default() -> Self {
-        Self::Overwrite
-    }
-}
 
 /// Search pattern types
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
