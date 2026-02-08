@@ -34,7 +34,7 @@
 //! }
 //! ```
 
-use super::{AtomicAction, KeywordRule, FeatureExtractor, FeatureVector};
+use super::{AtomicAction, KeywordRule, FeatureExtractor, FeatureVector, NaiveBayesClassifier, ActionClass};
 use dashmap::DashMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -89,6 +89,9 @@ pub struct RuleLearner {
     /// Feature extractor
     feature_extractor: FeatureExtractor,
 
+    /// Naive Bayes classifier for action prediction
+    classifier: Arc<RwLock<NaiveBayesClassifier>>,
+
     /// Statistics
     stats: Arc<RwLock<LearnerStats>>,
 }
@@ -99,6 +102,7 @@ impl RuleLearner {
         Self {
             records: DashMap::new(),
             feature_extractor: FeatureExtractor::new(),
+            classifier: Arc::new(RwLock::new(NaiveBayesClassifier::new())),
             stats: Arc::new(RwLock::new(LearnerStats::default())),
         }
     }
@@ -112,6 +116,11 @@ impl RuleLearner {
     pub fn learn_success(&self, input: &str, action: AtomicAction) {
         let normalized = self.normalize_input(input);
         let features = self.feature_extractor.extract(input);
+
+        // Train the classifier
+        if let Some(action_class) = Self::action_to_class(&action) {
+            self.classifier.write().unwrap().train(&features, action_class);
+        }
 
         self.records
             .entry(normalized.clone())
@@ -257,6 +266,27 @@ impl RuleLearner {
     pub fn pattern_count(&self) -> usize {
         self.records.len()
     }
+
+    /// Predict action for a given input using the classifier
+    ///
+    /// Returns the predicted action class and confidence score.
+    pub fn predict(&self, input: &str) -> Option<(ActionClass, f64)> {
+        let features = self.feature_extractor.extract(input);
+        self.classifier.read().unwrap().predict(&features)
+    }
+
+    /// Convert AtomicAction to ActionClass for classifier training
+    fn action_to_class(action: &AtomicAction) -> Option<ActionClass> {
+        match action {
+            AtomicAction::Read { .. } => Some(ActionClass::Read),
+            AtomicAction::Write { .. } => Some(ActionClass::Write),
+            AtomicAction::Edit { .. } => Some(ActionClass::Edit),
+            AtomicAction::Bash { .. } => Some(ActionClass::Bash),
+            AtomicAction::Search { .. } => Some(ActionClass::Search),
+            AtomicAction::Replace { .. } => Some(ActionClass::Replace),
+            AtomicAction::Move { .. } => Some(ActionClass::Move),
+        }
+    }
 }
 
 impl Default for RuleLearner {
@@ -302,6 +332,7 @@ impl LearnerStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::{SearchPattern, SearchScope};
 
     #[test]
     fn test_rule_learner_basic() {
@@ -389,5 +420,46 @@ mod tests {
 
         learner.clear();
         assert_eq!(learner.pattern_count(), 0);
+    }
+
+    #[test]
+    fn test_classifier_integration() {
+        let learner = RuleLearner::new();
+
+        // Train with search actions
+        let search_action = AtomicAction::Search {
+            pattern: SearchPattern::Regex {
+                pattern: "TODO".to_string(),
+            },
+            scope: SearchScope::Workspace,
+            filters: vec![],
+        };
+
+        learner.learn_success("search for TODO", search_action.clone());
+        learner.learn_success("find TODO in file", search_action.clone());
+        learner.learn_success("look for TODO", search_action);
+
+        // Train with bash actions
+        let bash_action = AtomicAction::Bash {
+            command: "git status".to_string(),
+            cwd: None,
+        };
+
+        learner.learn_success("run git status", bash_action.clone());
+        learner.learn_success("execute git status", bash_action.clone());
+        learner.learn_success("git status", bash_action);
+
+        // Predict action for similar inputs
+        let prediction = learner.predict("search for FIXME");
+        assert!(prediction.is_some());
+        let (action_class, confidence) = prediction.unwrap();
+        assert_eq!(action_class, ActionClass::Search);
+        assert!(confidence > 0.0);
+
+        let prediction = learner.predict("run git diff");
+        assert!(prediction.is_some());
+        let (action_class, confidence) = prediction.unwrap();
+        assert_eq!(action_class, ActionClass::Bash);
+        assert!(confidence > 0.0);
     }
 }
