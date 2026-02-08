@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 /// temperature = 0.9
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Default)]
 pub struct ProfileConfig {
     /// Human-readable description of this profile
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,20 +78,6 @@ pub struct ProfileConfig {
     pub history_limit: Option<usize>,
 }
 
-impl Default for ProfileConfig {
-    fn default() -> Self {
-        Self {
-            description: None,
-            model: None,
-            tools: Vec::new(),
-            system_prompt: None,
-            temperature: None,
-            max_tokens: None,
-            cache_strategy: CacheStrategy::default(),
-            history_limit: None,
-        }
-    }
-}
 
 // =============================================================================
 // CacheStrategy

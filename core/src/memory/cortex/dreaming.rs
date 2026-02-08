@@ -3,7 +3,7 @@
 //! This service runs during idle time or on schedule to process accumulated
 //! experiences and extract reusable patterns.
 
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::memory::cortex::{
     DistillationMode, DistillationPriority, DistillationService, DistillationTask, EvolutionStatus,
 };

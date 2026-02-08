@@ -29,15 +29,11 @@ use crate::dispatcher::UnifiedTool;
 /// Wraps a ProfileConfig and provides convenient filtering methods.
 /// If no profile is set, all tools are allowed (permissive default).
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ProfileFilter {
     profile: Option<ProfileConfig>,
 }
 
-impl Default for ProfileFilter {
-    fn default() -> Self {
-        Self { profile: None }
-    }
-}
 
 impl ProfileFilter {
     /// Create a new profile filter

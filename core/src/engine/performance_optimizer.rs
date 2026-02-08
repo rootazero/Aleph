@@ -44,7 +44,6 @@
 use dashmap::DashMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, info};
@@ -176,7 +175,7 @@ impl PerformanceOptimizer {
             for keyword in keywords {
                 self.rule_index
                     .entry(keyword)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(rule_idx);
             }
 

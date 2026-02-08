@@ -12,8 +12,7 @@ use tracing::{debug, info, warn};
 
 use aleph_protocol::IdentityContext;
 use crate::agent_loop::{Action, ActionExecutor, ActionResult};
-use crate::engine::{AtomicAction, AtomicEngine, RoutingLayer};
-use crate::error::Result;
+use crate::engine::{AtomicEngine, RoutingLayer};
 
 /// Atomic Action Executor with L1/L2 routing
 ///

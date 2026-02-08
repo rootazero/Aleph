@@ -110,7 +110,7 @@ impl ExperienceReplayLayer {
     /// Select the best matching experience from candidates
     async fn select_best_match(
         &self,
-        intent: &str,
+        _intent: &str,
         mut candidates: Vec<(Experience, f64)>,
     ) -> Result<ExperienceWithScore> {
         // Sort by similarity score (highest first)
@@ -179,13 +179,11 @@ impl ExperienceReplayLayer {
             // Parse extraction rule
             let value = if !var_config.extraction_rule.is_empty() {
                 let rule = &var_config.extraction_rule;
-                if rule.starts_with("regex:") {
+                if let Some(pattern) = rule.strip_prefix("regex:") {
                     // Regex extraction
-                    let pattern = &rule[6..];
                     self.extract_with_regex(intent, pattern)?
-                } else if rule.starts_with("keyword_after:") {
+                } else if let Some(keyword) = rule.strip_prefix("keyword_after:") {
                     // Keyword-based extraction
-                    let keyword = &rule[14..];
                     self.extract_after_keyword(intent, keyword)?
                 } else {
                     // Unknown rule, use default if available
@@ -230,7 +228,6 @@ impl ExperienceReplayLayer {
             let after = &text[pos + keyword.len()..];
             // Extract until next space or end
             let value = after
-                .trim()
                 .split_whitespace()
                 .next()
                 .map(|s| s.to_string());

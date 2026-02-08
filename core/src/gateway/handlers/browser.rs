@@ -3,7 +3,7 @@
 //! JSON-RPC handlers for browser automation via CDP.
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -101,7 +101,7 @@ pub async fn handle_start(
     request: JsonRpcRequest,
     state: Arc<BrowserState>,
 ) -> JsonRpcResponse {
-    let params: StartParams = match request.params {
+    let _params: StartParams = match request.params {
         Some(p) => serde_json::from_value(p).unwrap_or_default(),
         None => StartParams { headless: None },
     };

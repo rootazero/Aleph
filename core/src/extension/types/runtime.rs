@@ -6,7 +6,6 @@
 //! - AI providers (custom model providers)
 //! - HTTP routes (plugin-provided endpoints)
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

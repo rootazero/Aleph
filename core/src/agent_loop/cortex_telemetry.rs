@@ -4,7 +4,7 @@
 //! for experience replay and skill distillation.
 
 use crate::error::AlephError;
-use crate::memory::cortex::{DistillationMode, DistillationTask, EnvironmentContext};
+use crate::memory::cortex::EnvironmentContext;
 use crate::memory::database::VectorDatabase;
 use std::sync::Arc;
 use std::time::Instant;

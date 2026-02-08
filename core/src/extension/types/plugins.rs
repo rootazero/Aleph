@@ -2,8 +2,6 @@
 //!
 //! Core data structures for plugin management, discovery, and lifecycle.
 
-use crate::discovery::DiscoverySource;
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -269,7 +269,7 @@ impl SearchOps for SearchOpsHandler {
             SearchPattern::Fuzzy { text, threshold } => {
                 self.search_fuzzy(&files, text, *threshold).await?
             }
-            SearchPattern::Ast { query, language } => {
+            SearchPattern::Ast { query: _, language } => {
                 // AST search is complex, return not implemented for now
                 return Ok(AtomicResult {
                     success: false,

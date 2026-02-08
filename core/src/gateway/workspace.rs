@@ -593,7 +593,7 @@ impl WorkspaceManager {
 
         self.get(&workspace_id)
             .await?
-            .ok_or_else(|| WorkspaceError::NotFound(workspace_id))
+            .ok_or(WorkspaceError::NotFound(workspace_id))
     }
 
     /// Get the active workspace ID for a user (lightweight, no full workspace fetch)

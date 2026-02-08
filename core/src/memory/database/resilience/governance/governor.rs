@@ -4,7 +4,7 @@
 //! for the Multi-Agent Resilience architecture.
 
 use crate::error::AlephError;
-use super::super::types::{Lane, SessionStatus};
+use super::super::types::Lane;
 use crate::memory::database::VectorDatabase;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

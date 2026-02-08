@@ -36,7 +36,7 @@
 //! agent.generate_and_deploy_rules().await;
 //! ```
 
-use super::{AtomicAction, KeywordRule, ReflexLayer, RuleLearner, LearnerStats};
+use super::{AtomicAction, ReflexLayer, RuleLearner, LearnerStats};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -242,7 +242,7 @@ impl LearningAgent {
     async fn record_event(&self, key: &str, event: LearningEvent) {
         self.events
             .entry(key.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(event);
     }
 

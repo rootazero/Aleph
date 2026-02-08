@@ -51,7 +51,7 @@ impl GuestActivityLogger {
 
         self.logs
             .entry(session_id.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(log);
 
         // Enforce max logs limit

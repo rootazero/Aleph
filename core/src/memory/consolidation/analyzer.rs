@@ -78,7 +78,7 @@ impl ConsolidationAnalyzer {
 
         // Consolidate facts within each category
         let mut profile = UserProfile::new();
-        for (category_name, facts) in categories {
+        for (_category_name, facts) in categories {
             let consolidated = self.consolidate_category(facts, config.similarity_threshold);
             profile.add_category(consolidated);
         }
@@ -155,7 +155,7 @@ impl ConsolidationAnalyzer {
 
             categories
                 .entry(category_name.to_string())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(ff.clone());
         }
 

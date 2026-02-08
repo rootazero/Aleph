@@ -35,7 +35,7 @@ use crate::gateway::channel::{
     InlineKeyboard, MessageId, OutboundMessage, SendResult, UserId,
 };
 use async_trait::async_trait;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
@@ -311,7 +311,7 @@ impl Channel for TelegramChannel {
         // Validate configuration
         self.config
             .validate()
-            .map_err(|e| ChannelError::ConfigError(e))?;
+            .map_err(ChannelError::ConfigError)?;
 
         #[cfg(feature = "telegram")]
         {
@@ -781,7 +781,7 @@ impl ChannelFactory for TelegramChannelFactory {
 
         config
             .validate()
-            .map_err(|e| ChannelError::ConfigError(e))?;
+            .map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(TelegramChannel::new("telegram", config)))
     }

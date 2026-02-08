@@ -7,7 +7,7 @@ use crate::error::AlephError;
 use super::super::types::SessionStatus;
 use crate::memory::database::VectorDatabase;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Quota configuration
 #[derive(Debug, Clone)]

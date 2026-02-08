@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::yaml_spec::{YamlSpec, YamlSpecError};
-use super::types::TestCase;
 
 /// Source of test specifications.
 #[derive(Debug, Clone)]
@@ -273,7 +272,7 @@ impl UnifiedTestRunner {
 
         let mut details = Vec::new();
         let mut passed = 0;
-        let mut failed = 0;
+        let failed = 0;
 
         for scenario in &spec.scenarios {
             let scenario_start = Instant::now();

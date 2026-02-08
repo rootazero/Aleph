@@ -37,7 +37,7 @@ use crate::gateway::channel::{
     OutboundMessage, SendResult, UserId,
 };
 use async_trait::async_trait;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
@@ -294,7 +294,7 @@ impl Channel for DiscordChannel {
         // Validate configuration
         self.config
             .validate()
-            .map_err(|e| ChannelError::ConfigError(e))?;
+            .map_err(ChannelError::ConfigError)?;
 
         #[cfg(feature = "discord")]
         {
@@ -595,7 +595,7 @@ impl ChannelFactory for DiscordChannelFactory {
 
         config
             .validate()
-            .map_err(|e| ChannelError::ConfigError(e))?;
+            .map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(DiscordChannel::new("discord", config)))
     }
