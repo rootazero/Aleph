@@ -267,6 +267,11 @@ impl ExperienceBuilder {
         self
     }
 
+    pub fn environment_context_json(mut self, json: String) -> Self {
+        self.experience.environment_context_json = Some(json);
+        self
+    }
+
     pub fn parameter_mapping(mut self, mapping: String) -> Self {
         self.experience.parameter_mapping = Some(mapping);
         self
