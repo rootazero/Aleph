@@ -257,22 +257,23 @@ where
     /// cycle until the task is complete or a guard is triggered.
     ///
     /// # Arguments
-    /// * `request` - The user's request
-    /// * `context` - Request context (attachments, app context, etc.)
-    /// * `tools` - Available tools for this loop
+    /// * `run_context` - Context containing request, tools, identity, and optional parameters
     /// * `callback` - Callback for loop events
-    /// * `abort_signal` - Optional signal to abort the loop
-    /// * `initial_history` - Optional history summary from previous conversations
     pub async fn run(
         &self,
-        request: String,
-        context: RequestContext,
-        tools: Vec<crate::dispatcher::UnifiedTool>,
-        identity: IdentityContext,
+        run_context: RunContext,
         callback: impl LoopCallback,
-        abort_signal: Option<watch::Receiver<bool>>,
-        initial_history: Option<String>,
     ) -> LoopResult {
+        // Extract fields from context
+        let RunContext {
+            request,
+            context,
+            tools,
+            identity,
+            abort_signal,
+            initial_history,
+        } = run_context;
+
         // Generate session ID
         let session_id = uuid::Uuid::new_v4().to_string();
 

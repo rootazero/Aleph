@@ -98,7 +98,7 @@ pub use loop_result::LoopResult;
 pub use traits::{ActionExecutor, CompressedHistory, CompressorTrait, ThinkerTrait};
 
 // Re-export main agent loop
-pub use agent_loop::AgentLoop;
+pub use agent_loop::{AgentLoop, RunContext};
 
 // Re-export CLI callback (when cli feature is enabled)
 #[cfg(feature = "cli")]

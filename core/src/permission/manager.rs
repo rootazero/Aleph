@@ -328,7 +328,7 @@ impl PermissionManager {
     /// Add approved rules (for testing)
     #[cfg(test)]
     pub async fn add_approved_rule(&self, rule: super::rule::PermissionRule) {
-        self.approved_rules.write().await.push(rule);
+        self.approved_rules.write().await.add(rule);
     }
 }
 
