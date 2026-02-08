@@ -103,7 +103,7 @@ impl EventEmitter {
         let seq = self.next_seq(task_id).await;
 
         // Classify event
-        let event_type_enum = EventType::from_str(event_type);
+        let event_type_enum = EventType::from_str_infallible(event_type);
         let tier = EventClassifier::classify(&event_type_enum);
         let is_structural = EventClassifier::is_structural(&event_type_enum);
 
