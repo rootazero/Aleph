@@ -9,6 +9,7 @@ mod atomic_executor;
 mod patch;
 mod reflex_bench;
 mod reflex_layer;
+mod rule_learner;
 
 #[cfg(test)]
 mod integration_tests;
@@ -20,4 +21,5 @@ pub use atomic_action::{AtomicAction, LineRange, WriteMode, SearchPattern, Searc
 pub use atomic_engine::{AtomicEngine, ExecutionResult, RoutingLayer, RoutingResult, RoutingStats};
 pub use atomic_executor::AtomicExecutor;
 pub use patch::{Patch, PatchApplier};
-pub use reflex_layer::{KeywordRule, ReflexLayer};
+pub use reflex_layer::{KeywordRule, ReflexLayer, ActionType, ParamExtractor};
+pub use rule_learner::{RuleLearner, LearnerStats};
