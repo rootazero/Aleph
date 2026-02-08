@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
+use regex::Regex;
 
-use super::{AtomicAction, Patch, PatchApplier, WriteMode};
+use super::{AtomicAction, Patch, PatchApplier, WriteMode, SearchPattern, SearchScope, FileFilter};
 use crate::error::{AlephError, Result};
 
 /// Atomic operation executor
@@ -46,13 +47,8 @@ impl AtomicExecutor {
             AtomicAction::Bash { command, cwd } => {
                 self.execute_bash(command, cwd.as_ref()).await?
             }
-            AtomicAction::Search { .. } => {
-                // TODO: Implement search operation
-                AtomicResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some("Search operation not yet implemented".to_string()),
-                }
+            AtomicAction::Search { pattern, scope, filters } => {
+                self.execute_search(pattern, scope, filters).await?
             }
             AtomicAction::Replace { .. } => {
                 // TODO: Implement replace operation
@@ -270,6 +266,259 @@ impl AtomicExecutor {
         }
     }
 
+    /// Execute Search operation
+    async fn execute_search(
+        &self,
+        pattern: &SearchPattern,
+        scope: &SearchScope,
+        filters: &[FileFilter],
+    ) -> Result<AtomicResult> {
+        debug!(pattern = ?pattern, scope = ?scope, "Executing search");
+
+        // Collect files to search
+        let files = self.collect_files_for_search(scope, filters).await?;
+
+        if files.is_empty() {
+            return Ok(AtomicResult {
+                success: true,
+                output: "No files found matching the search scope".to_string(),
+                error: None,
+            });
+        }
+
+        // Perform search based on pattern type
+        let matches = match pattern {
+            SearchPattern::Regex { pattern: regex_str } => {
+                self.search_regex(&files, regex_str).await?
+            }
+            SearchPattern::Fuzzy { text, threshold } => {
+                self.search_fuzzy(&files, text, *threshold).await?
+            }
+            SearchPattern::Ast { query, language } => {
+                // AST search is complex, return not implemented for now
+                return Ok(AtomicResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!(
+                        "AST search not yet implemented for language: {}",
+                        language
+                    )),
+                });
+            }
+        };
+
+        // Format results
+        let output = if matches.is_empty() {
+            "No matches found".to_string()
+        } else {
+            format!(
+                "Found {} matches in {} files:\n{}",
+                matches.len(),
+                matches.iter().map(|m| &m.file).collect::<std::collections::HashSet<_>>().len(),
+                matches
+                    .iter()
+                    .map(|m| format!("{}:{}:{}", m.file.display(), m.line_number, m.line_content))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        };
+
+        Ok(AtomicResult {
+            success: true,
+            output,
+            error: None,
+        })
+    }
+
+    /// Collect files for search based on scope and filters
+    async fn collect_files_for_search(
+        &self,
+        scope: &SearchScope,
+        filters: &[FileFilter],
+    ) -> Result<Vec<PathBuf>> {
+        let mut files = Vec::new();
+
+        match scope {
+            SearchScope::File { path } => {
+                let resolved = self.resolve_path(path.to_str().unwrap_or(""))?;
+                if resolved.exists() && self.should_include_file(&resolved, filters) {
+                    files.push(resolved);
+                }
+            }
+            SearchScope::Directory { path, recursive } => {
+                let resolved = self.resolve_path(path.to_str().unwrap_or(""))?;
+                if resolved.exists() && resolved.is_dir() {
+                    self.collect_files_from_directory(&resolved, *recursive, filters, &mut files)
+                        .await?;
+                }
+            }
+            SearchScope::Workspace => {
+                // Search in working directory recursively
+                self.collect_files_from_directory(&self.working_dir, true, filters, &mut files)
+                    .await?;
+            }
+        }
+
+        Ok(files)
+    }
+
+    /// Recursively collect files from directory
+    fn collect_files_from_directory<'a>(
+        &'a self,
+        dir: &'a Path,
+        recursive: bool,
+        filters: &'a [FileFilter],
+        files: &'a mut Vec<PathBuf>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut entries = tokio::fs::read_dir(dir).await?;
+
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+
+                if path.is_file() {
+                    if self.should_include_file(&path, filters) {
+                        files.push(path);
+                    }
+                } else if path.is_dir() && recursive {
+                    // Skip hidden directories and common ignore patterns
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if !name.starts_with('.') && name != "node_modules" && name != "target" {
+                            self.collect_files_from_directory(&path, recursive, filters, files)
+                                .await?;
+                        }
+                    }
+                }
+            }
+
+            Ok(())
+        })
+    }
+
+    /// Check if file should be included based on filters
+    fn should_include_file(&self, path: &Path, filters: &[FileFilter]) -> bool {
+        // If no filters, include all files
+        if filters.is_empty() {
+            return true;
+        }
+
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        for filter in filters {
+            match filter {
+                FileFilter::Code => {
+                    // Common code file extensions
+                    let code_exts = [
+                        "rs", "py", "js", "ts", "jsx", "tsx", "go", "java", "c", "cpp", "h",
+                        "hpp", "cs", "rb", "php", "swift", "kt", "scala", "sh", "bash",
+                    ];
+                    if !code_exts.contains(&extension) {
+                        return false;
+                    }
+                }
+                FileFilter::Text => {
+                    // Common text file extensions
+                    let text_exts = ["txt", "md", "rst", "log", "json", "yaml", "yml", "toml"];
+                    if !text_exts.contains(&extension) {
+                        return false;
+                    }
+                }
+                FileFilter::Extension(ext) => {
+                    if extension != ext {
+                        return false;
+                    }
+                }
+                FileFilter::Exclude(pattern) => {
+                    // Simple glob-like matching
+                    if filename.contains(pattern.trim_matches('*')) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Search files using regex pattern
+    async fn search_regex(&self, files: &[PathBuf], pattern: &str) -> Result<Vec<SearchMatch>> {
+        let regex = Regex::new(pattern)
+            .map_err(|e| AlephError::tool(format!("Invalid regex pattern: {}", e)))?;
+
+        let mut matches = Vec::new();
+
+        for file in files {
+            // Skip files that are too large
+            if let Ok(metadata) = tokio::fs::metadata(file).await {
+                if metadata.len() > self.max_file_size {
+                    continue;
+                }
+            }
+
+            // Read file content
+            if let Ok(content) = tokio::fs::read_to_string(file).await {
+                for (line_num, line) in content.lines().enumerate() {
+                    if regex.is_match(line) {
+                        matches.push(SearchMatch {
+                            file: file.clone(),
+                            line_number: line_num + 1,
+                            line_content: line.to_string(),
+                            match_start: 0, // TODO: Calculate actual match position
+                            match_end: line.len(),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(matches)
+    }
+
+    /// Search files using fuzzy matching
+    async fn search_fuzzy(
+        &self,
+        files: &[PathBuf],
+        text: &str,
+        threshold: f32,
+    ) -> Result<Vec<SearchMatch>> {
+        let mut matches = Vec::new();
+
+        for file in files {
+            // Skip files that are too large
+            if let Ok(metadata) = tokio::fs::metadata(file).await {
+                if metadata.len() > self.max_file_size {
+                    continue;
+                }
+            }
+
+            // Read file content
+            if let Ok(content) = tokio::fs::read_to_string(file).await {
+                for (line_num, line) in content.lines().enumerate() {
+                    // Simple fuzzy matching: check if text appears as substring (case-insensitive)
+                    // TODO: Implement proper fuzzy matching algorithm (e.g., Levenshtein distance)
+                    let similarity = if line.to_lowercase().contains(&text.to_lowercase()) {
+                        1.0
+                    } else {
+                        0.0
+                    };
+
+                    if similarity >= threshold {
+                        matches.push(SearchMatch {
+                            file: file.clone(),
+                            line_number: line_num + 1,
+                            line_content: line.to_string(),
+                            match_start: 0,
+                            match_end: line.len(),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(matches)
+    }
+
     /// Resolve path (relative to working directory)
     fn resolve_path(&self, path: &str) -> Result<PathBuf> {
         let path = Path::new(path);
@@ -292,6 +541,21 @@ impl AtomicExecutor {
         // Otherwise, resolve relative to working directory
         Ok(self.working_dir.join(path))
     }
+}
+
+/// Search match result
+#[derive(Debug, Clone)]
+struct SearchMatch {
+    /// File where match was found
+    file: PathBuf,
+    /// Line number (1-indexed)
+    line_number: usize,
+    /// Content of the matching line
+    line_content: String,
+    /// Start position of match in line
+    match_start: usize,
+    /// End position of match in line
+    match_end: usize,
 }
 
 /// Result of atomic operation execution
@@ -494,5 +758,113 @@ mod tests {
         // Verify content
         let content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(content, "initial\nappended\n");
+    }
+
+    #[tokio::test]
+    async fn test_execute_search_regex() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create test files
+        let test_file1 = temp_dir.path().join("test1.rs");
+        fs::write(&test_file1, "fn main() {\n    println!(\"TODO: implement\");\n}\n").unwrap();
+
+        let test_file2 = temp_dir.path().join("test2.rs");
+        fs::write(&test_file2, "// TODO: fix this\nfn helper() {}\n").unwrap();
+
+        // Search for TODO comments
+        let action = AtomicAction::Search {
+            pattern: SearchPattern::Regex {
+                pattern: r"TODO:.*".to_string(),
+            },
+            scope: SearchScope::Directory {
+                path: temp_dir.path().to_path_buf(),
+                recursive: false,
+            },
+            filters: vec![FileFilter::Extension("rs".to_string())],
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("Found 2 matches"));
+        assert!(result.output.contains("test1.rs"));
+        assert!(result.output.contains("test2.rs"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_search_fuzzy() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create test file
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "Hello world\nHello Rust\nGoodbye\n").unwrap();
+
+        // Fuzzy search for "hello"
+        let action = AtomicAction::Search {
+            pattern: SearchPattern::Fuzzy {
+                text: "hello".to_string(),
+                threshold: 0.8,
+            },
+            scope: SearchScope::File {
+                path: test_file.clone(),
+            },
+            filters: vec![],
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("Found 2 matches"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_search_no_matches() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create test file
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "Hello world\n").unwrap();
+
+        // Search for non-existent pattern
+        let action = AtomicAction::Search {
+            pattern: SearchPattern::Regex {
+                pattern: r"NOTFOUND".to_string(),
+            },
+            scope: SearchScope::File {
+                path: test_file,
+            },
+            filters: vec![],
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("No matches found"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_search_with_filters() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create test files with different extensions
+        let rs_file = temp_dir.path().join("test.rs");
+        fs::write(&rs_file, "fn main() {}\n").unwrap();
+
+        let txt_file = temp_dir.path().join("test.txt");
+        fs::write(&txt_file, "fn main() {}\n").unwrap();
+
+        // Search only .rs files
+        let action = AtomicAction::Search {
+            pattern: SearchPattern::Regex {
+                pattern: r"fn main".to_string(),
+            },
+            scope: SearchScope::Directory {
+                path: temp_dir.path().to_path_buf(),
+                recursive: false,
+            },
+            filters: vec![FileFilter::Extension("rs".to_string())],
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("test.rs"));
+        assert!(!result.output.contains("test.txt"));
     }
 }
