@@ -2,27 +2,25 @@
 //!
 //! Uses Apple's Seatbelt sandbox profile language to enforce security policies.
 
+use crate::error::{AlephError, Result};
+use crate::exec::sandbox::adapter::{
+    ExecutionResult, SandboxAdapter, SandboxCommand, SandboxProfile,
+};
+use crate::exec::sandbox::capabilities::{
+    Capabilities, FileSystemCapability, NetworkCapability,
+};
+use crate::exec::sandbox::profile::ProfileGenerator;
+use async_trait::async_trait;
 use std::path::PathBuf;
-use std::process::Stdio;
-use std::time::Duration;
+use std::time::Instant;
 use tokio::process::Command;
 
-use crate::error::Result;
-use crate::exec::sandbox::adapter::SandboxAdapter;
-use crate::exec::sandbox::capabilities::Capabilities;
-
 /// macOS sandbox adapter using sandbox-exec
-pub struct MacOSSandbox {
-    workspace: PathBuf,
-    profile_path: Option<PathBuf>,
-}
+pub struct MacOSSandbox;
 
 impl MacOSSandbox {
-    pub fn new(workspace: PathBuf) -> Self {
-        Self {
-            workspace,
-            profile_path: None,
-        }
+    pub fn new() -> Self {
+        Self
     }
 
     /// Check if sandbox-exec is available on the system
@@ -33,55 +31,9 @@ impl MacOSSandbox {
             .map(|output| output.status.success())
             .unwrap_or(false)
     }
-
-    /// Generate Seatbelt profile from capabilities
-    fn generate_seatbelt_profile(&self, caps: &Capabilities) -> String {
-        let mut profile = String::from("(version 1)\n");
-        profile.push_str("(deny default)\n\n");
-
-        // File system permissions
-        if let Some(fs_caps) = &caps.filesystem {
-            for path in &fs_caps.read_paths {
-                profile.push_str(&format!(
-                    "(allow file-read* (subpath \"{}\"))\n",
-                    path.display()
-                ));
-            }
-            for path in &fs_caps.write_paths {
-                profile.push_str(&format!(
-                    "(allow file-write* (subpath \"{}\"))\n",
-                    path.display()
-                ));
-            }
-        }
-
-        // Network permissions
-        if let Some(net_caps) = &caps.network {
-            if net_caps.allow_outbound {
-                profile.push_str("(allow network-outbound)\n");
-            }
-            if net_caps.allow_inbound {
-                profile.push_str("(allow network-inbound)\n");
-            }
-        }
-
-        // Process permissions
-        if let Some(proc_caps) = &caps.process {
-            if proc_caps.allow_exec {
-                profile.push_str("(allow process-exec)\n");
-            }
-        }
-
-        // Always allow basic system operations
-        profile.push_str("\n; Basic system operations\n");
-        profile.push_str("(allow sysctl-read)\n");
-        profile.push_str("(allow mach-lookup)\n");
-
-        profile
-    }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl SandboxAdapter for MacOSSandbox {
     fn is_supported(&self) -> bool {
         #[cfg(target_os = "macos")]
@@ -98,26 +50,71 @@ impl SandboxAdapter for MacOSSandbox {
         "macos"
     }
 
-    fn generate_profile(
-        &self,
-        caps: &Capabilities,
-    ) -> Result<crate::exec::sandbox::adapter::SandboxProfile> {
-        use crate::exec::sandbox::adapter::SandboxProfile;
-        use std::io::Write;
+    fn generate_profile(&self, caps: &Capabilities) -> Result<SandboxProfile> {
+        let mut profile = String::from("(version 1)\n");
+        profile.push_str("(deny default)\n\n");
 
-        // Create profile file
-        let profile_path = self.workspace.join("sandbox.sb");
-        let profile_content = self.generate_seatbelt_profile(caps);
+        // Allow basic system calls
+        profile.push_str(";; Allow basic system operations\n");
+        profile.push_str("(allow process-exec*)\n");
+        profile.push_str("(allow file-read* (subpath \"/System/Library\"))\n");
+        profile.push_str("(allow file-read* (subpath \"/usr/lib\"))\n");
+        profile.push_str("(allow file-read* (subpath \"/usr/bin\"))\n");
+        profile.push_str("(allow file-read* (literal \"/dev/null\"))\n");
+        profile.push_str("(allow file-read* (literal \"/dev/urandom\"))\n\n");
 
-        let mut file = std::fs::File::create(&profile_path)?;
-        file.write_all(profile_content.as_bytes())?;
+        // Temporary workspace tracking
+        let mut temp_workspace = None;
 
-        // Determine temp workspace
-        let temp_workspace = if caps.filesystem.as_ref().map_or(false, |fs| fs.temp_workspace) {
-            Some(self.workspace.clone())
-        } else {
-            None
-        };
+        // Generate filesystem rules
+        profile.push_str(";; Filesystem permissions\n");
+        for fs_cap in &caps.filesystem {
+            match fs_cap {
+                FileSystemCapability::ReadOnly { path } => {
+                    profile.push_str(&format!(
+                        "(allow file-read* (subpath \"{}\"))\n",
+                        path.display()
+                    ));
+                }
+                FileSystemCapability::ReadWrite { path } => {
+                    profile.push_str(&format!(
+                        "(allow file-read* file-write* (subpath \"{}\"))\n",
+                        path.display()
+                    ));
+                }
+                FileSystemCapability::TempWorkspace => {
+                    let temp_dir = ProfileGenerator::create_temp_workspace()?;
+                    profile.push_str(&format!(
+                        "(allow file-read* file-write* (subpath \"{}\"))\n",
+                        temp_dir.display()
+                    ));
+                    temp_workspace = Some(temp_dir);
+                }
+            }
+        }
+        profile.push_str("\n");
+
+        // Network rules
+        profile.push_str(";; Network permissions\n");
+        match &caps.network {
+            NetworkCapability::Deny => {
+                profile.push_str("(deny network*)\n");
+            }
+            NetworkCapability::AllowDomains(domains) => {
+                for domain in domains {
+                    profile.push_str(&format!(
+                        "(allow network-outbound (remote tcp \"{}:*\"))\n",
+                        domain
+                    ));
+                }
+            }
+            NetworkCapability::AllowAll => {
+                profile.push_str("(allow network*)\n");
+            }
+        }
+
+        // Write profile to temp file
+        let profile_path = ProfileGenerator::write_temp_profile(&profile, ".sb")?;
 
         Ok(SandboxProfile {
             path: profile_path,
@@ -129,30 +126,30 @@ impl SandboxAdapter for MacOSSandbox {
 
     async fn execute_sandboxed(
         &self,
-        command: &crate::exec::sandbox::adapter::SandboxCommand,
-        profile: &crate::exec::sandbox::adapter::SandboxProfile,
-    ) -> Result<crate::exec::sandbox::adapter::ExecutionResult> {
-        use crate::exec::sandbox::adapter::ExecutionResult;
-        use std::time::Instant;
-
+        command: &SandboxCommand,
+        profile: &SandboxProfile,
+    ) -> Result<ExecutionResult> {
         let start = Instant::now();
 
         // Build sandbox-exec command
         let mut cmd = Command::new("sandbox-exec");
-        cmd.arg("-f")
-            .arg(&profile.path)
-            .arg(&command.program)
-            .args(&command.args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.arg("-f").arg(&profile.path);
+        cmd.arg(&command.program);
+        cmd.args(&command.args);
 
-        if let Some(working_dir) = &command.working_dir {
+        if let Some(ref working_dir) = command.working_dir {
             cmd.current_dir(working_dir);
         }
 
+        // Set timeout
+        let timeout = std::time::Duration::from_secs(profile.capabilities.process.max_execution_time);
+
         // Execute with timeout
-        let timeout = Duration::from_secs(300); // 5 minutes default
-        let output = tokio::time::timeout(timeout, cmd.output()).await??;
+        let output = tokio::time::timeout(timeout, cmd.output())
+            .await
+            .map_err(|_| AlephError::ExecutionTimeout {
+                timeout_secs: profile.capabilities.process.max_execution_time,
+            })??;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -165,19 +162,16 @@ impl SandboxAdapter for MacOSSandbox {
         })
     }
 
-    fn cleanup(
-        &self,
-        profile: &crate::exec::sandbox::adapter::SandboxProfile,
-    ) -> Result<()> {
+    fn cleanup(&self, profile: &SandboxProfile) -> Result<()> {
         // Remove profile file
         if profile.path.exists() {
             std::fs::remove_file(&profile.path)?;
         }
 
-        // Remove temp workspace if it was created
-        if let Some(temp_workspace) = &profile.temp_workspace {
-            if temp_workspace.exists() && temp_workspace != &self.workspace {
-                std::fs::remove_dir_all(temp_workspace)?;
+        // Remove temp workspace
+        if let Some(ref workspace) = profile.temp_workspace {
+            if workspace.exists() {
+                std::fs::remove_dir_all(workspace)?;
             }
         }
 
@@ -188,89 +182,55 @@ impl SandboxAdapter for MacOSSandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     #[test]
-    fn test_macos_sandbox_detection() {
-        let temp_dir = TempDir::new().unwrap();
-        let sandbox = MacOSSandbox::new(temp_dir.path().to_path_buf());
-
-        // Should detect sandbox-exec availability
-        let supported = sandbox.is_supported();
+    fn test_macos_sandbox_supported() {
+        let sandbox = MacOSSandbox::new();
 
         #[cfg(target_os = "macos")]
         {
             // On macOS, should be supported if sandbox-exec exists
-            // We don't assert true because it might not be available in all environments
+            let supported = sandbox.is_supported();
             println!("macOS sandbox supported: {}", supported);
         }
 
         #[cfg(not(target_os = "macos"))]
         {
             // On non-macOS, should not be supported
-            assert!(!supported, "sandbox-exec should not be available on non-macOS");
+            assert!(!sandbox.is_supported(), "sandbox-exec should not be available on non-macOS");
         }
     }
 
     #[test]
     fn test_platform_name() {
-        let temp_dir = TempDir::new().unwrap();
-        let sandbox = MacOSSandbox::new(temp_dir.path().to_path_buf());
-
+        let sandbox = MacOSSandbox::new();
         assert_eq!(sandbox.platform_name(), "macos");
     }
 
     #[tokio::test]
+    #[cfg(target_os = "macos")]
     async fn test_macos_sandbox_execution() {
-        use crate::exec::sandbox::adapter::SandboxCommand;
-        use crate::exec::sandbox::capabilities::{Capabilities, FileSystemCapability};
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            // Skip on non-macOS
+        let sandbox = MacOSSandbox::new();
+        if !sandbox.is_supported() {
+            println!("Skipping test: sandbox-exec not available");
             return;
         }
 
-        #[cfg(target_os = "macos")]
-        {
-            let temp_dir = TempDir::new().unwrap();
-            let sandbox = MacOSSandbox::new(temp_dir.path().to_path_buf());
+        let caps = Capabilities::default();
+        let profile = sandbox.generate_profile(&caps).unwrap();
 
-            if !sandbox.is_supported() {
-                println!("Skipping test: sandbox-exec not available");
-                return;
-            }
+        let command = SandboxCommand {
+            program: "echo".to_string(),
+            args: vec!["hello".to_string()],
+            working_dir: None,
+        };
 
-            // Create capabilities with read access to /tmp
-            let caps = Capabilities {
-                filesystem: Some(FileSystemCapability {
-                    read_paths: vec![PathBuf::from("/tmp")],
-                    write_paths: vec![],
-                    temp_workspace: false,
-                }),
-                network: None,
-                process: None,
-                environment: None,
-            };
+        let result = sandbox.execute_sandboxed(&command, &profile).await.unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.stdout.contains("hello"));
+        assert!(result.sandboxed);
 
-            // Generate profile
-            let profile = sandbox.generate_profile(&caps).unwrap();
-
-            // Execute simple command
-            let command = SandboxCommand {
-                program: "echo".to_string(),
-                args: vec!["Hello, Sandbox!".to_string()],
-                working_dir: None,
-            };
-
-            let result = sandbox.execute_sandboxed(&command, &profile).await.unwrap();
-
-            assert_eq!(result.exit_code, Some(0));
-            assert!(result.stdout.contains("Hello, Sandbox!"));
-            assert!(result.sandboxed);
-
-            // Cleanup
-            sandbox.cleanup(&profile).unwrap();
-        }
+        sandbox.cleanup(&profile).unwrap();
     }
 }
+
