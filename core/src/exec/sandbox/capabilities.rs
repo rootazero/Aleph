@@ -22,8 +22,7 @@ impl Default for Capabilities {
             process: ProcessCapability {
                 no_fork: true,
                 max_execution_time: 300, // 5 minutes
-                max_memory_mb: 512,
-                max_cpu_percent: 80,
+                max_memory_mb: Some(512),
             },
             environment: EnvironmentCapability::Restricted,
         }
@@ -32,17 +31,19 @@ impl Default for Capabilities {
 
 /// Filesystem access capability
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum FileSystemCapability {
     /// Read-only access to specific path
-    ReadOnly(PathBuf),
+    ReadOnly { path: PathBuf },
     /// Read-write access to specific path
-    ReadWrite(PathBuf),
+    ReadWrite { path: PathBuf },
     /// Access to temporary workspace (auto-created, auto-cleaned)
     TempWorkspace,
 }
 
 /// Network access capability
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum NetworkCapability {
     /// No network access
     Deny,
@@ -60,13 +61,12 @@ pub struct ProcessCapability {
     /// Maximum execution time in seconds
     pub max_execution_time: u64,
     /// Maximum memory usage in MB
-    pub max_memory_mb: u64,
-    /// Maximum CPU usage percentage
-    pub max_cpu_percent: u8,
+    pub max_memory_mb: Option<u64>,
 }
 
 /// Environment variable access
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum EnvironmentCapability {
     /// No environment variables
     None,
