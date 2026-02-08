@@ -73,6 +73,110 @@ pub fn migrate_add_namespace(conn: &Connection) -> Result<(), AlephError> {
     Ok(())
 }
 
+/// Migrate to add experience_replays table for Cortex evolution system
+///
+/// This migration creates the experience_replays table for storing distilled
+/// task execution experiences that can be replayed for faster execution.
+///
+/// # Migration Steps
+/// 1. Check if experience_replays table exists
+/// 2. If not, create the table with all required columns
+/// 3. Create indexes for efficient querying
+///
+/// # Safety
+/// - Uses IF NOT EXISTS for idempotent table creation
+/// - Creates indexes with IF NOT EXISTS
+pub fn migrate_add_experience_replays(conn: &Connection) -> Result<(), AlephError> {
+    // Use savepoint for atomic migration
+    conn.execute_batch("SAVEPOINT migration_experience_replays")
+        .map_err(|e| AlephError::config(format!("Failed to begin migration: {}", e)))?;
+
+    // Check if experience_replays table already exists
+    let table_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='experience_replays'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_experience_replays");
+            AlephError::config(format!("Failed to check experience_replays table: {}", e))
+        })?;
+
+    if table_exists == 0 {
+        // Create experience_replays table
+        conn.execute_batch(
+            r#"
+            CREATE TABLE experience_replays (
+                -- Primary key and indexing
+                id TEXT PRIMARY KEY,
+                pattern_hash TEXT NOT NULL,
+                intent_vector BLOB,
+
+                -- Core context snapshot
+                user_intent TEXT NOT NULL,
+                environment_context_json TEXT,
+                thought_trace_distilled TEXT,
+                tool_sequence_json TEXT NOT NULL,
+                parameter_mapping TEXT,
+                logic_trace_json TEXT,
+
+                -- Evaluation metrics
+                success_score REAL NOT NULL,
+                token_efficiency REAL,
+                latency_ms INTEGER,
+                novelty_score REAL,
+
+                -- Evolution status and statistics
+                evolution_status TEXT NOT NULL,
+                usage_count INTEGER DEFAULT 1,
+                success_count INTEGER DEFAULT 0,
+                last_success_rate REAL,
+
+                -- Timestamps
+                created_at INTEGER NOT NULL,
+                last_used_at INTEGER NOT NULL,
+                last_evaluated_at INTEGER,
+
+                -- Prevent duplicate experiences
+                UNIQUE(pattern_hash, user_intent)
+            );
+
+            -- Index for pattern-based queries
+            CREATE INDEX idx_experience_pattern_hash ON experience_replays(pattern_hash);
+
+            -- Index for evolution status filtering
+            CREATE INDEX idx_experience_evolution_status ON experience_replays(evolution_status);
+
+            -- Index for LRU-based decay
+            CREATE INDEX idx_experience_last_used_at ON experience_replays(last_used_at);
+
+            -- Index for success rate queries
+            CREATE INDEX idx_experience_success_rate ON experience_replays(last_success_rate);
+
+            -- Virtual table for vector search on intent_vector
+            CREATE VIRTUAL TABLE IF NOT EXISTS experiences_vec USING vec0(
+                embedding float[384]
+            );
+            "#,
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_experience_replays");
+            AlephError::config(format!("Failed to create experience_replays table: {}", e))
+        })?;
+
+        tracing::info!("Created experience_replays table and indexes");
+    } else {
+        tracing::debug!("experience_replays table already exists, skipping creation");
+    }
+
+    // Release savepoint (commits all changes)
+    conn.execute_batch("RELEASE migration_experience_replays")
+        .map_err(|e| AlephError::config(format!("Failed to commit migration: {}", e)))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,6 +222,64 @@ mod tests {
             )
             .unwrap();
         assert_eq!(has_namespace, 1);
+    }
+
+    #[test]
+    fn test_migrate_add_experience_replays_idempotent() {
+        // Register sqlite-vec extension BEFORE opening connection
+        unsafe {
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )));
+        }
+
+        // Create in-memory database
+        let conn = Connection::open_in_memory().unwrap();
+
+        // First migration should create table
+        migrate_add_experience_replays(&conn).unwrap();
+
+        // Verify table exists
+        let table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='experience_replays'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_exists, 1);
+
+        // Verify indexes exist
+        let idx_pattern: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_experience_pattern_hash'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx_pattern, 1);
+
+        let idx_status: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_experience_evolution_status'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx_status, 1);
+
+        // Second migration should be no-op
+        migrate_add_experience_replays(&conn).unwrap();
+
+        // Verify still only one table
+        let table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='experience_replays'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_exists, 1);
     }
 
     #[test]
