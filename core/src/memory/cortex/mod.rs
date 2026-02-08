@@ -3,11 +3,13 @@
 //! Implements the experience replay buffer and skill distillation pipeline
 //! for evolving from "stateless executor" to "self-evolving agent".
 
+pub mod clustering;
 pub mod distillation;
 pub mod dreaming;
 pub mod pattern_extractor;
 pub mod types;
 
+pub use clustering::{Cluster, ClusteringConfig, ClusteringService};
 pub use distillation::{
     DistillationConfig, DistillationPriority, DistillationService, PrioritizedTask,
 };
