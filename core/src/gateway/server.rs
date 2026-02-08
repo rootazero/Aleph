@@ -50,21 +50,6 @@ pub struct ConnectionState {
 }
 
 impl ConnectionState {
-    fn new() -> Self {
-        Self {
-            authenticated: false,
-            first_message: true,
-            subscriptions: vec![],
-            metadata: HashMap::new(),
-            device_id: None,
-            permissions: vec![],
-            manifest: None,
-            reverse_rpc: None,
-            client_sender: None,
-            guest_session_id: None,
-        }
-    }
-
     /// Create a new connection state with Server-Client routing support
     fn with_routing(
         reverse_rpc: Arc<ReverseRpcManager>,
