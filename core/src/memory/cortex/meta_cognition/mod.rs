@@ -8,9 +8,13 @@
 
 pub mod anchor_store;
 pub mod conflict_detector;
+pub mod reactive;
 pub mod schema;
 pub mod types;
 
 pub use anchor_store::AnchorStore;
 pub use conflict_detector::{ConflictDetector, ConflictReport, ConflictType};
+pub use reactive::{
+    FailureSignal, FailureSnapshot, LLMConfig, ReactiveReflector, ReflectionResult, RootCause,
+};
 pub use types::{AnchorScope, AnchorSource, BehavioralAnchor};
