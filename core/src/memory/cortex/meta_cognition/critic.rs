@@ -337,7 +337,128 @@ impl CriticAgent {
         (base_score - redundancy_penalty).max(0.0).min(1.0)
     }
 
-    /// Generate a critic report with optimization suggestions
+    /// Generate a critic report with optimization suggestions using LLM
+    ///
+    /// # Arguments
+    ///
+    /// * `exp` - The experience to critique
+    /// * `analysis` - The chain analysis results
+    ///
+    /// # Returns
+    ///
+    /// * `Result<CriticReport>` - Generated critic report
+    ///
+    /// # Note
+    ///
+    /// This method uses LLM to analyze the task execution and generate
+    /// optimization suggestions based on the chain analysis.
+    pub async fn generate_critic_report_async(
+        &self,
+        exp: &Experience,
+        analysis: ChainAnalysis,
+    ) -> Result<CriticReport, AlephError> {
+        // Build prompt for LLM analysis
+        let prompt = format!(
+            r#"Analyze this task execution and suggest optimizations.
+
+**Task Execution:**
+- Experience ID: {}
+- Pattern Hash: {}
+- Efficiency Score: {:.2}
+- Redundant Reads: {}
+- Unnecessary Steps: {}
+- Missing Optimizations: {}
+
+**Your Task:**
+Generate an optimization suggestion to improve task execution efficiency.
+
+**Response Format (JSON):**
+{{
+  "optimization_type": "efficiency|redundancy|batching|caching",
+  "rule_text": "Actionable optimization rule",
+  "confidence": 0.0-1.0
+}}
+
+**Example:**
+{{
+  "optimization_type": "caching",
+  "rule_text": "Cache file contents when reading the same file multiple times in a task",
+  "confidence": 0.7
+}}"#,
+            exp.id,
+            exp.pattern_hash,
+            analysis.efficiency_score,
+            analysis.redundant_reads,
+            if analysis.unnecessary_steps.is_empty() {
+                "None".to_string()
+            } else {
+                analysis.unnecessary_steps.join(", ")
+            },
+            if analysis.missing_optimizations.is_empty() {
+                "None".to_string()
+            } else {
+                analysis.missing_optimizations.join(", ")
+            }
+        );
+
+        let system_prompt = "You are an expert performance optimizer analyzing task executions. \
+            Provide concise, actionable optimization suggestions in JSON format.";
+
+        // Call LLM
+        let response = self
+            .provider
+            .process(&prompt, Some(system_prompt))
+            .await
+            .map_err(|e| AlephError::provider(format!("LLM call failed: {}", e)))?;
+
+        // Parse JSON response
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap_or_else(|_| {
+            // Fallback: extract from text if JSON parsing fails
+            serde_json::json!({
+                "optimization_type": "efficiency",
+                "rule_text": response.lines().next().unwrap_or("Consider optimizing task execution"),
+                "confidence": 0.6
+            })
+        });
+
+        let rule_text = parsed["rule_text"]
+            .as_str()
+            .unwrap_or("Consider optimizing task execution")
+            .to_string();
+        let optimization_type = parsed["optimization_type"]
+            .as_str()
+            .unwrap_or("efficiency")
+            .to_string();
+        let confidence = parsed["confidence"].as_f64().unwrap_or(0.6) as f32;
+
+        let anchor_id = Uuid::new_v4().to_string();
+        let trigger_tags = vec!["optimization".to_string(), "proactive".to_string()];
+
+        let suggested_anchor = BehavioralAnchor::new(
+            anchor_id,
+            rule_text,
+            trigger_tags,
+            AnchorSource::ProactiveReflection {
+                pattern_hash: exp.pattern_hash.clone(),
+                optimization_type,
+            },
+            AnchorScope::Global,
+            50, // Medium priority for proactive anchors
+            confidence,
+        );
+
+        Ok(CriticReport {
+            experience_id: exp.id.clone(),
+            analysis,
+            suggested_anchor,
+            confidence,
+        })
+    }
+
+    /// Synchronous wrapper for generate_critic_report_async
+    ///
+    /// This method provides a synchronous interface for backward compatibility.
+    /// It uses tokio::runtime::Handle to execute the async LLM call.
     ///
     /// # Arguments
     ///
@@ -352,47 +473,21 @@ impl CriticAgent {
         exp: &Experience,
         analysis: ChainAnalysis,
     ) -> Result<CriticReport, AlephError> {
-        // TODO: Use LLM to generate optimization suggestions
-        // For now, generate a simple rule based on analysis
-
-        let rule_text = if analysis.redundant_reads > 0 {
-            format!(
-                "Optimize file reading: detected {} redundant reads. Consider caching file contents.",
-                analysis.redundant_reads
-            )
-        } else if !analysis.unnecessary_steps.is_empty() {
-            format!(
-                "Remove unnecessary steps: {}",
-                analysis.unnecessary_steps.join(", ")
-            )
-        } else if !analysis.missing_optimizations.is_empty() {
-            analysis.missing_optimizations[0].clone()
-        } else {
-            "Consider optimizing task execution flow for better efficiency".to_string()
-        };
-
-        let anchor_id = Uuid::new_v4().to_string();
-        let trigger_tags = vec!["optimization".to_string(), "proactive".to_string()];
-
-        let suggested_anchor = BehavioralAnchor::new(
-            anchor_id,
-            rule_text,
-            trigger_tags,
-            AnchorSource::ProactiveReflection {
-                pattern_hash: exp.pattern_hash.clone(),
-                optimization_type: "efficiency".to_string(),
-            },
-            AnchorScope::Global,
-            50, // Medium priority for proactive anchors
-            0.6, // Lower initial confidence for proactive suggestions
-        );
-
-        Ok(CriticReport {
-            experience_id: exp.id.clone(),
-            analysis,
-            suggested_anchor,
-            confidence: 0.6,
-        })
+        // Try to get current runtime handle, or create a new runtime
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                // We're already in a tokio runtime, use block_in_place
+                tokio::task::block_in_place(|| {
+                    handle.block_on(self.generate_critic_report_async(exp, analysis))
+                })
+            }
+            Err(_) => {
+                // No runtime available, create a new one
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| AlephError::config(format!("Failed to create runtime: {}", e)))?;
+                rt.block_on(self.generate_critic_report_async(exp, analysis))
+            }
+        }
     }
 }
 
@@ -401,7 +496,7 @@ mod tests {
     use super::*;
     use crate::memory::cortex::meta_cognition::schema::initialize_schema;
     use crate::memory::cortex::types::ExperienceBuilder;
-    use crate::providers::create_mock_provider;
+    use crate::providers::MockProvider;
     use rusqlite::Connection;
     use tempfile::TempDir;
 
@@ -416,8 +511,13 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
         let db = Arc::new(VectorDatabase::new(db_path).unwrap());
 
-        // Create mock provider for testing
-        let provider = create_mock_provider();
+        // Create mock provider that returns properly formatted JSON
+        let mock_response = r#"{
+            "optimization_type": "caching",
+            "rule_text": "Optimize file reading by caching contents",
+            "confidence": 0.7
+        }"#;
+        let provider = Arc::new(MockProvider::new(mock_response));
 
         (
             CriticAgent::new(
@@ -587,10 +687,11 @@ mod tests {
         let report = critic.generate_critic_report(&exp, analysis).unwrap();
 
         assert_eq!(report.experience_id, "test-exp");
-        assert_eq!(report.confidence, 0.6);
+        // Check that we got a meaningful response from the mock LLM
+        assert!(!report.suggested_anchor.rule_text.is_empty());
         assert_eq!(report.suggested_anchor.priority, 50); // Medium priority
-        assert_eq!(report.suggested_anchor.confidence, 0.6); // Lower confidence
-        assert!(report.suggested_anchor.rule_text.contains("redundant reads"));
+        // Confidence comes from LLM response
+        assert!(report.suggested_anchor.confidence > 0.0);
         assert!(matches!(
             report.suggested_anchor.source,
             AnchorSource::ProactiveReflection { .. }
