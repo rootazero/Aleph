@@ -88,7 +88,7 @@ impl FactExtractor {
 
             let fact = MemoryFact::new(
                 extracted_fact.content,
-                FactType::from_str(&extracted_fact.fact_type),
+                FactType::from_str_or_other(&extracted_fact.fact_type),
                 extracted_fact.source_ids,
             )
             .with_embedding(embedding)

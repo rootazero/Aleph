@@ -78,7 +78,7 @@ impl VectorDatabase {
                 Ok(MemoryFact {
                     id,
                     content,
-                    fact_type: FactType::from_str(&fact_type_str),
+                    fact_type: FactType::from_str_or_other(&fact_type_str),
                     embedding,
                     source_memory_ids,
                     created_at,
@@ -87,8 +87,8 @@ impl VectorDatabase {
                     is_valid: is_valid != 0,
                     invalidation_reason,
                     decay_invalidated_at,
-                    specificity: FactSpecificity::from_str(&specificity_str),
-                    temporal_scope: TemporalScope::from_str(&temporal_scope_str),
+                    specificity: FactSpecificity::from_str_or_default(&specificity_str),
+                    temporal_scope: TemporalScope::from_str_or_default(&temporal_scope_str),
                     similarity_score: None,
                 })
             },
@@ -151,7 +151,7 @@ impl VectorDatabase {
                 Ok(MemoryFact {
                     id,
                     content,
-                    fact_type: FactType::from_str(&fact_type_str),
+                    fact_type: FactType::from_str_or_other(&fact_type_str),
                     embedding,
                     source_memory_ids,
                     created_at,
@@ -160,8 +160,8 @@ impl VectorDatabase {
                     is_valid: is_valid != 0,
                     invalidation_reason,
                     decay_invalidated_at,
-                    specificity: FactSpecificity::from_str(&specificity_str),
-                    temporal_scope: TemporalScope::from_str(&temporal_scope_str),
+                    specificity: FactSpecificity::from_str_or_default(&specificity_str),
+                    temporal_scope: TemporalScope::from_str_or_default(&temporal_scope_str),
                     similarity_score: None,
                 })
             })

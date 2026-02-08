@@ -459,7 +459,7 @@ fn decay_config_from_policy(policy: &MemoryDecayPolicy) -> DecayConfig {
         config.protected_types.push(FactType::Personal);
     } else {
         for entry in &policy.protected_types {
-            let fact_type = FactType::from_str(entry);
+            let fact_type = FactType::from_str_or_other(entry);
             if !config.protected_types.contains(&fact_type) {
                 config.protected_types.push(fact_type);
             }

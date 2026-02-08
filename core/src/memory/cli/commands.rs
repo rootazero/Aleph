@@ -476,15 +476,15 @@ impl MemoryCommands {
             let mut fact = MemoryFact::with_id(
                 exported.id.clone(),
                 exported.content.clone(),
-                FactType::from_str(&exported.fact_type),
+                FactType::from_str_or_other(&exported.fact_type),
             );
             fact.created_at = exported.created_at;
             fact.updated_at = exported.updated_at;
             fact.confidence = exported.confidence;
             fact.is_valid = exported.is_valid;
             fact.invalidation_reason = exported.invalidation_reason;
-            fact.specificity = FactSpecificity::from_str(&exported.specificity);
-            fact.temporal_scope = TemporalScope::from_str(&exported.temporal_scope);
+            fact.specificity = FactSpecificity::from_str_or_default(&exported.specificity);
+            fact.temporal_scope = TemporalScope::from_str_or_default(&exported.temporal_scope);
 
             // Generate embedding if embedder is available
             if let Some(emb) = embedder {
