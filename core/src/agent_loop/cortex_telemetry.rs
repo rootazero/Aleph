@@ -62,6 +62,7 @@ impl ExecutionTelemetry {
 
 /// Cortex telemetry collector
 pub struct CortexTelemetry {
+    #[allow(dead_code)]
     db: Arc<VectorDatabase>,
     enabled: bool,
 }
