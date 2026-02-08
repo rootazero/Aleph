@@ -22,3 +22,6 @@ pub use reactive::{
     FailureSignal, FailureSnapshot, LLMConfig, ReactiveReflector, ReflectionResult, RootCause,
 };
 pub use types::{AnchorScope, AnchorSource, BehavioralAnchor};
+
+#[cfg(test)]
+mod integration_tests;
