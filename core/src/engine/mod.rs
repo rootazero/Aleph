@@ -16,7 +16,7 @@ mod integration_tests;
 #[cfg(test)]
 mod performance_benchmarks;
 
-pub use atomic_action::{AtomicAction, LineRange, WriteMode};
+pub use atomic_action::{AtomicAction, LineRange, WriteMode, SearchPattern, SearchScope, FileFilter};
 pub use atomic_engine::{AtomicEngine, ExecutionResult, RoutingLayer, RoutingResult, RoutingStats};
 pub use atomic_executor::AtomicExecutor;
 pub use patch::{Patch, PatchApplier};

@@ -1,14 +1,18 @@
 //! Atomic Action Types
 //!
-//! Defines the four atomic operations inspired by OpenClaw's Pi engine:
+//! Defines the seven atomic operations inspired by OpenClaw's Pi engine:
 //! - Read: Read file content with optional line range
 //! - Write: Write file content with mode control
 //! - Edit: Incremental editing via patches (80-95% token savings)
 //! - Bash: Execute shell commands
+//! - Search: Semantic search with regex/fuzzy/AST support
+//! - Replace: Batch replacement across files with preview
+//! - Move: File/directory movement with import path updates
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
-/// Four atomic operations (Pi engine style)
+/// Seven atomic operations (Pi engine style + extensions)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AtomicAction {
@@ -39,6 +43,35 @@ pub enum AtomicAction {
         #[serde(default)]
         cwd: Option<String>,
     },
+
+    /// Search files with pattern matching
+    Search {
+        pattern: SearchPattern,
+        scope: SearchScope,
+        #[serde(default)]
+        filters: Vec<FileFilter>,
+    },
+
+    /// Replace text across files
+    Replace {
+        search: Box<SearchPattern>,
+        replacement: String,
+        scope: SearchScope,
+        #[serde(default)]
+        preview: bool,
+        #[serde(default)]
+        dry_run: bool,
+    },
+
+    /// Move file or directory
+    Move {
+        source: PathBuf,
+        destination: PathBuf,
+        #[serde(default)]
+        update_imports: bool,
+        #[serde(default)]
+        create_parent: bool,
+    },
 }
 
 impl AtomicAction {
@@ -49,6 +82,9 @@ impl AtomicAction {
             AtomicAction::Write { path, .. } => Some(path),
             AtomicAction::Edit { path, .. } => Some(path),
             AtomicAction::Bash { .. } => None,
+            AtomicAction::Search { .. } => None, // Operates on multiple files
+            AtomicAction::Replace { .. } => None, // Operates on multiple files
+            AtomicAction::Move { source, .. } => Some(source.to_str().unwrap_or("")),
         }
     }
 
@@ -59,19 +95,25 @@ impl AtomicAction {
             AtomicAction::Write { .. } => "write",
             AtomicAction::Edit { .. } => "edit",
             AtomicAction::Bash { .. } => "bash",
+            AtomicAction::Search { .. } => "search",
+            AtomicAction::Replace { .. } => "replace",
+            AtomicAction::Move { .. } => "move",
         }
     }
 
     /// Check if this action is read-only
     pub fn is_read_only(&self) -> bool {
-        matches!(self, AtomicAction::Read { .. })
+        matches!(self, AtomicAction::Read { .. } | AtomicAction::Search { .. })
     }
 
     /// Check if this action modifies the filesystem
     pub fn is_mutating(&self) -> bool {
         matches!(
             self,
-            AtomicAction::Write { .. } | AtomicAction::Edit { .. }
+            AtomicAction::Write { .. }
+                | AtomicAction::Edit { .. }
+                | AtomicAction::Replace { .. }
+                | AtomicAction::Move { .. }
         )
     }
 }
@@ -134,6 +176,44 @@ impl Default for WriteMode {
     fn default() -> Self {
         Self::Overwrite
     }
+}
+
+/// Search pattern types
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SearchPattern {
+    /// Regular expression pattern
+    Regex { pattern: String },
+    /// Fuzzy text matching
+    Fuzzy { text: String, threshold: f32 },
+    /// AST-level code search (language-aware)
+    Ast { query: String, language: String },
+}
+
+/// Search scope
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SearchScope {
+    /// Single file
+    File { path: PathBuf },
+    /// Directory (recursive)
+    Directory { path: PathBuf, recursive: bool },
+    /// Entire workspace
+    Workspace,
+}
+
+/// File filters for search
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileFilter {
+    /// Only code files (common extensions)
+    Code,
+    /// Only text files
+    Text,
+    /// Only files matching extension
+    Extension(String),
+    /// Exclude files matching pattern
+    Exclude(String),
 }
 
 #[cfg(test)]
@@ -260,5 +340,112 @@ mod tests {
     #[test]
     fn test_write_mode_default() {
         assert_eq!(WriteMode::default(), WriteMode::Overwrite);
+    }
+
+    #[test]
+    fn test_search_action() {
+        let search = AtomicAction::Search {
+            pattern: SearchPattern::Regex {
+                pattern: r"TODO:.*".to_string(),
+            },
+            scope: SearchScope::Workspace,
+            filters: vec![FileFilter::Code],
+        };
+        assert_eq!(search.action_type(), "search");
+        assert!(search.is_read_only());
+        assert!(!search.is_mutating());
+    }
+
+    #[test]
+    fn test_replace_action() {
+        let replace = AtomicAction::Replace {
+            search: Box::new(SearchPattern::Regex {
+                pattern: r"old_name".to_string(),
+            }),
+            replacement: "new_name".to_string(),
+            scope: SearchScope::Workspace,
+            preview: true,
+            dry_run: false,
+        };
+        assert_eq!(replace.action_type(), "replace");
+        assert!(!replace.is_read_only());
+        assert!(replace.is_mutating());
+    }
+
+    #[test]
+    fn test_move_action() {
+        let move_action = AtomicAction::Move {
+            source: PathBuf::from("src/old.rs"),
+            destination: PathBuf::from("src/new.rs"),
+            update_imports: true,
+            create_parent: false,
+        };
+        assert_eq!(move_action.action_type(), "move");
+        assert!(!move_action.is_read_only());
+        assert!(move_action.is_mutating());
+        assert!(move_action.file_path().is_some());
+    }
+
+    #[test]
+    fn test_search_pattern_types() {
+        let regex = SearchPattern::Regex {
+            pattern: r"\d+".to_string(),
+        };
+        let fuzzy = SearchPattern::Fuzzy {
+            text: "hello".to_string(),
+            threshold: 0.8,
+        };
+        let ast = SearchPattern::Ast {
+            query: "function_name".to_string(),
+            language: "rust".to_string(),
+        };
+
+        // Test serialization
+        let json = serde_json::to_string(&regex).unwrap();
+        assert!(json.contains("\"type\":\"regex\""));
+
+        let json = serde_json::to_string(&fuzzy).unwrap();
+        assert!(json.contains("\"type\":\"fuzzy\""));
+
+        let json = serde_json::to_string(&ast).unwrap();
+        assert!(json.contains("\"type\":\"ast\""));
+    }
+
+    #[test]
+    fn test_search_scope_types() {
+        let file = SearchScope::File {
+            path: PathBuf::from("test.rs"),
+        };
+        let dir = SearchScope::Directory {
+            path: PathBuf::from("src/"),
+            recursive: true,
+        };
+        let workspace = SearchScope::Workspace;
+
+        // Test serialization
+        let json = serde_json::to_string(&file).unwrap();
+        assert!(json.contains("\"type\":\"file\""));
+
+        let json = serde_json::to_string(&dir).unwrap();
+        assert!(json.contains("\"type\":\"directory\""));
+        assert!(json.contains("\"recursive\":true"));
+
+        let json = serde_json::to_string(&workspace).unwrap();
+        assert!(json.contains("\"type\":\"workspace\""));
+    }
+
+    #[test]
+    fn test_file_filters() {
+        let code = FileFilter::Code;
+        let text = FileFilter::Text;
+        let ext = FileFilter::Extension("rs".to_string());
+        let exclude = FileFilter::Exclude("*.tmp".to_string());
+
+        // Test serialization
+        let json = serde_json::to_string(&code).unwrap();
+        assert!(json.contains("\"code\""));
+
+        let json = serde_json::to_string(&ext).unwrap();
+        assert!(json.contains("\"rs\""));
     }
 }
