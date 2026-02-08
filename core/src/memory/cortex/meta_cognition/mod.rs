@@ -6,6 +6,7 @@
 //! - Proactive reflection (excellence learning from optimization)
 //! - Dynamic behavioral anchor injection
 
+pub mod schema;
 pub mod types;
 
 pub use types::{AnchorScope, AnchorSource, BehavioralAnchor};
