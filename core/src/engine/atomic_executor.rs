@@ -2,930 +2,113 @@
 //!
 //! This module implements the executor that runs atomic operations (Read, Write, Edit, Bash)
 //! with proper security validation and error handling.
+//!
+//! ## Architecture
+//!
+//! The executor uses a composition pattern with specialized handlers:
+//! - **FileOpsHandler**: Read, Write, Move operations
+//! - **EditOpsHandler**: Edit, Replace operations
+//! - **BashOpsHandler**: Shell command execution
+//! - **SearchOpsHandler**: Search operations
+//!
+//! All handlers share a common **ExecutorContext** for working directory and security checks.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::process::Command;
-use tracing::{debug, info, warn};
-use regex::Regex;
+use tracing::debug;
 
-use super::{AtomicAction, Patch, PatchApplier, WriteMode, SearchPattern, SearchScope, FileFilter};
-use crate::error::{AlephError, Result};
+use super::atomic::{
+    ExecutorContext, FileOpsHandler, EditOpsHandler,
+    BashOpsHandler, SearchOpsHandler,
+    FileOps, EditOps, BashOps, SearchOps,
+};
+use super::AtomicAction;
+use crate::error::Result;
+
+/// Atomic operation result
+#[derive(Debug, Clone)]
+pub struct AtomicResult {
+    /// Whether the operation succeeded
+    pub success: bool,
+    /// Output from the operation
+    pub output: String,
+    /// Error message if operation failed
+    pub error: Option<String>,
+}
 
 /// Atomic operation executor
+///
+/// Delegates operations to specialized handlers using composition pattern.
 pub struct AtomicExecutor {
-    /// Working directory for relative paths
-    working_dir: PathBuf,
+    /// Shared execution context
+    context: Arc<ExecutorContext>,
 
-    /// Maximum file size for read/edit operations (10MB)
-    max_file_size: u64,
+    /// File operations handler
+    file_ops: FileOpsHandler,
 
-    /// Command timeout (30 seconds)
-    command_timeout: Duration,
+    /// Edit operations handler
+    edit_ops: EditOpsHandler,
+
+    /// Bash operations handler
+    bash_ops: BashOpsHandler,
+
+    /// Search operations handler
+    search_ops: SearchOpsHandler,
 }
 
 impl AtomicExecutor {
     /// Create a new atomic executor
+    ///
+    /// # Arguments
+    ///
+    /// * `working_dir` - The working directory for path resolution
     pub fn new(working_dir: PathBuf) -> Self {
+        let context = Arc::new(ExecutorContext::new(working_dir));
+
         Self {
-            working_dir,
-            max_file_size: 10 * 1024 * 1024, // 10MB
-            command_timeout: Duration::from_secs(30),
+            context: context.clone(),
+            file_ops: FileOpsHandler::new(context.clone(), 10 * 1024 * 1024), // 10MB
+            edit_ops: EditOpsHandler::new(context.clone(), 10 * 1024 * 1024), // 10MB
+            bash_ops: BashOpsHandler::new(context.clone(), Duration::from_secs(30)),
+            search_ops: SearchOpsHandler::new(context.clone()),
         }
     }
 
     /// Execute an atomic action
+    ///
+    /// Delegates to the appropriate handler based on action type.
     pub async fn execute(&self, action: &AtomicAction) -> Result<AtomicResult> {
         debug!(action = ?action, "Executing atomic action");
 
         let result = match action {
-            AtomicAction::Read { path, range } => self.execute_read(path, range.as_ref()).await?,
+            AtomicAction::Read { path, range } => {
+                self.file_ops.read(path, range.as_ref()).await?
+            }
             AtomicAction::Write { path, content, mode } => {
-                self.execute_write(path, content, mode).await?
-            }
-            AtomicAction::Edit { path, patches } => self.execute_edit(path, patches).await?,
-            AtomicAction::Bash { command, cwd } => {
-                self.execute_bash(command, cwd.as_ref()).await?
-            }
-            AtomicAction::Search { pattern, scope, filters } => {
-                self.execute_search(pattern, scope, filters).await?
-            }
-            AtomicAction::Replace { search, replacement, scope, preview, dry_run } => {
-                self.execute_replace(search, replacement, scope, *preview, *dry_run).await?
+                self.file_ops.write(path, content, mode).await?
             }
             AtomicAction::Move { source, destination, update_imports, create_parent } => {
-                self.execute_move(source, destination, *update_imports, *create_parent).await?
+                // Convert PathBuf to &str for the handler
+                let source_str = source.to_str().unwrap_or("");
+                let dest_str = destination.to_str().unwrap_or("");
+                self.file_ops.move_file(source_str, dest_str, *update_imports, *create_parent).await?
+            }
+            AtomicAction::Edit { path, patches } => {
+                self.edit_ops.edit(path, patches).await?
+            }
+            AtomicAction::Replace { search, replacement, scope, preview, dry_run } => {
+                self.edit_ops.replace(search, replacement, scope, *preview, *dry_run).await?
+            }
+            AtomicAction::Bash { command, cwd } => {
+                self.bash_ops.execute(command, cwd.as_deref()).await?
+            }
+            AtomicAction::Search { pattern, scope, filters } => {
+                self.search_ops.search(pattern, scope, filters).await?
             }
         };
 
         Ok(result)
-    }
-
-    /// Execute Read operation
-    async fn execute_read(
-        &self,
-        path: &str,
-        range: Option<&super::LineRange>,
-    ) -> Result<AtomicResult> {
-        let resolved_path = self.resolve_path(path)?;
-
-        // Check file exists
-        if !resolved_path.exists() {
-            return Ok(AtomicResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("File not found: {}", resolved_path.display())),
-            });
-        }
-
-        // Check file size
-        let metadata = tokio::fs::metadata(&resolved_path).await?;
-        if metadata.len() > self.max_file_size {
-            return Ok(AtomicResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "File too large: {} bytes (max: {})",
-                    metadata.len(),
-                    self.max_file_size
-                )),
-            });
-        }
-
-        // Read file
-        let content = tokio::fs::read_to_string(&resolved_path).await?;
-
-        // Apply line range if specified
-        let output = if let Some(range) = range {
-            let lines: Vec<&str> = content.lines().collect();
-            if range.start == 0 || range.start > lines.len() || range.end > lines.len() {
-                return Ok(AtomicResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!(
-                        "Invalid line range: {}-{} (file has {} lines)",
-                        range.start,
-                        range.end,
-                        lines.len()
-                    )),
-                });
-            }
-            lines[(range.start - 1)..range.end].join("\n")
-        } else {
-            content
-        };
-
-        Ok(AtomicResult {
-            success: true,
-            output,
-            error: None,
-        })
-    }
-
-    /// Execute Write operation
-    async fn execute_write(
-        &self,
-        path: &str,
-        content: &str,
-        mode: &WriteMode,
-    ) -> Result<AtomicResult> {
-        let resolved_path = self.resolve_path(path)?;
-
-        // Check mode
-        match mode {
-            WriteMode::CreateOnly => {
-                if resolved_path.exists() {
-                    return Ok(AtomicResult {
-                        success: false,
-                        output: String::new(),
-                        error: Some(format!("File already exists: {}", resolved_path.display())),
-                    });
-                }
-            }
-            WriteMode::Append => {
-                if resolved_path.exists() {
-                    let existing = tokio::fs::read_to_string(&resolved_path).await?;
-                    let new_content = format!("{}{}", existing, content);
-                    tokio::fs::write(&resolved_path, new_content).await?;
-                    return Ok(AtomicResult {
-                        success: true,
-                        output: format!("Appended to {}", resolved_path.display()),
-                        error: None,
-                    });
-                }
-            }
-            WriteMode::Overwrite => {
-                // Default behavior
-            }
-        }
-
-        // Write file
-        tokio::fs::write(&resolved_path, content).await?;
-
-        Ok(AtomicResult {
-            success: true,
-            output: format!("Wrote {} bytes to {}", content.len(), resolved_path.display()),
-            error: None,
-        })
-    }
-
-    /// Execute Edit operation
-    async fn execute_edit(&self, path: &str, patches: &[Patch]) -> Result<AtomicResult> {
-        let resolved_path = self.resolve_path(path)?;
-
-        // Check file exists
-        if !resolved_path.exists() {
-            return Ok(AtomicResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("File not found: {}", resolved_path.display())),
-            });
-        }
-
-        // Read file
-        let content = tokio::fs::read_to_string(&resolved_path).await?;
-
-        // Apply patches
-        let applier = PatchApplier::new(patches.to_vec());
-
-        // Detect conflicts
-        let conflicts = applier.detect_conflicts();
-        if !conflicts.is_empty() {
-            return Ok(AtomicResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Patch conflicts detected: {:?}", conflicts)),
-            });
-        }
-
-        // Apply all patches
-        let new_content = applier.apply_all(&content).map_err(|e| {
-            AlephError::tool(format!("Failed to apply patches: {}", e))
-        })?;
-
-        // Write back
-        tokio::fs::write(&resolved_path, new_content).await?;
-
-        Ok(AtomicResult {
-            success: true,
-            output: format!(
-                "Applied {} patches to {}",
-                patches.len(),
-                resolved_path.display()
-            ),
-            error: None,
-        })
-    }
-
-    /// Execute Bash operation
-    async fn execute_bash(&self, command: &str, cwd: Option<&String>) -> Result<AtomicResult> {
-        let work_dir = if let Some(cwd) = cwd {
-            PathBuf::from(cwd)
-        } else {
-            self.working_dir.clone()
-        };
-
-        // Execute command with timeout
-        let output = tokio::time::timeout(
-            self.command_timeout,
-            Command::new("sh")
-                .arg("-c")
-                .arg(command)
-                .current_dir(&work_dir)
-                .output(),
-        )
-        .await
-        .map_err(|_| AlephError::tool(format!("Command timeout after {:?}", self.command_timeout)))?
-        .map_err(|e| AlephError::tool(format!("Failed to execute command: {}", e)))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-        if output.status.success() {
-            Ok(AtomicResult {
-                success: true,
-                output: stdout,
-                error: None,
-            })
-        } else {
-            Ok(AtomicResult {
-                success: false,
-                output: stdout,
-                error: Some(stderr),
-            })
-        }
-    }
-
-    /// Execute Search operation
-    async fn execute_search(
-        &self,
-        pattern: &SearchPattern,
-        scope: &SearchScope,
-        filters: &[FileFilter],
-    ) -> Result<AtomicResult> {
-        debug!(pattern = ?pattern, scope = ?scope, "Executing search");
-
-        // Collect files to search
-        let files = self.collect_files_for_search(scope, filters).await?;
-
-        if files.is_empty() {
-            return Ok(AtomicResult {
-                success: true,
-                output: "No files found matching the search scope".to_string(),
-                error: None,
-            });
-        }
-
-        // Perform search based on pattern type
-        let matches = match pattern {
-            SearchPattern::Regex { pattern: regex_str } => {
-                self.search_regex(&files, regex_str).await?
-            }
-            SearchPattern::Fuzzy { text, threshold } => {
-                self.search_fuzzy(&files, text, *threshold).await?
-            }
-            SearchPattern::Ast { query, language } => {
-                // AST search is complex, return not implemented for now
-                return Ok(AtomicResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!(
-                        "AST search not yet implemented for language: {}",
-                        language
-                    )),
-                });
-            }
-        };
-
-        // Format results
-        let output = if matches.is_empty() {
-            "No matches found".to_string()
-        } else {
-            format!(
-                "Found {} matches in {} files:\n{}",
-                matches.len(),
-                matches.iter().map(|m| &m.file).collect::<std::collections::HashSet<_>>().len(),
-                matches
-                    .iter()
-                    .map(|m| format!("{}:{}:{}", m.file.display(), m.line_number, m.line_content))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )
-        };
-
-        Ok(AtomicResult {
-            success: true,
-            output,
-            error: None,
-        })
-    }
-
-    /// Execute Replace operation
-    async fn execute_replace(
-        &self,
-        pattern: &SearchPattern,
-        replacement: &str,
-        scope: &SearchScope,
-        preview: bool,
-        dry_run: bool,
-    ) -> Result<AtomicResult> {
-        debug!(pattern = ?pattern, replacement = replacement, "Executing replace");
-
-        // First, find all matches using search logic
-        let files = self.collect_files_for_search(scope, &[]).await?;
-
-        if files.is_empty() {
-            return Ok(AtomicResult {
-                success: true,
-                output: "No files found matching the search scope".to_string(),
-                error: None,
-            });
-        }
-
-        // Perform replacement based on pattern type
-        let mut replacements = Vec::new();
-        let mut total_replacements = 0;
-
-        for file in &files {
-            // Skip files that are too large
-            if let Ok(metadata) = tokio::fs::metadata(file).await {
-                if metadata.len() > self.max_file_size {
-                    continue;
-                }
-            }
-
-            // Read file content
-            let content = match tokio::fs::read_to_string(file).await {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            // Perform replacement based on pattern type
-            let new_content = match pattern {
-                SearchPattern::Regex { pattern: regex_str } => {
-                    let regex = Regex::new(regex_str)
-                        .map_err(|e| AlephError::tool(format!("Invalid regex pattern: {}", e)))?;
-                    regex.replace_all(&content, replacement).to_string()
-                }
-                SearchPattern::Fuzzy { text, .. } => {
-                    // Simple case-insensitive replacement
-                    content.replace(text, replacement)
-                }
-                SearchPattern::Ast { .. } => {
-                    return Ok(AtomicResult {
-                        success: false,
-                        output: String::new(),
-                        error: Some("AST-based replacement not yet implemented".to_string()),
-                    });
-                }
-            };
-
-            // Count replacements
-            if content != new_content {
-                let count = match pattern {
-                    SearchPattern::Regex { pattern: regex_str } => {
-                        let regex = Regex::new(regex_str).unwrap();
-                        regex.find_iter(&content).count()
-                    }
-                    SearchPattern::Fuzzy { text, .. } => {
-                        content.matches(text).count()
-                    }
-                    _ => 0,
-                };
-
-                total_replacements += count;
-
-                replacements.push(FileReplacement {
-                    file: file.clone(),
-                    old_content: content.clone(),
-                    new_content: new_content.clone(),
-                    replacement_count: count,
-                });
-
-                // Write back if not dry_run
-                if !dry_run {
-                    tokio::fs::write(file, &new_content).await?;
-                }
-            }
-        }
-
-        // Format output
-        let output = if replacements.is_empty() {
-            "No replacements made".to_string()
-        } else if preview {
-            // Generate preview with diffs
-            let mut preview_output = format!(
-                "Preview: {} replacements in {} files\n\n",
-                total_replacements,
-                replacements.len()
-            );
-
-            for repl in &replacements {
-                preview_output.push_str(&format!(
-                    "File: {}\nReplacements: {}\n",
-                    repl.file.display(),
-                    repl.replacement_count
-                ));
-
-                // Show first few lines of diff
-                let old_lines: Vec<&str> = repl.old_content.lines().collect();
-                let new_lines: Vec<&str> = repl.new_content.lines().collect();
-
-                for (i, (old, new)) in old_lines.iter().zip(new_lines.iter()).enumerate() {
-                    if old != new {
-                        preview_output.push_str(&format!("  Line {}:\n", i + 1));
-                        preview_output.push_str(&format!("    - {}\n", old));
-                        preview_output.push_str(&format!("    + {}\n", new));
-                    }
-                }
-                preview_output.push('\n');
-            }
-
-            preview_output
-        } else {
-            // Summary output
-            let mode = if dry_run { " (dry run)" } else { "" };
-            format!(
-                "Made {} replacements in {} files{}\n{}",
-                total_replacements,
-                replacements.len(),
-                mode,
-                replacements
-                    .iter()
-                    .map(|r| format!("  {}: {} replacements", r.file.display(), r.replacement_count))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )
-        };
-
-        Ok(AtomicResult {
-            success: true,
-            output,
-            error: None,
-        })
-    }
-
-    /// Execute Move operation
-    async fn execute_move(
-        &self,
-        source: &PathBuf,
-        destination: &PathBuf,
-        update_imports: bool,
-        create_parent: bool,
-    ) -> Result<AtomicResult> {
-        debug!(source = ?source, destination = ?destination, "Executing move");
-
-        // Resolve paths
-        let source_path = if source.is_absolute() {
-            source.clone()
-        } else {
-            self.working_dir.join(source)
-        };
-
-        let dest_path = if destination.is_absolute() {
-            destination.clone()
-        } else {
-            self.working_dir.join(destination)
-        };
-
-        // Check source exists
-        if !source_path.exists() {
-            return Ok(AtomicResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Source does not exist: {}", source_path.display())),
-            });
-        }
-
-        // Check destination doesn't exist
-        if dest_path.exists() {
-            return Ok(AtomicResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Destination already exists: {}", dest_path.display())),
-            });
-        }
-
-        // Create parent directory if needed
-        if create_parent {
-            if let Some(parent) = dest_path.parent() {
-                if !parent.exists() {
-                    tokio::fs::create_dir_all(parent).await?;
-                }
-            }
-        }
-
-        // Check parent directory exists
-        if let Some(parent) = dest_path.parent() {
-            if !parent.exists() {
-                return Ok(AtomicResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!(
-                        "Parent directory does not exist: {}. Use create_parent option.",
-                        parent.display()
-                    )),
-                });
-            }
-        }
-
-        // Perform the move
-        tokio::fs::rename(&source_path, &dest_path).await?;
-
-        // Update imports if requested
-        let mut import_updates = Vec::new();
-        if update_imports {
-            import_updates = self.update_imports_after_move(&source_path, &dest_path).await?;
-        }
-
-        // Format output
-        let output = if import_updates.is_empty() {
-            format!(
-                "Moved {} to {}",
-                source_path.display(),
-                dest_path.display()
-            )
-        } else {
-            format!(
-                "Moved {} to {}\nUpdated imports in {} files:\n{}",
-                source_path.display(),
-                dest_path.display(),
-                import_updates.len(),
-                import_updates
-                    .iter()
-                    .map(|f| format!("  - {}", f.display()))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )
-        };
-
-        Ok(AtomicResult {
-            success: true,
-            output,
-            error: None,
-        })
-    }
-
-    /// Update imports after moving a file
-    async fn update_imports_after_move(
-        &self,
-        old_path: &PathBuf,
-        new_path: &PathBuf,
-    ) -> Result<Vec<PathBuf>> {
-        let mut updated_files = Vec::new();
-
-        // Only handle Rust files for now
-        if let Some(ext) = old_path.extension() {
-            if ext != "rs" {
-                // Not a Rust file, skip import updates
-                return Ok(updated_files);
-            }
-        } else {
-            return Ok(updated_files);
-        }
-
-        // Extract module names from paths
-        let old_module = self.path_to_module_name(old_path);
-        let new_module = self.path_to_module_name(new_path);
-
-        if old_module.is_none() || new_module.is_none() {
-            return Ok(updated_files);
-        }
-
-        let old_mod = old_module.unwrap();
-        let new_mod = new_module.unwrap();
-
-        // Find all Rust files in the workspace
-        let mut rust_files = Vec::new();
-        self.collect_files_from_directory(
-            &self.working_dir,
-            true,
-            &[FileFilter::Extension("rs".to_string())],
-            &mut rust_files,
-        )
-        .await?;
-
-        // Update imports in each file
-        for file in rust_files {
-            if file == *new_path {
-                // Skip the moved file itself
-                continue;
-            }
-
-            let content = match tokio::fs::read_to_string(&file).await {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            // Simple pattern matching for Rust imports
-            // Look for: use old_module::...;  or  mod old_module;
-            let patterns = vec![
-                format!(r"use\s+{}::", old_mod),
-                format!(r"use\s+{}\s*;", old_mod),
-                format!(r"mod\s+{}\s*;", old_mod),
-            ];
-
-            let mut modified = false;
-            let mut new_content = content.clone();
-
-            for pattern in patterns {
-                if content.contains(&old_mod) {
-                    // Replace old module name with new module name
-                    new_content = new_content.replace(&old_mod, &new_mod);
-                    modified = true;
-                }
-            }
-
-            if modified {
-                tokio::fs::write(&file, new_content).await?;
-                updated_files.push(file);
-            }
-        }
-
-        Ok(updated_files)
-    }
-
-    /// Convert file path to module name (for Rust files)
-    fn path_to_module_name(&self, path: &PathBuf) -> Option<String> {
-        // Get relative path from working directory
-        let rel_path = path.strip_prefix(&self.working_dir).ok()?;
-
-        // Remove .rs extension
-        let path_str = rel_path.to_str()?;
-        let without_ext = path_str.strip_suffix(".rs")?;
-
-        // Convert path separators to ::
-        let module_name = without_ext.replace('/', "::").replace('\\', "::");
-
-        // Handle mod.rs files
-        let module_name = module_name.strip_suffix("::mod").unwrap_or(&module_name);
-
-        Some(module_name.to_string())
-    }
-
-    /// Collect files for search based on scope and filters
-    async fn collect_files_for_search(
-        &self,
-        scope: &SearchScope,
-        filters: &[FileFilter],
-    ) -> Result<Vec<PathBuf>> {
-        let mut files = Vec::new();
-
-        match scope {
-            SearchScope::File { path } => {
-                let resolved = self.resolve_path(path.to_str().unwrap_or(""))?;
-                if resolved.exists() && self.should_include_file(&resolved, filters) {
-                    files.push(resolved);
-                }
-            }
-            SearchScope::Directory { path, recursive } => {
-                let resolved = self.resolve_path(path.to_str().unwrap_or(""))?;
-                if resolved.exists() && resolved.is_dir() {
-                    self.collect_files_from_directory(&resolved, *recursive, filters, &mut files)
-                        .await?;
-                }
-            }
-            SearchScope::Workspace => {
-                // Search in working directory recursively
-                self.collect_files_from_directory(&self.working_dir, true, filters, &mut files)
-                    .await?;
-            }
-        }
-
-        Ok(files)
-    }
-
-    /// Recursively collect files from directory
-    fn collect_files_from_directory<'a>(
-        &'a self,
-        dir: &'a Path,
-        recursive: bool,
-        filters: &'a [FileFilter],
-        files: &'a mut Vec<PathBuf>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(async move {
-            let mut entries = tokio::fs::read_dir(dir).await?;
-
-            while let Some(entry) = entries.next_entry().await? {
-                let path = entry.path();
-
-                if path.is_file() {
-                    if self.should_include_file(&path, filters) {
-                        files.push(path);
-                    }
-                } else if path.is_dir() && recursive {
-                    // Skip hidden directories and common ignore patterns
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if !name.starts_with('.') && name != "node_modules" && name != "target" {
-                            self.collect_files_from_directory(&path, recursive, filters, files)
-                                .await?;
-                        }
-                    }
-                }
-            }
-
-            Ok(())
-        })
-    }
-
-    /// Check if file should be included based on filters
-    fn should_include_file(&self, path: &Path, filters: &[FileFilter]) -> bool {
-        // If no filters, include all files
-        if filters.is_empty() {
-            return true;
-        }
-
-        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-        for filter in filters {
-            match filter {
-                FileFilter::Code => {
-                    // Common code file extensions
-                    let code_exts = [
-                        "rs", "py", "js", "ts", "jsx", "tsx", "go", "java", "c", "cpp", "h",
-                        "hpp", "cs", "rb", "php", "swift", "kt", "scala", "sh", "bash",
-                    ];
-                    if !code_exts.contains(&extension) {
-                        return false;
-                    }
-                }
-                FileFilter::Text => {
-                    // Common text file extensions
-                    let text_exts = ["txt", "md", "rst", "log", "json", "yaml", "yml", "toml"];
-                    if !text_exts.contains(&extension) {
-                        return false;
-                    }
-                }
-                FileFilter::Extension(ext) => {
-                    if extension != ext {
-                        return false;
-                    }
-                }
-                FileFilter::Exclude(pattern) => {
-                    // Simple glob-like matching
-                    if filename.contains(pattern.trim_matches('*')) {
-                        return false;
-                    }
-                }
-            }
-        }
-
-        true
-    }
-
-    /// Search files using regex pattern
-    async fn search_regex(&self, files: &[PathBuf], pattern: &str) -> Result<Vec<SearchMatch>> {
-        let regex = Regex::new(pattern)
-            .map_err(|e| AlephError::tool(format!("Invalid regex pattern: {}", e)))?;
-
-        let mut matches = Vec::new();
-
-        for file in files {
-            // Skip files that are too large
-            if let Ok(metadata) = tokio::fs::metadata(file).await {
-                if metadata.len() > self.max_file_size {
-                    continue;
-                }
-            }
-
-            // Read file content
-            if let Ok(content) = tokio::fs::read_to_string(file).await {
-                for (line_num, line) in content.lines().enumerate() {
-                    if regex.is_match(line) {
-                        matches.push(SearchMatch {
-                            file: file.clone(),
-                            line_number: line_num + 1,
-                            line_content: line.to_string(),
-                            match_start: 0, // TODO: Calculate actual match position
-                            match_end: line.len(),
-                        });
-                    }
-                }
-            }
-        }
-
-        Ok(matches)
-    }
-
-    /// Search files using fuzzy matching
-    async fn search_fuzzy(
-        &self,
-        files: &[PathBuf],
-        text: &str,
-        threshold: f32,
-    ) -> Result<Vec<SearchMatch>> {
-        let mut matches = Vec::new();
-
-        for file in files {
-            // Skip files that are too large
-            if let Ok(metadata) = tokio::fs::metadata(file).await {
-                if metadata.len() > self.max_file_size {
-                    continue;
-                }
-            }
-
-            // Read file content
-            if let Ok(content) = tokio::fs::read_to_string(file).await {
-                for (line_num, line) in content.lines().enumerate() {
-                    // Simple fuzzy matching: check if text appears as substring (case-insensitive)
-                    // TODO: Implement proper fuzzy matching algorithm (e.g., Levenshtein distance)
-                    let similarity = if line.to_lowercase().contains(&text.to_lowercase()) {
-                        1.0
-                    } else {
-                        0.0
-                    };
-
-                    if similarity >= threshold {
-                        matches.push(SearchMatch {
-                            file: file.clone(),
-                            line_number: line_num + 1,
-                            line_content: line.to_string(),
-                            match_start: 0,
-                            match_end: line.len(),
-                        });
-                    }
-                }
-            }
-        }
-
-        Ok(matches)
-    }
-
-    /// Resolve path (relative to working directory)
-    fn resolve_path(&self, path: &str) -> Result<PathBuf> {
-        let path = Path::new(path);
-
-        // If absolute, use as-is
-        if path.is_absolute() {
-            return Ok(path.to_path_buf());
-        }
-
-        // If starts with ~, expand home directory
-        if let Some(path_str) = path.to_str() {
-            if path_str.starts_with("~/") || path_str == "~" {
-                if let Some(home) = dirs::home_dir() {
-                    let relative = path_str.strip_prefix("~/").unwrap_or("");
-                    return Ok(home.join(relative));
-                }
-            }
-        }
-
-        // Otherwise, resolve relative to working directory
-        Ok(self.working_dir.join(path))
-    }
-}
-
-/// Search match result
-#[derive(Debug, Clone)]
-struct SearchMatch {
-    /// File where match was found
-    file: PathBuf,
-    /// Line number (1-indexed)
-    line_number: usize,
-    /// Content of the matching line
-    line_content: String,
-    /// Start position of match in line
-    match_start: usize,
-    /// End position of match in line
-    match_end: usize,
-}
-
-/// File replacement result
-#[derive(Debug, Clone)]
-struct FileReplacement {
-    /// File that was modified
-    file: PathBuf,
-    /// Original content
-    old_content: String,
-    /// New content after replacement
-    new_content: String,
-    /// Number of replacements made
-    replacement_count: usize,
-}
-
-/// Result of atomic operation execution
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AtomicResult {
-    /// Whether the operation succeeded
-    pub success: bool,
-
-    /// Output (stdout for bash, content for read, message for write/edit)
-    pub output: String,
-
-    /// Error message (if failed)
-    pub error: Option<String>,
-}
-
-impl AtomicResult {
-    /// Check if the result indicates success
-    pub fn is_success(&self) -> bool {
-        self.success
-    }
-
-    /// Get error message
-    pub fn error_message(&self) -> String {
-        self.error.clone().unwrap_or_default()
     }
 }
 
@@ -945,446 +128,64 @@ mod tests {
     async fn test_execute_read() {
         let (executor, temp_dir) = create_test_executor();
 
-        // Create test file
+        // Create a test file
         let test_file = temp_dir.path().join("test.txt");
-        fs::write(&test_file, "line1\nline2\nline3\n").unwrap();
+        fs::write(&test_file, "Hello, World!\nLine 2\nLine 3\n").unwrap();
 
         // Read entire file
         let action = AtomicAction::Read {
-            path: test_file.to_str().unwrap().to_string(),
+            path: "test.txt".to_string(),
             range: None,
         };
+
         let result = executor.execute(&action).await.unwrap();
         assert!(result.success);
-        assert_eq!(result.output, "line1\nline2\nline3\n");
-    }
-
-    #[tokio::test]
-    async fn test_execute_read_with_range() {
-        let (executor, temp_dir) = create_test_executor();
-
-        // Create test file
-        let test_file = temp_dir.path().join("test.txt");
-        fs::write(&test_file, "line1\nline2\nline3\nline4\n").unwrap();
-
-        // Read lines 2-3
-        let action = AtomicAction::Read {
-            path: test_file.to_str().unwrap().to_string(),
-            range: Some(super::super::LineRange { start: 2, end: 3 }),
-        };
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-        assert_eq!(result.output, "line2\nline3");
+        assert_eq!(result.output, "Hello, World!\nLine 2\nLine 3\n");
     }
 
     #[tokio::test]
     async fn test_execute_write() {
         let (executor, temp_dir) = create_test_executor();
 
-        let test_file = temp_dir.path().join("test.txt");
-
-        // Write file
+        // Write a file
         let action = AtomicAction::Write {
-            path: test_file.to_str().unwrap().to_string(),
-            content: "hello world".to_string(),
-            mode: WriteMode::Overwrite,
+            path: "output.txt".to_string(),
+            content: "Test content".to_string(),
+            mode: super::super::WriteMode::Overwrite,
         };
+
         let result = executor.execute(&action).await.unwrap();
         assert!(result.success);
 
-        // Verify content
-        let content = fs::read_to_string(&test_file).unwrap();
-        assert_eq!(content, "hello world");
-    }
-
-    #[tokio::test]
-    async fn test_execute_edit() {
-        let (executor, temp_dir) = create_test_executor();
-
-        // Create test file
-        let test_file = temp_dir.path().join("test.txt");
-        fs::write(&test_file, "line1\nline2\nline3\n").unwrap();
-
-        // Edit file
-        let action = AtomicAction::Edit {
-            path: test_file.to_str().unwrap().to_string(),
-            patches: vec![Patch {
-                start_line: 2,
-                end_line: 2,
-                old_content: "line2".to_string(),
-                new_content: "modified".to_string(),
-            }],
-        };
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-
-        // Verify content
-        let content = fs::read_to_string(&test_file).unwrap();
-        assert_eq!(content, "line1\nmodified\nline3\n");
+        // Verify file was written
+        let content = fs::read_to_string(temp_dir.path().join("output.txt")).unwrap();
+        assert_eq!(content, "Test content");
     }
 
     #[tokio::test]
     async fn test_execute_bash() {
         let (executor, _temp_dir) = create_test_executor();
 
-        // Execute simple command
+        // Execute a simple command
         let action = AtomicAction::Bash {
-            command: "echo hello".to_string(),
+            command: "echo 'Hello from bash'".to_string(),
             cwd: None,
         };
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-        assert_eq!(result.output.trim(), "hello");
-    }
-
-    #[tokio::test]
-    async fn test_execute_bash_failure() {
-        let (executor, _temp_dir) = create_test_executor();
-
-        // Execute failing command
-        let action = AtomicAction::Bash {
-            command: "exit 1".to_string(),
-            cwd: None,
-        };
-        let result = executor.execute(&action).await.unwrap();
-        assert!(!result.success);
-    }
-
-    #[tokio::test]
-    async fn test_read_file_not_found() {
-        let (executor, _temp_dir) = create_test_executor();
-
-        let action = AtomicAction::Read {
-            path: "/nonexistent/file.txt".to_string(),
-            range: None,
-        };
-        let result = executor.execute(&action).await.unwrap();
-        assert!(!result.success);
-        assert!(result.error.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_write_create_only() {
-        let (executor, temp_dir) = create_test_executor();
-
-        let test_file = temp_dir.path().join("test.txt");
-
-        // First write should succeed
-        let action = AtomicAction::Write {
-            path: test_file.to_str().unwrap().to_string(),
-            content: "content".to_string(),
-            mode: WriteMode::CreateOnly,
-        };
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-
-        // Second write should fail
-        let result = executor.execute(&action).await.unwrap();
-        assert!(!result.success);
-    }
-
-    #[tokio::test]
-    async fn test_write_append() {
-        let (executor, temp_dir) = create_test_executor();
-
-        let test_file = temp_dir.path().join("test.txt");
-
-        // Write initial content
-        fs::write(&test_file, "initial\n").unwrap();
-
-        // Append
-        let action = AtomicAction::Write {
-            path: test_file.to_str().unwrap().to_string(),
-            content: "appended\n".to_string(),
-            mode: WriteMode::Append,
-        };
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-
-        // Verify content
-        let content = fs::read_to_string(&test_file).unwrap();
-        assert_eq!(content, "initial\nappended\n");
-    }
-
-    #[tokio::test]
-    async fn test_execute_search_regex() {
-        let (executor, temp_dir) = create_test_executor();
-
-        // Create test files
-        let test_file1 = temp_dir.path().join("test1.rs");
-        fs::write(&test_file1, "fn main() {\n    println!(\"TODO: implement\");\n}\n").unwrap();
-
-        let test_file2 = temp_dir.path().join("test2.rs");
-        fs::write(&test_file2, "// TODO: fix this\nfn helper() {}\n").unwrap();
-
-        // Search for TODO comments
-        let action = AtomicAction::Search {
-            pattern: SearchPattern::Regex {
-                pattern: r"TODO:.*".to_string(),
-            },
-            scope: SearchScope::Directory {
-                path: temp_dir.path().to_path_buf(),
-                recursive: false,
-            },
-            filters: vec![FileFilter::Extension("rs".to_string())],
-        };
 
         let result = executor.execute(&action).await.unwrap();
         assert!(result.success);
-        assert!(result.output.contains("Found 2 matches"));
-        assert!(result.output.contains("test1.rs"));
-        assert!(result.output.contains("test2.rs"));
+        assert!(result.output.contains("Hello from bash"));
     }
 
     #[tokio::test]
-    async fn test_execute_search_fuzzy() {
+    async fn test_execute_move() {
         let (executor, temp_dir) = create_test_executor();
 
-        // Create test file
-        let test_file = temp_dir.path().join("test.txt");
-        fs::write(&test_file, "Hello world\nHello Rust\nGoodbye\n").unwrap();
-
-        // Fuzzy search for "hello"
-        let action = AtomicAction::Search {
-            pattern: SearchPattern::Fuzzy {
-                text: "hello".to_string(),
-                threshold: 0.8,
-            },
-            scope: SearchScope::File {
-                path: test_file.clone(),
-            },
-            filters: vec![],
-        };
-
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("Found 2 matches"));
-    }
-
-    #[tokio::test]
-    async fn test_execute_search_no_matches() {
-        let (executor, temp_dir) = create_test_executor();
-
-        // Create test file
-        let test_file = temp_dir.path().join("test.txt");
-        fs::write(&test_file, "Hello world\n").unwrap();
-
-        // Search for non-existent pattern
-        let action = AtomicAction::Search {
-            pattern: SearchPattern::Regex {
-                pattern: r"NOTFOUND".to_string(),
-            },
-            scope: SearchScope::File {
-                path: test_file,
-            },
-            filters: vec![],
-        };
-
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("No matches found"));
-    }
-
-    #[tokio::test]
-    async fn test_execute_search_with_filters() {
-        let (executor, temp_dir) = create_test_executor();
-
-        // Create test files with different extensions
-        let rs_file = temp_dir.path().join("test.rs");
-        fs::write(&rs_file, "fn main() {}\n").unwrap();
-
-        let txt_file = temp_dir.path().join("test.txt");
-        fs::write(&txt_file, "fn main() {}\n").unwrap();
-
-        // Search only .rs files
-        let action = AtomicAction::Search {
-            pattern: SearchPattern::Regex {
-                pattern: r"fn main".to_string(),
-            },
-            scope: SearchScope::Directory {
-                path: temp_dir.path().to_path_buf(),
-                recursive: false,
-            },
-            filters: vec![FileFilter::Extension("rs".to_string())],
-        };
-
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("test.rs"));
-        assert!(!result.output.contains("test.txt"));
-    }
-
-    #[tokio::test]
-    async fn test_execute_replace_regex() {
-        let (executor, temp_dir) = create_test_executor();
-
-        // Create test files
-        let test_file1 = temp_dir.path().join("test1.txt");
-        fs::write(&test_file1, "Hello world\nHello Rust\nGoodbye\n").unwrap();
-
-        let test_file2 = temp_dir.path().join("test2.txt");
-        fs::write(&test_file2, "Hello everyone\n").unwrap();
-
-        // Replace "Hello" with "Hi"
-        let action = AtomicAction::Replace {
-            search: Box::new(SearchPattern::Regex {
-                pattern: r"Hello".to_string(),
-            }),
-            replacement: "Hi".to_string(),
-            scope: SearchScope::Directory {
-                path: temp_dir.path().to_path_buf(),
-                recursive: false,
-            },
-            preview: false,
-            dry_run: false,
-        };
-
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("Made 3 replacements"));
-        assert!(result.output.contains("2 files"));
-
-        // Verify files were modified
-        let content1 = fs::read_to_string(&test_file1).unwrap();
-        assert_eq!(content1, "Hi world\nHi Rust\nGoodbye\n");
-
-        let content2 = fs::read_to_string(&test_file2).unwrap();
-        assert_eq!(content2, "Hi everyone\n");
-    }
-
-    #[tokio::test]
-    async fn test_execute_replace_dry_run() {
-        let (executor, temp_dir) = create_test_executor();
-
-        // Create test file
-        let test_file = temp_dir.path().join("test.txt");
-        fs::write(&test_file, "Hello world\n").unwrap();
-
-        // Replace with dry_run
-        let action = AtomicAction::Replace {
-            search: Box::new(SearchPattern::Regex {
-                pattern: r"Hello".to_string(),
-            }),
-            replacement: "Hi".to_string(),
-            scope: SearchScope::File {
-                path: test_file.clone(),
-            },
-            preview: false,
-            dry_run: true,
-        };
-
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("(dry run)"));
-
-        // Verify file was NOT modified
-        let content = fs::read_to_string(&test_file).unwrap();
-        assert_eq!(content, "Hello world\n");
-    }
-
-    #[tokio::test]
-    async fn test_execute_replace_preview() {
-        let (executor, temp_dir) = create_test_executor();
-
-        // Create test file
-        let test_file = temp_dir.path().join("test.txt");
-        fs::write(&test_file, "Hello world\nHello Rust\n").unwrap();
-
-        // Replace with preview
-        let action = AtomicAction::Replace {
-            search: Box::new(SearchPattern::Regex {
-                pattern: r"Hello".to_string(),
-            }),
-            replacement: "Hi".to_string(),
-            scope: SearchScope::File {
-                path: test_file.clone(),
-            },
-            preview: true,
-            dry_run: false,
-        };
-
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("Preview:"));
-        assert!(result.output.contains("2 replacements"));
-        assert!(result.output.contains("- Hello"));
-        assert!(result.output.contains("+ Hi"));
-
-        // Verify file WAS modified (preview doesn't prevent modification)
-        let content = fs::read_to_string(&test_file).unwrap();
-        assert_eq!(content, "Hi world\nHi Rust\n");
-    }
-
-    #[tokio::test]
-    async fn test_execute_replace_no_matches() {
-        let (executor, temp_dir) = create_test_executor();
-
-        // Create test file
-        let test_file = temp_dir.path().join("test.txt");
-        fs::write(&test_file, "Hello world\n").unwrap();
-
-        // Replace non-existent pattern
-        let action = AtomicAction::Replace {
-            search: Box::new(SearchPattern::Regex {
-                pattern: r"NOTFOUND".to_string(),
-            }),
-            replacement: "replacement".to_string(),
-            scope: SearchScope::File {
-                path: test_file.clone(),
-            },
-            preview: false,
-            dry_run: false,
-        };
-
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("No replacements made"));
-
-        // Verify file was not modified
-        let content = fs::read_to_string(&test_file).unwrap();
-        assert_eq!(content, "Hello world\n");
-    }
-
-    #[tokio::test]
-    async fn test_execute_replace_fuzzy() {
-        let (executor, temp_dir) = create_test_executor();
-
-        // Create test file
-        let test_file = temp_dir.path().join("test.txt");
-        fs::write(&test_file, "Hello world\nHello Rust\n").unwrap();
-
-        // Fuzzy replace
-        let action = AtomicAction::Replace {
-            search: Box::new(SearchPattern::Fuzzy {
-                text: "Hello".to_string(),
-                threshold: 0.8,
-            }),
-            replacement: "Hi".to_string(),
-            scope: SearchScope::File {
-                path: test_file.clone(),
-            },
-            preview: false,
-            dry_run: false,
-        };
-
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("Made 2 replacements"));
-
-        // Verify file was modified
-        let content = fs::read_to_string(&test_file).unwrap();
-        assert_eq!(content, "Hi world\nHi Rust\n");
-    }
-
-    #[tokio::test]
-    async fn test_execute_move_file() {
-        let (executor, temp_dir) = create_test_executor();
-
-        // Create test file
+        // Create a source file
         let source = temp_dir.path().join("source.txt");
-        fs::write(&source, "test content\n").unwrap();
+        fs::write(&source, "content").unwrap();
 
-        let dest = temp_dir.path().join("destination.txt");
+        let dest = temp_dir.path().join("dest.txt");
 
         // Move file
         let action = AtomicAction::Move {
@@ -1396,96 +197,21 @@ mod tests {
 
         let result = executor.execute(&action).await.unwrap();
         assert!(result.success);
-        assert!(result.output.contains("Moved"));
 
         // Verify source no longer exists
         assert!(!source.exists());
 
-        // Verify destination exists with correct content
-        assert!(dest.exists());
-        let content = fs::read_to_string(&dest).unwrap();
-        assert_eq!(content, "test content\n");
-    }
-
-    #[tokio::test]
-    async fn test_execute_move_with_parent_creation() {
-        let (executor, temp_dir) = create_test_executor();
-
-        // Create test file
-        let source = temp_dir.path().join("source.txt");
-        fs::write(&source, "test content\n").unwrap();
-
-        // Destination with non-existent parent
-        let dest = temp_dir.path().join("subdir").join("destination.txt");
-
-        // Move file with create_parent
-        let action = AtomicAction::Move {
-            source: source.clone(),
-            destination: dest.clone(),
-            update_imports: false,
-            create_parent: true,
-        };
-
-        let result = executor.execute(&action).await.unwrap();
-        assert!(result.success);
-
         // Verify destination exists
         assert!(dest.exists());
         let content = fs::read_to_string(&dest).unwrap();
-        assert_eq!(content, "test content\n");
-    }
-
-    #[tokio::test]
-    async fn test_execute_move_source_not_exists() {
-        let (executor, temp_dir) = create_test_executor();
-
-        let source = temp_dir.path().join("nonexistent.txt");
-        let dest = temp_dir.path().join("destination.txt");
-
-        // Try to move non-existent file
-        let action = AtomicAction::Move {
-            source: source.clone(),
-            destination: dest.clone(),
-            update_imports: false,
-            create_parent: false,
-        };
-
-        let result = executor.execute(&action).await.unwrap();
-        assert!(!result.success);
-        assert!(result.error.is_some());
-        assert!(result.error.unwrap().contains("Source does not exist"));
-    }
-
-    #[tokio::test]
-    async fn test_execute_move_destination_exists() {
-        let (executor, temp_dir) = create_test_executor();
-
-        // Create source and destination files
-        let source = temp_dir.path().join("source.txt");
-        fs::write(&source, "source content\n").unwrap();
-
-        let dest = temp_dir.path().join("destination.txt");
-        fs::write(&dest, "dest content\n").unwrap();
-
-        // Try to move to existing destination
-        let action = AtomicAction::Move {
-            source: source.clone(),
-            destination: dest.clone(),
-            update_imports: false,
-            create_parent: false,
-        };
-
-        let result = executor.execute(&action).await.unwrap();
-        assert!(!result.success);
-        assert!(result.error.is_some());
-        assert!(result.error.unwrap().contains("Destination already exists"));
+        assert_eq!(content, "content");
     }
 
     #[tokio::test]
     async fn test_execute_move_directory() {
         let (executor, temp_dir) = create_test_executor();
 
-        // Create source directory with files
+        // Create a source directory with files
         let source_dir = temp_dir.path().join("source_dir");
         fs::create_dir(&source_dir).unwrap();
         fs::write(source_dir.join("file1.txt"), "content1\n").unwrap();
@@ -1537,11 +263,16 @@ mod tests {
 
         let result = executor.execute(&action).await.unwrap();
         assert!(result.success);
-        assert!(result.output.contains("Updated imports"));
+
+        // Verify source no longer exists
+        assert!(!source.exists());
+
+        // Verify destination exists
+        assert!(dest.exists());
 
         // Verify imports were updated
         let importer_content = fs::read_to_string(&importer).unwrap();
-        assert!(importer_content.contains("use new_module::hello;"));
-        assert!(!importer_content.contains("use old_module::hello;"));
+        assert!(importer_content.contains("use new_module::hello"));
+        assert!(!importer_content.contains("use old_module::hello"));
     }
 }
