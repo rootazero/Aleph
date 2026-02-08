@@ -174,6 +174,31 @@ pub struct LoopConfig {
     /// the system will automatically try a lower level.
     #[serde(default = "default_true")]
     pub enable_thinking_fallback: bool,
+
+    // ========================================================================
+    // Meta-Cognition Layer (Phase 6)
+    // ========================================================================
+
+    /// Enable meta-cognition layer for self-reflection and behavioral learning
+    ///
+    /// When enabled, the agent loop will:
+    /// - Trigger reactive reflection on task failures
+    /// - Retrieve relevant behavioral anchors for new tasks
+    /// - Inject anchors into system prompts
+    #[serde(default)]
+    pub meta_cognition_enabled: bool,
+
+    /// Cache size for anchor retrieval (LRU)
+    #[serde(default = "default_meta_cognition_cache_size")]
+    pub meta_cognition_cache_size: usize,
+
+    /// Minimum confidence threshold for anchor injection (0.0-1.0)
+    #[serde(default = "default_meta_cognition_min_confidence")]
+    pub meta_cognition_min_confidence: f32,
+
+    /// Maximum number of anchors to inject per request
+    #[serde(default = "default_meta_cognition_max_anchors")]
+    pub meta_cognition_max_anchors: usize,
 }
 
 /// Retry configuration for think operations (LLM calls)
@@ -272,6 +297,11 @@ impl Default for LoopConfig {
             // Thinking levels system
             think_level: ThinkLevel::default(),
             enable_thinking_fallback: true,
+            // Meta-cognition layer (disabled by default)
+            meta_cognition_enabled: false,
+            meta_cognition_cache_size: default_meta_cognition_cache_size(),
+            meta_cognition_min_confidence: default_meta_cognition_min_confidence(),
+            meta_cognition_max_anchors: default_meta_cognition_max_anchors(),
         }
     }
 }
@@ -417,6 +447,18 @@ fn default_fast_model() -> String {
     "claude-3-5-haiku-20241022".to_string()
 }
 
+fn default_meta_cognition_cache_size() -> usize {
+    100
+}
+
+fn default_meta_cognition_min_confidence() -> f32 {
+    0.5
+}
+
+fn default_meta_cognition_max_anchors() -> usize {
+    5
+}
+
 fn default_dangerous_tools() -> Vec<String> {
     vec![
         "delete".to_string(),
@@ -536,6 +578,18 @@ impl LoopConfig {
         self
     }
 
+    /// Builder pattern: enable/disable meta-cognition
+    pub fn with_meta_cognition(mut self, enabled: bool) -> Self {
+        self.meta_cognition_enabled = enabled;
+        self
+    }
+
+    /// Builder pattern: set meta-cognition cache size
+    pub fn with_meta_cognition_cache_size(mut self, size: usize) -> Self {
+        self.meta_cognition_cache_size = size;
+        self
+    }
+
     /// Check if the current mode allows a specific tool
     ///
     /// In PlanMode, only read operations are allowed.
@@ -623,6 +677,11 @@ impl LoopConfig {
             // Thinking levels
             think_level: ThinkLevel::Minimal,
             enable_thinking_fallback: true,
+            // Meta-cognition (enabled for testing)
+            meta_cognition_enabled: true,
+            meta_cognition_cache_size: 10,
+            meta_cognition_min_confidence: 0.5,
+            meta_cognition_max_anchors: 3,
         }
     }
 

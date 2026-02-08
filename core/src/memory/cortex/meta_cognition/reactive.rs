@@ -416,6 +416,55 @@ impl ReactiveReflector {
 
         Ok(anchor)
     }
+
+    /// Get a reference to the anchor store
+    ///
+    /// This is useful for external components that need to access the anchor store
+    /// for operations like updating anchor confidence.
+    pub fn anchor_store(&self) -> &Arc<RwLock<AnchorStore>> {
+        &self.anchor_store
+    }
+
+    /// Async wrapper for handle_failure to support async contexts
+    ///
+    /// # Arguments
+    ///
+    /// * `signal` - The failure signal to analyze
+    /// * `snapshot` - Pre-created failure snapshot
+    ///
+    /// # Returns
+    ///
+    /// * `Result<ReflectionResult>` - Reflection result with anchor and snapshot
+    pub async fn reflect_on_failure(
+        &self,
+        signal: FailureSignal,
+        snapshot: FailureSnapshot,
+    ) -> Result<ReflectionResult, AlephError> {
+        // Analyze root cause (CPU-bound, but fast enough to run inline)
+        let root_cause = self.analyze_root_cause(&snapshot)?;
+
+        // Generate corrective anchor
+        let anchor = self.generate_corrective_anchor(&root_cause)?;
+
+        // Persist anchor to store
+        {
+            let mut store = self.anchor_store.write().map_err(|e| {
+                AlephError::config(format!("Failed to acquire anchor store lock: {}", e))
+            })?;
+            store.add(anchor.clone()).map_err(|e| {
+                AlephError::config(format!("Failed to persist anchor: {}", e))
+            })?;
+        }
+
+        // Determine if retry is appropriate
+        let should_retry = root_cause.preventable && matches!(signal, FailureSignal::ExecutionError { .. });
+
+        Ok(ReflectionResult {
+            anchor,
+            snapshot,
+            should_retry,
+        })
+    }
 }
 
 #[cfg(test)]
