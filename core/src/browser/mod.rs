@@ -62,11 +62,14 @@ pub mod config;
 pub mod context_registry;
 pub mod resource_monitor;
 pub mod persistence;
+pub mod types;
+pub mod scripts;
 
 pub use config::{
     ActionResult, BrowserConfig, ClickOptions, PageSnapshot, ScreenshotOptions,
     SnapshotNode, TabInfo, TypeOptions,
 };
+pub use types::{BrowserResult, BrowserError, ElementRef, AllocationPolicy};
 
 use std::collections::HashMap;
 use std::process::Child;
@@ -84,55 +87,6 @@ use chromiumoxide::{
 };
 #[cfg(feature = "browser")]
 use futures::StreamExt;
-
-/// Result type for browser operations
-pub type BrowserResult<T> = Result<T, BrowserError>;
-
-/// Errors that can occur in browser operations
-#[derive(Debug, thiserror::Error)]
-pub enum BrowserError {
-    #[error("Browser not started")]
-    NotStarted,
-
-    #[error("Browser already running")]
-    AlreadyRunning,
-
-    #[error("Chrome executable not found")]
-    ExecutableNotFound,
-
-    #[error("Failed to launch browser: {0}")]
-    LaunchFailed(String),
-
-    #[error("CDP connection failed: {0}")]
-    ConnectionFailed(String),
-
-    #[error("Navigation failed: {0}")]
-    NavigationFailed(String),
-
-    #[error("Element not found: {0}")]
-    ElementNotFound(String),
-
-    #[error("Action failed: {0}")]
-    ActionFailed(String),
-
-    #[error("Timeout: {0}")]
-    Timeout(String),
-
-    #[error("Configuration error: {0}")]
-    ConfigError(String),
-
-    #[error("Internal error: {0}")]
-    Internal(String),
-}
-
-/// Element reference cache for stable targeting
-#[derive(Debug, Clone)]
-pub struct ElementRef {
-    pub ref_id: String,
-    pub selector: String,
-    pub role: String,
-    pub name: String,
-}
 
 /// Browser service for Chrome/Chromium automation
 pub struct BrowserService {
@@ -401,42 +355,7 @@ impl BrowserService {
             .unwrap_or_default();
 
         // Get accessibility tree via JavaScript
-        let js = r#"
-            (function() {
-                const nodes = [];
-                const walk = (node, depth) => {
-                    if (depth > 10) return; // Limit depth
-
-                    const role = node.getAttribute?.('role') || node.tagName?.toLowerCase() || '';
-                    const ariaLabel = node.getAttribute?.('aria-label') || '';
-                    const innerText = node.innerText?.slice(0, 100) || '';
-
-                    const interactive = ['a', 'button', 'input', 'select', 'textarea'].includes(node.tagName?.toLowerCase()) ||
-                        node.getAttribute?.('onclick') ||
-                        node.getAttribute?.('role') === 'button' ||
-                        node.getAttribute?.('role') === 'link';
-
-                    if (role || ariaLabel || (interactive && innerText)) {
-                        nodes.push({
-                            role: role || node.tagName?.toLowerCase() || 'generic',
-                            name: ariaLabel || innerText.trim().slice(0, 50),
-                            value: node.value || null,
-                            depth: depth,
-                            interactive: interactive,
-                            tagName: node.tagName?.toLowerCase() || '',
-                        });
-                    }
-
-                    if (nodes.length < 500) { // Limit total nodes
-                        for (const child of node.children || []) {
-                            walk(child, depth + 1);
-                        }
-                    }
-                };
-                walk(document.body, 0);
-                return nodes;
-            })()
-        "#;
+        let js = scripts::get_accessibility_tree_script();
 
         let result: Vec<serde_json::Value> = page.evaluate(js)
             .await
@@ -784,17 +703,6 @@ mod tests {
 use context_registry::{ContextRegistry, TaskId};
 use resource_monitor::ResourceMonitor;
 use persistence::{PersistenceManager, PoolSnapshot, PersistedContext};
-
-/// Allocation policy for browser instances
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AllocationPolicy {
-    /// All contexts share one browser process
-    SingleInstance,
-    /// Each context gets a dedicated browser process
-    MultiInstance,
-    /// Automatically decide based on system resources
-    Adaptive,
-}
 
 /// Browser pool for managing multiple browser instances and contexts
 pub struct BrowserPool {
@@ -1193,92 +1101,7 @@ impl BrowserPool {
             .ok_or(BrowserError::NotStarted)?;
 
         // JavaScript code to freeze the page
-        let freeze_script = r#"
-(function() {
-    // Check if already frozen
-    if (window.__aleph_frozen) {
-        return { success: true, message: 'Already frozen' };
-    }
-
-    try {
-        // Create freeze overlay
-        const overlay = document.createElement('div');
-        overlay.id = '__aleph_freeze_overlay';
-        overlay.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.1);
-            z-index: 2147483647;
-            cursor: not-allowed;
-            pointer-events: all;
-        `;
-
-        // Add freeze indicator
-        const indicator = document.createElement('div');
-        indicator.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: rgba(255, 165, 0, 0.9);
-            color: white;
-            padding: 10px 20px;
-            border-radius: 5px;
-            font-family: system-ui, -apple-system, sans-serif;
-            font-size: 14px;
-            font-weight: 500;
-            z-index: 2147483647;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-        `;
-        indicator.textContent = '⏸ Task Paused';
-
-        document.body.appendChild(overlay);
-        document.body.appendChild(indicator);
-
-        // Store timer IDs to clear them
-        window.__aleph_frozen_timers = [];
-
-        // Override setTimeout/setInterval to prevent new timers
-        window.__aleph_original_setTimeout = window.setTimeout;
-        window.__aleph_original_setInterval = window.setInterval;
-        window.__aleph_original_requestAnimationFrame = window.requestAnimationFrame;
-
-        window.setTimeout = function() {
-            return 0;
-        };
-        window.setInterval = function() {
-            return 0;
-        };
-        window.requestAnimationFrame = function() {
-            return 0;
-        };
-
-        // Block all events
-        const blockEvent = (e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            return false;
-        };
-
-        window.__aleph_event_blocker = blockEvent;
-
-        ['click', 'mousedown', 'mouseup', 'mousemove', 'keydown', 'keyup',
-         'keypress', 'touchstart', 'touchend', 'touchmove', 'wheel', 'scroll',
-         'focus', 'blur', 'input', 'change', 'submit'].forEach(eventType => {
-            document.addEventListener(eventType, blockEvent, true);
-        });
-
-        // Mark as frozen
-        window.__aleph_frozen = true;
-
-        return { success: true, message: 'Context frozen successfully' };
-    } catch (error) {
-        return { success: false, message: error.toString() };
-    }
-})();
-        "#;
+        let freeze_script = scripts::get_freeze_context_script();
 
         // Execute freeze script
         let result = context.evaluate(freeze_script)
@@ -1335,66 +1158,7 @@ impl BrowserPool {
             .ok_or(BrowserError::NotStarted)?;
 
         // JavaScript code to resume the page
-        let resume_script = r#"
-(function() {
-    // Check if frozen
-    if (!window.__aleph_frozen) {
-        return { success: true, message: 'Not frozen' };
-    }
-
-    try {
-        // Remove freeze overlay
-        const overlay = document.getElementById('__aleph_freeze_overlay');
-        if (overlay) {
-            overlay.remove();
-        }
-
-        // Remove freeze indicator
-        const indicators = document.querySelectorAll('div');
-        indicators.forEach(el => {
-            if (el.textContent === '⏸ Task Paused') {
-                el.remove();
-            }
-        });
-
-        // Restore original timer functions
-        if (window.__aleph_original_setTimeout) {
-            window.setTimeout = window.__aleph_original_setTimeout;
-            delete window.__aleph_original_setTimeout;
-        }
-        if (window.__aleph_original_setInterval) {
-            window.setInterval = window.__aleph_original_setInterval;
-            delete window.__aleph_original_setInterval;
-        }
-        if (window.__aleph_original_requestAnimationFrame) {
-            window.requestAnimationFrame = window.__aleph_original_requestAnimationFrame;
-            delete window.__aleph_original_requestAnimationFrame;
-        }
-
-        // Remove event blockers
-        if (window.__aleph_event_blocker) {
-            ['click', 'mousedown', 'mouseup', 'mousemove', 'keydown', 'keyup',
-             'keypress', 'touchstart', 'touchend', 'touchmove', 'wheel', 'scroll',
-             'focus', 'blur', 'input', 'change', 'submit'].forEach(eventType => {
-                document.removeEventListener(eventType, window.__aleph_event_blocker, true);
-            });
-            delete window.__aleph_event_blocker;
-        }
-
-        // Clear frozen timers
-        if (window.__aleph_frozen_timers) {
-            delete window.__aleph_frozen_timers;
-        }
-
-        // Mark as not frozen
-        window.__aleph_frozen = false;
-
-        return { success: true, message: 'Context resumed successfully' };
-    } catch (error) {
-        return { success: false, message: error.toString() };
-    }
-})();
-        "#;
+        let resume_script = scripts::get_resume_context_script();
 
         // Execute resume script
         let result = context.evaluate(resume_script)
