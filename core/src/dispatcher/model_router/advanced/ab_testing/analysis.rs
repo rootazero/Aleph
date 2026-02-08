@@ -112,11 +112,11 @@ impl SignificanceCalculator {
 
         Some(SignificanceResult {
             metric,
-            control_id: control_id.to_string(),
+            control_id: VariantId::new(control_id.to_string()),
             control_mean,
             control_std_dev: control.std_dev(),
             control_n: control.count,
-            treatment_id: treatment_id.to_string(),
+            treatment_id: VariantId::new(treatment_id.to_string()),
             treatment_mean,
             treatment_std_dev: treatment.std_dev(),
             treatment_n: treatment.count,

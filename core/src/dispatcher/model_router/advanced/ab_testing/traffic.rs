@@ -61,12 +61,12 @@ impl TrafficSplitManager {
 
     /// Remove an experiment
     pub fn remove_experiment(&mut self, experiment_id: &str) -> Option<ExperimentConfig> {
-        self.experiments.remove(experiment_id)
+        self.experiments.remove(&ExperimentId::from(experiment_id))
     }
 
     /// Get an experiment by ID
     pub fn get_experiment(&self, experiment_id: &str) -> Option<&ExperimentConfig> {
-        self.experiments.get(experiment_id)
+        self.experiments.get(&ExperimentId::from(experiment_id))
     }
 
     /// Get all experiments
@@ -189,7 +189,7 @@ impl TrafficSplitManager {
 
     /// Enable an experiment
     pub fn enable_experiment(&mut self, experiment_id: &str) -> bool {
-        if let Some(experiment) = self.experiments.get_mut(experiment_id) {
+        if let Some(experiment) = self.experiments.get_mut(&ExperimentId::from(experiment_id)) {
             experiment.enabled = true;
             if experiment.start_time.is_none() {
                 experiment.start_time = Some(SystemTime::now());
@@ -202,7 +202,7 @@ impl TrafficSplitManager {
 
     /// Disable an experiment
     pub fn disable_experiment(&mut self, experiment_id: &str) -> bool {
-        if let Some(experiment) = self.experiments.get_mut(experiment_id) {
+        if let Some(experiment) = self.experiments.get_mut(&ExperimentId::from(experiment_id)) {
             experiment.enabled = false;
             true
         } else {

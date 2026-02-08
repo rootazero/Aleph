@@ -559,13 +559,14 @@ impl P3IntelligentRouter {
         let model_used = assignment
             .model_override
             .as_ref()
-            .unwrap_or(&assignment.variant_id);
+            .map(|s| s.as_str())
+            .unwrap_or_else(|| assignment.variant_id.as_str());
 
         let request_id = uuid::Uuid::new_v4().to_string();
 
         let outcome = ExperimentOutcome::new(
-            &assignment.experiment_id,
-            &assignment.variant_id,
+            assignment.experiment_id.as_str(),
+            assignment.variant_id.as_str(),
             &request_id,
             model_used,
         )

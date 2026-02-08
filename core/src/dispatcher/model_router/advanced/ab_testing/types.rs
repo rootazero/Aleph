@@ -15,11 +15,99 @@ use std::time::SystemTime;
 // Type Aliases
 // ============================================================================
 
-/// Unique identifier for an experiment
-pub type ExperimentId = String;
+/// Unique identifier for an experiment (newtype for type safety)
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ExperimentId(String);
 
-/// Unique identifier for a variant within an experiment
-pub type VariantId = String;
+impl ExperimentId {
+    /// Create a new ExperimentId
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Get the inner string reference
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Convert into inner String
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for ExperimentId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for ExperimentId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl std::fmt::Display for ExperimentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::ops::Deref for ExperimentId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// Unique identifier for a variant within an experiment (newtype for type safety)
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct VariantId(String);
+
+impl VariantId {
+    /// Create a new VariantId
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Get the inner string reference
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Convert into inner String
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for VariantId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for VariantId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl std::fmt::Display for VariantId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::ops::Deref for VariantId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 // ============================================================================
 // Tracked Metrics
@@ -128,10 +216,10 @@ pub struct VariantConfig {
 impl VariantConfig {
     /// Create a new variant with the given ID
     pub fn new(id: impl Into<String>) -> Self {
-        let id = id.into();
+        let id_str = id.into();
         Self {
-            name: id.clone(),
-            id,
+            name: id_str.clone(),
+            id: VariantId::new(id_str),
             weight: 50,
             model_override: None,
             cost_strategy_override: None,
@@ -142,7 +230,7 @@ impl VariantConfig {
     /// Create a control variant (typically weight 50)
     pub fn control(model: impl Into<String>) -> Self {
         Self {
-            id: "control".to_string(),
+            id: VariantId::new("control"),
             name: "Control".to_string(),
             weight: 50,
             model_override: Some(model.into()),
@@ -154,7 +242,7 @@ impl VariantConfig {
     /// Create a treatment variant (typically weight 50)
     pub fn treatment(model: impl Into<String>) -> Self {
         Self {
-            id: "treatment".to_string(),
+            id: VariantId::new("treatment"),
             name: "Treatment".to_string(),
             weight: 50,
             model_override: Some(model.into()),
@@ -225,10 +313,10 @@ pub struct ExperimentConfig {
 impl ExperimentConfig {
     /// Create a new experiment with the given ID
     pub fn new(id: impl Into<String>) -> Self {
-        let id = id.into();
+        let id_str = id.into();
         Self {
-            name: id.clone(),
-            id,
+            name: id_str.clone(),
+            id: ExperimentId::new(id_str),
             enabled: true,
             traffic_percentage: 10,
             variants: Vec::new(),
@@ -348,7 +436,7 @@ impl ExperimentConfig {
         for variant in &self.variants {
             if !seen_ids.insert(&variant.id) {
                 return Err(ExperimentValidationError::DuplicateVariantId {
-                    variant_id: variant.id.clone(),
+                    variant_id: variant.id.to_string(),
                 });
             }
         }
@@ -413,7 +501,7 @@ impl VariantAssignment {
             variant_name: variant.name.clone(),
             model_override: variant.model_override.clone(),
             cost_strategy_override: variant.cost_strategy_override,
-            is_control: variant.id == "control",
+            is_control: variant.id == VariantId::from("control"),
         }
     }
 }

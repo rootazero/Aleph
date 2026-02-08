@@ -19,11 +19,99 @@ pub type ContextHandle = Arc<Page>;
 #[cfg(not(feature = "browser"))]
 pub type ContextHandle = Arc<()>;
 
-/// Context ID type
-pub type ContextId = String;
+/// Context ID newtype for type safety
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContextId(String);
 
-/// Task ID type
-pub type TaskId = String;
+impl ContextId {
+    /// Create a new ContextId
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Get the inner string reference
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Convert into inner String
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for ContextId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for ContextId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl std::fmt::Display for ContextId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::ops::Deref for ContextId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// Task ID newtype for type safety
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TaskId(String);
+
+impl TaskId {
+    /// Create a new TaskId
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Get the inner string reference
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Convert into inner String
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for TaskId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for TaskId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl std::fmt::Display for TaskId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::ops::Deref for TaskId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 /// Isolation level for contexts
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

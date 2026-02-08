@@ -42,8 +42,8 @@ impl ExperimentOutcome {
         model_used: impl Into<String>,
     ) -> Self {
         Self {
-            experiment_id: experiment_id.into(),
-            variant_id: variant_id.into(),
+            experiment_id: ExperimentId::new(experiment_id.into()),
+            variant_id: VariantId::new(variant_id.into()),
             timestamp: SystemTime::now(),
             metrics: HashMap::new(),
             request_id: request_id.into(),
@@ -241,15 +241,15 @@ impl OutcomeTracker {
     /// Get statistics for an experiment
     pub fn get_stats(&self, experiment_id: &str) -> Option<HashMap<VariantId, VariantStats>> {
         let stats = self.stats.read().unwrap();
-        stats.get(experiment_id).cloned()
+        stats.get(&ExperimentId::from(experiment_id)).cloned()
     }
 
     /// Get statistics for a specific variant
     pub fn get_variant_stats(&self, experiment_id: &str, variant_id: &str) -> Option<VariantStats> {
         let stats = self.stats.read().unwrap();
         stats
-            .get(experiment_id)
-            .and_then(|e| e.get(variant_id))
+            .get(&ExperimentId::from(experiment_id))
+            .and_then(|e| e.get(&VariantId::from(variant_id)))
             .cloned()
     }
 
@@ -261,8 +261,9 @@ impl OutcomeTracker {
     /// Get raw outcomes for an experiment (most recent first)
     pub fn get_raw_outcomes(&self, experiment_id: &str) -> Vec<ExperimentOutcome> {
         let raw = self.raw_outcomes.read().unwrap();
+        let exp_id = ExperimentId::from(experiment_id);
         raw.iter()
-            .filter(|o| o.experiment_id == experiment_id)
+            .filter(|o| o.experiment_id == exp_id)
             .cloned()
             .collect()
     }
@@ -271,20 +272,21 @@ impl OutcomeTracker {
     pub fn get_total_count(&self, experiment_id: &str) -> u64 {
         let stats = self.stats.read().unwrap();
         stats
-            .get(experiment_id)
+            .get(&ExperimentId::from(experiment_id))
             .map(|e| e.values().map(|v| v.sample_count).sum())
             .unwrap_or(0)
     }
 
     /// Clear statistics for an experiment
     pub fn clear_experiment(&self, experiment_id: &str) {
+        let exp_id = ExperimentId::from(experiment_id);
         {
             let mut stats = self.stats.write().unwrap();
-            stats.remove(experiment_id);
+            stats.remove(&exp_id);
         }
         {
             let mut raw = self.raw_outcomes.write().unwrap();
-            raw.retain(|o| o.experiment_id != experiment_id);
+            raw.retain(|o| o.experiment_id != exp_id);
         }
     }
 
