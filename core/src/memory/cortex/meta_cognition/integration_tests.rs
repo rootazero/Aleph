@@ -165,12 +165,14 @@ fn test_complete_proactive_flow() {
     let anchor_store = create_test_anchor_store();
     let scan_config = critic::CriticScanConfig::default();
     let llm_config = critic::LLMConfig::default();
+    let provider = crate::providers::create_mock_provider();
 
     let critic_agent = CriticAgent::new(
         Arc::clone(&db),
         Arc::clone(&anchor_store),
         scan_config,
         llm_config,
+        provider,
     );
 
     // Create mock experience data
