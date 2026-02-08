@@ -95,6 +95,7 @@ pub struct SessionHandle {
     state: RwLock<HandleState>,
 
     /// Sender for signaling task completion (held by executor)
+    #[allow(dead_code)]
     result_tx: RwLock<Option<oneshot::Sender<TaskResult>>>,
 }
 

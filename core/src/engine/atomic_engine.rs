@@ -15,6 +15,7 @@ pub struct AtomicEngine {
     /// Maximum retry attempts for self-healing
     max_retries: usize,
     /// Working directory for relative path resolution
+    #[allow(dead_code)]
     working_dir: PathBuf,
 }
 

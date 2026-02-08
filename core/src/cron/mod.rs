@@ -147,6 +147,7 @@ impl CronService {
     }
 
     /// Open a database connection
+    #[allow(dead_code)]
     fn open_db(&self) -> CronResult<Connection> {
         Connection::open(&self.db_path).map_err(CronError::Database)
     }

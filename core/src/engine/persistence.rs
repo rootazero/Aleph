@@ -48,6 +48,7 @@ pub struct Persistence {
     conn: Arc<RwLock<Connection>>,
 
     /// Database file path
+    #[allow(dead_code)]
     db_path: PathBuf,
 }
 
