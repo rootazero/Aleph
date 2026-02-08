@@ -101,7 +101,8 @@ impl CommandRegistry {
         // e.g., "^/search" -> "search", "^/en\\s*" -> "en"
         let key = rule
             .regex
-            .trim_start_matches("^/")
+            .strip_prefix("^/")
+            .unwrap_or(&rule.regex)
             .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
             .next()
             .unwrap_or("")
