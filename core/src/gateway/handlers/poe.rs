@@ -53,202 +53,27 @@ use crate::poe::{
     ContractContext, ContractSummary, ManifestBuilder, PendingContract, PendingContractStore,
     PendingResult, PrepareResult, RejectResult, SignRequest, SignResult,
 };
+use crate::poe::handler_types::{
+    // Events (private - only used internally)
+    PoeAcceptedEvent, PoeCompletedEvent, PoeErrorEvent, PoeStepEvent, PoeValidationEvent,
+    // RPC types (private - only used internally)
+    PoeCancelParams, PoeCancelResult, PoeConfigParams, PoeRunParams, PoeRunResult,
+    PoeStatusParams, PoeStatusResult,
+};
+
+// Re-export types that are used by other modules
+pub use crate::poe::handler_types::{
+    PoeTaskState, PoeTaskStatus,
+    ValidatorFactory, WorkerFactory,
+};
 
 // ============================================================================
-// RPC Parameter/Result Types
+// RPC Parameter/Result Types (moved to core/src/poe/handler_types/)
 // ============================================================================
-
-/// Parameters for poe.run request
-#[derive(Debug, Clone, Deserialize)]
-pub struct PoeRunParams {
-    /// Success manifest defining success criteria
-    pub manifest: SuccessManifest,
-    /// Natural language instruction for the worker
-    pub instruction: String,
-    /// Whether to stream events during execution (default: true)
-    #[serde(default = "default_stream")]
-    pub stream: bool,
-    /// POE configuration overrides
-    #[serde(default)]
-    pub config: Option<PoeConfigParams>,
-}
-
-/// Optional POE configuration overrides
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct PoeConfigParams {
-    /// Stuck detection window (number of attempts)
-    #[serde(default)]
-    pub stuck_window: Option<usize>,
-    /// Maximum tokens budget
-    #[serde(default)]
-    pub max_tokens: Option<u32>,
-}
-
-fn default_stream() -> bool {
-    true
-}
-
-/// Result of poe.run request (immediate response)
-#[derive(Debug, Clone, Serialize)]
-pub struct PoeRunResult {
-    /// Unique task identifier (from manifest)
-    pub task_id: String,
-    /// Session key for event subscription
-    pub session_key: String,
-    /// Timestamp when task was accepted
-    pub accepted_at: String,
-}
-
-/// Parameters for poe.status request
-#[derive(Debug, Clone, Deserialize)]
-pub struct PoeStatusParams {
-    /// Task ID to query
-    pub task_id: String,
-}
-
-/// Result of poe.status request
-#[derive(Debug, Clone, Serialize)]
-pub struct PoeStatusResult {
-    /// Task ID
-    pub task_id: String,
-    /// Current status
-    pub status: String,
-    /// Elapsed time in milliseconds
-    pub elapsed_ms: u64,
-    /// Current attempt number (if running)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_attempt: Option<u8>,
-    /// Last distance score (if available)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_distance_score: Option<f32>,
-    /// Final outcome (if completed)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<PoeOutcome>,
-}
-
-/// Parameters for poe.cancel request
-#[derive(Debug, Clone, Deserialize)]
-pub struct PoeCancelParams {
-    /// Task ID to cancel
-    pub task_id: String,
-}
-
-/// Result of poe.cancel request
-#[derive(Debug, Clone, Serialize)]
-pub struct PoeCancelResult {
-    /// Task ID
-    pub task_id: String,
-    /// Whether the task was successfully cancelled
-    pub cancelled: bool,
-    /// Reason if cancellation failed
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-// ============================================================================
-// Task State
-// ============================================================================
-
-/// Status of a POE task
-#[derive(Debug, Clone)]
-pub enum PoeTaskStatus {
-    /// Task is queued/running
-    Running {
-        current_attempt: u8,
-        last_distance_score: Option<f32>,
-    },
-    /// Task completed with outcome
-    Completed(PoeOutcome),
-    /// Task was cancelled
-    Cancelled,
-}
-
-impl PoeTaskStatus {
-    /// Get status string for serialization
-    pub fn status_str(&self) -> &'static str {
-        match self {
-            PoeTaskStatus::Running { .. } => "running",
-            PoeTaskStatus::Completed(outcome) => match outcome {
-                PoeOutcome::Success(_) => "success",
-                PoeOutcome::StrategySwitch { .. } => "strategy_switch",
-                PoeOutcome::BudgetExhausted { .. } => "budget_exhausted",
-            },
-            PoeTaskStatus::Cancelled => "cancelled",
-        }
-    }
-}
-
-/// State of a POE task
-#[derive(Debug, Clone)]
-pub struct PoeTaskState {
-    /// Task ID
-    pub task_id: String,
-    /// Session key for events
-    pub session_key: String,
-    /// When the task started
-    pub started_at: Instant,
-    /// Current status
-    pub status: PoeTaskStatus,
-    /// Whether streaming is enabled
-    pub stream: bool,
-}
-
-// ============================================================================
-// POE Event Types
-// ============================================================================
-
-/// Event emitted when a POE task is accepted
-#[derive(Debug, Clone, Serialize)]
-struct PoeAcceptedEvent {
-    pub task_id: String,
-    pub session_key: String,
-    pub accepted_at: String,
-    pub objective: String,
-}
-
-/// Event emitted for each POE step (P->O->E iteration)
-#[derive(Debug, Clone, Serialize)]
-struct PoeStepEvent {
-    pub task_id: String,
-    pub attempt: u8,
-    pub phase: String, // "principle", "operation", "evaluation"
-    pub message: String,
-}
-
-/// Event emitted after validation
-#[derive(Debug, Clone, Serialize)]
-struct PoeValidationEvent {
-    pub task_id: String,
-    pub attempt: u8,
-    pub passed: bool,
-    pub distance_score: f32,
-    pub reason: String,
-}
-
-/// Event emitted when POE task completes
-#[derive(Debug, Clone, Serialize)]
-struct PoeCompletedEvent {
-    pub task_id: String,
-    pub outcome: PoeOutcome,
-    pub duration_ms: u64,
-}
-
-/// Event emitted on error
-#[derive(Debug, Clone, Serialize)]
-struct PoeErrorEvent {
-    pub task_id: String,
-    pub error: String,
-}
 
 // ============================================================================
 // PoeRunManager
 // ============================================================================
-
-/// Factory function type for creating workers
-pub type WorkerFactory<W> = Arc<dyn Fn() -> W + Send + Sync>;
-
-/// Factory function type for creating validators
-pub type ValidatorFactory = Arc<dyn Fn() -> CompositeValidator + Send + Sync>;
 
 /// Manager for POE task runs
 ///

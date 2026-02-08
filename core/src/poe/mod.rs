@@ -107,6 +107,7 @@ pub mod budget;
 pub mod contract;
 pub mod contract_store;
 pub mod crystallization;
+pub mod handler_types;
 pub mod manager;
 pub mod manifest;
 pub mod trust;
@@ -166,4 +167,18 @@ pub use contract_store::PendingContractStore;
 pub use trust::{
     AlwaysRequireSignature, AutoApprovalDecision, ExperienceTrustEvaluator,
     TrustContext, TrustEvaluator, WhitelistTrustEvaluator,
+};
+
+// Gateway handler types
+pub use handler_types::{
+    // Task state
+    PoeTaskState, PoeTaskStatus,
+    // Events
+    PoeAcceptedEvent, PoeStepEvent, PoeValidationEvent, PoeCompletedEvent, PoeErrorEvent,
+    // RPC types
+    PoeRunParams, PoeConfigParams, PoeRunResult,
+    PoeStatusParams, PoeStatusResult,
+    PoeCancelParams, PoeCancelResult,
+    // Factories
+    WorkerFactory, ValidatorFactory,
 };
