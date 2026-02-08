@@ -7,6 +7,7 @@ mod atomic_action;
 mod atomic_engine;
 mod atomic_executor;
 mod classifier;
+mod conflict_detector;
 mod feature_extractor;
 mod learning_agent;
 mod patch;
@@ -25,6 +26,7 @@ pub use atomic_action::{AtomicAction, LineRange, WriteMode, SearchPattern, Searc
 pub use atomic_engine::{AtomicEngine, ExecutionResult, RoutingLayer, RoutingResult, RoutingStats};
 pub use atomic_executor::AtomicExecutor;
 pub use classifier::{NaiveBayesClassifier, ActionClass};
+pub use conflict_detector::{ConflictDetector, Conflict, ConflictType, ConflictSeverity, ConflictReport, ConflictResolver, ResolutionStrategy};
 pub use feature_extractor::{FeatureExtractor, FeatureVector, Intent, Entity};
 pub use learning_agent::{LearningAgent, LearningEvent, AgentStats};
 pub use patch::{Patch, PatchApplier};
