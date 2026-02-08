@@ -347,7 +347,7 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("Asked"));
 
-        let replied = QuestionEvent::replied("session-1", "q-1", vec![vec!["Yes".into()]]);
+        let replied = QuestionEvent::replied("session-1", "q-1", vec![Answer::new(vec!["Yes".into()])]);
         let json = serde_json::to_string(&replied).unwrap();
         assert!(json.contains("Replied"));
 

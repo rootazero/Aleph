@@ -9,7 +9,7 @@ use alephcore::agent_loop::{
     question::{ChoiceOption, QuestionKind},
     state::{LoopState, LoopStep, RequestContext, Thinking},
     AgentLoop, ActionExecutor, CompressedHistory, CompressorTrait, ThinkerTrait,
-    CompactionTrigger, OptionalCompactionTrigger, LoopResult,
+    CompactionTrigger, OptionalCompactionTrigger, LoopResult, RunContext,
 };
 use alephcore::event::{EventType, StopReason};
 use alephcore::Result;
@@ -275,16 +275,14 @@ async fn when_run_loop(w: &mut AlephWorld, request: String) {
         "test".to_string(),
     );
 
+    let run_context = RunContext::new(
+        request,
+        RequestContext::empty(),
+        vec![],
+        identity,
+    );
     let result = agent_loop
-        .run(
-            request,
-            RequestContext::empty(),
-            vec![],
-            identity,
-            &callback,
-            None,
-            None,
-        )
+        .run(run_context, &callback)
         .await;
 
     ctx.loop_result = Some(result.clone());
@@ -316,16 +314,14 @@ async fn when_run_loop_with_event_bus(w: &mut AlephWorld) {
         "test".to_string(),
     );
 
+    let run_context = RunContext::new(
+        "Test request".to_string(),
+        RequestContext::empty(),
+        vec![],
+        identity,
+    );
     let result = agent_loop
-        .run(
-            "Test request".to_string(),
-            RequestContext::empty(),
-            vec![],
-            identity,
-            NoOpLoopCallback,
-            None,
-            None,
-        )
+        .run(run_context, NoOpLoopCallback)
         .await;
 
     ctx.loop_result = Some(result.clone());
@@ -360,16 +356,14 @@ async fn when_run_loop_with_overflow(w: &mut AlephWorld) {
         "test".to_string(),
     );
 
+    let run_context = RunContext::new(
+        "Test request".to_string(),
+        RequestContext::empty(),
+        vec![],
+        identity,
+    );
     let result = agent_loop
-        .run(
-            "Test request".to_string(),
-            RequestContext::empty(),
-            vec![],
-            identity,
-            NoOpLoopCallback,
-            None,
-            None,
-        )
+        .run(run_context, NoOpLoopCallback)
         .await;
 
     ctx.loop_result = Some(result);
