@@ -94,8 +94,9 @@ fn test_complete_reactive_flow() {
     let (db, _temp_dir) = create_test_db();
     let anchor_store = create_test_anchor_store();
     let llm_config = reactive::LLMConfig::default();
+    let provider = crate::providers::create_mock_provider();
 
-    let reflector = ReactiveReflector::new(db, Arc::clone(&anchor_store), llm_config);
+    let reflector = ReactiveReflector::new(db, Arc::clone(&anchor_store), llm_config, provider);
 
     // Create a failure signal
     let failure_signal = create_test_failure_signal();
@@ -409,12 +410,14 @@ fn test_end_to_end_flow() {
     let (db, _temp_dir) = create_test_db();
     let anchor_store = create_test_anchor_store();
     let llm_config = reactive::LLMConfig::default();
+    let provider = crate::providers::create_mock_provider();
 
     // Step 1: Simulate a failure → ReactiveReflector → Store anchor
     let reflector = ReactiveReflector::new(
         Arc::clone(&db),
         Arc::clone(&anchor_store),
         llm_config.clone(),
+        provider,
     );
 
     let failure_signal = create_test_failure_signal();
