@@ -8,12 +8,14 @@
 
 pub mod anchor_store;
 pub mod conflict_detector;
+pub mod critic;
 pub mod reactive;
 pub mod schema;
 pub mod types;
 
 pub use anchor_store::AnchorStore;
 pub use conflict_detector::{ConflictDetector, ConflictReport, ConflictType};
+pub use critic::{ChainAnalysis, CriticAgent, CriticReport, CriticScanConfig};
 pub use reactive::{
     FailureSignal, FailureSnapshot, LLMConfig, ReactiveReflector, ReflectionResult, RootCause,
 };
