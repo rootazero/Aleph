@@ -36,20 +36,28 @@ impl fmt::Display for EvolutionStatus {
 }
 
 impl EvolutionStatus {
-    /// Parse status from database string
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "candidate" => EvolutionStatus::Candidate,
-            "verified" => EvolutionStatus::Verified,
-            "distilled" => EvolutionStatus::Distilled,
-            "archived" => EvolutionStatus::Archived,
-            _ => EvolutionStatus::Candidate,
-        }
+    /// Parse status from database string with fallback to Candidate
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(EvolutionStatus::Candidate)
     }
 
     /// Check if experience can be used for replay
     pub fn is_replayable(&self) -> bool {
         matches!(self, EvolutionStatus::Verified | EvolutionStatus::Distilled)
+    }
+}
+
+impl std::str::FromStr for EvolutionStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "candidate" => Ok(EvolutionStatus::Candidate),
+            "verified" => Ok(EvolutionStatus::Verified),
+            "distilled" => Ok(EvolutionStatus::Distilled),
+            "archived" => Ok(EvolutionStatus::Archived),
+            _ => Err(format!("Unknown evolution status: {}", s)),
+        }
     }
 }
 
@@ -288,11 +296,11 @@ mod tests {
 
     #[test]
     fn test_evolution_status_from_str() {
-        assert_eq!(EvolutionStatus::from_str("candidate"), EvolutionStatus::Candidate);
-        assert_eq!(EvolutionStatus::from_str("verified"), EvolutionStatus::Verified);
-        assert_eq!(EvolutionStatus::from_str("distilled"), EvolutionStatus::Distilled);
-        assert_eq!(EvolutionStatus::from_str("archived"), EvolutionStatus::Archived);
-        assert_eq!(EvolutionStatus::from_str("unknown"), EvolutionStatus::Candidate);
+        assert_eq!(EvolutionStatus::from_str_or_default("candidate"), EvolutionStatus::Candidate);
+        assert_eq!(EvolutionStatus::from_str_or_default("verified"), EvolutionStatus::Verified);
+        assert_eq!(EvolutionStatus::from_str_or_default("distilled"), EvolutionStatus::Distilled);
+        assert_eq!(EvolutionStatus::from_str_or_default("archived"), EvolutionStatus::Archived);
+        assert_eq!(EvolutionStatus::from_str_or_default("unknown"), EvolutionStatus::Candidate);
     }
 
     #[test]

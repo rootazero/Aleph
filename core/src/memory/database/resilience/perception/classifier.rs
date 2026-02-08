@@ -53,9 +53,42 @@ pub enum EventType {
 }
 
 impl EventType {
-    /// Parse event type from string
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
+    /// Parse event type from string (infallible - unknown types become Custom)
+    pub fn from_str_infallible(s: &str) -> Self {
+        s.parse().unwrap_or_else(|_| EventType::Custom(s.to_string()))
+    }
+
+    /// Convert to string representation
+    pub fn as_str(&self) -> &str {
+        match self {
+            EventType::TaskStarted => "task_started",
+            EventType::TaskCompleted => "task_completed",
+            EventType::TaskFailed => "task_failed",
+            EventType::TaskInterrupted => "task_interrupted",
+            EventType::ToolCallStarted => "tool_call_started",
+            EventType::ToolCallCompleted => "tool_call_completed",
+            EventType::ArtifactCreated => "artifact_created",
+            EventType::ArtifactModified => "artifact_modified",
+            EventType::SessionCreated => "session_created",
+            EventType::SessionEnded => "session_ended",
+            EventType::CheckpointCreated => "checkpoint_created",
+            EventType::AiStreamingChunk => "ai_streaming_chunk",
+            EventType::ProgressUpdate => "progress_update",
+            EventType::LogEntry => "log_entry",
+            EventType::TokenUsage => "token_usage",
+            EventType::Heartbeat => "heartbeat",
+            EventType::MetricsSnapshot => "metrics_snapshot",
+            EventType::SubscriptionAck => "subscription_ack",
+            EventType::Custom(s) => s,
+        }
+    }
+}
+
+impl std::str::FromStr for EventType {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
             // Skeleton
             "task_started" | "taskstarted" => EventType::TaskStarted,
             "task_completed" | "taskcompleted" => EventType::TaskCompleted,
@@ -84,32 +117,7 @@ impl EventType {
 
             // Unknown -> Custom
             other => EventType::Custom(other.to_string()),
-        }
-    }
-
-    /// Convert to string representation
-    pub fn as_str(&self) -> &str {
-        match self {
-            EventType::TaskStarted => "task_started",
-            EventType::TaskCompleted => "task_completed",
-            EventType::TaskFailed => "task_failed",
-            EventType::TaskInterrupted => "task_interrupted",
-            EventType::ToolCallStarted => "tool_call_started",
-            EventType::ToolCallCompleted => "tool_call_completed",
-            EventType::ArtifactCreated => "artifact_created",
-            EventType::ArtifactModified => "artifact_modified",
-            EventType::SessionCreated => "session_created",
-            EventType::SessionEnded => "session_ended",
-            EventType::CheckpointCreated => "checkpoint_created",
-            EventType::AiStreamingChunk => "ai_streaming_chunk",
-            EventType::ProgressUpdate => "progress_update",
-            EventType::LogEntry => "log_entry",
-            EventType::TokenUsage => "token_usage",
-            EventType::Heartbeat => "heartbeat",
-            EventType::MetricsSnapshot => "metrics_snapshot",
-            EventType::SubscriptionAck => "subscription_ack",
-            EventType::Custom(s) => s,
-        }
+        })
     }
 }
 
@@ -151,7 +159,7 @@ impl EventClassifier {
 
     /// Classify an AgentEvent by its event_type field
     pub fn classify_event(event: &AgentEvent) -> EventTier {
-        let event_type = EventType::from_str(&event.event_type);
+        let event_type = EventType::from_str_infallible(&event.event_type);
         Self::classify(&event_type)
     }
 
@@ -265,15 +273,15 @@ mod tests {
 
     #[test]
     fn test_event_type_parsing() {
-        assert_eq!(EventType::from_str("task_started"), EventType::TaskStarted);
-        assert_eq!(EventType::from_str("TaskStarted"), EventType::TaskStarted);
+        assert_eq!(EventType::from_str_infallible("task_started"), EventType::TaskStarted);
+        assert_eq!(EventType::from_str_infallible("TaskStarted"), EventType::TaskStarted);
         assert_eq!(
-            EventType::from_str("tool_call_completed"),
+            EventType::from_str_infallible("tool_call_completed"),
             EventType::ToolCallCompleted
         );
-        assert_eq!(EventType::from_str("heartbeat"), EventType::Heartbeat);
+        assert_eq!(EventType::from_str_infallible("heartbeat"), EventType::Heartbeat);
         assert_eq!(
-            EventType::from_str("unknown_event"),
+            EventType::from_str_infallible("unknown_event"),
             EventType::Custom("unknown_event".to_string())
         );
     }

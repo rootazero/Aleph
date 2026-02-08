@@ -20,17 +20,9 @@ pub enum RuntimeKind {
 }
 
 impl RuntimeKind {
-    /// Parse runtime kind from string
-    #[allow(clippy::should_implement_trait)]
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "node" | "nodejs" => Self::Node,
-            "python" | "python3" => Self::Python,
-            "bun" => Self::Bun,
-            "deno" => Self::Deno,
-            "none" | "" => Self::None,
-            _ => Self::None,
-        }
+    /// Parse runtime kind from string with fallback to None
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Self::None)
     }
 
     /// Get the command to check for this runtime
@@ -59,6 +51,21 @@ impl RuntimeKind {
 impl std::fmt::Display for RuntimeKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.display_name())
+    }
+}
+
+impl std::str::FromStr for RuntimeKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "node" | "nodejs" => Ok(Self::Node),
+            "python" | "python3" => Ok(Self::Python),
+            "bun" => Ok(Self::Bun),
+            "deno" => Ok(Self::Deno),
+            "none" | "" => Ok(Self::None),
+            _ => Err(format!("Unknown runtime kind: {}", s)),
+        }
     }
 }
 
@@ -167,16 +174,16 @@ mod tests {
 
     #[test]
     fn test_runtime_kind_from_str() {
-        assert_eq!(RuntimeKind::from_str("node"), RuntimeKind::Node);
-        assert_eq!(RuntimeKind::from_str("nodejs"), RuntimeKind::Node);
-        assert_eq!(RuntimeKind::from_str("Node"), RuntimeKind::Node);
-        assert_eq!(RuntimeKind::from_str("python"), RuntimeKind::Python);
-        assert_eq!(RuntimeKind::from_str("python3"), RuntimeKind::Python);
-        assert_eq!(RuntimeKind::from_str("bun"), RuntimeKind::Bun);
-        assert_eq!(RuntimeKind::from_str("deno"), RuntimeKind::Deno);
-        assert_eq!(RuntimeKind::from_str("none"), RuntimeKind::None);
-        assert_eq!(RuntimeKind::from_str(""), RuntimeKind::None);
-        assert_eq!(RuntimeKind::from_str("unknown"), RuntimeKind::None);
+        assert_eq!(RuntimeKind::from_str_or_default("node"), RuntimeKind::Node);
+        assert_eq!(RuntimeKind::from_str_or_default("nodejs"), RuntimeKind::Node);
+        assert_eq!(RuntimeKind::from_str_or_default("Node"), RuntimeKind::Node);
+        assert_eq!(RuntimeKind::from_str_or_default("python"), RuntimeKind::Python);
+        assert_eq!(RuntimeKind::from_str_or_default("python3"), RuntimeKind::Python);
+        assert_eq!(RuntimeKind::from_str_or_default("bun"), RuntimeKind::Bun);
+        assert_eq!(RuntimeKind::from_str_or_default("deno"), RuntimeKind::Deno);
+        assert_eq!(RuntimeKind::from_str_or_default("none"), RuntimeKind::None);
+        assert_eq!(RuntimeKind::from_str_or_default(""), RuntimeKind::None);
+        assert_eq!(RuntimeKind::from_str_or_default("unknown"), RuntimeKind::None);
     }
 
     #[test]

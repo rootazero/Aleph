@@ -122,7 +122,7 @@ impl McpClient {
             .into_iter()
             .filter(|config| {
                 if let Some(ref runtime_str) = config.requires_runtime {
-                    let runtime = RuntimeKind::from_str(runtime_str);
+                    let runtime = RuntimeKind::from_str_or_default(runtime_str);
                     if runtime != RuntimeKind::None {
                         let check = check_runtime(runtime);
                         if !check.available {
