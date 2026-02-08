@@ -2,7 +2,6 @@
 //!
 //! Types for shell-based hooks, plugin hooks, and MCP server configurations.
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -36,7 +36,7 @@ impl FileOpsHandler {
     }
 
     /// Convert file path to module name (for Rust files)
-    fn path_to_module_name(&self, path: &PathBuf) -> Option<String> {
+    fn path_to_module_name(&self, path: &Path) -> Option<String> {
         // Get relative path from working directory
         let rel_path = path.strip_prefix(&self.context.working_dir).ok()?;
 

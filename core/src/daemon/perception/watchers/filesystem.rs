@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -21,7 +21,7 @@ impl FSEventWatcher {
         Self { config }
     }
 
-    fn should_ignore(&self, path: &PathBuf) -> bool {
+    fn should_ignore(&self, path: &Path) -> bool {
         let path_str = path.to_string_lossy();
 
         for pattern in &self.config.ignore_patterns {
