@@ -110,6 +110,7 @@ pub mod crystallization;
 pub mod handler_types;
 pub mod manager;
 pub mod manifest;
+pub mod services;
 pub mod trust;
 pub mod types;
 pub mod validation;
@@ -182,3 +183,6 @@ pub use handler_types::{
     // Factories
     WorkerFactory, ValidatorFactory,
 };
+
+// Service layer
+pub use services::{PoeRunManager, PoeContractService, PrepareParams, PrepareContext, RejectParams};

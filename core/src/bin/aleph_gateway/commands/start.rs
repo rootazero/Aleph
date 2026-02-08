@@ -50,7 +50,6 @@ use alephcore::gateway::channels::imessage::{IMessageChannel, IMessageConfig};
 use alephcore::executor::BuiltinToolRegistry;
 #[cfg(feature = "gateway")]
 use alephcore::gateway::handlers::poe::{
-    PoeRunManager, PoeContractService, WorkerFactory, ValidatorFactory,
     handle_run as handle_poe_run, handle_status as handle_poe_status,
     handle_cancel as handle_poe_cancel, handle_list as handle_poe_list,
     handle_prepare, handle_sign, handle_reject, handle_pending,
@@ -59,6 +58,8 @@ use alephcore::gateway::handlers::poe::{
 use alephcore::poe::{
     CompositeValidator, GatewayAgentLoopWorker, ManifestBuilder, PoeConfig,
     create_gateway_worker,
+    // Service layer
+    PoeRunManager, PoeContractService, WorkerFactory, ValidatorFactory,
 };
 #[cfg(feature = "gateway")]
 use alephcore::gateway::{
