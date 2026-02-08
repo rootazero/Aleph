@@ -219,6 +219,7 @@ aleph/
 │   └── desktop/                    # Cross-platform Tauri App
 ├── docs/                           # 文档
 │   ├── ARCHITECTURE.md             # 完整架构
+│   ├── DESIGN_PATTERNS.md          # 设计模式 (Context, Newtype, FromStr)
 │   ├── AGENT_SYSTEM.md             # Agent 系统
 │   ├── GATEWAY.md                  # Gateway 协议
 │   ├── TOOL_SYSTEM.md              # 工具系统
@@ -226,6 +227,7 @@ aleph/
 │   ├── EXTENSION_SYSTEM.md         # 扩展系统
 │   ├── SECURITY.md                 # 安全系统
 │   ├── AGENT_DESIGN_PHILOSOPHY.md  # 设计思想
+│   ├── DOMAIN_MODELING.md          # 领域建模
 │   └── plans/                      # 设计规划文档
 ├── Cargo.toml                      # Workspace root
 └── CLAUDE.md                       # 本文档
@@ -315,6 +317,7 @@ Example: `gateway: add WebSocket server foundation`
 | 文档 | 描述 |
 |------|------|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 完整系统架构、模块依赖、数据流 |
+| [DESIGN_PATTERNS.md](docs/DESIGN_PATTERNS.md) | 设计模式：Context、Newtype、FromStr、Builder |
 | [AGENT_SYSTEM.md](docs/AGENT_SYSTEM.md) | Agent Loop、Thinker、Dispatcher |
 | [GATEWAY.md](docs/GATEWAY.md) | WebSocket 协议、RPC 方法、Channels |
 | [TOOL_SYSTEM.md](docs/TOOL_SYSTEM.md) | AlephTool trait、内置工具、开发指南 |
