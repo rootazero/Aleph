@@ -82,6 +82,9 @@ pub mod profile_filter;
 // === Cortex 2.0: Robust dispatcher internals ===
 pub mod cortex;
 
+// === Experience Replay Layer: L1.5 routing ===
+pub mod experience_replay_layer;
+
 // === Tool Index: Semantic tool retrieval ===
 pub mod tool_index;
 
@@ -149,6 +152,9 @@ pub use content_category::{infer_required_tools, ContentCategory};
 pub use profile_filter::{ProfileFilter, ToolPermission};
 pub use smart_filter::SmartToolFilter;
 pub use tool_filter::{FilterResult, ToolFilter, ToolFilterConfig};
+
+// === Re-exports: Experience Replay Layer ===
+pub use experience_replay_layer::{ExperienceReplayConfig, ExperienceReplayLayer};
 
 // === Re-exports: Tool Index (Semantic Retrieval) ===
 pub use tool_index::{
