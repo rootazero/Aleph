@@ -8,6 +8,7 @@ use super::types::{AnchorScope, AnchorSource, BehavioralAnchor};
 use super::AnchorStore;
 use crate::error::AlephError;
 use crate::memory::database::VectorDatabase;
+use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -126,6 +127,7 @@ pub struct ReactiveReflector {
     db: Arc<VectorDatabase>,
     anchor_store: Arc<RwLock<AnchorStore>>,
     llm_config: LLMConfig,
+    provider: Arc<dyn AiProvider>,
 }
 
 impl ReactiveReflector {
@@ -136,6 +138,7 @@ impl ReactiveReflector {
     /// * `db` - Vector database for storing failure experiences
     /// * `anchor_store` - Store for persisting behavioral anchors
     /// * `llm_config` - LLM configuration for root cause analysis
+    /// * `provider` - AI provider for LLM calls
     ///
     /// # Example
     ///
@@ -143,6 +146,7 @@ impl ReactiveReflector {
     /// use std::sync::{Arc, RwLock};
     /// use alephcore::memory::database::VectorDatabase;
     /// use alephcore::memory::cortex::meta_cognition::{AnchorStore, reactive::{ReactiveReflector, LLMConfig}};
+    /// use alephcore::providers::create_mock_provider;
     /// use rusqlite::Connection;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -150,8 +154,9 @@ impl ReactiveReflector {
     /// let conn = Arc::new(Connection::open_in_memory()?);
     /// let anchor_store = Arc::new(RwLock::new(AnchorStore::new(conn)));
     /// let llm_config = LLMConfig::default();
+    /// let provider = create_mock_provider();
     ///
-    /// let reflector = ReactiveReflector::new(db, anchor_store, llm_config);
+    /// let reflector = ReactiveReflector::new(db, anchor_store, llm_config, provider);
     /// # Ok(())
     /// # }
     /// ```
@@ -159,11 +164,13 @@ impl ReactiveReflector {
         db: Arc<VectorDatabase>,
         anchor_store: Arc<RwLock<AnchorStore>>,
         llm_config: LLMConfig,
+        provider: Arc<dyn AiProvider>,
     ) -> Self {
         Self {
             db,
             anchor_store,
             llm_config,
+            provider,
         }
     }
 
@@ -184,12 +191,14 @@ impl ReactiveReflector {
     /// # use std::collections::HashMap;
     /// # use alephcore::memory::database::VectorDatabase;
     /// # use alephcore::memory::cortex::meta_cognition::{AnchorStore, reactive::{ReactiveReflector, LLMConfig, FailureSignal}};
+    /// # use alephcore::providers::create_mock_provider;
     /// # use rusqlite::Connection;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let db = Arc::new(VectorDatabase::open_in_memory().await?);
     /// # let conn = Arc::new(Connection::open_in_memory()?);
     /// # let anchor_store = Arc::new(RwLock::new(AnchorStore::new(conn)));
-    /// # let reflector = ReactiveReflector::new(db, anchor_store, LLMConfig::default());
+    /// # let provider = create_mock_provider();
+    /// # let reflector = ReactiveReflector::new(db, anchor_store, LLMConfig::default(), provider);
     /// let signal = FailureSignal::ExecutionError {
     ///     task_id: "task-123".to_string(),
     ///     error: "Python version mismatch".to_string(),
@@ -471,6 +480,7 @@ impl ReactiveReflector {
 mod tests {
     use super::*;
     use crate::memory::cortex::meta_cognition::schema::initialize_schema;
+    use crate::providers::create_mock_provider;
     use rusqlite::Connection;
     use tempfile::TempDir;
 
@@ -485,8 +495,11 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
         let db = Arc::new(VectorDatabase::new(db_path).unwrap());
 
+        // Create mock provider for testing
+        let provider = create_mock_provider();
+
         (
-            ReactiveReflector::new(db, anchor_store, LLMConfig::default()),
+            ReactiveReflector::new(db, anchor_store, LLMConfig::default(), provider),
             temp_dir,
         )
     }

@@ -98,13 +98,16 @@ impl MetaCognitionIntegration {
         config: MetaCognitionConfig,
     ) -> Result<Self, AlephError> {
         use crate::memory::cortex::meta_cognition::reactive::LLMConfig;
+        use crate::providers::create_mock_provider;
 
         let llm_config = LLMConfig::default();
+        let provider = create_mock_provider();
 
         let reactive_reflector = Arc::new(ReactiveReflector::new(
             db.clone(),
             anchor_store.clone(),
             llm_config.clone(),
+            provider,
         ));
 
         let anchor_retriever = Arc::new(RwLock::new(AnchorRetriever::new(
