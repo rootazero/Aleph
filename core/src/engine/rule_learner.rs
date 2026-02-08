@@ -34,7 +34,7 @@
 //! }
 //! ```
 
-use super::{AtomicAction, KeywordRule};
+use super::{AtomicAction, KeywordRule, FeatureExtractor, FeatureVector};
 use dashmap::DashMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -61,6 +61,8 @@ struct PatternRecord {
     successes: usize,
     /// Number of failed executions
     failures: usize,
+    /// Extracted features (for advanced learning)
+    features: Option<FeatureVector>,
 }
 
 impl PatternRecord {
@@ -84,6 +86,9 @@ pub struct RuleLearner {
     /// Pattern records indexed by normalized input
     records: DashMap<String, PatternRecord>,
 
+    /// Feature extractor
+    feature_extractor: FeatureExtractor,
+
     /// Statistics
     stats: Arc<RwLock<LearnerStats>>,
 }
@@ -93,6 +98,7 @@ impl RuleLearner {
     pub fn new() -> Self {
         Self {
             records: DashMap::new(),
+            feature_extractor: FeatureExtractor::new(),
             stats: Arc::new(RwLock::new(LearnerStats::default())),
         }
     }
@@ -105,12 +111,14 @@ impl RuleLearner {
     /// * `action` - The atomic action that was executed
     pub fn learn_success(&self, input: &str, action: AtomicAction) {
         let normalized = self.normalize_input(input);
+        let features = self.feature_extractor.extract(input);
 
         self.records
             .entry(normalized.clone())
             .and_modify(|record| {
                 record.count += 1;
                 record.successes += 1;
+                record.features = Some(features.clone());
             })
             .or_insert_with(|| PatternRecord {
                 pattern: normalized.clone(),
@@ -118,6 +126,7 @@ impl RuleLearner {
                 count: 1,
                 successes: 1,
                 failures: 0,
+                features: Some(features),
             });
 
         self.stats.write().unwrap().total_observations += 1;
@@ -138,12 +147,14 @@ impl RuleLearner {
     /// * `action` - The atomic action that was attempted
     pub fn learn_failure(&self, input: &str, action: AtomicAction) {
         let normalized = self.normalize_input(input);
+        let features = self.feature_extractor.extract(input);
 
         self.records
             .entry(normalized.clone())
             .and_modify(|record| {
                 record.count += 1;
                 record.failures += 1;
+                record.features = Some(features.clone());
             })
             .or_insert_with(|| PatternRecord {
                 pattern: normalized.clone(),
@@ -151,6 +162,7 @@ impl RuleLearner {
                 count: 1,
                 successes: 0,
                 failures: 1,
+                features: Some(features),
             });
 
         self.stats.write().unwrap().total_observations += 1;

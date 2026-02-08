@@ -6,6 +6,7 @@
 mod atomic_action;
 mod atomic_engine;
 mod atomic_executor;
+mod feature_extractor;
 mod patch;
 mod reflex_bench;
 mod reflex_layer;
@@ -20,6 +21,7 @@ mod performance_benchmarks;
 pub use atomic_action::{AtomicAction, LineRange, WriteMode, SearchPattern, SearchScope, FileFilter};
 pub use atomic_engine::{AtomicEngine, ExecutionResult, RoutingLayer, RoutingResult, RoutingStats};
 pub use atomic_executor::AtomicExecutor;
+pub use feature_extractor::{FeatureExtractor, FeatureVector, Intent, Entity};
 pub use patch::{Patch, PatchApplier};
 pub use reflex_layer::{KeywordRule, ReflexLayer, ActionType, ParamExtractor};
 pub use rule_learner::{RuleLearner, LearnerStats};
