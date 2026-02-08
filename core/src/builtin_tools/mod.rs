@@ -8,6 +8,7 @@
 //! - [`WebFetchTool`] - Web page fetching
 //! - [`YouTubeTool`] - YouTube video transcript extraction
 //! - [`FileOpsTool`] - File system operations (list, read, write, move, copy, delete, mkdir, search)
+//! - [`AtomicOpsTool`] - Atomic operations (search, replace, move) powered by Atomic Engine
 //! - [`CodeExecTool`] - Code execution (Python, JavaScript, Shell)
 //! - [`PdfGenerateTool`] - PDF generation from text/Markdown
 //! - [`ImageGenerateTool`] - Image generation from text prompts
@@ -33,6 +34,7 @@ use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
 use tracing::debug;
 
+pub mod atomic_ops;
 pub mod bash_exec;
 pub mod canvas;
 pub mod code_exec;
@@ -54,6 +56,7 @@ pub mod youtube;
 pub mod mcp_resource;
 pub mod mcp_prompt;
 
+pub use atomic_ops::{AtomicOpsArgs, AtomicOpsOutput, AtomicOpsTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};
 pub use code_exec::{CodeExecArgs, CodeExecTool};
 pub use error::ToolError;
