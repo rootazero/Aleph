@@ -31,12 +31,15 @@
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 
+mod builtin;
 mod server;
 pub mod sessions;
 mod traits;
+mod types;
 
 // Markdown skill system
 pub mod markdown_skill;
 
-pub use server::{AlephToolServer, AlephToolServerHandle, ToolUpdateInfo};
+pub use server::{AlephToolServer, AlephToolServerHandle};
 pub use traits::{AlephTool, AlephToolDyn};
+pub use types::{ToolRepairInfo, ToolRepairType, ToolUpdateInfo};
