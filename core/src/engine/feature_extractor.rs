@@ -41,7 +41,7 @@ pub struct FeatureVector {
 }
 
 /// Intent types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Intent {
     /// Read operation (read, show, display, cat)
     Read,
@@ -60,7 +60,7 @@ pub enum Intent {
 }
 
 /// Entity types
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Entity {
     /// File path
     FilePath(String),
