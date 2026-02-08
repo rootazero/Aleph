@@ -2,10 +2,12 @@
 //!
 //! Provides importance scoring for memory entries to filter low-value content.
 
+pub mod cortex;
 pub mod estimator;
 pub mod llm_scorer;
 pub mod signals;
 
+pub use cortex::{CortexValueEstimator, ExperienceScore};
 pub use estimator::ValueEstimator;
 pub use llm_scorer::{LlmScorer, LlmScorerConfig};
 pub use signals::{Signal, SignalDetector};
