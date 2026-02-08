@@ -165,21 +165,29 @@ impl FactType {
         }
     }
 
-    /// Parse from string
-    #[allow(clippy::should_implement_trait)]
-    pub fn from_str(s: &str) -> Self {
+    /// Parse from string with fallback to Other
+    pub fn from_str_or_other(s: &str) -> Self {
+        s.parse().unwrap_or(FactType::Other)
+    }
+}
+
+impl std::str::FromStr for FactType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "preference" => FactType::Preference,
-            "plan" => FactType::Plan,
-            "learning" => FactType::Learning,
-            "project" => FactType::Project,
-            "personal" => FactType::Personal,
-            "tool" => FactType::Tool,
-            "subagent_run" => FactType::SubagentRun,
-            "subagent_session" => FactType::SubagentSession,
-            "subagent_checkpoint" => FactType::SubagentCheckpoint,
-            "subagent_transcript" => FactType::SubagentTranscript,
-            _ => FactType::Other,
+            "preference" => Ok(FactType::Preference),
+            "plan" => Ok(FactType::Plan),
+            "learning" => Ok(FactType::Learning),
+            "project" => Ok(FactType::Project),
+            "personal" => Ok(FactType::Personal),
+            "tool" => Ok(FactType::Tool),
+            "subagent_run" => Ok(FactType::SubagentRun),
+            "subagent_session" => Ok(FactType::SubagentSession),
+            "subagent_checkpoint" => Ok(FactType::SubagentCheckpoint),
+            "subagent_transcript" => Ok(FactType::SubagentTranscript),
+            "other" => Ok(FactType::Other),
+            _ => Err(format!("Unknown fact type: {}", s)),
         }
     }
 }
@@ -212,12 +220,21 @@ impl FactSpecificity {
         }
     }
 
-    #[allow(clippy::should_implement_trait)]
-    pub fn from_str(s: &str) -> Self {
+    /// Parse from string with fallback to Pattern
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Self::Pattern)
+    }
+}
+
+impl std::str::FromStr for FactSpecificity {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "principle" => Self::Principle,
-            "instance" => Self::Instance,
-            _ => Self::Pattern,
+            "principle" => Ok(Self::Principle),
+            "pattern" => Ok(Self::Pattern),
+            "instance" => Ok(Self::Instance),
+            _ => Err(format!("Unknown fact specificity: {}", s)),
         }
     }
 }
@@ -250,12 +267,21 @@ impl TemporalScope {
         }
     }
 
-    #[allow(clippy::should_implement_trait)]
-    pub fn from_str(s: &str) -> Self {
+    /// Parse from string with fallback to Contextual
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Self::Contextual)
+    }
+}
+
+impl std::str::FromStr for TemporalScope {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "permanent" => Self::Permanent,
-            "ephemeral" => Self::Ephemeral,
-            _ => Self::Contextual,
+            "permanent" => Ok(Self::Permanent),
+            "contextual" => Ok(Self::Contextual),
+            "ephemeral" => Ok(Self::Ephemeral),
+            _ => Err(format!("Unknown temporal scope: {}", s)),
         }
     }
 }
@@ -576,19 +602,19 @@ mod tests {
     #[test]
     fn test_specificity_from_str() {
         assert_eq!(
-            FactSpecificity::from_str("principle"),
+            FactSpecificity::from_str_or_default("principle"),
             FactSpecificity::Principle
         );
         assert_eq!(
-            FactSpecificity::from_str("PATTERN"),
+            FactSpecificity::from_str_or_default("PATTERN"),
             FactSpecificity::Pattern
         );
         assert_eq!(
-            FactSpecificity::from_str("instance"),
+            FactSpecificity::from_str_or_default("instance"),
             FactSpecificity::Instance
         );
         assert_eq!(
-            FactSpecificity::from_str("unknown"),
+            FactSpecificity::from_str_or_default("unknown"),
             FactSpecificity::Pattern
         ); // default
     }
@@ -596,19 +622,19 @@ mod tests {
     #[test]
     fn test_temporal_scope_from_str() {
         assert_eq!(
-            TemporalScope::from_str("permanent"),
+            TemporalScope::from_str_or_default("permanent"),
             TemporalScope::Permanent
         );
         assert_eq!(
-            TemporalScope::from_str("CONTEXTUAL"),
+            TemporalScope::from_str_or_default("CONTEXTUAL"),
             TemporalScope::Contextual
         );
         assert_eq!(
-            TemporalScope::from_str("ephemeral"),
+            TemporalScope::from_str_or_default("ephemeral"),
             TemporalScope::Ephemeral
         );
         assert_eq!(
-            TemporalScope::from_str("unknown"),
+            TemporalScope::from_str_or_default("unknown"),
             TemporalScope::Contextual
         ); // default
     }
@@ -642,15 +668,15 @@ mod tests {
     #[test]
     fn test_fact_type_tool() {
         assert_eq!(FactType::Tool.as_str(), "tool");
-        assert_eq!(FactType::from_str("tool"), FactType::Tool);
+        assert_eq!(FactType::from_str_or_other("tool"), FactType::Tool);
     }
 
     #[test]
     fn test_subagent_fact_types() {
-        assert_eq!(FactType::from_str("subagent_run"), FactType::SubagentRun);
-        assert_eq!(FactType::from_str("subagent_session"), FactType::SubagentSession);
-        assert_eq!(FactType::from_str("subagent_checkpoint"), FactType::SubagentCheckpoint);
-        assert_eq!(FactType::from_str("subagent_transcript"), FactType::SubagentTranscript);
+        assert_eq!(FactType::from_str_or_other("subagent_run"), FactType::SubagentRun);
+        assert_eq!(FactType::from_str_or_other("subagent_session"), FactType::SubagentSession);
+        assert_eq!(FactType::from_str_or_other("subagent_checkpoint"), FactType::SubagentCheckpoint);
+        assert_eq!(FactType::from_str_or_other("subagent_transcript"), FactType::SubagentTranscript);
         assert_eq!(FactType::SubagentRun.as_str(), "subagent_run");
         assert_eq!(FactType::SubagentSession.as_str(), "subagent_session");
         assert_eq!(FactType::SubagentCheckpoint.as_str(), "subagent_checkpoint");

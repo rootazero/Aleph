@@ -120,7 +120,7 @@ impl VectorDatabase {
                     Ok((id.clone(), MemoryFact {
                         id,
                         content: row.get(1)?,
-                        fact_type: FactType::from_str(&row.get::<_, String>(2)?),
+                        fact_type: FactType::from_str_or_other(&row.get::<_, String>(2)?),
                         embedding,
                         source_memory_ids: source_ids,
                         created_at: row.get(5)?,
@@ -129,8 +129,8 @@ impl VectorDatabase {
                         is_valid: row.get::<_, i32>(8)? == 1,
                         invalidation_reason: row.get(9)?,
                         decay_invalidated_at: None,
-                        specificity: FactSpecificity::from_str(&specificity_str),
-                        temporal_scope: TemporalScope::from_str(&temporal_scope_str),
+                        specificity: FactSpecificity::from_str_or_default(&specificity_str),
+                        temporal_scope: TemporalScope::from_str_or_default(&temporal_scope_str),
                         similarity_score: None, // Will be set after fusion
                     }, vec_score as f32))
                 },
@@ -244,7 +244,7 @@ impl VectorDatabase {
                     Ok(MemoryFact {
                         id: row.get(0)?,
                         content: row.get(1)?,
-                        fact_type: FactType::from_str(&row.get::<_, String>(2)?),
+                        fact_type: FactType::from_str_or_other(&row.get::<_, String>(2)?),
                         embedding,
                         source_memory_ids: source_ids,
                         created_at: row.get(5)?,
@@ -253,8 +253,8 @@ impl VectorDatabase {
                         is_valid: row.get::<_, i32>(8)? == 1,
                         invalidation_reason: row.get(9)?,
                         decay_invalidated_at: None,
-                        specificity: FactSpecificity::from_str(&specificity_str),
-                        temporal_scope: TemporalScope::from_str(&temporal_scope_str),
+                        specificity: FactSpecificity::from_str_or_default(&specificity_str),
+                        temporal_scope: TemporalScope::from_str_or_default(&temporal_scope_str),
                         similarity_score: Some(score as f32),
                     })
                 },

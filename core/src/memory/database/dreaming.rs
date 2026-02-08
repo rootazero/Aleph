@@ -201,7 +201,7 @@ impl VectorDatabase {
         let mut report = MemoryDecayReport::default();
 
         for (fact_id, fact_type_str, created_at, updated_at, confidence) in rows {
-            let fact_type = FactType::from_str(&fact_type_str);
+            let fact_type = FactType::from_str_or_other(&fact_type_str);
             if config.is_protected(&fact_type) {
                 continue;
             }
