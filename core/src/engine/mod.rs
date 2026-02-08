@@ -11,6 +11,7 @@ mod conflict_detector;
 mod feature_extractor;
 mod learning_agent;
 mod patch;
+mod performance_optimizer;
 mod persistence;
 mod reflex_bench;
 mod reflex_layer;
@@ -30,6 +31,7 @@ pub use conflict_detector::{ConflictDetector, Conflict, ConflictType, ConflictSe
 pub use feature_extractor::{FeatureExtractor, FeatureVector, Intent, Entity};
 pub use learning_agent::{LearningAgent, LearningEvent, AgentStats};
 pub use patch::{Patch, PatchApplier};
+pub use performance_optimizer::{PerformanceOptimizer, CachedResult, CacheStats, IndexStats};
 pub use persistence::{Persistence, LearnedPattern, RuleMetadata, PersistenceStats};
 pub use reflex_layer::{KeywordRule, ReflexLayer, ActionType, ParamExtractor};
 pub use rule_learner::{RuleLearner, LearnerStats};
