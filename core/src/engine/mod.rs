@@ -8,7 +8,9 @@ mod atomic_engine;
 mod atomic_executor;
 mod classifier;
 mod feature_extractor;
+mod learning_agent;
 mod patch;
+mod persistence;
 mod reflex_bench;
 mod reflex_layer;
 mod rule_learner;
@@ -24,6 +26,8 @@ pub use atomic_engine::{AtomicEngine, ExecutionResult, RoutingLayer, RoutingResu
 pub use atomic_executor::AtomicExecutor;
 pub use classifier::{NaiveBayesClassifier, ActionClass};
 pub use feature_extractor::{FeatureExtractor, FeatureVector, Intent, Entity};
+pub use learning_agent::{LearningAgent, LearningEvent, AgentStats};
 pub use patch::{Patch, PatchApplier};
+pub use persistence::{Persistence, LearnedPattern, RuleMetadata, PersistenceStats};
 pub use reflex_layer::{KeywordRule, ReflexLayer, ActionType, ParamExtractor};
 pub use rule_learner::{RuleLearner, LearnerStats};
