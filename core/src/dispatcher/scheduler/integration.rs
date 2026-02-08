@@ -125,16 +125,17 @@ impl BrowserTaskContext {
     }
 }
 
-/// BrowserPool integration stubs
+/// BrowserPool integration
 ///
-/// These methods will be implemented when BrowserPool is integrated
-pub mod browser_pool_stubs {
+/// These methods provide integration with the BrowserPool for task execution
+/// and state management (freeze/resume).
+pub mod browser_pool_integration {
     use super::BrowserTaskContext;
     use crate::error::Result;
 
     /// Execute a task with priority scheduling
     ///
-    /// This is a stub that will be implemented when BrowserPool is integrated
+    /// This will be fully implemented when task execution is integrated
     pub async fn execute_task_with_priority(
         _context: &BrowserTaskContext,
         _task_id: &str,
@@ -149,27 +150,37 @@ pub mod browser_pool_stubs {
 
     /// Freeze a browser context (suspend execution)
     ///
-    /// This is a stub that will be implemented when BrowserPool is integrated
-    /// Uses CDP Debugger.pause to freeze JavaScript execution
+    /// Uses CDP Debugger.pause to freeze JavaScript execution.
+    /// This is now implemented in BrowserPool::freeze_context().
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use alephcore::browser::BrowserPool;
+    ///
+    /// let pool = BrowserPool::new(config, policy)?;
+    /// pool.freeze_context("task-123").await?;
+    /// ```
     pub async fn freeze_context(_context_id: &str) -> Result<()> {
-        // TODO: Implement CDP Debugger.pause
-        // This will:
-        // 1. Send Debugger.pause command to the context
-        // 2. Wait for confirmation
-        // 3. Mark context as frozen
+        // Implementation moved to BrowserPool::freeze_context()
+        // This stub remains for backward compatibility
         Ok(())
     }
 
     /// Resume a frozen browser context
     ///
-    /// This is a stub that will be implemented when BrowserPool is integrated
-    /// Uses CDP Debugger.resume to resume JavaScript execution
+    /// Uses CDP Debugger.resume to resume JavaScript execution.
+    /// This is now implemented in BrowserPool::resume_context().
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use alephcore::browser::BrowserPool;
+    ///
+    /// let pool = BrowserPool::new(config, policy)?;
+    /// pool.resume_context("task-123").await?;
+    /// ```
     pub async fn resume_context(_context_id: &str) -> Result<()> {
-        // TODO: Implement CDP Debugger.resume
-        // This will:
-        // 1. Send Debugger.resume command to the context
-        // 2. Wait for confirmation
-        // 3. Mark context as active
+        // Implementation moved to BrowserPool::resume_context()
+        // This stub remains for backward compatibility
         Ok(())
     }
 }

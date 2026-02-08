@@ -827,6 +827,9 @@ pub struct BrowserPool {
 
     /// Chrome processes
     processes: Arc<RwLock<Vec<Child>>>,
+
+    /// Frozen contexts (task IDs with paused execution)
+    frozen_contexts: Arc<RwLock<std::collections::HashSet<TaskId>>>,
 }
 
 impl BrowserPool {
@@ -850,6 +853,7 @@ impl BrowserPool {
             resource_monitor: Arc::new(ResourceMonitor::new()),
             persistence_manager: Arc::new(PersistenceManager::new(persistence_dir)),
             processes: Arc::new(RwLock::new(Vec::new())),
+            frozen_contexts: Arc::new(RwLock::new(std::collections::HashSet::new())),
         })
     }
 
@@ -1159,6 +1163,110 @@ impl BrowserPool {
     pub async fn load_snapshot(&self) -> BrowserResult<Option<PoolSnapshot>> {
         self.persistence_manager.load_snapshot().await
     }
+
+    /// Freeze a browser context (pause JavaScript execution)
+    ///
+    /// This method freezes JavaScript execution in the specified task's browser
+    /// context. This is used for task preemption in the priority scheduler.
+    ///
+    /// # Implementation Note
+    /// Currently tracks frozen state. Full CDP Debugger.pause implementation
+    /// requires chromiumoxide to expose the Debugger domain or raw CDP command
+    /// support. See: https://chromedevtools.github.io/devtools-protocol/tot/Debugger/#method-pause
+    ///
+    /// # Arguments
+    /// * `task_id` - The task ID whose context should be frozen
+    ///
+    /// # Returns
+    /// * `Ok(())` if the context was successfully frozen
+    /// * `Err(BrowserError::NotStarted)` if the context doesn't exist
+    #[cfg(feature = "browser")]
+    pub async fn freeze_context(&self, task_id: &TaskId) -> BrowserResult<()> {
+        // Verify the context exists
+        let _context = self.get_ephemeral_context(task_id).await
+            .ok_or(BrowserError::NotStarted)?;
+
+        // TODO: Send CDP Debugger.pause command when chromiumoxide supports it
+        // For now, we track the frozen state for integration with PriorityScheduler
+        //
+        // Planned implementation:
+        // 1. Enable debugger: context.execute(EnableParams::default()).await?
+        // 2. Pause execution: context.execute(PauseParams::default()).await?
+        // 3. Track frozen state (done below)
+        //
+        // Alternative approach if CDP Debugger is not available:
+        // - Use Page.setLifecycleEventsEnabled + Page.stopLoading
+        // - Inject JavaScript to freeze event loop
+        // - Use Network.setBlockedURLs to block all requests
+
+        // Track frozen state
+        self.frozen_contexts.write().await.insert(task_id.clone());
+
+        tracing::info!("Marked context as frozen for task: {} (CDP pause pending)", task_id);
+        Ok(())
+    }
+
+    #[cfg(not(feature = "browser"))]
+    pub async fn freeze_context(&self, _task_id: &TaskId) -> BrowserResult<()> {
+        Err(BrowserError::Internal("Browser feature not enabled".to_string()))
+    }
+
+    /// Resume a frozen browser context (resume JavaScript execution)
+    ///
+    /// This method resumes JavaScript execution in a previously frozen browser
+    /// context.
+    ///
+    /// # Implementation Note
+    /// Currently tracks frozen state. Full CDP Debugger.resume implementation
+    /// requires chromiumoxide to expose the Debugger domain or raw CDP command
+    /// support. See: https://chromedevtools.github.io/devtools-protocol/tot/Debugger/#method-resume
+    ///
+    /// # Arguments
+    /// * `task_id` - The task ID whose context should be resumed
+    ///
+    /// # Returns
+    /// * `Ok(())` if the context was successfully resumed
+    /// * `Err(BrowserError::NotStarted)` if the context doesn't exist
+    #[cfg(feature = "browser")]
+    pub async fn resume_context(&self, task_id: &TaskId) -> BrowserResult<()> {
+        // Check if context is actually frozen
+        if !self.frozen_contexts.read().await.contains(task_id) {
+            tracing::warn!("Attempted to resume non-frozen context: {}", task_id);
+            return Ok(());
+        }
+
+        // Verify the context exists
+        let _context = self.get_ephemeral_context(task_id).await
+            .ok_or(BrowserError::NotStarted)?;
+
+        // TODO: Send CDP Debugger.resume command when chromiumoxide supports it
+        // For now, we track the frozen state for integration with PriorityScheduler
+        //
+        // Planned implementation:
+        // 1. Resume execution: context.execute(ResumeParams::default()).await?
+        // 2. Remove from frozen set (done below)
+
+        // Remove from frozen set
+        self.frozen_contexts.write().await.remove(task_id);
+
+        tracing::info!("Marked context as resumed for task: {} (CDP resume pending)", task_id);
+        Ok(())
+    }
+
+    #[cfg(not(feature = "browser"))]
+    pub async fn resume_context(&self, _task_id: &TaskId) -> BrowserResult<()> {
+        Err(BrowserError::Internal("Browser feature not enabled".to_string()))
+    }
+
+    /// Check if a context is currently frozen
+    pub async fn is_context_frozen(&self, task_id: &TaskId) -> bool {
+        self.frozen_contexts.read().await.contains(task_id)
+    }
+
+    /// Get list of all frozen context task IDs
+    pub async fn get_frozen_contexts(&self) -> Vec<TaskId> {
+        self.frozen_contexts.read().await.iter().cloned().collect()
+    }
 }
 
 impl Drop for BrowserPool {
@@ -1387,5 +1495,33 @@ mod integration_tests {
         // Now should be able to lock again
         let result = registry.lock_domain("example.com".to_string(), "task-2".to_string()).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_frozen_context_tracking() {
+        let config = BrowserConfig::default();
+        let pool = BrowserPool::new(config, AllocationPolicy::Adaptive).unwrap();
+
+        // Initially no frozen contexts
+        assert_eq!(pool.get_frozen_contexts().await.len(), 0);
+        assert!(!pool.is_context_frozen(&"task-1".to_string()).await);
+
+        // Simulate freezing (without actual browser)
+        pool.frozen_contexts.write().await.insert("task-1".to_string());
+        pool.frozen_contexts.write().await.insert("task-2".to_string());
+
+        // Check frozen state
+        assert_eq!(pool.get_frozen_contexts().await.len(), 2);
+        assert!(pool.is_context_frozen(&"task-1".to_string()).await);
+        assert!(pool.is_context_frozen(&"task-2".to_string()).await);
+        assert!(!pool.is_context_frozen(&"task-3".to_string()).await);
+
+        // Simulate resuming
+        pool.frozen_contexts.write().await.remove(&"task-1".to_string());
+
+        // Check updated state
+        assert_eq!(pool.get_frozen_contexts().await.len(), 1);
+        assert!(!pool.is_context_frozen(&"task-1".to_string()).await);
+        assert!(pool.is_context_frozen(&"task-2".to_string()).await);
     }
 }
