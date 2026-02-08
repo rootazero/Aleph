@@ -65,7 +65,7 @@ impl PermissionManager {
         Self {
             evaluator: PermissionEvaluator::new(),
             config_rules: config_to_ruleset(&permission_config),
-            approved_rules: RwLock::new(Vec::new()),
+            approved_rules: RwLock::new(Ruleset::new()),
             pending: RwLock::new(HashMap::new()),
             event_bus,
             config,
@@ -197,7 +197,7 @@ impl PermissionManager {
                 {
                     let mut approved = self.approved_rules.write().await;
                     for pattern in &pending.request.always_patterns {
-                        approved.push(super::rule::PermissionRule::new(
+                        approved.add(super::rule::PermissionRule::new(
                             &pending.request.permission,
                             pattern,
                             PermissionAction::Allow,
