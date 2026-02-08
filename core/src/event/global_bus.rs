@@ -107,8 +107,52 @@ impl GlobalEvent {
 // SubscriptionId
 // =============================================================================
 
-/// Unique identifier for a subscription.
-pub type SubscriptionId = String;
+/// Unique identifier for a subscription (newtype for type safety)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SubscriptionId(String);
+
+impl SubscriptionId {
+    /// Create a new SubscriptionId
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Get the inner string reference
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Convert into inner String
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for SubscriptionId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for SubscriptionId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl std::fmt::Display for SubscriptionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::ops::Deref for SubscriptionId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 // =============================================================================
 // Subscription
@@ -259,7 +303,7 @@ impl GlobalBus {
         filter: EventFilter,
         callback: impl Fn(GlobalEvent) + Send + Sync + 'static,
     ) -> SubscriptionId {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = SubscriptionId::new(uuid::Uuid::new_v4().to_string());
         let subscription = Subscription {
             id: id.clone(),
             filter,
@@ -283,7 +327,7 @@ impl GlobalBus {
         filter: EventFilter,
         callback: impl Fn(GlobalEvent) + Send + Sync + 'static,
     ) -> SubscriptionId {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = SubscriptionId::new(uuid::Uuid::new_v4().to_string());
         let subscription = Subscription {
             id: id.clone(),
             filter,
