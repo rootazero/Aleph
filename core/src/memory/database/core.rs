@@ -458,6 +458,9 @@ impl VectorDatabase {
         // Migrate existing databases to add namespace support (idempotent)
         migration::migrate_add_namespace(&conn)?;
 
+        // Migrate to add experience_replays table for Cortex evolution system (idempotent)
+        migration::migrate_add_experience_replays(&conn)?;
+
         // Migrate existing data to vec0 tables (for upgrades from old schema)
         Self::migrate_to_vec0(&conn)?;
 

@@ -15,6 +15,7 @@ mod audit;
 mod compression;
 mod core;
 mod dreaming;
+mod experiences;
 mod facts;
 mod memory_ops;
 pub mod migration;

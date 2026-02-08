@@ -46,6 +46,7 @@ pub mod ripple;
 pub mod evolution;
 pub mod consolidation;
 pub mod performance_monitor;
+pub mod cortex;
 
 #[cfg(test)]
 mod integration_tests;
@@ -91,7 +92,7 @@ pub use transcript_indexer::{
 pub use context_comptroller::{
     ContextComptroller, ComptrollerConfig, ArbitratedContext, RetentionMode, TokenBudget,
 };
-pub use value_estimator::{LlmScorer, LlmScorerConfig, Signal, ValueEstimator};
+pub use value_estimator::{CortexValueEstimator, ExperienceScore, LlmScorer, LlmScorerConfig, Signal, ValueEstimator};
 pub use compression_daemon::{CompressionDaemon, CompressionDaemonConfig};
 pub use ripple::{RippleTask, RippleConfig, RippleResult};
 pub use evolution::{
@@ -101,4 +102,8 @@ pub use evolution::{
 pub use consolidation::{
     ConsolidationAnalyzer, ConsolidationConfig, ConsolidatedFact, FrequentFact, ProfileCategory,
     UserProfile,
+};
+pub use cortex::{
+    DistillationMode, DistillationTask, EnvironmentContext, EvolutionStatus, Experience,
+    ExperienceBuilder, ParameterConfig, ParameterMapping, ReplayMatch,
 };

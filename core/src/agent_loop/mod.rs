@@ -62,6 +62,7 @@ pub mod state;
 pub mod thinking;
 
 mod compaction_trigger;
+mod cortex_telemetry;
 mod loop_result;
 mod traits;
 mod agent_loop;
@@ -84,6 +85,9 @@ pub use thinking::{ConfidenceLevel, ReasoningStep, ReasoningStepType, Structured
 
 // Re-export compaction trigger (useful for custom agent loop implementations)
 pub use compaction_trigger::{CompactionTrigger, OptionalCompactionTrigger};
+
+// Re-export cortex telemetry
+pub use cortex_telemetry::{CortexTelemetry, ExecutionTelemetry, OptionalCortexTelemetry};
 
 // Re-export loop result
 pub use loop_result::LoopResult;
