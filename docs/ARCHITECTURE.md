@@ -222,6 +222,93 @@ Thinker Decision (tool_use)
 
 ---
 
+## Design Patterns
+
+Aleph employs several key design patterns to ensure code quality, type safety, and maintainability:
+
+### Context Pattern
+
+Groups related function parameters into dedicated structs, reducing parameter count and improving API ergonomics.
+
+**Example: `RunContext`**
+```rust
+// Before: 7 parameters
+agent_loop.run(request, context, tools, identity, callback, abort_signal, initial_history).await
+
+// After: 2 parameters + Context
+let run_context = RunContext::new(request, context, tools, identity)
+    .with_abort_signal(abort_rx)
+    .with_initial_history(history);
+agent_loop.run(run_context, callback).await
+```
+
+**Benefits:**
+- Extensibility: Add parameters without breaking changes
+- Readability: Clear parameter grouping
+- Type Safety: Compile-time validation
+- Ergonomics: Builder pattern for optional parameters
+
+### Newtype Pattern
+
+Wraps primitive types in distinct structs for type safety and semantic clarity.
+
+**Example: ID Types**
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExperimentId(String);
+
+impl ExperimentId {
+    pub fn new(id: impl Into<String>) -> Self { Self(id.into()) }
+    pub fn as_str(&self) -> &str { &self.0 }
+}
+
+impl Deref for ExperimentId {
+    type Target = str;
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+```
+
+**Newtype Catalog:**
+- **IDs**: `ExperimentId`, `VariantId`, `ContextId`, `TaskId`, `SubscriptionId`
+- **Collections**: `Ruleset` (permission rules)
+- **Values**: `Answer` (question responses)
+
+**Benefits:**
+- Type Safety: Prevents mixing different ID types
+- Self-Documentation: Clear semantic meaning
+- Encapsulation: Controlled access to inner value
+- Extension Points: Add methods without modifying primitives
+
+### FromStr Trait Pattern
+
+Provides consistent parsing interface across the codebase.
+
+**Example:**
+```rust
+impl FromStr for TaskStatus {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            _ => Err(format!("Invalid TaskStatus: {}", s)),
+        }
+    }
+}
+
+// Usage
+let status: TaskStatus = "pending".parse()?;
+```
+
+**Implemented for:** `FactType`, `HookKind`, `DeviceType`, `TaskStatus`, `RuntimeKind`, and 10+ other types.
+
+### Complete Documentation
+
+For detailed information on design patterns, implementation guidelines, and migration guides, see:
+- **[DESIGN_PATTERNS.md](DESIGN_PATTERNS.md)** - Complete design patterns reference
+
+---
+
 ## Providers
 
 ### Protocol Adapter Architecture
