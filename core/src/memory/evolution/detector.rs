@@ -13,29 +13,6 @@ pub struct ContradictionDetector {
     similarity_threshold: f32,
 }
 
-/// Configuration for contradiction detection
-#[derive(Debug, Clone)]
-pub struct ContradictionConfig {
-    /// Similarity threshold for finding candidate facts (default: 0.7)
-    pub similarity_threshold: f32,
-
-    /// Maximum number of similar facts to check (default: 10)
-    pub max_candidates: u32,
-
-    /// Whether to use LLM for detection (default: true if provider available)
-    pub use_llm: bool,
-}
-
-impl Default for ContradictionConfig {
-    fn default() -> Self {
-        Self {
-            similarity_threshold: 0.7,
-            max_candidates: 10,
-            use_llm: true,
-        }
-    }
-}
-
 impl ContradictionDetector {
     /// Create a new contradiction detector
     pub fn new(
