@@ -53,13 +53,8 @@ impl AtomicExecutor {
             AtomicAction::Replace { search, replacement, scope, preview, dry_run } => {
                 self.execute_replace(search, replacement, scope, *preview, *dry_run).await?
             }
-            AtomicAction::Move { .. } => {
-                // TODO: Implement move operation
-                AtomicResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some("Move operation not yet implemented".to_string()),
-                }
+            AtomicAction::Move { source, destination, update_imports, create_parent } => {
+                self.execute_move(source, destination, *update_imports, *create_parent).await?
             }
         };
 
@@ -468,6 +463,204 @@ impl AtomicExecutor {
             output,
             error: None,
         })
+    }
+
+    /// Execute Move operation
+    async fn execute_move(
+        &self,
+        source: &PathBuf,
+        destination: &PathBuf,
+        update_imports: bool,
+        create_parent: bool,
+    ) -> Result<AtomicResult> {
+        debug!(source = ?source, destination = ?destination, "Executing move");
+
+        // Resolve paths
+        let source_path = if source.is_absolute() {
+            source.clone()
+        } else {
+            self.working_dir.join(source)
+        };
+
+        let dest_path = if destination.is_absolute() {
+            destination.clone()
+        } else {
+            self.working_dir.join(destination)
+        };
+
+        // Check source exists
+        if !source_path.exists() {
+            return Ok(AtomicResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("Source does not exist: {}", source_path.display())),
+            });
+        }
+
+        // Check destination doesn't exist
+        if dest_path.exists() {
+            return Ok(AtomicResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("Destination already exists: {}", dest_path.display())),
+            });
+        }
+
+        // Create parent directory if needed
+        if create_parent {
+            if let Some(parent) = dest_path.parent() {
+                if !parent.exists() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+            }
+        }
+
+        // Check parent directory exists
+        if let Some(parent) = dest_path.parent() {
+            if !parent.exists() {
+                return Ok(AtomicResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!(
+                        "Parent directory does not exist: {}. Use create_parent option.",
+                        parent.display()
+                    )),
+                });
+            }
+        }
+
+        // Perform the move
+        tokio::fs::rename(&source_path, &dest_path).await?;
+
+        // Update imports if requested
+        let mut import_updates = Vec::new();
+        if update_imports {
+            import_updates = self.update_imports_after_move(&source_path, &dest_path).await?;
+        }
+
+        // Format output
+        let output = if import_updates.is_empty() {
+            format!(
+                "Moved {} to {}",
+                source_path.display(),
+                dest_path.display()
+            )
+        } else {
+            format!(
+                "Moved {} to {}\nUpdated imports in {} files:\n{}",
+                source_path.display(),
+                dest_path.display(),
+                import_updates.len(),
+                import_updates
+                    .iter()
+                    .map(|f| format!("  - {}", f.display()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        };
+
+        Ok(AtomicResult {
+            success: true,
+            output,
+            error: None,
+        })
+    }
+
+    /// Update imports after moving a file
+    async fn update_imports_after_move(
+        &self,
+        old_path: &PathBuf,
+        new_path: &PathBuf,
+    ) -> Result<Vec<PathBuf>> {
+        let mut updated_files = Vec::new();
+
+        // Only handle Rust files for now
+        if let Some(ext) = old_path.extension() {
+            if ext != "rs" {
+                // Not a Rust file, skip import updates
+                return Ok(updated_files);
+            }
+        } else {
+            return Ok(updated_files);
+        }
+
+        // Extract module names from paths
+        let old_module = self.path_to_module_name(old_path);
+        let new_module = self.path_to_module_name(new_path);
+
+        if old_module.is_none() || new_module.is_none() {
+            return Ok(updated_files);
+        }
+
+        let old_mod = old_module.unwrap();
+        let new_mod = new_module.unwrap();
+
+        // Find all Rust files in the workspace
+        let mut rust_files = Vec::new();
+        self.collect_files_from_directory(
+            &self.working_dir,
+            true,
+            &[FileFilter::Extension("rs".to_string())],
+            &mut rust_files,
+        )
+        .await?;
+
+        // Update imports in each file
+        for file in rust_files {
+            if file == *new_path {
+                // Skip the moved file itself
+                continue;
+            }
+
+            let content = match tokio::fs::read_to_string(&file).await {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            // Simple pattern matching for Rust imports
+            // Look for: use old_module::...;  or  mod old_module;
+            let patterns = vec![
+                format!(r"use\s+{}::", old_mod),
+                format!(r"use\s+{}\s*;", old_mod),
+                format!(r"mod\s+{}\s*;", old_mod),
+            ];
+
+            let mut modified = false;
+            let mut new_content = content.clone();
+
+            for pattern in patterns {
+                if content.contains(&old_mod) {
+                    // Replace old module name with new module name
+                    new_content = new_content.replace(&old_mod, &new_mod);
+                    modified = true;
+                }
+            }
+
+            if modified {
+                tokio::fs::write(&file, new_content).await?;
+                updated_files.push(file);
+            }
+        }
+
+        Ok(updated_files)
+    }
+
+    /// Convert file path to module name (for Rust files)
+    fn path_to_module_name(&self, path: &PathBuf) -> Option<String> {
+        // Get relative path from working directory
+        let rel_path = path.strip_prefix(&self.working_dir).ok()?;
+
+        // Remove .rs extension
+        let path_str = rel_path.to_str()?;
+        let without_ext = path_str.strip_suffix(".rs")?;
+
+        // Convert path separators to ::
+        let module_name = without_ext.replace('/', "::").replace('\\', "::");
+
+        // Handle mod.rs files
+        let module_name = module_name.strip_suffix("::mod").unwrap_or(&module_name);
+
+        Some(module_name.to_string())
     }
 
     /// Collect files for search based on scope and filters
@@ -1181,5 +1374,174 @@ mod tests {
         // Verify file was modified
         let content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(content, "Hi world\nHi Rust\n");
+    }
+
+    #[tokio::test]
+    async fn test_execute_move_file() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create test file
+        let source = temp_dir.path().join("source.txt");
+        fs::write(&source, "test content\n").unwrap();
+
+        let dest = temp_dir.path().join("destination.txt");
+
+        // Move file
+        let action = AtomicAction::Move {
+            source: source.clone(),
+            destination: dest.clone(),
+            update_imports: false,
+            create_parent: false,
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("Moved"));
+
+        // Verify source no longer exists
+        assert!(!source.exists());
+
+        // Verify destination exists with correct content
+        assert!(dest.exists());
+        let content = fs::read_to_string(&dest).unwrap();
+        assert_eq!(content, "test content\n");
+    }
+
+    #[tokio::test]
+    async fn test_execute_move_with_parent_creation() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create test file
+        let source = temp_dir.path().join("source.txt");
+        fs::write(&source, "test content\n").unwrap();
+
+        // Destination with non-existent parent
+        let dest = temp_dir.path().join("subdir").join("destination.txt");
+
+        // Move file with create_parent
+        let action = AtomicAction::Move {
+            source: source.clone(),
+            destination: dest.clone(),
+            update_imports: false,
+            create_parent: true,
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(result.success);
+
+        // Verify destination exists
+        assert!(dest.exists());
+        let content = fs::read_to_string(&dest).unwrap();
+        assert_eq!(content, "test content\n");
+    }
+
+    #[tokio::test]
+    async fn test_execute_move_source_not_exists() {
+        let (executor, temp_dir) = create_test_executor();
+
+        let source = temp_dir.path().join("nonexistent.txt");
+        let dest = temp_dir.path().join("destination.txt");
+
+        // Try to move non-existent file
+        let action = AtomicAction::Move {
+            source: source.clone(),
+            destination: dest.clone(),
+            update_imports: false,
+            create_parent: false,
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(!result.success);
+        assert!(result.error.is_some());
+        assert!(result.error.unwrap().contains("Source does not exist"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_move_destination_exists() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create source and destination files
+        let source = temp_dir.path().join("source.txt");
+        fs::write(&source, "source content\n").unwrap();
+
+        let dest = temp_dir.path().join("destination.txt");
+        fs::write(&dest, "dest content\n").unwrap();
+
+        // Try to move to existing destination
+        let action = AtomicAction::Move {
+            source: source.clone(),
+            destination: dest.clone(),
+            update_imports: false,
+            create_parent: false,
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(!result.success);
+        assert!(result.error.is_some());
+        assert!(result.error.unwrap().contains("Destination already exists"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_move_directory() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create source directory with files
+        let source_dir = temp_dir.path().join("source_dir");
+        fs::create_dir(&source_dir).unwrap();
+        fs::write(source_dir.join("file1.txt"), "content1\n").unwrap();
+        fs::write(source_dir.join("file2.txt"), "content2\n").unwrap();
+
+        let dest_dir = temp_dir.path().join("dest_dir");
+
+        // Move directory
+        let action = AtomicAction::Move {
+            source: source_dir.clone(),
+            destination: dest_dir.clone(),
+            update_imports: false,
+            create_parent: false,
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(result.success);
+
+        // Verify source directory no longer exists
+        assert!(!source_dir.exists());
+
+        // Verify destination directory exists with files
+        assert!(dest_dir.exists());
+        assert!(dest_dir.join("file1.txt").exists());
+        assert!(dest_dir.join("file2.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn test_execute_move_with_import_updates() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // Create a Rust source file
+        let source = temp_dir.path().join("old_module.rs");
+        fs::write(&source, "pub fn hello() {}\n").unwrap();
+
+        // Create a file that imports the module
+        let importer = temp_dir.path().join("main.rs");
+        fs::write(&importer, "use old_module::hello;\n\nfn main() {}\n").unwrap();
+
+        let dest = temp_dir.path().join("new_module.rs");
+
+        // Move file with import updates
+        let action = AtomicAction::Move {
+            source: source.clone(),
+            destination: dest.clone(),
+            update_imports: true,
+            create_parent: false,
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("Updated imports"));
+
+        // Verify imports were updated
+        let importer_content = fs::read_to_string(&importer).unwrap();
+        assert!(importer_content.contains("use new_module::hello;"));
+        assert!(!importer_content.contains("use old_module::hello;"));
     }
 }
