@@ -3,6 +3,7 @@
 //! This module implements the atomic engine architecture inspired by OpenClaw's Pi engine,
 //! with enhancements for L1/L2/L3 routing and self-healing execution.
 
+pub mod atomic;
 mod atomic_action;
 mod atomic_engine;
 mod atomic_executor;
