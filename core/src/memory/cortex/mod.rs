@@ -7,6 +7,7 @@ pub mod clustering;
 pub mod distillation;
 pub mod dreaming;
 pub mod integration;
+pub mod meta_cognition;
 pub mod pattern_extractor;
 pub mod types;
 
@@ -16,6 +17,7 @@ pub use distillation::{
 };
 pub use dreaming::{CortexDreamingConfig, CortexDreamingService, DreamingMetrics};
 pub use integration::{CortexConfig, CortexIntegration};
+pub use meta_cognition::{AnchorScope, AnchorSource, BehavioralAnchor};
 pub use pattern_extractor::{ExtractedPattern, PatternExtractor, PatternExtractorConfig};
 pub use types::{
     DistillationMode, DistillationTask, EnvironmentContext, EvolutionStatus, Experience,
