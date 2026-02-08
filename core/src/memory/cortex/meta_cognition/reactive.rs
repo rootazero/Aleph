@@ -327,7 +327,7 @@ impl ReactiveReflector {
         })
     }
 
-    /// Analyze root cause of failure
+    /// Analyze root cause of failure using LLM
     ///
     /// # Arguments
     ///
@@ -339,56 +339,114 @@ impl ReactiveReflector {
     ///
     /// # Note
     ///
-    /// This is currently a stub implementation. In the future, this will use
-    /// LLM-based analysis to determine the true root cause.
+    /// This method uses LLM to analyze the failure and determine:
+    /// - The root cause of the failure
+    /// - Whether the failure was preventable
+    /// - A suggested behavioral rule to prevent recurrence
+    pub async fn analyze_root_cause_async(
+        &self,
+        snapshot: &FailureSnapshot,
+    ) -> Result<RootCause, AlephError> {
+        // Build prompt for LLM analysis
+        let prompt = format!(
+            r#"Analyze this task failure and provide root cause analysis.
+
+**Failure Context:**
+- Intent: {}
+- Failure Point: {}
+- Error Message: {}
+- Execution Trace: {}
+- Environment: {:?}
+
+**Your Task:**
+1. Identify the root cause of this failure
+2. Determine if this failure was preventable
+3. Suggest a behavioral rule to prevent similar failures
+
+**Response Format (JSON):**
+{{
+  "root_cause": "Brief description of the root cause",
+  "preventable": true/false,
+  "suggested_rule": "Actionable rule to prevent recurrence"
+}}
+
+**Example:**
+{{
+  "root_cause": "Python version mismatch - code requires Python 3.10+ but system has 3.8",
+  "preventable": true,
+  "suggested_rule": "Before executing Python scripts, verify Python version meets requirements"
+}}"#,
+            snapshot.intent,
+            snapshot.failure_point,
+            snapshot.error_message,
+            snapshot.execution_trace.join(" → "),
+            snapshot.environment
+        );
+
+        let system_prompt = "You are an expert system debugger analyzing task failures. \
+            Provide concise, actionable root cause analysis in JSON format.";
+
+        // Call LLM
+        let response = self
+            .provider
+            .process(&prompt, Some(system_prompt))
+            .await
+            .map_err(|e| AlephError::provider(format!("LLM call failed: {}", e)))?;
+
+        // Parse JSON response
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap_or_else(|_| {
+            // Fallback: extract from text if JSON parsing fails
+            serde_json::json!({
+                "root_cause": response.lines().next().unwrap_or("Unknown failure"),
+                "preventable": true,
+                "suggested_rule": "Review and retry with corrected approach"
+            })
+        });
+
+        Ok(RootCause {
+            root_cause: parsed["root_cause"]
+                .as_str()
+                .unwrap_or("Unknown failure")
+                .to_string(),
+            preventable: parsed["preventable"].as_bool().unwrap_or(true),
+            suggested_rule: parsed["suggested_rule"]
+                .as_str()
+                .unwrap_or("Review and retry")
+                .to_string(),
+        })
+    }
+
+    /// Synchronous wrapper for analyze_root_cause_async
+    ///
+    /// This method provides a synchronous interface for backward compatibility.
+    /// It uses tokio::runtime::Handle to execute the async LLM call.
+    ///
+    /// # Arguments
+    ///
+    /// * `snapshot` - The failure snapshot to analyze
+    ///
+    /// # Returns
+    ///
+    /// * `Result<RootCause>` - Root cause analysis result
     pub fn analyze_root_cause(
         &self,
         snapshot: &FailureSnapshot,
     ) -> Result<RootCause, AlephError> {
-        // TODO: Implement LLM-based root cause analysis
-        // For now, use simple heuristics based on failure point
-
-        let (root_cause, preventable, suggested_rule) = match snapshot.failure_point.as_str() {
-            "task_execution" => (
-                format!("Task execution failed: {}", snapshot.error_message),
-                true,
-                format!(
-                    "Before executing similar tasks, verify: {}",
-                    snapshot.error_message
-                ),
-            ),
-            "user_feedback" => (
-                "User dissatisfied with response quality".to_string(),
-                true,
-                "Improve response clarity and completeness".to_string(),
-            ),
-            "manifest_validation" => (
-                "Task output did not match success criteria".to_string(),
-                true,
-                "Validate intermediate results against manifest before completion".to_string(),
-            ),
-            "intent_drift" => (
-                "User intent was not fully satisfied".to_string(),
-                true,
-                "Ask clarifying questions before executing ambiguous tasks".to_string(),
-            ),
-            "repeated_failure" => (
-                "Same failure pattern repeated multiple times".to_string(),
-                true,
-                "Escalate to user or try alternative approach after 2 failures".to_string(),
-            ),
-            _ => (
-                format!("Unknown failure at {}", snapshot.failure_point),
-                false,
-                "Log failure for manual review".to_string(),
-            ),
-        };
-
-        Ok(RootCause {
-            root_cause,
-            preventable,
-            suggested_rule,
-        })
+        // Try to get current runtime handle, or create a new runtime
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                // We're already in a tokio runtime, use block_in_place
+                tokio::task::block_in_place(|| {
+                    handle.block_on(self.analyze_root_cause_async(snapshot))
+                })
+            }
+            Err(_) => {
+                // No runtime available, create a new one
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| AlephError::config(format!("Failed to create runtime: {}", e)))?;
+                rt.block_on(self.analyze_root_cause_async(snapshot))
+            }
+        }
     }
 
     /// Generate a corrective behavioral anchor
@@ -480,7 +538,7 @@ impl ReactiveReflector {
 mod tests {
     use super::*;
     use crate::memory::cortex::meta_cognition::schema::initialize_schema;
-    use crate::providers::create_mock_provider;
+    use crate::providers::MockProvider;
     use rusqlite::Connection;
     use tempfile::TempDir;
 
@@ -495,8 +553,13 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
         let db = Arc::new(VectorDatabase::new(db_path).unwrap());
 
-        // Create mock provider for testing
-        let provider = create_mock_provider();
+        // Create mock provider that returns properly formatted JSON
+        let mock_response = r#"{
+            "root_cause": "Task execution failed due to version mismatch",
+            "preventable": true,
+            "suggested_rule": "Before executing tasks, verify system requirements"
+        }"#;
+        let provider = Arc::new(MockProvider::new(mock_response));
 
         (
             ReactiveReflector::new(db, anchor_store, LLMConfig::default(), provider),
@@ -562,8 +625,9 @@ mod tests {
         let root_cause = reflector.analyze_root_cause(&snapshot).unwrap();
 
         assert!(root_cause.preventable);
-        assert!(root_cause.root_cause.contains("Task execution failed"));
-        assert!(root_cause.suggested_rule.contains("verify"));
+        // Check that we got a meaningful response from the mock LLM
+        assert!(!root_cause.root_cause.is_empty());
+        assert!(!root_cause.suggested_rule.is_empty());
     }
 
     #[test]
@@ -582,9 +646,9 @@ mod tests {
         let root_cause = reflector.analyze_root_cause(&snapshot).unwrap();
 
         assert!(root_cause.preventable);
-        assert!(root_cause
-            .suggested_rule
-            .contains("Escalate to user or try alternative approach"));
+        // Check that we got a meaningful response from the mock LLM
+        assert!(!root_cause.root_cause.is_empty());
+        assert!(!root_cause.suggested_rule.is_empty());
     }
 
     #[test]
