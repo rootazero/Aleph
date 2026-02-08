@@ -16,7 +16,7 @@ use tokio::sync::{watch, RwLock};
 
 use crate::agent_loop::{
     Action, ActionExecutor, ActionResult, AgentLoop, CompressorTrait, GuardViolation,
-    LoopCallback, LoopConfig, LoopResult, LoopState, RequestContext, ThinkerTrait, Thinking,
+    LoopCallback, LoopConfig, LoopResult, LoopState, RequestContext, RunContext, ThinkerTrait, Thinking,
 };
 use crate::agent_loop::decision::QuestionGroup;
 use crate::dispatcher::UnifiedTool;
@@ -515,16 +515,15 @@ where
         );
 
         // Execute via AgentLoop
+        let run_context = RunContext::new(
+            prompt,
+            context,
+            self.tools.clone(),
+            identity,
+        )
+        .with_abort_signal(self.abort_rx.clone());
         let result = agent_loop
-            .run(
-                prompt,
-                context,
-                self.tools.clone(),
-                identity,
-                callback,
-                Some(self.abort_rx.clone()),
-                None,
-            )
+            .run(run_context, callback)
             .await;
 
         // Collect artifacts and logs
