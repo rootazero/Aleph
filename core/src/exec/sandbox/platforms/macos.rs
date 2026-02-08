@@ -11,7 +11,6 @@ use crate::exec::sandbox::capabilities::{
 };
 use crate::exec::sandbox::profile::ProfileGenerator;
 use async_trait::async_trait;
-use std::path::PathBuf;
 use std::time::Instant;
 use tokio::process::Command;
 
