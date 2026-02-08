@@ -9,11 +9,11 @@
 /// - "^/(?i)code" -> "code"
 /// - "^/draw\\s+" -> "draw"
 pub fn extract_command_name(pattern: &str) -> String {
-    // Remove common regex prefixes and patterns
-    let cleaned = pattern
-        .trim_start_matches("^/")
-        .trim_start_matches("(?i)")
-        .trim_start_matches('(');
+    // Remove common regex prefixes and patterns sequentially
+    let mut cleaned = pattern;
+    cleaned = cleaned.strip_prefix("^/").unwrap_or(cleaned);
+    cleaned = cleaned.strip_prefix("(?i)").unwrap_or(cleaned);
+    cleaned = cleaned.strip_prefix('(').unwrap_or(cleaned);
 
     // Take characters until we hit a regex special character
     cleaned
