@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use crate::models::{TraceNode, TraceNodeType};
 use crate::mock_data::generate_mock_trace_nodes;
-use crate::context::DashboardState;
+use crate::context::{DashboardState, GatewayEvent};
 
 #[component]
 pub fn AgentTrace() -> impl IntoView {
@@ -11,6 +11,59 @@ pub fn AgentTrace() -> impl IntoView {
     // State
     let nodes = RwSignal::new(generate_mock_trace_nodes());
     let is_active = RwSignal::new(true);
+
+    // Subscribe to agent events when connected
+    Effect::new(move || {
+        if state.is_connected.get() {
+            let state = state.clone();
+            let nodes = nodes.clone();
+
+            // Subscribe to agent events
+            let _subscription_id = state.subscribe_events(move |event: GatewayEvent| {
+                // Only process if active
+                if !is_active.get() {
+                    return;
+                }
+
+                // Handle different event types
+                match event.topic.as_str() {
+                    "agent.started" => {
+                        web_sys::console::log_1(&format!("Agent started: {:?}", event.data).into());
+                        // Add trace node for agent start
+                    }
+                    "agent.completed" => {
+                        web_sys::console::log_1(&format!("Agent completed: {:?}", event.data).into());
+                        // Add trace node for agent completion
+                    }
+                    "stream.chunk" => {
+                        web_sys::console::log_1(&format!("Stream chunk: {:?}", event.data).into());
+                        // Add trace node for stream chunk
+                    }
+                    "stream.tool_start" => {
+                        web_sys::console::log_1(&format!("Tool start: {:?}", event.data).into());
+                        // Add trace node for tool start
+                    }
+                    "stream.tool_end" => {
+                        web_sys::console::log_1(&format!("Tool end: {:?}", event.data).into());
+                        // Add trace node for tool end
+                    }
+                    _ => {
+                        web_sys::console::log_1(&format!("Unknown event: {}", event.topic).into());
+                    }
+                }
+            });
+
+            // Subscribe to agent.* events on the Gateway
+            leptos::task::spawn_local(async move {
+                if let Err(e) = state.subscribe_topic("agent.*").await {
+                    web_sys::console::error_1(&format!("Failed to subscribe to agent events: {}", e).into());
+                }
+                if let Err(e) = state.subscribe_topic("stream.*").await {
+                    web_sys::console::error_1(&format!("Failed to subscribe to stream events: {}", e).into());
+                }
+            });
+        }
+    });
 
     view! {
         <div class="h-full flex flex-col">

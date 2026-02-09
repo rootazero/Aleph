@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use crate::components::ui::*;
 use crate::context::DashboardState;
+use crate::api::{MemoryApi, MemoryFact, MemoryStats};
 
 #[component]
 pub fn Memory() -> impl IntoView {
@@ -9,6 +10,57 @@ pub fn Memory() -> impl IntoView {
 
     // Create a signal for disabled state
     let is_disabled = Signal::derive(move || !state.is_connected.get());
+
+    // Memory stats
+    let stats = RwSignal::new(None::<MemoryStats>);
+
+    // Search results
+    let search_query = RwSignal::new(String::new());
+    let search_results = RwSignal::new(Vec::<MemoryFact>::new());
+    let is_searching = RwSignal::new(false);
+
+    // Fetch stats when connected
+    Effect::new(move || {
+        if state.is_connected.get() {
+            let state = state.clone();
+            leptos::task::spawn_local(async move {
+                match MemoryApi::stats(&state).await {
+                    Ok(s) => {
+                        stats.set(Some(s));
+                    }
+                    Err(e) => {
+                        web_sys::console::error_1(&format!("Failed to fetch memory stats: {}", e).into());
+                    }
+                }
+            });
+        } else {
+            stats.set(None);
+        }
+    });
+
+    // Search handler
+    let handle_search = move |_| {
+        let query = search_query.get();
+        if query.is_empty() {
+            return;
+        }
+
+        let state = state.clone();
+        leptos::task::spawn_local(async move {
+            is_searching.set(true);
+
+            match MemoryApi::search(&state, query, Some(20)).await {
+                Ok(results) => {
+                    search_results.set(results);
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Search failed: {}", e).into());
+                }
+            }
+
+            is_searching.set(false);
+        });
+    };
 
     view! {
         <div class="p-8 max-w-7xl mx-auto space-y-8">
@@ -36,6 +88,14 @@ pub fn Memory() -> impl IntoView {
                             placeholder="Search facts..."
                             class="pl-10 pr-4 py-2 bg-slate-900/40 border border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 w-64 transition-all text-sm text-slate-200 placeholder:text-slate-600 shadow-sm"
                             disabled=is_disabled
+                            on:input=move |ev| {
+                                search_query.set(event_target_value(&ev));
+                            }
+                            on:keydown=move |ev| {
+                                if ev.key() == "Enter" {
+                                    handle_search(());
+                                }
+                            }
                         />
                     </div>
                     <Button variant=ButtonVariant::Secondary size=ButtonSize::Sm class="p-2 h-auto rounded-xl".to_string() disabled=is_disabled>
