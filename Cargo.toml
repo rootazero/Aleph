@@ -9,6 +9,7 @@ members = [
     "clients/cli",
     "clients/shared",
     "clients/desktop/src-tauri",
+    "clients/dashboard",
 ]
 
 [workspace.package]
