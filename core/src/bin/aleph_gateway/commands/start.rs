@@ -1298,7 +1298,8 @@ fn register_config_handlers(
     server.handlers_mut().register("security_config.revoke_device", move |req| {
         let store = device_store_revoke.clone();
         let bus = event_bus_security_revoke.clone();
-        async move { security_config::handle_revoke_device(req, store, bus).await }\n    });
+        async move { security_config::handle_revoke_device(req, store, bus).await }
+    });
 
     // generation_providers.list
     let config_gen_list = config.clone();
