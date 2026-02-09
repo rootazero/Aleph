@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Aleph Design Tokens */
+:root {
+  /* Agent States */
+  --agent-thinking: #3b82f6;      /* blue-500 */
+  --agent-acting: #10b981;        /* green-500 */
+  --agent-error: #ef4444;         /* red-500 */
+  --agent-idle: #6b7280;          /* gray-500 */
+
+  /* Tool Call States */
+  --tool-pending: #f59e0b;        /* amber-500 */
+  --tool-success: #10b981;        /* green-500 */
+  --tool-failed: #ef4444;         /* red-500 */
+
+  /* Connection States */
+  --conn-connected: #10b981;      /* green-500 */
+  --conn-connecting: #f59e0b;     /* amber-500 */
+  --conn-disconnected: #ef4444;   /* red-500 */
+  --conn-reconnecting: #3b82f6;   /* blue-500 */
+}
+
+/* Custom Components */
+.status-indicator {
+  @apply inline-block w-2 h-2 rounded-full;
+}
+
+.status-indicator.connected {
+  @apply bg-green-500;
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.status-indicator.connecting {
+  @apply bg-amber-500;
+  animation: pulse 1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.status-indicator.disconnected {
+  @apply bg-red-500;
+}
+
+.status-indicator.reconnecting {
+  @apply bg-blue-500;
+  animation: pulse 0.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Card Styles */
+.card {
+  @apply bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-700;
+}
+
+.card-header {
+  @apply text-lg font-semibold mb-4 text-gray-100;
+}
+
+/* Tool Call Card */
+.tool-card {
+  @apply bg-gray-800 rounded-md p-4 border-l-4 mb-2;
+}
+
+.tool-card.pending {
+  @apply border-amber-500;
+}
+
+.tool-card.success {
+  @apply border-green-500;
+}
+
+.tool-card.failed {
+  @apply border-red-500;
+}
