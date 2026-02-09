@@ -3,6 +3,7 @@
 //  Aleph
 //
 //  Simplified settings view - all configuration now managed via ControlPlane
+//  Uses WebSocket connection to Gateway instead of FFI
 //
 
 import SwiftUI
@@ -17,9 +18,7 @@ enum SettingsTab: Hashable {
 // MARK: - Simplified Settings View
 
 struct SettingsView: View {
-    let core: AlephCore?
-
-    @State private var connectionStatus: String = "Checking..."
+    @StateObject private var wsClient = GatewayWebSocketClient()
     @State private var currentProvider: String = "Loading..."
 
     private var appVersion: String {
@@ -28,19 +27,49 @@ struct SettingsView: View {
         return "\(version) (Build \(build))"
     }
 
+    private var connectionStatusText: String {
+        switch wsClient.connectionState {
+        case .disconnected:
+            return "Disconnected"
+        case .connecting:
+            return "Connecting..."
+        case .connected:
+            return "Connected"
+        case .reconnecting:
+            return "Reconnecting..."
+        }
+    }
+
+    private var connectionStatusColor: Color {
+        switch wsClient.connectionState {
+        case .disconnected:
+            return .red
+        case .connecting, .reconnecting:
+            return .orange
+        case .connected:
+            return .green
+        }
+    }
+
     var body: some View {
         VStack(spacing: 24) {
             // Connection Status
             VStack(alignment: .leading, spacing: 8) {
-                Text("Connection Status")
+                Text("Gateway Connection")
                     .font(.headline)
 
                 HStack {
                     Circle()
-                        .fill(connectionStatus == "Connected" ? Color.green : Color.red)
+                        .fill(connectionStatusColor)
                         .frame(width: 10, height: 10)
-                    Text(connectionStatus)
+                    Text(connectionStatusText)
                         .foregroundColor(.secondary)
+                }
+
+                if let error = wsClient.lastError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -61,16 +90,28 @@ struct SettingsView: View {
 
             Divider()
 
-            // Open ControlPlane Button
-            Button(action: openControlPlane) {
-                HStack {
-                    Image(systemName: "gearshape.2")
-                    Text("Open Control Panel")
+            // Actions
+            VStack(spacing: 12) {
+                // Open ControlPlane Button
+                Button(action: openControlPlane) {
+                    HStack {
+                        Image(systemName: "gearshape.2")
+                        Text("Open Control Panel")
+                    }
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+                // Connect/Disconnect Button
+                Button(action: toggleConnection) {
+                    HStack {
+                        Image(systemName: wsClient.connectionState == .connected ? "network.slash" : "network")
+                        Text(wsClient.connectionState == .connected ? "Disconnect" : "Connect")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(core == nil)
 
             Spacer()
 
@@ -84,10 +125,13 @@ struct SettingsView: View {
             }
         }
         .padding()
-        .frame(width: 400, height: 300)
+        .frame(width: 400, height: 350)
         .onAppear {
-            updateConnectionStatus()
+            wsClient.connect()
             loadCurrentProvider()
+        }
+        .onDisappear {
+            wsClient.disconnect()
         }
     }
 
@@ -100,14 +144,31 @@ struct SettingsView: View {
         }
     }
 
-    private func updateConnectionStatus() {
-        // TODO: Get actual connection status from core
-        connectionStatus = core != nil ? "Connected" : "Disconnected"
+    private func toggleConnection() {
+        if wsClient.connectionState == .connected {
+            wsClient.disconnect()
+        } else {
+            wsClient.connect()
+        }
     }
 
     private func loadCurrentProvider() {
-        // TODO: Get current provider from core
-        currentProvider = "Claude (Anthropic)"
+        // TODO: Get current provider from Gateway via RPC
+        Task {
+            do {
+                // Wait for connection
+                try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+
+                if wsClient.connectionState == .connected {
+                    // Example RPC call (will implement proper config.get later)
+                    // let response: JSONRPCResponse = try await wsClient.sendRequest(method: "config.get", params: nil)
+                    currentProvider = "Claude (Anthropic)"
+                }
+            } catch {
+                print("[SettingsView] Failed to load provider: \(error)")
+                currentProvider = "Unknown"
+            }
+        }
     }
 }
 
@@ -116,7 +177,7 @@ struct SettingsView: View {
 #if DEBUG
 struct SettingsView_Previews: PreviewProvider {
     static var previews: some View {
-        SettingsView(core: nil)
+        SettingsView()
     }
 }
 #endif
