@@ -55,8 +55,8 @@ shared_ui_logic/
 │   │   └── cache.rs       # 本地缓存（TODO）
 │   ├── api/             # API 层（leptos feature）
 │   │   ├── memory.rs    # Memory API ✅
-│   │   ├── plugins.rs   # Plugins API（TODO）
-│   │   ├── providers.rs # Providers API（TODO）
+│   │   ├── plugins.rs   # Plugins API ✅
+│   │   ├── providers.rs # Providers API ✅
 │   │   └── config.rs    # Config API ✅
 │   └── observability/   # 可观测性（observability feature）
 │       ├── trace.rs     # 时间轴追踪（TODO）
@@ -85,11 +85,13 @@ shared_ui_logic/
 - [x] API 层（API Layer）
   - [x] Memory API（7个方法：stats, search, delete, clear, compress, app_list）
   - [x] Config API（配置管理：behavior, search, policies, shortcuts, security）
+  - [x] Plugins API（10个方法：list, install, uninstall, enable, disable, call_tool, execute_command, load, unload）
+  - [x] Providers API（6个方法：list, get, update, delete, test, set_default）
 - [x] 可观测性层（Observability Layer - 基础）
   - [x] MetricsCollector（工具调用追踪）
   - [x] TraceNode（层级追踪结构）
   - [x] ToolMetrics（工具统计）
-- [x] 单元测试（23 个测试全部通过）
+- [x] 单元测试（27 个测试全部通过）
 - [x] 文档测试（9 个测试通过）
 
 ### 🚧 进行中
@@ -102,9 +104,6 @@ shared_ui_logic/
   - [ ] Agent 状态机
   - [ ] UI 状态管理
   - [ ] 本地缓存
-- [ ] API 层（剩余模块）
-  - [ ] Plugins API
-  - [ ] Providers API
 - [ ] 可观测性层（高级功能）
   - [ ] 时间轴追踪（响应式）
   - [ ] 日志流处理
