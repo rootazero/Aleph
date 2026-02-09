@@ -41,6 +41,20 @@ pub fn SystemStatus() -> impl IntoView {
         });
     };
 
+    let handle_reconnect = move |_| {
+        let state = state.clone();
+        leptos::task::spawn_local(async move {
+            match state.reconnect().await {
+                Ok(()) => {
+                    web_sys::console::log_1(&"Successfully reconnected to gateway".into());
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to reconnect: {}", e).into());
+                }
+            }
+        });
+    };
+
     // Determine connection status text
     let gateway_status = RwSignal::new("Disconnected");
 
@@ -87,6 +101,33 @@ pub fn SystemStatus() -> impl IntoView {
                             >
                                 "Disconnect"
                             </Button>
+                        }.into_any()
+                    } else if state.is_reconnecting.get() {
+                        view! {
+                            <Button
+                                variant=ButtonVariant::Primary
+                                disabled=Signal::derive(|| true)
+                            >
+                                {move || format!("Reconnecting... ({})", state.reconnect_count.get() + 1)}
+                            </Button>
+                        }.into_any()
+                    } else if state.connection_error.get().is_some() {
+                        view! {
+                            <>
+                                <Button
+                                    on:click=handle_reconnect
+                                    variant=ButtonVariant::Secondary
+                                >
+                                    "Retry Connection"
+                                </Button>
+                                <Button
+                                    on:click=handle_connect
+                                    variant=ButtonVariant::Primary
+                                    class=if is_connecting.get() { "opacity-80 pointer-events-none" } else { "" }.to_string()
+                                >
+                                    {move || if is_connecting.get() { "Connecting..." } else { "Connect to Gateway" }}
+                                </Button>
+                            </>
                         }.into_any()
                     } else {
                         view! {
