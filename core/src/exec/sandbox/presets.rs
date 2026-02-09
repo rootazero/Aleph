@@ -58,6 +58,73 @@ impl Default for PresetRegistry {
             },
         );
 
+        // web_scraper preset
+        presets.insert(
+            "web_scraper".to_string(),
+            PresetDefinition {
+                name: "web_scraper".to_string(),
+                description: "Web scraping tools with network access".to_string(),
+                capabilities: Capabilities {
+                    filesystem: vec![FileSystemCapability::TempWorkspace],
+                    network: NetworkCapability::AllowAll,
+                    process: ProcessCapability {
+                        no_fork: true,
+                        max_execution_time: 600,
+                        max_memory_mb: Some(1024),
+                    },
+                    environment: EnvironmentCapability::Restricted,
+                },
+                immutable_fields: vec!["filesystem".to_string()],
+            },
+        );
+
+        // code_analyzer preset
+        presets.insert(
+            "code_analyzer".to_string(),
+            PresetDefinition {
+                name: "code_analyzer".to_string(),
+                description: "Code analysis tools with read-only workspace access".to_string(),
+                capabilities: Capabilities {
+                    filesystem: vec![FileSystemCapability::ReadOnly {
+                        path: "${WORKSPACE}".into(),
+                    }],
+                    network: NetworkCapability::Deny,
+                    process: ProcessCapability {
+                        no_fork: true,
+                        max_execution_time: 900,
+                        max_memory_mb: Some(2048),
+                    },
+                    environment: EnvironmentCapability::Restricted,
+                },
+                immutable_fields: vec!["network".to_string()],
+            },
+        );
+
+        // data_transformer preset
+        presets.insert(
+            "data_transformer".to_string(),
+            PresetDefinition {
+                name: "data_transformer".to_string(),
+                description: "Data transformation tools with temp workspace and read-only data access".to_string(),
+                capabilities: Capabilities {
+                    filesystem: vec![
+                        FileSystemCapability::TempWorkspace,
+                        FileSystemCapability::ReadOnly {
+                            path: "${PROJECT_ROOT}/data".into(),
+                        },
+                    ],
+                    network: NetworkCapability::Deny,
+                    process: ProcessCapability {
+                        no_fork: true,
+                        max_execution_time: 1800,
+                        max_memory_mb: Some(4096),
+                    },
+                    environment: EnvironmentCapability::Restricted,
+                },
+                immutable_fields: vec![],
+            },
+        );
+
         Self { presets }
     }
 }
@@ -72,5 +139,40 @@ mod tests {
         let preset = registry.get("file_processor").unwrap();
         assert_eq!(preset.name, "file_processor");
         assert!(matches!(preset.capabilities.network, NetworkCapability::Deny));
+    }
+
+    #[test]
+    fn test_preset_registry_get_web_scraper() {
+        let registry = PresetRegistry::default();
+        let preset = registry.get("web_scraper").unwrap();
+        assert_eq!(preset.name, "web_scraper");
+        assert!(matches!(preset.capabilities.network, NetworkCapability::AllowAll));
+    }
+
+    #[test]
+    fn test_preset_registry_get_code_analyzer() {
+        let registry = PresetRegistry::default();
+        let preset = registry.get("code_analyzer").unwrap();
+        assert_eq!(preset.name, "code_analyzer");
+        assert!(matches!(preset.capabilities.network, NetworkCapability::Deny));
+    }
+
+    #[test]
+    fn test_preset_registry_get_data_transformer() {
+        let registry = PresetRegistry::default();
+        let preset = registry.get("data_transformer").unwrap();
+        assert_eq!(preset.name, "data_transformer");
+        assert_eq!(preset.capabilities.process.max_execution_time, 1800);
+    }
+
+    #[test]
+    fn test_preset_registry_list_presets() {
+        let registry = PresetRegistry::default();
+        let presets = registry.list_presets();
+        assert_eq!(presets.len(), 4);
+        assert!(presets.contains(&"file_processor".to_string()));
+        assert!(presets.contains(&"web_scraper".to_string()));
+        assert!(presets.contains(&"code_analyzer".to_string()));
+        assert!(presets.contains(&"data_transformer".to_string()));
     }
 }
