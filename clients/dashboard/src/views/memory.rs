@@ -1,8 +1,67 @@
 use leptos::prelude::*;
 use crate::components::ui::*;
+use crate::context::DashboardState;
+use crate::api::{MemoryApi, MemoryFact, MemoryStats};
 
 #[component]
 pub fn Memory() -> impl IntoView {
+    // Get dashboard state from context
+    let state = expect_context::<DashboardState>();
+
+    // Create a signal for disabled state
+    let is_disabled = Signal::derive(move || !state.is_connected.get());
+
+    // Memory stats
+    let stats = RwSignal::new(None::<MemoryStats>);
+
+    // Search results
+    let search_query = RwSignal::new(String::new());
+    let search_results = RwSignal::new(Vec::<MemoryFact>::new());
+    let is_searching = RwSignal::new(false);
+
+    // Fetch stats when connected
+    Effect::new(move || {
+        if state.is_connected.get() {
+            let state = state.clone();
+            leptos::task::spawn_local(async move {
+                match MemoryApi::stats(&state).await {
+                    Ok(s) => {
+                        stats.set(Some(s));
+                    }
+                    Err(e) => {
+                        web_sys::console::error_1(&format!("Failed to fetch memory stats: {}", e).into());
+                    }
+                }
+            });
+        } else {
+            stats.set(None);
+        }
+    });
+
+    // Search handler
+    let handle_search = move |_| {
+        let query = search_query.get();
+        if query.is_empty() {
+            return;
+        }
+
+        let state = state.clone();
+        leptos::task::spawn_local(async move {
+            is_searching.set(true);
+
+            match MemoryApi::search(&state, query, Some(20)).await {
+                Ok(results) => {
+                    search_results.set(results);
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Search failed: {}", e).into());
+                }
+            }
+
+            is_searching.set(false);
+        });
+    };
+
     view! {
         <div class="p-8 max-w-7xl mx-auto space-y-8">
             <header class="flex items-center justify-between">
@@ -17,26 +76,56 @@ pub fn Memory() -> impl IntoView {
                     </h2>
                     <p class="text-slate-400">"Browse and manage Agent's long-term memory and facts."</p>
                 </div>
-                
+
                 <div class="flex items-center gap-3">
                     <div class="relative group">
                         <svg width="16" height="16" attr:class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-indigo-400 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <circle cx="11" cy="11" r="8" />
                             <line x1="21" y1="21" x2="16.65" y2="16.65" />
                         </svg>
-                        <input 
-                            type="text" 
+                        <input
+                            type="text"
                             placeholder="Search facts..."
                             class="pl-10 pr-4 py-2 bg-slate-900/40 border border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 w-64 transition-all text-sm text-slate-200 placeholder:text-slate-600 shadow-sm"
+                            disabled=is_disabled
+                            on:input=move |ev| {
+                                search_query.set(event_target_value(&ev));
+                            }
+                            on:keydown=move |ev| {
+                                if ev.key() == "Enter" {
+                                    handle_search(());
+                                }
+                            }
                         />
                     </div>
-                    <Button variant=ButtonVariant::Secondary size=ButtonSize::Sm class="p-2 h-auto rounded-xl".to_string()>
+                    <Button variant=ButtonVariant::Secondary size=ButtonSize::Sm class="p-2 h-auto rounded-xl".to_string() disabled=is_disabled>
                         <svg width="20" height="20" attr:class="w-5 h-5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
                         </svg>
                     </Button>
                 </div>
             </header>
+
+            // Connection status warning
+            {move || {
+                if !state.is_connected.get() {
+                    view! {
+                        <div class="bg-amber-500/10 border border-amber-500/20 rounded-xl p-6 flex items-start gap-4">
+                            <svg width="24" height="24" attr:class="w-6 h-6 text-amber-500 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                                <line x1="12" y1="9" x2="12" y2="13" />
+                                <line x1="12" y1="17" x2="12.01" y2="17" />
+                            </svg>
+                            <div>
+                                <h3 class="text-amber-400 font-semibold mb-1">"Gateway Connection Required"</h3>
+                                <p class="text-sm text-amber-300/80">"Please connect to the Aleph Gateway from the System Status page to access memory data."</p>
+                            </div>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! { <div></div> }.into_any()
+                }
+            }}
 
             // Memory Stats
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">

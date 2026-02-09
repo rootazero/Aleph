@@ -28,12 +28,16 @@ pub fn Button(
     #[prop(into, optional)] variant: ButtonVariant,
     #[prop(into, optional)] size: ButtonSize,
     #[prop(into, optional)] class: String,
+    #[prop(into, optional)] disabled: MaybeSignal<bool>,
     children: Children,
 ) -> impl IntoView {
     let base_class = "inline-flex items-center justify-center rounded-xl font-medium transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none";
-    
+
     view! {
-        <button class=format!("{} {} {} {}", base_class, variant.as_class(), size.as_class(), class)>
+        <button
+            class=format!("{} {} {} {}", base_class, variant.as_class(), size.as_class(), class)
+            disabled=move || disabled.get()
+        >
             {children()}
         </button>
     }
