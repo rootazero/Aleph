@@ -9,6 +9,9 @@ pub mod executor;
 pub mod platforms;
 pub mod profile;
 
+#[cfg(test)]
+mod tests;
+
 // Re-exports will be enabled as types are implemented
 // pub use adapter::{SandboxAdapter, SandboxCommand, SandboxProfile};
 // pub use audit::{ExecutionStatus, SandboxAuditLog, SandboxViolation};
