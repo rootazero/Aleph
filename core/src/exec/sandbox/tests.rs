@@ -17,7 +17,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[cfg(target_os = "macos")]
-    async fn test_full_sandbox_execution_flow() {
+    async fn test_end_to_end_sandbox_execution() {
         // Create sandbox manager
         let adapter: Arc<dyn SandboxAdapter> = Arc::new(MacOSSandbox::new());
         let manager = SandboxManager::new(adapter);
@@ -53,6 +53,7 @@ mod integration_tests {
         // Verify audit log
         assert_eq!(audit_log.skill_id, "test-skill-001");
         assert_eq!(audit_log.sandbox_platform, "macos");
+        assert!(audit_log.is_success());
         assert!(matches!(
             audit_log.execution_result,
             ExecutionStatus::Success { .. }
@@ -141,7 +142,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[cfg(target_os = "macos")]
-    async fn test_fallback_policy_deny() {
+    async fn test_sandbox_unavailable_deny_policy() {
         // Create a mock adapter that reports as unsupported
         struct UnsupportedAdapter;
 
