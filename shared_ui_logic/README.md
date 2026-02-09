@@ -46,21 +46,21 @@ shared_ui_logic/
 │   │   ├── wasm.rs      # WASM 实现（TODO）
 │   │   └── native.rs    # 原生实现（TODO）
 │   ├── protocol/        # 协议层（core feature）
-│   │   ├── rpc.rs       # JSON-RPC 封装（TODO）
-│   │   ├── streaming.rs # 流式数据（TODO）
-│   │   └── events.rs    # 事件分发（TODO）
+│   │   ├── rpc.rs       # JSON-RPC 封装 ✅
+│   │   ├── streaming.rs # 流式数据 ✅
+│   │   └── events.rs    # 事件分发 ✅
 │   ├── state/           # 状态层（leptos feature）
 │   │   ├── agent_state.rs # Agent 状态机（TODO）
 │   │   ├── ui_state.rs    # UI 状态（TODO）
 │   │   └── cache.rs       # 本地缓存（TODO）
 │   ├── api/             # API 层（leptos feature）
-│   │   ├── memory.rs    # Memory API（TODO）
+│   │   ├── memory.rs    # Memory API ✅
 │   │   ├── plugins.rs   # Plugins API（TODO）
 │   │   ├── providers.rs # Providers API（TODO）
-│   │   └── config.rs    # Config API（TODO）
+│   │   └── config.rs    # Config API ✅
 │   └── observability/   # 可观测性（observability feature）
 │       ├── trace.rs     # 时间轴追踪（TODO）
-│       ├── metrics.rs   # 指标收集（TODO）
+│       ├── metrics.rs   # 指标收集 ✅
 │       └── logs.rs      # 日志流（TODO）
 └── examples/
     ├── cli_client.rs    # CLI 示例（TODO）
@@ -81,27 +81,33 @@ shared_ui_logic/
   - [x] RPC 客户端（类型安全的 JSON-RPC 2.0）
   - [x] 流式数据处理（StreamHandler, StreamBuffer）
   - [x] 事件分发系统（Pub/Sub 模式）
-- [x] 单元测试（14 个测试全部通过）
+- [x] API 层（API Layer）
+  - [x] Memory API（7个方法：stats, search, delete, clear, compress, app_list）
+  - [x] Config API（配置管理：behavior, search, policies, shortcuts, security）
+- [x] 可观测性层（Observability Layer - 基础）
+  - [x] MetricsCollector（工具调用追踪）
+  - [x] TraceNode（层级追踪结构）
+  - [x] ToolMetrics（工具统计）
+- [x] 单元测试（23 个测试全部通过）
 - [x] 文档测试（9 个测试通过）
 
 ### 🚧 进行中
 
-- [ ] 连接层平台实现
-  - [ ] WASM 实现（`connection/wasm.rs`）
+暂无
 
 ### 📋 待实施
 
-- [ ] 状态层（State Layer）
+- [ ] 连接层平台实现
+  - [ ] WASM 实现（`connection/wasm.rs`）
+- [ ] 状态层（State Layer - 需要 Leptos 集成）
   - [ ] Agent 状态机
   - [ ] UI 状态管理
-- [ ] API 层（API Layer）
-  - [ ] Memory API
+  - [ ] 本地缓存
+- [ ] API 层（剩余模块）
   - [ ] Plugins API
   - [ ] Providers API
-  - [ ] Config API
-- [ ] 可观测性层（Observability Layer）
-  - [ ] 时间轴追踪
-  - [ ] 指标收集器
+- [ ] 可观测性层（高级功能）
+  - [ ] 时间轴追踪（响应式）
   - [ ] 日志流处理
 
 ## 使用示例
