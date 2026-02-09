@@ -5,6 +5,7 @@
 resolver = "2"
 members = [
     "core",
+    "core/ui/control_plane",
     "shared/protocol",
     "shared/ui_logic",
     "clients/cli",
