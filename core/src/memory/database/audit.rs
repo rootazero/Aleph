@@ -2,7 +2,7 @@
 ///
 /// Provides methods for storing and retrieving audit log entries for memory operations.
 use crate::error::AlephError;
-use crate::memory::audit::{AuditAction, AuditActor, AuditEntry};
+use crate::memory::audit::{AuditAction, AuditActor, AuditDetails, AuditEntry};
 use crate::memory::database::VectorDatabase;
 use rusqlite::params;
 
