@@ -1,20 +1,60 @@
 use leptos::prelude::*;
-use gloo_timers::future::TimeoutFuture;
 use crate::components::ui::*;
+use crate::context::DashboardState;
 
 #[component]
 pub fn SystemStatus() -> impl IntoView {
+    // Get dashboard state from context
+    let state = expect_context::<DashboardState>();
+
     let is_connecting = RwSignal::new(false);
-    let connection_status = RwSignal::new("Healthy");
 
     let handle_connect = move |_| {
+        let state = state.clone();
         leptos::task::spawn_local(async move {
             is_connecting.set(true);
-            TimeoutFuture::new(1500).await;
+
+            match state.connect().await {
+                Ok(()) => {
+                    web_sys::console::log_1(&"Successfully connected to gateway".into());
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to connect: {}", e).into());
+                }
+            }
+
             is_connecting.set(false);
-            connection_status.set("Healthy");
         });
     };
+
+    let handle_disconnect = move |_| {
+        let state = state.clone();
+        leptos::task::spawn_local(async move {
+            match state.disconnect().await {
+                Ok(()) => {
+                    web_sys::console::log_1(&"Successfully disconnected from gateway".into());
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to disconnect: {}", e).into());
+                }
+            }
+        });
+    };
+
+    // Determine connection status text
+    let gateway_status = RwSignal::new("Disconnected");
+
+    // Update gateway status when connection state changes
+    Effect::new(move || {
+        let status = if state.is_connected.get() {
+            "Healthy"
+        } else if state.connection_error.get().is_some() {
+            "Degraded"
+        } else {
+            "Disconnected"
+        };
+        gateway_status.set(status);
+    });
 
     view! {
         <div class="p-8 max-w-7xl mx-auto space-y-12">
@@ -38,24 +78,72 @@ pub fn SystemStatus() -> impl IntoView {
                     <p class="text-slate-400">"Real-time monitoring of Aleph Core and Infrastructure."</p>
                 </div>
 
-                <Button 
-                    on:click=handle_connect
-                    variant=ButtonVariant::Primary
-                    class=if is_connecting.get() { "opacity-80 pointer-events-none" } else { "" }.to_string()
-                >
-                    {move || if is_connecting.get() { "Negotiating..." } else { "Re-Sync Core" }}
-                </Button>
+                <div class="flex gap-3">
+                    {move || if state.is_connected.get() {
+                        view! {
+                            <Button
+                                on:click=handle_disconnect
+                                variant=ButtonVariant::Secondary
+                            >
+                                "Disconnect"
+                            </Button>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <Button
+                                on:click=handle_connect
+                                variant=ButtonVariant::Primary
+                                class=if is_connecting.get() { "opacity-80 pointer-events-none" } else { "" }.to_string()
+                            >
+                                {move || if is_connecting.get() { "Connecting..." } else { "Connect to Gateway" }}
+                            </Button>
+                        }.into_any()
+                    }}
+                </div>
             </header>
+
+            // Show connection error if any
+            {move || {
+                if let Some(error) = state.connection_error.get() {
+                    view! {
+                        <div class="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
+                            <strong>"Connection Error: "</strong> {error}
+                        </div>
+                    }.into_any()
+                } else {
+                    view! { <div></div> }.into_any()
+                }
+            }}
 
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 // Core Services
                 <div class="space-y-6">
                     <h3 class="text-xl font-semibold px-1 text-slate-300">"Core Services"</h3>
                     <div class="space-y-4">
-                        <ServiceCard name="Gateway Engine" status=connection_status uptime="12d 4h" latency="14ms" />
-                        <ServiceCard name="Agent Runtime" status=connection_status uptime="12d 4h" latency="2ms" />
-                        <ServiceCard name="Memory Vector DB" status=RwSignal::new("Degraded") uptime="5h 12m" latency="145ms" />
-                        <ServiceCard name="MCP Tool Server" status=RwSignal::new("Healthy") uptime="4d 18h" latency="45ms" />
+                        <ServiceCard
+                            name="Gateway Engine"
+                            status=gateway_status
+                            uptime="12d 4h"
+                            latency="14ms"
+                        />
+                        <ServiceCard
+                            name="Agent Runtime"
+                            status=gateway_status
+                            uptime="12d 4h"
+                            latency="2ms"
+                        />
+                        <ServiceCard
+                            name="Memory Vector DB"
+                            status=RwSignal::new("Degraded")
+                            uptime="5h 12m"
+                            latency="145ms"
+                        />
+                        <ServiceCard
+                            name="MCP Tool Server"
+                            status=RwSignal::new("Healthy")
+                            uptime="4d 18h"
+                            latency="45ms"
+                        />
                     </div>
                 </div>
 
