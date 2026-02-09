@@ -1,0 +1,88 @@
+[package]
+name = "aleph-ui-logic"
+version = "0.1.0"
+edition = "2021"
+description = "Aleph端侧SDK - 统一的Client与Server交互逻辑"
+rust-version = "1.92"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+name = "aleph_ui_logic"
+
+[features]
+default = ["leptos"]
+
+# 基础协议层（无UI依赖）
+core = [
+    "dep:serde",
+    "dep:serde_json",
+    "dep:thiserror",
+    "dep:aleph-protocol",
+    "dep:futures",
+]
+
+# UI状态层（依赖Leptos）
+leptos = [
+    "core",
+    "dep:leptos",
+]
+
+# 可观测性增强（Command Center专用）
+observability = [
+    "leptos",
+    "dep:tracing",
+]
+
+# WASM支持
+wasm = [
+    "core",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:web-sys",
+    "dep:js-sys",
+]
+
+# 原生支持
+native = [
+    "core",
+    "dep:tokio",
+    "dep:tokio-tungstenite",
+]
+
+[dependencies]
+# 协议定义
+aleph-protocol = { path = "../shared/protocol", optional = true }
+
+# 序列化
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+# 错误处理
+thiserror = { version = "1", optional = true }
+anyhow = "1"
+
+# 异步
+futures = { version = "0.3", optional = true }
+
+# Leptos（UI状态层）
+leptos = { version = "0.7", optional = true }
+
+# 可观测性
+tracing = { version = "0.1", optional = true }
+
+# WASM依赖
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent"], optional = true }
+js-sys = { version = "0.3", optional = true }
+
+# 原生依赖
+tokio = { version = "1", features = ["sync", "time"], optional = true }
+tokio-tungstenite = { version = "0.24", optional = true }
+
+# 工具
+uuid = { version = "1.7", features = ["v4"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+tokio-test = "0.4"
