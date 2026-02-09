@@ -10,6 +10,7 @@
 
 pub mod allowlist;
 pub mod analysis;
+pub mod approval;
 pub mod bridge;
 pub mod config;
 pub mod decision;
