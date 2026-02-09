@@ -248,14 +248,18 @@ final class DependencyContainer: ObservableObject {
         // Get config path
         let configPath = getConfigPath()
 
-        // === Core Initialization (rig-core based, unified interface) ===
-        print("[DependencyContainer] Initializing core...")
+        // === Core Initialization (DEPRECATED: FFI-based) ===
+        // NOTE: Core initialization is now handled via WebSocket connection
+        // The FFI-based initCore is deprecated and will be removed
+        print("[DependencyContainer] Skipping FFI core initialization (using WebSocket instead)")
+
+        // Create stub handler for compatibility
         let handler = EventHandler(haloWindow: nil)
         eventHandler = handler
-        let coreInstance = try initCore(configPath: configPath, handler: handler)
-        core = coreInstance
-        eventHandler?.setCore(coreInstance)
-        print("[DependencyContainer] core initialized successfully")
+
+        // Core is now nil - all functionality moved to WebSocket
+        core = nil
+        print("[DependencyContainer] Core services initialized (WebSocket mode)")
 
         isCoreInitialized = true
         print("[DependencyContainer] Core services initialized successfully")

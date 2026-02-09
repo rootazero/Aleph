@@ -3,6 +3,7 @@
 //  Aleph
 //
 //  Simplified root layout - all configuration now managed via ControlPlane
+//  Uses WebSocket connection instead of FFI
 //
 
 import SwiftUI
@@ -10,21 +11,11 @@ import AppKit
 
 /// Simplified root content view for Settings window
 struct RootContentView: View {
-    // MARK: - Dependencies
-
-    /// core (rig-core based) - used for connection status
-    var core: AlephCore? {
-        appDelegate.core
-    }
-
-    // Observe AppDelegate for core updates
-    @EnvironmentObject private var appDelegate: AppDelegate
-
     // MARK: - Body
 
     var body: some View {
-        SettingsView(core: core)
-            .frame(minWidth: 400, maxWidth: 400, minHeight: 300, maxHeight: 300)
+        SettingsView()
+            .frame(minWidth: 400, maxWidth: 400, minHeight: 350, maxHeight: 350)
             .background(.windowBackground)
     }
 }
