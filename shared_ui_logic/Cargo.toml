@@ -77,7 +77,7 @@ web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "CloseEven
 js-sys = { version = "0.3", optional = true }
 
 # 原生依赖
-tokio = { version = "1", features = ["sync", "time"], optional = true }
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"], optional = true }
 tokio-tungstenite = { version = "0.24", optional = true }
 
 # 工具
