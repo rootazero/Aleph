@@ -271,6 +271,17 @@ impl DashboardState {
                 self.connection_error.set(None);
                 self.reconnect_count.set(0);
                 self.is_reconnecting.set(false);
+
+                // Subscribe to config events automatically
+                let state_for_subscribe = *self;
+                spawn_local(async move {
+                    if let Err(e) = state_for_subscribe.subscribe_topic("config.**").await {
+                        web_sys::console::error_1(&format!("Failed to subscribe to config events: {}", e).into());
+                    } else {
+                        web_sys::console::log_1(&"Subscribed to config.** events".into());
+                    }
+                });
+
                 Ok(())
             }
             Err(e) => {
