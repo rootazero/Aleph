@@ -13,7 +13,7 @@ mod models;
 mod mock_data;
 
 use context::DashboardContext;
-use views::{home::Home, system_status::SystemStatus, agent_trace::AgentTrace};
+use views::{home::Home, system_status::SystemStatus, agent_trace::AgentTrace, memory_explorer::MemoryExplorer};
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -46,6 +46,9 @@ pub fn App() -> impl IntoView {
                                     <A href="/trace" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium">
                                         "Agent Trace"
                                     </A>
+                                    <A href="/memory" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium">
+                                        "Memory"
+                                    </A>
                                 </div>
                             </div>
                         </div>
@@ -56,6 +59,7 @@ pub fn App() -> impl IntoView {
                             <Route path="/" view=Home/>
                             <Route path="/system" view=SystemStatus/>
                             <Route path="/trace" view=AgentTrace/>
+                            <Route path="/memory" view=MemoryExplorer/>
                         </Routes>
                     </div>
                 </main>
