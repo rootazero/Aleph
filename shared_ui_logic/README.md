@@ -73,15 +73,16 @@ shared_ui_logic/
 
 - [x] Crate 基础结构
 - [x] Feature Flags 配置
-- [x] 连接层 trait 定义（`AlephConnector`）
-- [x] 重连策略实现（指数退避）
-- [x] 原生连接器实现（`connection/native.rs`）
-  - [x] tokio-tungstenite WebSocket 连接
-  - [x] 后台任务管理 stream
-  - [x] 双向通道通信
-  - [x] JSON 自动序列化/反序列化
-- [x] 单元测试（5 个测试全部通过）
-- [x] 文档测试（2 个测试通过）
+- [x] 连接层（Connection Layer）
+  - [x] AlephConnector trait 定义
+  - [x] 重连策略实现（指数退避）
+  - [x] 原生连接器实现（tokio-tungstenite）
+- [x] 协议层（Protocol Layer）
+  - [x] RPC 客户端（类型安全的 JSON-RPC 2.0）
+  - [x] 流式数据处理（StreamHandler, StreamBuffer）
+  - [x] 事件分发系统（Pub/Sub 模式）
+- [x] 单元测试（14 个测试全部通过）
+- [x] 文档测试（9 个测试通过）
 
 ### 🚧 进行中
 
@@ -90,10 +91,6 @@ shared_ui_logic/
 
 ### 📋 待实施
 
-- [ ] 协议层（Protocol Layer）
-  - [ ] RPC 客户端
-  - [ ] 流式数据处理
-  - [ ] 事件分发系统
 - [ ] 状态层（State Layer）
   - [ ] Agent 状态机
   - [ ] UI 状态管理
