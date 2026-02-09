@@ -331,6 +331,7 @@ pub async fn handle_pending<W: Worker + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::event_bus::GatewayEventBus;
     use crate::poe::{
         worker::MockWorker,
         ValidationRule, SuccessManifest, PoeOutcome, Verdict,
