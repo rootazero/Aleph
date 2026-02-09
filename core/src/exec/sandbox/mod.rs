@@ -5,6 +5,7 @@
 pub mod adapter;
 pub mod audit;
 pub mod capabilities;
+pub mod capability_resolver;
 pub mod executor;
 pub mod parameter_binding;
 pub mod platforms;
