@@ -183,6 +183,14 @@ pub enum AlephError {
     /// Channel closed error (internal communication failure)
     #[error("Channel closed: {0}")]
     ChannelClosed(String),
+
+    /// Sandbox unavailable error
+    #[error("Sandbox unavailable: {reason}")]
+    SandboxUnavailable { reason: String },
+
+    /// Execution timeout error
+    #[error("Execution timeout after {timeout_secs} seconds")]
+    ExecutionTimeout { timeout_secs: u64 },
 }
 
 impl AlephError {
@@ -351,7 +359,9 @@ impl AlephError {
             | AlephError::Cancelled
             | AlephError::MissingInput { .. }
             | AlephError::CorruptData(_)
-            | AlephError::ChannelClosed(_) => None,
+            | AlephError::ChannelClosed(_)
+            | AlephError::SandboxUnavailable { .. }
+            | AlephError::ExecutionTimeout { .. } => None,
         }
     }
 
@@ -500,6 +510,12 @@ impl AlephError {
             }
             AlephError::ChannelClosed(msg) => {
                 format!("Internal communication failed: {}. Please restart the application.", msg)
+            }
+            AlephError::SandboxUnavailable { reason } => {
+                format!("Sandbox unavailable: {}. Please check your system configuration.", reason)
+            }
+            AlephError::ExecutionTimeout { timeout_secs } => {
+                format!("Execution timed out after {} seconds. The command took too long to complete.", timeout_secs)
             }
         }
     }
