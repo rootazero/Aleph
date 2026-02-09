@@ -3,6 +3,8 @@
 use crate::exec::sandbox::capabilities::Capabilities;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// Execution status of a sandboxed command
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -42,6 +44,26 @@ pub struct SandboxViolation {
     pub timestamp: i64,
 }
 
+/// Tool execution context for enhanced audit logging
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolExecutionContext {
+    pub tool_name: String,
+    pub tool_version: String,
+    pub base_preset: String,
+    pub applied_overrides: Vec<String>,
+    pub parameter_bindings_used: HashMap<String, String>,
+    pub dynamic_paths: Vec<PathBuf>,
+    pub capability_resolution_log: Vec<ResolutionStep>,
+}
+
+/// Step in capability resolution process
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolutionStep {
+    pub step: String,
+    pub timestamp: i64,
+    pub description: String,
+}
+
 /// Complete audit log for a sandbox execution
 #[derive(Debug, Serialize)]
 pub struct SandboxAuditLog {
@@ -57,6 +79,9 @@ pub struct SandboxAuditLog {
     pub sandbox_platform: String,
     /// List of policy violations
     pub violations: Vec<SandboxViolation>,
+    /// Enhanced context for tool executions
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_context: Option<ToolExecutionContext>,
 }
 
 impl SandboxAuditLog {
@@ -74,6 +99,7 @@ impl SandboxAuditLog {
             execution_result,
             sandbox_platform,
             violations: Vec::new(),
+            tool_context: None,
         }
     }
 
