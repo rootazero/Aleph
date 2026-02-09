@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use crate::components::ui::*;
 use crate::context::DashboardState;
+use crate::api::SystemApi;
 
 #[component]
 pub fn SystemStatus() -> impl IntoView {
@@ -8,6 +9,28 @@ pub fn SystemStatus() -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
     let is_connecting = RwSignal::new(false);
+    let system_info = RwSignal::new(None::<String>);
+
+    // Fetch system info when connected
+    Effect::new(move || {
+        if state.is_connected.get() {
+            let state = state.clone();
+            leptos::task::spawn_local(async move {
+                match SystemApi::info(&state).await {
+                    Ok(info) => {
+                        let info_text = format!("Version: {} | Platform: {} | Uptime: {}s",
+                            info.version, info.platform, info.uptime);
+                        system_info.set(Some(info_text));
+                    }
+                    Err(e) => {
+                        web_sys::console::error_1(&format!("Failed to fetch system info: {}", e).into());
+                    }
+                }
+            });
+        } else {
+            system_info.set(None);
+        }
+    });
 
     let handle_connect = move |_| {
         let state = state.clone();
