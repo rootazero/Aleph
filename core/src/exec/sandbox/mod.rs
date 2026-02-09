@@ -6,6 +6,7 @@ pub mod adapter;
 pub mod audit;
 pub mod capabilities;
 pub mod executor;
+pub mod parameter_binding;
 pub mod platforms;
 pub mod presets;
 pub mod profile;
