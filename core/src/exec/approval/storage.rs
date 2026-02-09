@@ -84,14 +84,14 @@ impl ApprovalAuditStorage {
     /// Get last execution timestamp for a tool
     pub async fn get_last_execution_time(&self, tool_name: &str) -> SqliteResult<Option<i64>> {
         let conn = self.conn.lock().await;
-        let result = conn.query_row(
+        let result: Result<Option<i64>, _> = conn.query_row(
             "SELECT MAX(timestamp) FROM tool_executions WHERE tool_name = ?1",
             params![tool_name],
             |row| row.get(0),
         );
 
         match result {
-            Ok(time) => Ok(Some(time)),
+            Ok(time) => Ok(time),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
         }
@@ -273,6 +273,25 @@ impl ApprovalAuditStorage {
              (tool_name, execution_id, escalation_reason, decided_at)
              VALUES (?1, ?2, ?3, ?4)",
             params![tool_name, execution_id, escalation_reason, decided_at],
+        )?;
+        Ok(())
+    }
+
+    /// Test helper: Insert tool execution (only available in tests)
+    #[cfg(test)]
+    pub async fn insert_test_execution(
+        &self,
+        tool_name: &str,
+        execution_id: &str,
+        parameters: &str,
+        timestamp: i64,
+    ) -> SqliteResult<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO tool_executions
+             (execution_id, tool_name, timestamp, parameters, escalation_triggered)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![execution_id, tool_name, timestamp, parameters, false],
         )?;
         Ok(())
     }
