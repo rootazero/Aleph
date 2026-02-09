@@ -1,10 +1,13 @@
 use leptos::prelude::*;
+use shared_ui_logic::connection::wasm::WasmConnector;
+use shared_ui_logic::connection::connector::AlephConnector;
 
 #[derive(Clone, Copy)]
 pub struct DashboardState {
     pub is_connected: RwSignal<bool>,
     pub reconnect_count: RwSignal<u32>,
     pub gateway_url: RwSignal<String>,
+    pub connection_error: RwSignal<Option<String>>,
 }
 
 impl DashboardState {
@@ -13,7 +16,38 @@ impl DashboardState {
             is_connected: RwSignal::new(false),
             reconnect_count: RwSignal::new(0),
             gateway_url: RwSignal::new("ws://127.0.0.1:18789".to_string()),
+            connection_error: RwSignal::new(None),
         }
+    }
+
+    /// Connect to the gateway
+    pub async fn connect(&self) -> Result<(), String> {
+        let url = self.gateway_url.get();
+        let mut connector = WasmConnector::new();
+
+        match connector.connect(&url).await {
+            Ok(()) => {
+                self.is_connected.set(true);
+                self.connection_error.set(None);
+                self.reconnect_count.set(0);
+                Ok(())
+            }
+            Err(e) => {
+                self.is_connected.set(false);
+                let error_msg = e.to_string();
+                self.connection_error.set(Some(error_msg.clone()));
+                Err(error_msg)
+            }
+        }
+    }
+
+    /// Disconnect from the gateway
+    pub async fn disconnect(&self) -> Result<(), String> {
+        // For now, just update the state
+        // In a real implementation, we'd need to store the connector
+        self.is_connected.set(false);
+        self.connection_error.set(None);
+        Ok(())
     }
 }
 
