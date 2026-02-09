@@ -80,13 +80,14 @@ impl AuditQuery {
         let escalation_count = self.storage.get_escalation_count(tool_name).await?;
         let last_executed_at = self.storage.get_last_execution_time(tool_name).await?;
 
-        // For now, we'll use a placeholder for capabilities
-        // In a real implementation, this would be fetched from capability_approvals
-        let capabilities = vec![];
+        // Get capabilities from database
+        let capabilities = self.storage.get_tool_capabilities(tool_name).await?;
 
-        // Calculate risk score with placeholder capabilities
-        // In real implementation, parse capabilities from database
-        let risk_score = 10 + (escalation_count * 10);
+        // Parse capabilities into Capabilities struct for risk calculation
+        let parsed_capabilities = parse_capabilities_from_strings(&capabilities);
+
+        // Calculate risk score with actual capabilities
+        let risk_score = Self::calculate_risk_score(&parsed_capabilities, escalation_count);
 
         Ok(ToolRiskSummary {
             tool_name: tool_name.to_string(),
@@ -174,6 +175,50 @@ fn parse_escalation_reason(reason: &str) -> EscalationReason {
         "first_execution" => EscalationReason::FirstExecution,
         _ => EscalationReason::FirstExecution, // Default fallback
     }
+}
+
+/// Parse capabilities from string representations
+fn parse_capabilities_from_strings(capability_strings: &[String]) -> Capabilities {
+    use std::path::PathBuf;
+
+    let mut capabilities = Capabilities::default();
+
+    for cap_str in capability_strings {
+        if cap_str.starts_with("filesystem.") {
+            let fs_type = &cap_str[11..]; // Skip "filesystem."
+            match fs_type {
+                "read_write" => {
+                    capabilities.filesystem.push(FileSystemCapability::ReadWrite {
+                        path: PathBuf::from("/tmp"), // Placeholder path
+                    });
+                }
+                "read_only" => {
+                    capabilities.filesystem.push(FileSystemCapability::ReadOnly {
+                        path: PathBuf::from("/tmp"), // Placeholder path
+                    });
+                }
+                _ => {}
+            }
+        } else if cap_str.starts_with("network.") {
+            let net_type = &cap_str[8..]; // Skip "network."
+            match net_type {
+                "allow_all" => {
+                    capabilities.network = NetworkCapability::AllowAll;
+                }
+                "allow_domains" => {
+                    capabilities.network = NetworkCapability::AllowDomains(vec![]);
+                }
+                "deny" => {
+                    capabilities.network = NetworkCapability::Deny;
+                }
+                _ => {}
+            }
+        } else if cap_str == "process.exec" {
+            capabilities.process.no_fork = false;
+        }
+    }
+
+    capabilities
 }
 
 #[cfg(test)]
@@ -316,6 +361,57 @@ mod tests {
         assert_eq!(summary.execution_count, 0);
         assert_eq!(summary.escalation_count, 0);
         assert_eq!(summary.last_executed_at, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_tool_risk_summary_with_capabilities() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        let storage = ApprovalAuditStorage::new(&db_path).await.unwrap();
+
+        // Insert test data with high-risk capabilities
+        let capabilities_json = r#"{
+            "filesystem": [{"type": "read_write", "path": "/tmp"}],
+            "network": "allow_all",
+            "process": {"no_fork": false, "max_execution_time": 300, "max_memory_mb": 512},
+            "environment": "restricted"
+        }"#;
+
+        // Insert data using test helpers
+        storage
+            .insert_test_capability_approval("risky_tool", capabilities_json, 1234567890)
+            .await
+            .unwrap();
+
+        // Add some escalations
+        storage
+            .insert_test_escalation("risky_tool", "exec1", "path_out_of_scope", 1234567891)
+            .await
+            .unwrap();
+
+        storage
+            .insert_test_escalation("risky_tool", "exec2", "sensitive_directory", 1234567892)
+            .await
+            .unwrap();
+
+        let audit = AuditQuery::new(storage);
+
+        // Get summary
+        let summary = audit.get_tool_risk_summary("risky_tool").await.unwrap();
+        assert_eq!(summary.tool_name, "risky_tool");
+        assert_eq!(summary.escalation_count, 2);
+
+        // Risk score should be: Base(10) + ReadWrite(20) + AllowAll(30) + Exec(40) + Escalations(20) = 120
+        assert_eq!(summary.risk_score, 120);
+
+        // Check capabilities are present
+        assert!(summary.capabilities.len() > 0);
+        assert!(summary.capabilities.contains(&"filesystem.read_write".to_string()));
+        assert!(summary.capabilities.contains(&"network.allow_all".to_string()));
+        assert!(summary.capabilities.contains(&"process.exec".to_string()));
     }
 
     #[tokio::test]

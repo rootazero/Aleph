@@ -16,6 +16,7 @@ impl ApprovalAuditStorage {
                 id INTEGER PRIMARY KEY,
                 tool_name TEXT NOT NULL,
                 capabilities_hash TEXT NOT NULL,
+                capabilities_json TEXT,
                 approved BOOLEAN NOT NULL,
                 approved_by TEXT NOT NULL,
                 approval_scope TEXT NOT NULL,
@@ -171,6 +172,110 @@ impl ApprovalAuditStorage {
 
         rows.collect()
     }
+
+    /// Get tool capabilities from the most recent approval
+    pub async fn get_tool_capabilities(&self, tool_name: &str) -> SqliteResult<Vec<String>> {
+        let conn = self.conn.lock().await;
+
+        // Try to get the most recent capabilities JSON for this tool
+        let result = conn.query_row(
+            "SELECT capabilities_json FROM capability_approvals
+             WHERE tool_name = ?1 AND approved = 1
+             ORDER BY approved_at DESC
+             LIMIT 1",
+            params![tool_name],
+            |row| row.get::<_, Option<String>>(0),
+        );
+
+        match result {
+            Ok(Some(json_str)) => {
+                // Parse the JSON to extract capability strings
+                if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                    let mut capabilities = Vec::new();
+
+                    // Extract filesystem capabilities
+                    if let Some(fs_array) = json_value.get("filesystem").and_then(|v| v.as_array()) {
+                        for fs_cap in fs_array {
+                            if let Some(cap_type) = fs_cap.get("type").and_then(|v| v.as_str()) {
+                                capabilities.push(format!("filesystem.{}", cap_type));
+                            }
+                        }
+                    }
+
+                    // Extract network capability
+                    if let Some(network) = json_value.get("network") {
+                        if let Some(net_str) = network.as_str() {
+                            capabilities.push(format!("network.{}", net_str));
+                        } else if network.is_object() {
+                            // Handle AllowDomains case
+                            capabilities.push("network.allow_domains".to_string());
+                        }
+                    }
+
+                    // Extract process capability
+                    if let Some(process) = json_value.get("process").and_then(|v| v.as_object()) {
+                        if let Some(no_fork) = process.get("no_fork").and_then(|v| v.as_bool()) {
+                            if !no_fork {
+                                capabilities.push("process.exec".to_string());
+                            }
+                        }
+                    }
+
+                    Ok(capabilities)
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+            Ok(None) => Ok(Vec::new()),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Test helper: Insert capability approval (only available in tests)
+    #[cfg(test)]
+    pub async fn insert_test_capability_approval(
+        &self,
+        tool_name: &str,
+        capabilities_json: &str,
+        approved_at: i64,
+    ) -> SqliteResult<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO capability_approvals
+             (tool_name, capabilities_hash, capabilities_json, approved, approved_by, approval_scope, approved_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                tool_name,
+                "test_hash",
+                capabilities_json,
+                true,
+                "test_user",
+                "session",
+                approved_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Test helper: Insert escalation (only available in tests)
+    #[cfg(test)]
+    pub async fn insert_test_escalation(
+        &self,
+        tool_name: &str,
+        execution_id: &str,
+        escalation_reason: &str,
+        decided_at: i64,
+    ) -> SqliteResult<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO capability_escalations
+             (tool_name, execution_id, escalation_reason, decided_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![tool_name, execution_id, escalation_reason, decided_at],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -197,5 +302,85 @@ mod tests {
 
         assert!(tables.contains(&"capability_approvals".to_string()));
         assert!(tables.contains(&"capability_escalations".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_tool_capabilities_empty() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        let storage = ApprovalAuditStorage::new(&db_path).await.unwrap();
+
+        // Get capabilities for non-existent tool
+        let capabilities = storage.get_tool_capabilities("test_tool").await.unwrap();
+        assert_eq!(capabilities.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_tool_capabilities_with_data() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        let storage = ApprovalAuditStorage::new(&db_path).await.unwrap();
+
+        // Insert test data with capabilities JSON
+        let capabilities_json = r#"{
+            "filesystem": [{"type": "read_write", "path": "/tmp"}],
+            "network": "allow_all",
+            "process": {"no_fork": false, "max_execution_time": 300, "max_memory_mb": 512},
+            "environment": "restricted"
+        }"#;
+
+        storage
+            .insert_test_capability_approval("test_tool", capabilities_json, 1234567890)
+            .await
+            .unwrap();
+
+        // Get capabilities
+        let capabilities = storage.get_tool_capabilities("test_tool").await.unwrap();
+        assert!(capabilities.len() > 0);
+        assert!(capabilities.contains(&"filesystem.read_write".to_string()));
+        assert!(capabilities.contains(&"network.allow_all".to_string()));
+        assert!(capabilities.contains(&"process.exec".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_tool_capabilities_multiple_approvals() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        let storage = ApprovalAuditStorage::new(&db_path).await.unwrap();
+
+        // Insert older approval
+        let old_capabilities_json = r#"{
+            "filesystem": [{"type": "read_only", "path": "/tmp"}],
+            "network": "deny",
+            "process": {"no_fork": true, "max_execution_time": 300, "max_memory_mb": 512},
+            "environment": "restricted"
+        }"#;
+
+        // Insert newer approval
+        let new_capabilities_json = r#"{
+            "filesystem": [{"type": "read_write", "path": "/tmp"}],
+            "network": "allow_all",
+            "process": {"no_fork": false, "max_execution_time": 300, "max_memory_mb": 512},
+            "environment": "restricted"
+        }"#;
+
+        storage
+            .insert_test_capability_approval("test_tool", old_capabilities_json, 1234567890)
+            .await
+            .unwrap();
+
+        storage
+            .insert_test_capability_approval("test_tool", new_capabilities_json, 1234567900)
+            .await
+            .unwrap();
+
+        // Get capabilities - should return the most recent one
+        let capabilities = storage.get_tool_capabilities("test_tool").await.unwrap();
+        assert!(capabilities.contains(&"filesystem.read_write".to_string()));
+        assert!(capabilities.contains(&"network.allow_all".to_string()));
+        assert!(capabilities.contains(&"process.exec".to_string()));
     }
 }
