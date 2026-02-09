@@ -33,6 +33,8 @@ plugin-wasm = ["dep:extism"]
 plugin-nodejs = []
 # Plugin system: All runtimes
 plugin-all = ["plugin-wasm", "plugin-nodejs"]
+# Test helpers for integration tests
+test-helpers = []
 
 [dependencies]
 # REMOVED: UniFFI - using Gateway WebSocket architecture
@@ -208,6 +210,10 @@ core-foundation = "0.9"
 
 [[bench]]
 name = "memory_benchmarks_simple"
+harness = false
+
+[[bench]]
+name = "approval_performance"
 harness = false
 
 [[test]]
