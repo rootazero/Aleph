@@ -2,50 +2,25 @@
 //  SettingsView.swift
 //  Aleph
 //
-//  Shared settings types and views used by RootContentView.
+//  Simplified settings view - all configuration now managed via ControlPlane
 //
 
 import SwiftUI
 import AppKit
-import UniformTypeIdentifiers
 
-// MARK: - Settings Tab Enum
+// MARK: - Settings Tab Enum (Simplified)
 
 enum SettingsTab: Hashable {
     case general
-    case providers
-    case generation  // Image/Video/Audio generation providers
-    case shortcuts
-    case behavior
-    case memory
-    case search
-    case mcp
-    case skills
-    case plugins     // Claude Code compatible plugins
-    case security    // File operations & code execution permissions
-    case policies
-    case guests      // Guest access management
 }
 
-// MARK: - UTType Extension
+// MARK: - Simplified Settings View
 
-extension UTType {
-    static var toml: UTType {
-        UTType(filenameExtension: "toml") ?? .plainText
-    }
-}
-
-// MARK: - General Settings View
-
-struct GeneralSettingsView: View {
+struct SettingsView: View {
     let core: AlephCore?
 
-    @State private var soundEnabled = false
-    @State private var showingLogViewer = false
-    @State private var selectedLanguage: String? = nil
-
-    // Launch at login manager
-    @ObservedObject private var launchAtLoginManager = LaunchAtLoginManager.shared
+    @State private var connectionStatus: String = "Checking..."
+    @State private var currentProvider: String = "Loading..."
 
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
@@ -54,187 +29,94 @@ struct GeneralSettingsView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                Form {
-                    Section(header: Text(L("settings.general.sound"))) {
-                        Toggle(L("settings.general.sound_effects"), isOn: $soundEnabled)
-                            .onChange(of: soundEnabled) { _, _ in
-                                showComingSoonAlert(feature: L("settings.general.sound_effects"))
-                            }
-                    }
+        VStack(spacing: 24) {
+            // Connection Status
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Connection Status")
+                    .font(.headline)
 
-                    Section(header: Text(L("settings.general.startup"))) {
-                        Toggle(L("settings.general.launch_at_login"), isOn: $launchAtLoginManager.isEnabled)
-                        Text(L("settings.general.launch_at_login_description"))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    Section(header: Text(L("settings.general.language"))) {
-                        Picker(L("settings.general.language_preference"), selection: $selectedLanguage) {
-                            Text(L("settings.general.language_system_default")).tag(nil as String?)
-                            Text("English").tag("en" as String?)
-                            Text("简体中文").tag("zh-Hans" as String?)
-                        }
-                        .onChange(of: selectedLanguage) { _, newValue in
-                            saveLanguagePreference(newValue)
-                        }
-                    }
-
-                    Section(header: Text(L("settings.general.updates"))) {
-                        Button(L("settings.general.check_updates")) {
-                            checkForUpdates()
-                        }
-                        .help(L("settings.general.check_updates_help"))
-                    }
-
-                    Section(header: Text(L("settings.general.logs"))) {
-                        Button(L("settings.general.view_logs")) {
-                            showingLogViewer = true
-                        }
-                        .help(L("settings.general.view_logs_help"))
-                        .disabled(core == nil)
-                    }
-
-                    Section(header: Text(L("settings.general.about"))) {
-                        HStack {
-                            Text(L("settings.general.version"))
-                            Spacer()
-                            Text(appVersion)
-                                .foregroundColor(.secondary)
-                        }
-                    }
+                HStack {
+                    Circle()
+                        .fill(connectionStatus == "Connected" ? Color.green : Color.red)
+                        .frame(width: 10, height: 10)
+                    Text(connectionStatus)
+                        .foregroundColor(.secondary)
                 }
-                .formStyle(.grouped)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(20)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $showingLogViewer) {
-            if let core = core {
-                LogViewerView(core: core)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Divider()
+
+            // Current Configuration (Read-only)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Current AI Provider")
+                    .font(.headline)
+                Text(currentProvider)
+                    .foregroundColor(.secondary)
+                Text("To modify settings, use the Control Panel")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Divider()
+
+            // Open ControlPlane Button
+            Button(action: openControlPlane) {
+                HStack {
+                    Image(systemName: "gearshape.2")
+                    Text("Open Control Panel")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(core == nil)
+
+            Spacer()
+
+            // About
+            VStack(spacing: 4) {
+                Text("Aleph")
+                    .font(.headline)
+                Text("Version \(appVersion)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
+        .padding()
+        .frame(width: 400, height: 300)
         .onAppear {
-            // Load current language setting
-            loadLanguagePreference()
+            updateConnectionStatus()
+            loadCurrentProvider()
         }
     }
 
-    private func showComingSoonAlert(feature: String) {
-        let alert = NSAlert()
-        alert.messageText = L("settings.general.coming_soon")
-        alert.informativeText = L("settings.general.coming_soon_message", feature)
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: L("common.ok"))
-        alert.runModal()
-    }
+    private func openControlPlane() {
+        // Default ControlPlane URL
+        let controlPlaneURL = "http://127.0.0.1:18790/cp"
 
-    private func checkForUpdates() {
-        let alert = NSAlert()
-        alert.messageText = L("settings.general.check_updates")
-        alert.informativeText = """
-        Current Version: \(appVersion)
-
-        To check for updates, please visit:
-        https://github.com/yourusername/aleph/releases
-
-        Automatic updates will be available in a future release.
-        """
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: L("common.ok"))
-        alert.addButton(withTitle: "Visit GitHub")
-
-        let response = alert.runModal()
-        if response == .alertSecondButtonReturn {
-            if let url = URL(string: "https://github.com/yourusername/aleph/releases") {
-                NSWorkspace.shared.open(url)
-            }
+        if let url = URL(string: controlPlaneURL) {
+            NSWorkspace.shared.open(url)
         }
     }
 
-    private func loadLanguagePreference() {
-        guard let core = core else { return }
-        do {
-            let config = try core.loadConfig()
-            selectedLanguage = config.general.language
-        } catch {
-            print("Failed to load language preference: \(error)")
-        }
+    private func updateConnectionStatus() {
+        // TODO: Get actual connection status from core
+        connectionStatus = core != nil ? "Connected" : "Disconnected"
     }
 
-    private func saveLanguagePreference(_ language: String?) {
-        guard let core = core else { return }
-
-        do {
-            // Load current config
-            var config = try core.loadConfig()
-
-            // Update language field
-            config.general.language = language
-
-            // Save config using update_general_config
-            try core.updateGeneralConfig(config: config.general)
-
-            // Show restart alert
-            showRestartAlert()
-        } catch {
-            print("Failed to save language preference: \(error)")
-            let alert = NSAlert()
-            alert.messageText = L("common.error")
-            alert.informativeText = "Failed to save language preference: \(error.localizedDescription)"
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: L("common.ok"))
-            alert.runModal()
-        }
-    }
-
-    private func showRestartAlert() {
-        let alert = NSAlert()
-        alert.messageText = L("settings.general.language_restart_title")
-        alert.informativeText = L("settings.general.language_restart_message")
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: L("settings.general.language_restart_now"))
-        alert.addButton(withTitle: L("settings.general.language_restart_later"))
-
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            // User chose "Restart Now" - restart the application
-            restartApplication()
-        }
-    }
-
-    /// Restart the application after language change
-    /// Uses NSWorkspace to launch a new instance before terminating current instance
-    private func restartApplication() {
-        print("[SettingsView] Restarting application for language change")
-
-        let url = URL(fileURLWithPath: Bundle.main.bundlePath)
-        let config = NSWorkspace.OpenConfiguration()
-        config.createsNewApplicationInstance = true
-
-        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
-            if let error = error {
-                print("[SettingsView] ❌ Error restarting application: \(error)")
-                // Show error alert if restart fails
-                DispatchQueue.main.async {
-                    let errorAlert = NSAlert()
-                    errorAlert.messageText = L("alert.restart.failed_title")
-                    errorAlert.informativeText = L("alert.restart.failed_message", error.localizedDescription)
-                    errorAlert.alertStyle = .warning
-                    errorAlert.addButton(withTitle: L("common.ok"))
-                    errorAlert.runModal()
-                }
-            }
-
-            // Terminate current instance after new instance starts
-            DispatchQueue.main.async {
-                NSApp.terminate(nil)
-            }
-        }
+    private func loadCurrentProvider() {
+        // TODO: Get current provider from core
+        currentProvider = "Claude (Anthropic)"
     }
 }
 
-// Theme-related views removed - using unified visual style
+// MARK: - Preview
+
+#if DEBUG
+struct SettingsView_Previews: PreviewProvider {
+    static var previews: some View {
+        SettingsView(core: nil)
+    }
+}
+#endif
