@@ -66,6 +66,7 @@ pub mod routing_rules;
 pub mod security_config;
 pub mod profiles;
 pub mod generation;
+pub mod generation_providers;
 pub mod pairing;
 pub mod runs;
 pub mod models;
