@@ -160,8 +160,8 @@ Aleph/
 │   ├── HaloState.swift          # State machine
 │   ├── EventHandler.swift       # Rust callback implementation
 │   ├── PermissionManager.swift  # Accessibility permissions
-│   ├── SettingsView.swift       # Settings UI
-│   ├── ProvidersView.swift      # Provider management (stub)
+│   ├── SettingsView.swift       # Settings UI (simplified, opens Dashboard)
+│   ├── GenerationProvidersView.swift  # Generation providers (temporary, will migrate to Dashboard)
 │   ├── RoutingView.swift        # Routing rules (stub)
 │   ├── ShortcutsView.swift      # Shortcuts config (stub)
 │   └── Generated/

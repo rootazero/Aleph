@@ -11,16 +11,14 @@ import { GatewayStatus } from '@/components/ui/gateway-status';
 import { GeneralSettings } from './tabs/GeneralSettings';
 import { ShortcutsSettings } from './tabs/ShortcutsSettings';
 import { BehaviorSettings } from './tabs/BehaviorSettings';
-import { ProvidersSettings } from './tabs/ProvidersSettings';
 import { GenerationSettings } from './tabs/GenerationSettings';
 import { GenerationProvidersSettings } from './tabs/GenerationProvidersSettings';
-import { MemorySettings } from './tabs/MemorySettings';
-import { McpSettings } from './tabs/McpSettings';
 import { PluginsSettings } from './tabs/PluginsSettings';
 import { SkillsSettings } from './tabs/SkillsSettings';
 import { AgentSettings } from './tabs/AgentSettings';
 import { SearchSettings } from './tabs/SearchSettings';
 import { PoliciesSettings } from './tabs/PoliciesSettings';
+import { MigratedToDashboard } from './tabs/MigratedToDashboard';
 
 export function SettingsWindow() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
@@ -61,15 +59,15 @@ export function SettingsWindow() {
       case 'behavior':
         return <BehaviorSettings />;
       case 'providers':
-        return <ProvidersSettings />;
+        return <MigratedToDashboard featureName="Providers" dashboardPath="/settings/providers" />;
       case 'generationProviders':
         return <GenerationProvidersSettings />;
       case 'generation':
         return <GenerationSettings />;
       case 'memory':
-        return <MemorySettings />;
+        return <MigratedToDashboard featureName="Memory" dashboardPath="/settings/memory" />;
       case 'mcp':
-        return <McpSettings />;
+        return <MigratedToDashboard featureName="MCP Plugins" dashboardPath="/settings/mcp" />;
       case 'plugins':
         return <PluginsSettings />;
       case 'skills':
