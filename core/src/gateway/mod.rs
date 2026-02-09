@@ -45,6 +45,10 @@ pub mod handlers;
 #[cfg(feature = "gateway")]
 pub mod mdns_broadcaster;
 
+// ControlPlane: Embedded web UI
+#[cfg(feature = "control-plane")]
+pub mod control_plane;
+
 // Phase 4: Multi-Agent & Dispatcher
 #[cfg(feature = "gateway")]
 pub mod agent_instance;

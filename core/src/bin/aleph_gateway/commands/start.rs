@@ -634,6 +634,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Start WebChat HTTP server if configured
     start_webchat_server(args, &final_bind, final_port).await;
 
+    // Start ControlPlane embedded UI server
+    #[cfg(feature = "control-plane")]
+    start_control_plane_server(&final_bind, final_port, args.daemon).await;
+
     // Set up graceful shutdown
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let pid_file = args.pid_file.clone();
@@ -1032,6 +1036,47 @@ async fn start_webchat_server(args: &Args, final_bind: &str, final_port: u16) {
             println!("WebChat directory not found: {}", webchat_path.display());
             println!();
         }
+    }
+}
+
+/// Start ControlPlane embedded web UI server
+#[cfg(all(feature = "gateway", feature = "control-plane"))]
+async fn start_control_plane_server(final_bind: &str, final_port: u16, daemon_mode: bool) {
+    use axum::Router;
+    use alephcore::gateway::control_plane::create_control_plane_router;
+
+    // Use a different port for ControlPlane (default: 8081)
+    let cp_port = final_port + 1;
+    let control_plane_addr: SocketAddr = format!("{}:{}", final_bind, cp_port)
+        .parse()
+        .expect("Invalid control plane address");
+
+    // Create ControlPlane router
+    let cp_router = create_control_plane_router();
+
+    // Mount under /cp path
+    let app = Router::new().nest("/cp", cp_router);
+
+    // Spawn ControlPlane server
+    tokio::spawn(async move {
+        match tokio::net::TcpListener::bind(control_plane_addr).await {
+            Ok(listener) => {
+                tracing::info!("ControlPlane UI available at http://{}/cp", control_plane_addr);
+                if let Err(e) = axum::serve(listener, app).await {
+                    tracing::error!("ControlPlane server error: {}", e);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to bind ControlPlane server: {}", e);
+            }
+        }
+    });
+
+    if !daemon_mode {
+        println!("ControlPlane UI:");
+        println!("  - URL: http://{}/cp", control_plane_addr);
+        println!("  - Embedded: rust-embed (WASM)");
+        println!();
     }
 }
 
