@@ -1,33 +1,34 @@
 // Audit logging for sandbox execution
 
-use chrono::{DateTime, Utc};
+use crate::exec::sandbox::capabilities::Capabilities;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
 /// Execution status of a sandboxed command
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
 pub enum ExecutionStatus {
     /// Command completed successfully
-    Success,
+    Success { exit_code: i32, duration_ms: u64 },
     /// Command exceeded time limit
-    Timeout,
+    Timeout { duration_ms: u64 },
     /// Command violated sandbox policy
-    SandboxViolation,
+    SandboxViolation { violation: String },
     /// Command failed with error
-    Error(String),
+    Error { error: String },
 }
 
 /// Type of sandbox violation
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ViolationType {
+    /// Attempted unauthorized file access
+    UnauthorizedFileAccess,
     /// Attempted unauthorized network access
-    NetworkAccess,
-    /// Attempted unauthorized file system access
-    FileSystemAccess,
-    /// Attempted unauthorized process execution
-    ProcessExecution,
-    /// Attempted unauthorized environment variable access
-    EnvironmentAccess,
+    UnauthorizedNetworkAccess,
+    /// Attempted unauthorized process fork
+    UnauthorizedProcessFork,
+    /// Resource limit exceeded
+    ResourceLimitExceeded,
 }
 
 /// Record of a sandbox policy violation
@@ -35,63 +36,50 @@ pub enum ViolationType {
 pub struct SandboxViolation {
     /// Type of violation
     pub violation_type: ViolationType,
-    /// Description of attempted action
-    pub attempted_action: String,
-    /// When the violation occurred
-    pub timestamp: DateTime<Utc>,
+    /// Description of the violation
+    pub description: String,
+    /// When the violation occurred (Unix timestamp)
+    pub timestamp: i64,
 }
 
 /// Complete audit log for a sandbox execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct SandboxAuditLog {
+    /// When execution started (Unix timestamp)
+    pub timestamp: i64,
     /// Skill identifier
     pub skill_id: String,
-    /// Command that was executed
-    pub command: Vec<String>,
-    /// When execution started
-    pub start_time: DateTime<Utc>,
-    /// When execution ended
-    pub end_time: Option<DateTime<Utc>>,
-    /// Execution duration
-    pub duration: Option<Duration>,
+    /// Sandbox capabilities used
+    pub capabilities: Capabilities,
     /// Final execution status
-    pub status: ExecutionStatus,
+    pub execution_result: ExecutionStatus,
+    /// Platform used for sandboxing
+    pub sandbox_platform: String,
     /// List of policy violations
     pub violations: Vec<SandboxViolation>,
-    /// Standard output (truncated if too large)
-    pub stdout: Option<String>,
-    /// Standard error (truncated if too large)
-    pub stderr: Option<String>,
-    /// Exit code if available
-    pub exit_code: Option<i32>,
 }
 
 impl SandboxAuditLog {
-    /// Create a new audit log for a command execution
-    pub fn new(skill_id: String, command: Vec<String>) -> Self {
+    /// Create a new audit log for a sandbox execution
+    pub fn new(
+        skill_id: String,
+        capabilities: Capabilities,
+        execution_result: ExecutionStatus,
+        sandbox_platform: String,
+    ) -> Self {
         Self {
+            timestamp: Utc::now().timestamp(),
             skill_id,
-            command,
-            start_time: Utc::now(),
-            end_time: None,
-            duration: None,
-            status: ExecutionStatus::Success,
+            capabilities,
+            execution_result,
+            sandbox_platform,
             violations: Vec::new(),
-            stdout: None,
-            stderr: None,
-            exit_code: None,
         }
     }
 
     /// Add a violation to the audit log
     pub fn add_violation(&mut self, violation: SandboxViolation) {
         self.violations.push(violation);
-        self.status = ExecutionStatus::SandboxViolation;
-    }
-
-    /// Check if execution was successful
-    pub fn is_success(&self) -> bool {
-        matches!(self.status, ExecutionStatus::Success)
     }
 }
 
@@ -100,32 +88,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_audit_log_creation() {
+    fn test_audit_log_serialization() {
         let log = SandboxAuditLog::new(
-            "skill-test".to_string(),
-            vec!["echo".to_string(), "hello".to_string()],
+            "test-skill".to_string(),
+            Capabilities::default(),
+            ExecutionStatus::Success {
+                exit_code: 0,
+                duration_ms: 100,
+            },
+            "macos".to_string(),
         );
 
-        assert_eq!(log.skill_id, "skill-test");
-        assert_eq!(log.command, vec!["echo", "hello"]);
-        assert!(log.violations.is_empty());
-        assert!(log.is_success());
-    }
-
-    #[test]
-    fn test_audit_log_with_violation() {
-        let mut log = SandboxAuditLog::new(
-            "skill-test".to_string(),
-            vec!["curl".to_string(), "evil.com".to_string()],
-        );
-
-        log.add_violation(SandboxViolation {
-            violation_type: ViolationType::NetworkAccess,
-            attempted_action: "connect to evil.com".to_string(),
-            timestamp: Utc::now(),
-        });
-
-        assert_eq!(log.violations.len(), 1);
-        assert!(!log.is_success());
+        let json = serde_json::to_string(&log).unwrap();
+        assert!(json.contains("test-skill"));
+        assert!(json.contains("\"status\":\"success\""));
     }
 }
