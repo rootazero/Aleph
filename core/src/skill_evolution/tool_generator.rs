@@ -27,6 +27,38 @@ use crate::exec::sandbox::parameter_binding::RequiredCapabilities;
 
 use super::types::SolidificationSuggestion;
 
+/// Approval metadata for tool definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalMetadata {
+    pub approved: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approved_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approved_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_stage: Option<String>,
+    #[serde(default)]
+    pub execution_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_executed_at: Option<String>,
+}
+
+impl Default for ApprovalMetadata {
+    fn default() -> Self {
+        Self {
+            approved: false,
+            approved_at: None,
+            approved_by: None,
+            approval_scope: None,
+            trust_stage: Some("draft".to_string()),
+            execution_count: 0,
+            last_executed_at: None,
+        }
+    }
+}
+
 /// Tool definition for generated tools
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneratedToolDefinition {
@@ -47,6 +79,9 @@ pub struct GeneratedToolDefinition {
     /// Sandbox capabilities required by this tool
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required_capabilities: Option<RequiredCapabilities>,
+    /// Approval metadata for this tool
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_metadata: Option<ApprovalMetadata>,
     /// Generation metadata
     pub generated: GenerationMetadata,
 }
@@ -152,6 +187,7 @@ impl ToolGenerator {
             self_tested: false,
             requires_confirmation: self.config.require_confirmation,
             required_capabilities: Some(Self::generate_required_capabilities(&suggestion)),
+            approval_metadata: None,
             generated: GenerationMetadata {
                 pattern_id: suggestion.pattern_id.clone(),
                 confidence: suggestion.confidence,
@@ -790,6 +826,7 @@ mod tests {
                 overrides: Default::default(),
                 parameter_bindings: Default::default(),
             }),
+            approval_metadata: None,
             generated: GenerationMetadata {
                 pattern_id: "test".to_string(),
                 confidence: 0.9,
@@ -800,5 +837,22 @@ mod tests {
 
         let json = serde_json::to_string(&def).unwrap();
         assert!(json.contains("required_capabilities"));
+    }
+
+    #[test]
+    fn test_approval_metadata_serialization() {
+        let metadata = ApprovalMetadata {
+            approved: true,
+            approved_at: Some("2026-02-09T10:30:00Z".to_string()),
+            approved_by: Some("owner".to_string()),
+            approval_scope: Some("permanent".to_string()),
+            trust_stage: Some("verified".to_string()),
+            execution_count: 42,
+            last_executed_at: Some("2026-02-09T15:20:00Z".to_string()),
+        };
+
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert!(json.contains("\"approved\":true"));
+        assert!(json.contains("\"execution_count\":42"));
     }
 }
