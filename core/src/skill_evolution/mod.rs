@@ -43,6 +43,7 @@ pub mod git;
 pub mod pipeline;
 pub mod safety;
 pub mod sandbox_integration;
+pub mod sandboxed_executor;
 pub mod tool_generator;
 pub mod tool_testing;
 pub mod tracker;
