@@ -3,7 +3,6 @@ use crate::exec::sandbox::{
     capabilities::Capabilities,
     presets::PresetRegistry,
     capability_resolver::{apply_overrides, bind_parameters},
-    parameter_binding::RequiredCapabilities,
 };
 use super::tool_generator::GeneratedToolDefinition;
 
