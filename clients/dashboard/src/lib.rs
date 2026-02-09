@@ -5,6 +5,7 @@
 use leptos::*;
 use leptos_meta::*;
 use leptos_router::*;
+use wasm_bindgen::prelude::*;
 
 mod components;
 mod context;
@@ -68,7 +69,8 @@ pub fn App() -> impl IntoView {
     }
 }
 
-fn main() {
+#[wasm_bindgen(start)]
+pub fn main() {
     // Set up console error panic hook for better error messages in browser console
     console_error_panic_hook::set_once();
 
