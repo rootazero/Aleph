@@ -1,193 +1,158 @@
-//! System Status view
-//!
-//! Displays connection status, reconnection attempts, and server health.
-//! Simulates realistic connection state transitions.
-
-use leptos::*;
-use crate::context::DashboardState;
-use crate::components::connection_status::ConnectionStatus;
-
-/// Connection state for simulation
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum ConnectionState {
-    Disconnected,
-    Connecting,
-    Connected,
-    Reconnecting,
-    Failed,
-}
+use leptos::prelude::*;
+use gloo_timers::future::TimeoutFuture;
+use crate::components::ui::*;
 
 #[component]
 pub fn SystemStatus() -> impl IntoView {
-    // Get the global dashboard state
-    let state = use_context::<DashboardState>()
-        .expect("DashboardState must be provided");
+    let is_connecting = RwSignal::new(false);
+    let connection_status = RwSignal::new("Healthy");
 
-    // Local connection state for simulation
-    let (conn_state, set_conn_state) = create_signal(ConnectionState::Disconnected);
-    let (error_message, set_error_message) = create_signal(None::<String>);
-
-    // Simulate connection process
-    let simulate_connection = move || {
-        // Reset error
-        set_error_message.set(None);
-        state.reconnect_count.set(0);
-
-        // Step 1: Connecting
-        set_conn_state.set(ConnectionState::Connecting);
-        state.is_connected.set(false);
-
-        // Simulate connection delay (1.5s)
-        set_timeout(
-            move || {
-                // 80% success rate
-                let success = js_sys::Math::random() > 0.2;
-
-                if success {
-                    // Step 2: Connected
-                    set_conn_state.set(ConnectionState::Connected);
-                    state.is_connected.set(true);
-                    log::info!("Connection successful");
-                } else {
-                    // Step 2: Failed
-                    set_conn_state.set(ConnectionState::Failed);
-                    set_error_message.set(Some("Connection failed: timeout".to_string()));
-                    state.is_connected.set(false);
-                    log::info!("Connection failed");
-                }
-            },
-            std::time::Duration::from_millis(1500),
-        );
-    };
-
-    // Handle connect button click
-    let on_connect = move |_| {
-        log::info!("Connect button clicked");
-        simulate_connection();
-    };
-
-    // Handle disconnect button click
-    let on_disconnect = move |_| {
-        log::info!("Disconnect button clicked");
-        set_conn_state.set(ConnectionState::Disconnected);
-        state.is_connected.set(false);
-        set_error_message.set(None);
-    };
-
-    // Get status text and color
-    let status_text = move || match conn_state.get() {
-        ConnectionState::Disconnected => "Disconnected",
-        ConnectionState::Connecting => "Connecting...",
-        ConnectionState::Connected => "Connected",
-        ConnectionState::Reconnecting => "Reconnecting...",
-        ConnectionState::Failed => "Failed",
-    };
-
-    let status_color = move || match conn_state.get() {
-        ConnectionState::Disconnected => "text-gray-400",
-        ConnectionState::Connecting => "text-amber-400",
-        ConnectionState::Connected => "text-green-400",
-        ConnectionState::Reconnecting => "text-blue-400",
-        ConnectionState::Failed => "text-red-400",
+    let handle_connect = move |_| {
+        leptos::task::spawn_local(async move {
+            is_connecting.set(true);
+            TimeoutFuture::new(1500).await;
+            is_connecting.set(false);
+            connection_status.set("Healthy");
+        });
     };
 
     view! {
-        <div class="space-y-6">
-            <div class="card">
-                <h2 class="card-header">"System Status"</h2>
+        <div class="p-8 max-w-7xl mx-auto space-y-12">
+            <header class="flex items-center justify-between">
+                <div>
+                    <h2 class="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3 text-slate-100">
+                        <svg width="32" height="32" attr:class="w-8 h-8 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
+                            <rect x="9" y="9" width="6" height="6" />
+                            <line x1="9" y1="1" x2="9" y2="4" />
+                            <line x1="15" y1="1" x2="15" y2="4" />
+                            <line x1="9" y1="20" x2="9" y2="23" />
+                            <line x1="15" y1="20" x2="15" y2="23" />
+                            <line x1="20" y1="9" x2="23" y2="9" />
+                            <line x1="20" y1="15" x2="23" y2="15" />
+                            <line x1="1" y1="9" x2="4" y2="9" />
+                            <line x1="1" y1="15" x2="4" y2="15" />
+                        </svg>
+                        "System Health"
+                    </h2>
+                    <p class="text-slate-400">"Real-time monitoring of Aleph Core and Infrastructure."</p>
+                </div>
 
-                // Connection Status Component
-                <ConnectionStatus />
+                <Button 
+                    on:click=handle_connect
+                    variant=ButtonVariant::Primary
+                    class=if is_connecting.get() { "opacity-80 pointer-events-none" } else { "" }.to_string()
+                >
+                    {move || if is_connecting.get() { "Negotiating..." } else { "Re-Sync Core" }}
+                </Button>
+            </header>
 
-                // Detailed Status
-                <div class="mt-4 bg-gray-700 rounded-lg p-4">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <div class="text-sm text-gray-400">"Current State"</div>
-                            <div class=move || format!("text-lg font-semibold {}", status_color())>
-                                {status_text}
-                            </div>
-                        </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                // Core Services
+                <div class="space-y-6">
+                    <h3 class="text-xl font-semibold px-1 text-slate-300">"Core Services"</h3>
+                    <div class="space-y-4">
+                        <ServiceCard name="Gateway Engine" status=connection_status uptime="12d 4h" latency="14ms" />
+                        <ServiceCard name="Agent Runtime" status=connection_status uptime="12d 4h" latency="2ms" />
+                        <ServiceCard name="Memory Vector DB" status=RwSignal::new("Degraded") uptime="5h 12m" latency="145ms" />
+                        <ServiceCard name="MCP Tool Server" status=RwSignal::new("Healthy") uptime="4d 18h" latency="45ms" />
                     </div>
                 </div>
 
-                // Connection Controls
-                <div class="mt-6 space-y-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-300 mb-2">
-                            "Gateway URL"
-                        </label>
-                        <input
-                            type="text"
-                            class="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            prop:value=move || state.gateway_url.get()
-                            on:input=move |ev| {
-                                state.gateway_url.set(event_target_value(&ev));
-                            }
-                            placeholder="ws://127.0.0.1:18789"
-                        />
-                    </div>
-
-                    <div class="flex space-x-4">
-                        <button
-                            class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-md font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                            on:click=on_connect
-                            disabled=move || conn_state.get() != ConnectionState::Disconnected && conn_state.get() != ConnectionState::Failed
-                        >
-                            {move || {
-                                match conn_state.get() {
-                                    ConnectionState::Connecting => "Connecting...",
-                                    ConnectionState::Reconnecting => "Reconnecting...",
-                                    _ => "Connect"
-                                }
-                            }}
-                        </button>
-
-                        <button
-                            class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-md font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                            on:click=on_disconnect
-                            disabled=move || conn_state.get() == ConnectionState::Disconnected
-                        >
-                            "Disconnect"
-                        </button>
-                    </div>
-
-                    // Error display
-                    {move || {
-                        if let Some(error) = error_message.get() {
-                            view! {
-                                <div class="bg-red-900/20 border border-red-500 rounded p-3 text-sm text-red-300">
-                                    <strong>"Error: "</strong> {error}
-                                </div>
-                            }.into_view()
-                        } else {
-                            view! { <div></div> }.into_view()
-                        }
-                    }}
-
-                    <div class="bg-blue-900/20 border border-blue-500 rounded p-3 text-sm text-blue-300">
-                        <strong>"Simulation: "</strong> "Connection states transition with realistic delays. 80% success rate for initial connection."
-                    </div>
+                // Resource Usage
+                <div class="space-y-6">
+                    <h3 class="text-xl font-semibold px-1 text-slate-300">"Resource Utilization"</h3>
+                    <Card class="p-8 space-y-8">
+                        <ResourceMetric label="CPU Clusters" value="24%" sub="16 Cores Active" color="bg-emerald-500" progress=24>
+                            <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
+                            <rect x="9" y="9" width="6" height="6" />
+                            <line x1="9" y1="1" x2="9" y2="4" />
+                            <line x1="15" y1="1" x2="15" y2="4" />
+                        </ResourceMetric>
+                        <ResourceMetric label="Neural Memory" value="4.2 GB" sub="Total 16 GB Allocated" color="bg-indigo-500" progress=26>
+                             <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                        </ResourceMetric>
+                        <ResourceMetric label="Encrypted Storage" value="128 GB" sub="842 GB Remaining" color="bg-purple-500" progress=15>
+                             <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+                             <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+                        </ResourceMetric>
+                        <ResourceMetric label="Security Layer" value="Enabled" sub="All Guards Active" color="bg-blue-500" progress=100>
+                             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                        </ResourceMetric>
+                    </Card>
                 </div>
             </div>
+        </div>
+    }
+}
 
-            // Server Health (placeholder for future implementation)
-            <div class="card">
-                <h2 class="card-header">"Server Health"</h2>
-                <div class="grid grid-cols-3 gap-4">
-                    <div class="bg-gray-700 rounded p-4">
-                        <div class="text-sm text-gray-400">"Uptime"</div>
-                        <div class="text-2xl font-bold text-white">"24h 15m"</div>
-                    </div>
-                    <div class="bg-gray-700 rounded p-4">
-                        <div class="text-sm text-gray-400">"Memory Usage"</div>
-                        <div class="text-2xl font-bold text-green-400">"45%"</div>
-                    </div>
-                    <div class="bg-gray-700 rounded p-4">
-                        <div class="text-sm text-gray-400">"Active Sessions"</div>
-                        <div class="text-2xl font-bold text-blue-400">"3"</div>
-                    </div>
+#[component]
+fn ServiceCard(
+    name: &'static str,
+    status: RwSignal<&'static str>,
+    uptime: &'static str,
+    latency: &'static str,
+) -> impl IntoView {
+    let badge_variant = move || match status.get() {
+        "Healthy" => BadgeVariant::Emerald,
+        "Degraded" => BadgeVariant::Amber,
+        _ => BadgeVariant::Red,
+    };
+
+    view! {
+        <div class="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl flex items-center justify-between group hover:border-slate-700 transition-all hover:bg-slate-800/20 shadow-sm hover:shadow-indigo-500/5">
+            <div class="flex items-center gap-4">
+                <div class=move || format!("w-2.5 h-2.5 rounded-full transition-all duration-500 shadow-[0_0_12px] {}", 
+                    if status.get() == "Healthy" { "bg-emerald-500 shadow-emerald-500/60" } 
+                    else if status.get() == "Degraded" { "bg-amber-500 shadow-amber-500/60" }
+                    else { "bg-red-500 shadow-red-500/60" }
+                )></div>
+                <div>
+                    <div class="font-medium text-slate-200 text-sm">{name}</div>
+                    <div class="text-[10px] text-slate-500 font-mono uppercase tracking-tight">{uptime} " uptime"</div>
                 </div>
+            </div>
+            <div class="flex items-center gap-6">
+                <div class="text-right">
+                    <div class="text-[9px] text-slate-500 uppercase font-bold tracking-widest mb-0.5">"Latency"</div>
+                    <div class="font-mono text-xs text-slate-300">{latency}</div>
+                </div>
+                <div class="w-px h-8 bg-slate-800"></div>
+                <div class="w-24 text-right">
+                    <Badge variant=badge_variant()>
+                        {move || status.get()}
+                    </Badge>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn ResourceMetric(
+    label: &'static str,
+    value: &'static str,
+    sub: &'static str,
+    color: &'static str,
+    progress: u32,
+    children: Children,
+) -> impl IntoView {
+    view! {
+        <div class="flex items-center gap-6 group">
+            <div class=format!("p-2.5 rounded-xl bg-slate-800/50 text-white transition-transform group-hover:scale-110 {}", color)>
+                <svg width="20" height="20" attr:class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    {children()}
+                </svg>
+            </div>
+            <div class="flex-1">
+                <div class="flex items-center justify-between mb-1.5">
+                    <span class="text-xs font-medium text-slate-400 group-hover:text-slate-200 transition-colors">{label}</span>
+                    <span class="text-base font-bold font-mono">{value}</span>
+                </div>
+                <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                    <div class=format!("h-full rounded-full transition-all duration-1000 ease-out {}", color) style=format!("width: {}%", progress)></div>
+                </div>
+                <div class="mt-1.5 text-[9px] text-slate-500 font-medium uppercase tracking-wider">{sub}</div>
             </div>
         </div>
     }

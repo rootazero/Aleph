@@ -1,30 +1,28 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
-    "./index.html",
+    "*.html",
     "./src/**/*.rs",
   ],
   theme: {
     extend: {
       colors: {
-        'agent': {
-          'thinking': '#3b82f6',
-          'acting': '#10b981',
-          'error': '#ef4444',
-          'idle': '#6b7280',
-        },
-        'tool': {
-          'pending': '#f59e0b',
-          'success': '#10b981',
-          'failed': '#ef4444',
-        },
-        'conn': {
-          'connected': '#10b981',
-          'connecting': '#f59e0b',
-          'disconnected': '#ef4444',
-          'reconnecting': '#3b82f6',
-        },
+        slate: {
+          950: '#020617',
+        }
       },
+      fontFamily: {
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'monospace'],
+      },
+      backgroundImage: {
+        'glass-gradient': 'linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 100%)',
+      },
+      boxShadow: {
+        'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
+        'neon-indigo': '0 0 20px -5px rgba(99, 102, 241, 0.5)',
+        'neon-emerald': '0 0 20px -5px rgba(16, 185, 129, 0.5)',
+      }
     },
   },
   plugins: [],
