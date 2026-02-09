@@ -511,7 +511,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let auth_ctx = Arc::new(auth_handlers::AuthContext::new(
         token_manager,
         pairing_manager,
-        device_store,
+        device_store.clone(),
         security_store,
         invitation_manager.clone(),
         guest_session_manager.clone(),
@@ -530,7 +530,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Register config handlers (for ConfigManager SDK)
     let app_config = Arc::new(tokio::sync::RwLock::new(alephcore::Config::default()));
-    register_config_handlers(&mut server, app_config, event_bus.clone());
+    register_config_handlers(&mut server, app_config, event_bus.clone(), device_store.clone());
 
     if !args.daemon {
         println!("Auth methods:");
@@ -1085,8 +1085,14 @@ fn register_config_handlers(
     server: &mut GatewayServer,
     config: Arc<tokio::sync::RwLock<alephcore::Config>>,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
+    device_store: Arc<alephcore::gateway::device_store::DeviceStore>,
 ) {
     use alephcore::gateway::handlers::config::{handle_get_full_config, handle_patch_config};
+    use alephcore::gateway::handlers::providers;
+    use alephcore::gateway::handlers::routing_rules;
+    use alephcore::gateway::handlers::mcp_config;
+    use alephcore::gateway::handlers::memory_config;
+    use alephcore::gateway::handlers::security_config;
 
     // config.get
     let config_get = config.clone();
@@ -1102,5 +1108,195 @@ fn register_config_handlers(
         let cfg = config_patch.clone();
         let bus = event_bus_patch.clone();
         async move { handle_patch_config(req, cfg, bus).await }
+    });
+
+    // providers.list
+    let config_list = config.clone();
+    server.handlers_mut().register("providers.list", move |req| {
+        let cfg = config_list.clone();
+        async move { providers::handle_list(req, cfg).await }
+    });
+
+    // providers.get
+    let config_get_provider = config.clone();
+    server.handlers_mut().register("providers.get", move |req| {
+        let cfg = config_get_provider.clone();
+        async move { providers::handle_get(req, cfg).await }
+    });
+
+    // providers.create
+    let config_create = config.clone();
+    let event_bus_create = event_bus.clone();
+    server.handlers_mut().register("providers.create", move |req| {
+        let cfg = config_create.clone();
+        let bus = event_bus_create.clone();
+        async move { providers::handle_create(req, cfg, bus).await }
+    });
+
+    // providers.update
+    let config_update = config.clone();
+    let event_bus_update = event_bus.clone();
+    server.handlers_mut().register("providers.update", move |req| {
+        let cfg = config_update.clone();
+        let bus = event_bus_update.clone();
+        async move { providers::handle_update(req, cfg, bus).await }
+    });
+
+    // providers.delete
+    let config_delete = config.clone();
+    let event_bus_delete = event_bus.clone();
+    server.handlers_mut().register("providers.delete", move |req| {
+        let cfg = config_delete.clone();
+        let bus = event_bus_delete.clone();
+        async move { providers::handle_delete(req, cfg, bus).await }
+    });
+
+    // providers.setDefault
+    let config_set_default = config.clone();
+    let event_bus_set_default = event_bus.clone();
+    server.handlers_mut().register("providers.setDefault", move |req| {
+        let cfg = config_set_default.clone();
+        let bus = event_bus_set_default.clone();
+        async move { providers::handle_set_default(req, cfg, bus).await }
+    });
+
+    // providers.test
+    server.handlers_mut().register("providers.test", move |req| {
+        async move { providers::handle_test(req).await }
+    });
+
+    // routing_rules.list
+    let config_rules_list = config.clone();
+    server.handlers_mut().register("routing_rules.list", move |req| {
+        let cfg = config_rules_list.clone();
+        async move { routing_rules::handle_list(req, cfg).await }
+    });
+
+    // routing_rules.get
+    let config_rules_get = config.clone();
+    server.handlers_mut().register("routing_rules.get", move |req| {
+        let cfg = config_rules_get.clone();
+        async move { routing_rules::handle_get(req, cfg).await }
+    });
+
+    // routing_rules.create
+    let config_rules_create = config.clone();
+    let event_bus_rules_create = event_bus.clone();
+    server.handlers_mut().register("routing_rules.create", move |req| {
+        let cfg = config_rules_create.clone();
+        let bus = event_bus_rules_create.clone();
+        async move { routing_rules::handle_create(req, cfg, bus).await }
+    });
+
+    // routing_rules.update
+    let config_rules_update = config.clone();
+    let event_bus_rules_update = event_bus.clone();
+    server.handlers_mut().register("routing_rules.update", move |req| {
+        let cfg = config_rules_update.clone();
+        let bus = event_bus_rules_update.clone();
+        async move { routing_rules::handle_update(req, cfg, bus).await }
+    });
+
+    // routing_rules.delete
+    let config_rules_delete = config.clone();
+    let event_bus_rules_delete = event_bus.clone();
+    server.handlers_mut().register("routing_rules.delete", move |req| {
+        let cfg = config_rules_delete.clone();
+        let bus = event_bus_rules_delete.clone();
+        async move { routing_rules::handle_delete(req, cfg, bus).await }
+    });
+
+    // routing_rules.move
+    let config_rules_move = config.clone();
+    let event_bus_rules_move = event_bus.clone();
+    server.handlers_mut().register("routing_rules.move", move |req| {
+        let cfg = config_rules_move.clone();
+        let bus = event_bus_rules_move.clone();
+        async move { routing_rules::handle_move(req, cfg, bus).await }
+    });
+
+    // mcp_config.list
+    let config_mcp_list = config.clone();
+    server.handlers_mut().register("mcp_config.list", move |req| {
+        let cfg = config_mcp_list.clone();
+        async move { mcp_config::handle_list(req, cfg).await }
+    });
+
+    // mcp_config.get
+    let config_mcp_get = config.clone();
+    server.handlers_mut().register("mcp_config.get", move |req| {
+        let cfg = config_mcp_get.clone();
+        async move { mcp_config::handle_get(req, cfg).await }
+    });
+
+    // mcp_config.create
+    let config_mcp_create = config.clone();
+    let event_bus_mcp_create = event_bus.clone();
+    server.handlers_mut().register("mcp_config.create", move |req| {
+        let cfg = config_mcp_create.clone();
+        let bus = event_bus_mcp_create.clone();
+        async move { mcp_config::handle_create(req, cfg, bus).await }
+    });
+
+    // mcp_config.update
+    let config_mcp_update = config.clone();
+    let event_bus_mcp_update = event_bus.clone();
+    server.handlers_mut().register("mcp_config.update", move |req| {
+        let cfg = config_mcp_update.clone();
+        let bus = event_bus_mcp_update.clone();
+        async move { mcp_config::handle_update(req, cfg, bus).await }
+    });
+
+    // mcp_config.delete
+    let config_mcp_delete = config.clone();
+    let event_bus_mcp_delete = event_bus.clone();
+    server.handlers_mut().register("mcp_config.delete", move |req| {
+        let cfg = config_mcp_delete.clone();
+        let bus = event_bus_mcp_delete.clone();
+        async move { mcp_config::handle_delete(req, cfg, bus).await }
+    });
+
+    // memory_config.get
+    let config_memory_get = config.clone();
+    server.handlers_mut().register("memory_config.get", move |req| {
+        let cfg = config_memory_get.clone();
+        async move { memory_config::handle_get(req, cfg).await }
+    });
+
+    // memory_config.update
+    let config_memory_update = config.clone();
+    let event_bus_memory_update = event_bus.clone();
+    server.handlers_mut().register("memory_config.update", move |req| {
+        let cfg = config_memory_update.clone();
+        let bus = event_bus_memory_update.clone();
+        async move { memory_config::handle_update(req, cfg, bus).await }
+    });
+
+    // security_config.get
+    server.handlers_mut().register("security_config.get", move |req| {
+        async move { security_config::handle_get(req).await }
+    });
+
+    // security_config.update
+    let event_bus_security_update = event_bus.clone();
+    server.handlers_mut().register("security_config.update", move |req| {
+        let bus = event_bus_security_update.clone();
+        async move { security_config::handle_update(req, bus).await }
+    });
+
+    // security_config.list_devices
+    let device_store_list = device_store.clone();
+    server.handlers_mut().register("security_config.list_devices", move |req| {
+        let store = device_store_list.clone();
+        async move { security_config::handle_list_devices(req, store).await }
+    });
+
+    // security_config.revoke_device
+    let device_store_revoke = device_store.clone();
+    let event_bus_security_revoke = event_bus.clone();
+    server.handlers_mut().register("security_config.revoke_device", move |req| {
+        let store = device_store_revoke.clone();
+        let bus = event_bus_security_revoke.clone();
+        async move { security_config::handle_revoke_device(req, store, bus).await }
     });
 }

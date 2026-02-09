@@ -5,6 +5,12 @@ use crate::views::home::Home;
 use crate::views::system_status::SystemStatus;
 use crate::views::agent_trace::AgentTrace;
 use crate::views::memory::Memory;
+use crate::views::settings::Settings;
+use crate::views::settings::ProvidersView;
+use crate::views::settings::RoutingRulesView;
+use crate::views::settings::McpView;
+use crate::views::settings::MemoryView;
+use crate::views::settings::SecurityView;
 use crate::components::sidebar::Sidebar;
 use crate::context::DashboardContext;
 
@@ -28,6 +34,12 @@ pub fn App() -> impl IntoView {
                             <Route path=path!("/status") view=SystemStatus />
                             <Route path=path!("/trace") view=AgentTrace />
                             <Route path=path!("/memory") view=Memory />
+                            <Route path=path!("/settings") view=Settings />
+                            <Route path=path!("/settings/providers") view=ProvidersView />
+                            <Route path=path!("/settings/routing") view=RoutingRulesView />
+                            <Route path=path!("/settings/mcp") view=McpView />
+                            <Route path=path!("/settings/memory") view=MemoryView />
+                            <Route path=path!("/settings/security") view=SecurityView />
                         </Routes>
                     </main>
                 </Router>
