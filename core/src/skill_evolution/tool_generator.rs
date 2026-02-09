@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::error::{AlephError, Result};
+use crate::exec::sandbox::parameter_binding::RequiredCapabilities;
 
 use super::types::SolidificationSuggestion;
 
@@ -43,6 +44,9 @@ pub struct GeneratedToolDefinition {
     pub self_tested: bool,
     /// Whether the tool requires confirmation before first use
     pub requires_confirmation: bool,
+    /// Sandbox capabilities required by this tool
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_capabilities: Option<RequiredCapabilities>,
     /// Generation metadata
     pub generated: GenerationMetadata,
 }
@@ -147,6 +151,7 @@ impl ToolGenerator {
             entrypoint: format!("entrypoint.{}", get_extension(&self.config.runtime)),
             self_tested: false,
             requires_confirmation: self.config.require_confirmation,
+            required_capabilities: None, // Will be added in Task 9
             generated: GenerationMetadata {
                 pattern_id: suggestion.pattern_id.clone(),
                 confidence: suggestion.confidence,
@@ -752,5 +757,33 @@ mod tests {
         assert!(preview.contains("python"));
         // Preview shows the original suggested name (with hyphen)
         assert!(preview.contains("text-processor"));
+    }
+
+    #[test]
+    fn test_tool_definition_with_capabilities() {
+        let def = GeneratedToolDefinition {
+            name: "test_tool".to_string(),
+            description: "Test tool".to_string(),
+            input_schema: serde_json::json!({}),
+            runtime: "python".to_string(),
+            entrypoint: "entrypoint.py".to_string(),
+            self_tested: false,
+            requires_confirmation: true,
+            required_capabilities: Some(crate::exec::sandbox::parameter_binding::RequiredCapabilities {
+                base_preset: "file_processor".to_string(),
+                description: "Test capabilities".to_string(),
+                overrides: Default::default(),
+                parameter_bindings: Default::default(),
+            }),
+            generated: GenerationMetadata {
+                pattern_id: "test".to_string(),
+                confidence: 0.9,
+                generated_at: 0,
+                generator_version: "1.0".to_string(),
+            },
+        };
+
+        let json = serde_json::to_string(&def).unwrap();
+        assert!(json.contains("required_capabilities"));
     }
 }
