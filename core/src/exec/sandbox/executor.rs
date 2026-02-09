@@ -7,10 +7,12 @@ use crate::error::{AlephError, Result};
 use crate::exec::sandbox::adapter::{ExecutionResult, SandboxAdapter, SandboxCommand};
 use crate::exec::sandbox::audit::{ExecutionStatus, SandboxAuditLog};
 use crate::exec::sandbox::capabilities::Capabilities;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Policy for handling sandbox unavailability
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum FallbackPolicy {
     /// Deny execution if sandbox is unavailable
     Deny,
@@ -44,15 +46,10 @@ impl SandboxManager {
         }
     }
 
-    /// Create a sandbox manager with custom fallback policy
-    pub fn with_fallback_policy(
-        adapter: Arc<dyn SandboxAdapter>,
-        fallback_policy: FallbackPolicy,
-    ) -> Self {
-        Self {
-            adapter,
-            fallback_policy,
-        }
+    /// Create with custom fallback policy
+    pub fn with_fallback_policy(mut self, policy: FallbackPolicy) -> Self {
+        self.fallback_policy = policy;
+        self
     }
 
     /// Check if sandbox is available on current platform
@@ -67,19 +64,19 @@ impl SandboxManager {
     pub async fn execute_sandboxed(
         &self,
         skill_id: &str,
-        command: &SandboxCommand,
-        capabilities: &Capabilities,
+        command: SandboxCommand,
+        capabilities: Capabilities,
     ) -> Result<(ExecutionResult, SandboxAuditLog)> {
         // Check if sandbox is available
         if !self.is_available() {
-            return self.handle_sandbox_unavailable(skill_id, command, capabilities).await;
+            return self.handle_sandbox_unavailable(skill_id).await;
         }
 
         // Generate sandbox profile
-        let profile = self.adapter.generate_profile(capabilities)?;
+        let profile = self.adapter.generate_profile(&capabilities)?;
 
         // Execute command in sandbox
-        let result = self.adapter.execute_sandboxed(command, &profile).await;
+        let result = self.adapter.execute_sandboxed(&command, &profile).await;
 
         // Create audit log
         let execution_status = match &result {
@@ -105,13 +102,13 @@ impl SandboxManager {
 
         let audit_log = SandboxAuditLog::new(
             skill_id.to_string(),
-            capabilities.clone(),
+            capabilities,
             execution_status,
             self.adapter.platform_name().to_string(),
         );
 
         // Cleanup profile (even if execution failed)
-        let _ = self.adapter.cleanup(&profile);
+        self.adapter.cleanup(&profile)?;
 
         // Return result and audit log
         result.map(|r| (r, audit_log))
@@ -120,9 +117,7 @@ impl SandboxManager {
     /// Handle sandbox unavailability based on fallback policy
     async fn handle_sandbox_unavailable(
         &self,
-        skill_id: &str,
-        _command: &SandboxCommand,
-        capabilities: &Capabilities,
+        _skill_id: &str,
     ) -> Result<(ExecutionResult, SandboxAuditLog)> {
         let reason = format!(
             "Sandbox not supported on platform: {}",
@@ -131,40 +126,16 @@ impl SandboxManager {
 
         match self.fallback_policy {
             FallbackPolicy::Deny => {
-                let _audit_log = SandboxAuditLog::new(
-                    skill_id.to_string(),
-                    capabilities.clone(),
-                    ExecutionStatus::Error {
-                        error: reason.clone(),
-                    },
-                    self.adapter.platform_name().to_string(),
-                );
                 Err(AlephError::SandboxUnavailable { reason })
             }
             FallbackPolicy::RequestApproval => {
                 // TODO: Implement approval workflow
-                let _audit_log = SandboxAuditLog::new(
-                    skill_id.to_string(),
-                    capabilities.clone(),
-                    ExecutionStatus::Error {
-                        error: "Approval workflow not implemented".to_string(),
-                    },
-                    self.adapter.platform_name().to_string(),
-                );
                 Err(AlephError::SandboxUnavailable {
                     reason: "Approval workflow not implemented".to_string(),
                 })
             }
             FallbackPolicy::WarnAndExecute => {
                 // TODO: Implement unsandboxed execution with warning
-                let _audit_log = SandboxAuditLog::new(
-                    skill_id.to_string(),
-                    capabilities.clone(),
-                    ExecutionStatus::Error {
-                        error: "Unsandboxed execution not implemented".to_string(),
-                    },
-                    self.adapter.platform_name().to_string(),
-                );
                 Err(AlephError::SandboxUnavailable {
                     reason: "Unsandboxed execution not implemented".to_string(),
                 })
@@ -177,6 +148,12 @@ impl SandboxManager {
 mod tests {
     use super::*;
     use crate::exec::sandbox::platforms::macos::MacOSSandbox;
+
+    #[test]
+    fn test_fallback_policy_default() {
+        let policy = FallbackPolicy::default();
+        assert!(matches!(policy, FallbackPolicy::Deny));
+    }
 
     #[tokio::test]
     async fn test_sandbox_manager_execution() {
@@ -196,7 +173,7 @@ mod tests {
 
         let caps = Capabilities::default();
         let (result, audit_log) = manager
-            .execute_sandboxed("test-skill", &command, &caps)
+            .execute_sandboxed("test-skill", command, caps)
             .await
             .unwrap();
 
