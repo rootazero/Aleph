@@ -1,12 +1,69 @@
 use leptos::prelude::*;
 use crate::models::{TraceNode, TraceNodeType};
 use crate::mock_data::generate_mock_trace_nodes;
+use crate::context::{DashboardState, GatewayEvent};
 
 #[component]
 pub fn AgentTrace() -> impl IntoView {
+    // Get dashboard state from context
+    let state = expect_context::<DashboardState>();
+
     // State
     let nodes = RwSignal::new(generate_mock_trace_nodes());
     let is_active = RwSignal::new(true);
+
+    // Subscribe to agent events when connected
+    Effect::new(move || {
+        if state.is_connected.get() {
+            let state = state.clone();
+            let nodes = nodes.clone();
+
+            // Subscribe to agent events
+            let _subscription_id = state.subscribe_events(move |event: GatewayEvent| {
+                // Only process if active
+                if !is_active.get() {
+                    return;
+                }
+
+                // Handle different event types
+                match event.topic.as_str() {
+                    "agent.started" => {
+                        web_sys::console::log_1(&format!("Agent started: {:?}", event.data).into());
+                        // Add trace node for agent start
+                    }
+                    "agent.completed" => {
+                        web_sys::console::log_1(&format!("Agent completed: {:?}", event.data).into());
+                        // Add trace node for agent completion
+                    }
+                    "stream.chunk" => {
+                        web_sys::console::log_1(&format!("Stream chunk: {:?}", event.data).into());
+                        // Add trace node for stream chunk
+                    }
+                    "stream.tool_start" => {
+                        web_sys::console::log_1(&format!("Tool start: {:?}", event.data).into());
+                        // Add trace node for tool start
+                    }
+                    "stream.tool_end" => {
+                        web_sys::console::log_1(&format!("Tool end: {:?}", event.data).into());
+                        // Add trace node for tool end
+                    }
+                    _ => {
+                        web_sys::console::log_1(&format!("Unknown event: {}", event.topic).into());
+                    }
+                }
+            });
+
+            // Subscribe to agent.* events on the Gateway
+            leptos::task::spawn_local(async move {
+                if let Err(e) = state.subscribe_topic("agent.*").await {
+                    web_sys::console::error_1(&format!("Failed to subscribe to agent events: {}", e).into());
+                }
+                if let Err(e) = state.subscribe_topic("stream.*").await {
+                    web_sys::console::error_1(&format!("Failed to subscribe to stream events: {}", e).into());
+                }
+            });
+        }
+    });
 
     view! {
         <div class="h-full flex flex-col">
@@ -22,14 +79,15 @@ pub fn AgentTrace() -> impl IntoView {
                         </h2>
                         <p class="text-slate-400">"Real-time observation of Agent's internal reasoning and actions."</p>
                     </div>
-                    
+
                     <div class="flex items-center gap-3">
-                        <button 
+                        <button
                             on:click=move |_| is_active.update(|v| *v = !*v)
                             class="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors border border-slate-700 hover:border-slate-600 shadow-sm"
+                            disabled=move || !state.is_connected.get()
                         >
                             {move || if is_active.get() {
-                                view! { 
+                                view! {
                                     <div class="flex items-center gap-2">
                                         <svg width="16" height="16" attr:class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                             <rect x="6" y="4" width="4" height="16" />
@@ -39,7 +97,7 @@ pub fn AgentTrace() -> impl IntoView {
                                     </div>
                                 }.into_any()
                             } else {
-                                view! { 
+                                view! {
                                     <div class="flex items-center gap-2">
                                         <svg width="16" height="16" attr:class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                             <polygon points="5 3 19 12 5 21 5 3" />
@@ -49,7 +107,7 @@ pub fn AgentTrace() -> impl IntoView {
                                 }.into_any()
                             }}
                         </button>
-                        <button 
+                        <button
                             on:click=move |_| nodes.set(Vec::new())
                             class="p-2 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-400/10 transition-all border border-transparent hover:border-red-400/20"
                         >
@@ -62,6 +120,29 @@ pub fn AgentTrace() -> impl IntoView {
                     </div>
                 </div>
             </header>
+
+            // Connection status warning
+            {move || {
+                if !state.is_connected.get() {
+                    view! {
+                        <div class="p-8">
+                            <div class="max-w-4xl mx-auto bg-amber-500/10 border border-amber-500/20 rounded-xl p-6 flex items-start gap-4">
+                                <svg width="24" height="24" attr:class="w-6 h-6 text-amber-500 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                                    <line x1="12" y1="9" x2="12" y2="13" />
+                                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                                </svg>
+                                <div>
+                                    <h3 class="text-amber-400 font-semibold mb-1">"Gateway Connection Required"</h3>
+                                    <p class="text-sm text-amber-300/80">"Please connect to the Aleph Gateway from the System Status page to receive live Agent trace events."</p>
+                                </div>
+                            </div>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! { <div></div> }.into_any()
+                }
+            }}
 
             // Timeline Content
             <div class="flex-1 overflow-y-auto p-8">
