@@ -12,7 +12,6 @@ import { GeneralSettings } from './tabs/GeneralSettings';
 import { ShortcutsSettings } from './tabs/ShortcutsSettings';
 import { BehaviorSettings } from './tabs/BehaviorSettings';
 import { GenerationSettings } from './tabs/GenerationSettings';
-import { GenerationProvidersSettings } from './tabs/GenerationProvidersSettings';
 import { PluginsSettings } from './tabs/PluginsSettings';
 import { SkillsSettings } from './tabs/SkillsSettings';
 import { AgentSettings } from './tabs/AgentSettings';
@@ -61,7 +60,7 @@ export function SettingsWindow() {
       case 'providers':
         return <MigratedToDashboard featureName="Providers" dashboardPath="/settings/providers" />;
       case 'generationProviders':
-        return <GenerationProvidersSettings />;
+        return <MigratedToDashboard featureName="Generation Providers" dashboardPath="/settings/generation-providers" />;
       case 'generation':
         return <GenerationSettings />;
       case 'memory':
