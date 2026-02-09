@@ -7,6 +7,7 @@ pub mod audit;
 pub mod capabilities;
 pub mod executor;
 pub mod platforms;
+pub mod presets;
 pub mod profile;
 
 #[cfg(test)]
