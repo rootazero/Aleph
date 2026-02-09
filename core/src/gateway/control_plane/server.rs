@@ -29,8 +29,8 @@ async fn serve_index() -> impl IntoResponse {
 
 /// Serve static assets
 async fn serve_static(AxumPath(path): AxumPath<String>) -> Response {
-    // If path is empty or just "/", serve index.html
-    if path.is_empty() || path == "/" {
+    // If path is empty, just "/", or ends with "/", serve index.html
+    if path.is_empty() || path == "/" || path.ends_with('/') {
         return serve_index().await.into_response();
     }
 
