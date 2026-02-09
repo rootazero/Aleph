@@ -151,7 +151,7 @@ impl ToolGenerator {
             entrypoint: format!("entrypoint.{}", get_extension(&self.config.runtime)),
             self_tested: false,
             requires_confirmation: self.config.require_confirmation,
-            required_capabilities: None, // Will be added in Task 9
+            required_capabilities: Some(Self::generate_required_capabilities(&suggestion)),
             generated: GenerationMetadata {
                 pattern_id: suggestion.pattern_id.clone(),
                 confidence: suggestion.confidence,
@@ -331,6 +331,21 @@ impl ToolGenerator {
     /// Get the output directory
     pub fn output_dir(&self) -> &Path {
         &self.config.output_dir
+    }
+
+    /// Generate required capabilities for a tool
+    fn generate_required_capabilities(suggestion: &SolidificationSuggestion) -> crate::exec::sandbox::parameter_binding::RequiredCapabilities {
+        use crate::exec::sandbox::parameter_binding::{RequiredCapabilities, CapabilityOverrides};
+        use crate::skill_evolution::sandbox_integration::infer_preset_from_purpose;
+
+        let base_preset = infer_preset_from_purpose(&suggestion.instructions_preview);
+
+        RequiredCapabilities {
+            base_preset,
+            description: format!("Capabilities for {}", suggestion.suggested_name),
+            overrides: CapabilityOverrides::default(),
+            parameter_bindings: Default::default(),
+        }
     }
 }
 
