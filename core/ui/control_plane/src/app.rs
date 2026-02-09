@@ -7,6 +7,7 @@ use crate::views::agent_trace::AgentTrace;
 use crate::views::memory::Memory;
 use crate::views::settings::Settings;
 use crate::views::settings::ProvidersView;
+use crate::views::settings::GenerationProvidersView;
 use crate::views::settings::RoutingRulesView;
 use crate::views::settings::McpView;
 use crate::views::settings::MemoryView;
@@ -36,6 +37,7 @@ pub fn App() -> impl IntoView {
                             <Route path=path!("/memory") view=Memory />
                             <Route path=path!("/settings") view=Settings />
                             <Route path=path!("/settings/providers") view=ProvidersView />
+                            <Route path=path!("/settings/generation-providers") view=GenerationProvidersView />
                             <Route path=path!("/settings/routing") view=RoutingRulesView />
                             <Route path=path!("/settings/mcp") view=McpView />
                             <Route path=path!("/settings/memory") view=MemoryView />

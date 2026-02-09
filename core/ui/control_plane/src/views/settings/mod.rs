@@ -3,12 +3,14 @@ pub mod routing_rules;
 pub mod mcp;
 pub mod memory;
 pub mod security;
+pub mod generation_providers;
 
 pub use providers::ProvidersView;
 pub use routing_rules::RoutingRulesView;
 pub use mcp::McpView;
 pub use memory::MemoryView;
 pub use security::SecurityView;
+pub use generation_providers::GenerationProvidersView;
 
 // Re-export Settings view
 use leptos::prelude::*;
