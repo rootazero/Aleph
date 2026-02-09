@@ -214,7 +214,8 @@ Thinker Decision (tool_use)
 | **builtin_tools** | `core/src/builtin_tools/` | Built-in tool implementations |
 | **memory** | `core/src/memory/` | Facts DB, hybrid retrieval |
 | **extension** | `core/src/extension/` | Plugin system (WASM, Node.js) |
-| **exec** | `core/src/exec/` | Shell execution, approval system |
+| **exec** | `core/src/exec/` | Shell execution, approval system, OS-native sandboxing |
+| **skill_evolution** | `core/src/skill_evolution/` | Dynamic skill generation, sandboxed execution |
 | **mcp** | `core/src/mcp/` | MCP client implementation |
 | **routing** | `core/src/routing/` | Session key resolution |
 | **config** | `core/src/config/` | Configuration management |
@@ -642,3 +643,4 @@ let result2 = executor.execute(&action2, &identity).await;
 - [Memory System](MEMORY_SYSTEM.md) - RAG and retrieval
 - [Extension System](EXTENSION_SYSTEM.md) - Plugin architecture
 - [Security](SECURITY.md) - Exec approval and permissions
+- [Skill Sandboxing](SKILL_SANDBOXING.md) - OS-native sandboxing for evolved skills

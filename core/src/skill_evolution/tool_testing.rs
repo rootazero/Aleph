@@ -615,6 +615,7 @@ mod tests {
             entrypoint: "entrypoint.py".to_string(),
             self_tested: true,
             requires_confirmation: false,
+            required_capabilities: None,
             generated: super::super::tool_generator::GenerationMetadata {
                 pattern_id: "test".to_string(),
                 confidence: 0.9,
