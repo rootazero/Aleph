@@ -1093,6 +1093,7 @@ fn register_config_handlers(
     use alephcore::gateway::handlers::mcp_config;
     use alephcore::gateway::handlers::memory_config;
     use alephcore::gateway::handlers::security_config;
+    use alephcore::gateway::handlers::generation_providers;
 
     // config.get
     let config_get = config.clone();
@@ -1297,6 +1298,62 @@ fn register_config_handlers(
     server.handlers_mut().register("security_config.revoke_device", move |req| {
         let store = device_store_revoke.clone();
         let bus = event_bus_security_revoke.clone();
-        async move { security_config::handle_revoke_device(req, store, bus).await }
+        async move { security_config::handle_revoke_device(req, store, bus).await }\n    });
+
+    // generation_providers.list
+    let config_gen_list = config.clone();
+    server.handlers_mut().register("generation_providers.list", move |req| {
+        let cfg = config_gen_list.clone();
+        async move { generation_providers::handle_list(req, cfg).await }
+    });
+
+    // generation_providers.get
+    let config_gen_get = config.clone();
+    server.handlers_mut().register("generation_providers.get", move |req| {
+        let cfg = config_gen_get.clone();
+        async move { generation_providers::handle_get(req, cfg).await }
+    });
+
+    // generation_providers.create
+    let config_gen_create = config.clone();
+    let event_bus_gen_create = event_bus.clone();
+    server.handlers_mut().register("generation_providers.create", move |req| {
+        let cfg = config_gen_create.clone();
+        let bus = event_bus_gen_create.clone();
+        async move { generation_providers::handle_create(req, cfg, bus).await }
+    });
+
+    // generation_providers.update
+    let config_gen_update = config.clone();
+    let event_bus_gen_update = event_bus.clone();
+    server.handlers_mut().register("generation_providers.update", move |req| {
+        let cfg = config_gen_update.clone();
+        let bus = event_bus_gen_update.clone();
+        async move { generation_providers::handle_update(req, cfg, bus).await }
+    });
+
+    // generation_providers.delete
+    let config_gen_delete = config.clone();
+    let event_bus_gen_delete = event_bus.clone();
+    server.handlers_mut().register("generation_providers.delete", move |req| {
+        let cfg = config_gen_delete.clone();
+        let bus = event_bus_gen_delete.clone();
+        async move { generation_providers::handle_delete(req, cfg, bus).await }
+    });
+
+    // generation_providers.setDefault
+    let config_gen_set_default = config.clone();
+    let event_bus_gen_set_default = event_bus.clone();
+    server.handlers_mut().register("generation_providers.setDefault", move |req| {
+        let cfg = config_gen_set_default.clone();
+        let bus = event_bus_gen_set_default.clone();
+        async move { generation_providers::handle_set_default(req, cfg, bus).await }
+    });
+
+    // generation_providers.test
+    let config_gen_test = config.clone();
+    server.handlers_mut().register("generation_providers.test", move |req| {
+        let cfg = config_gen_test.clone();
+        async move { generation_providers::handle_test_connection(req, cfg).await }
     });
 }
