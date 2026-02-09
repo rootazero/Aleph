@@ -1,185 +1,157 @@
-//! Agent Trace view
-//!
-//! Real-time visualization of Agent's thinking process with streaming updates.
-
-use leptos::*;
-use leptos::html::Div;
-use wasm_bindgen::JsCast;
-use crate::models::{TraceNode, TraceStatus};
-use crate::mock_data::{generate_mock_trace_nodes, generate_next_trace_node};
+use leptos::prelude::*;
+use crate::models::{TraceNode, TraceNodeType};
+use crate::mock_data::generate_mock_trace_nodes;
 
 #[component]
 pub fn AgentTrace() -> impl IntoView {
-    // Trace nodes signal (data bus for future integration)
-    let (trace_nodes, set_trace_nodes) = create_signal(generate_mock_trace_nodes());
+    // State
+    let nodes = RwSignal::new(generate_mock_trace_nodes());
+    let is_active = RwSignal::new(true);
 
-    // Auto-scroll reference
-    let scroll_container_ref = create_node_ref::<Div>();
+    view! {
+        <div class="h-full flex flex-col">
+            // Header
+            <header class="p-8 border-b border-slate-800 bg-slate-900/20 backdrop-blur-md sticky top-0 z-10">
+                <div class="max-w-7xl mx-auto flex items-center justify-between">
+                    <div>
+                        <h2 class="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3 text-slate-100">
+                            <svg width="32" height="32" attr:class="w-8 h-8 text-indigo-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                            </svg>
+                            "Live Agent Trace"
+                        </h2>
+                        <p class="text-slate-400">"Real-time observation of Agent's internal reasoning and actions."</p>
+                    </div>
+                    
+                    <div class="flex items-center gap-3">
+                        <button 
+                            on:click=move |_| is_active.update(|v| *v = !*v)
+                            class="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors border border-slate-700 hover:border-slate-600 shadow-sm"
+                        >
+                            {move || if is_active.get() {
+                                view! { 
+                                    <div class="flex items-center gap-2">
+                                        <svg width="16" height="16" attr:class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <rect x="6" y="4" width="4" height="16" />
+                                            <rect x="14" y="4" width="4" height="16" />
+                                        </svg>
+                                        "Pause"
+                                    </div>
+                                }.into_any()
+                            } else {
+                                view! { 
+                                    <div class="flex items-center gap-2">
+                                        <svg width="16" height="16" attr:class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <polygon points="5 3 19 12 5 21 5 3" />
+                                        </svg>
+                                        "Resume"
+                                    </div>
+                                }.into_any()
+                            }}
+                        </button>
+                        <button 
+                            on:click=move |_| nodes.set(Vec::new())
+                            class="p-2 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-400/10 transition-all border border-transparent hover:border-red-400/20"
+                        >
+                            <svg width="20" height="20" attr:class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M3 6h18" />
+                                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </header>
 
-    // Counter for generating new nodes
-    let (node_counter, set_node_counter) = create_signal(3usize);
+            // Timeline Content
+            <div class="flex-1 overflow-y-auto p-8">
+                <div class="max-w-4xl mx-auto">
+                    <div class="relative border-l-2 border-slate-800 ml-4 pl-10 space-y-12 pb-24">
+                        <For
+                            each=move || nodes.get()
+                            key=|node| node.id.clone()
+                            children=move |node| view! {
+                                <TraceNodeItem node=node />
+                            }
+                        />
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+}
 
-    // Streaming simulation: add new trace node every 800ms
-    let _interval_handle = set_interval(
-        move || {
-            let current_count = node_counter.get();
-            let new_node = generate_next_trace_node(current_count);
-
-            set_trace_nodes.update(|nodes| {
-                nodes.push(new_node);
-            });
-
-            set_node_counter.set(current_count + 1);
-
-            // Auto-scroll to bottom
-            if let Some(container) = scroll_container_ref.get() {
-                let element = container.unchecked_ref::<web_sys::HtmlElement>();
-                element.set_scroll_top(element.scroll_height());
-            }
-        },
-        std::time::Duration::from_millis(800),
-    );
-
-    // Clear trace
-    let on_clear = move |_| {
-        set_trace_nodes.set(Vec::new());
-        set_node_counter.set(0);
+#[component]
+fn TraceNodeItem(node: TraceNode) -> impl IntoView {
+    let icon_content = match node.node_type {
+        TraceNodeType::Thinking => view! {
+            <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.08z" />
+            <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.08z" />
+        }.into_any(),
+        TraceNodeType::ToolCall => view! {
+            <polyline points="4 17 10 11 4 5" />
+            <line x1="12" y1="19" x2="20" y2="19" />
+        }.into_any(),
+        TraceNodeType::ToolResult => view! {
+            <polyline points="20 6 9 17 4 12" />
+        }.into_any(),
+        _ => view! {
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+        }.into_any(),
     };
 
-    // Pause/Resume streaming
-    let (is_paused, set_is_paused) = create_signal(false);
+    let accent_color = match node.node_type {
+        TraceNodeType::Thinking => "text-blue-400 bg-blue-400/10 border-blue-400/20",
+        TraceNodeType::ToolCall => "text-amber-400 bg-amber-400/10 border-amber-400/20",
+        TraceNodeType::ToolResult => "text-emerald-400 bg-emerald-400/10 border-emerald-400/20",
+        _ => "text-slate-400 bg-slate-800 border-slate-700",
+    };
 
     view! {
-        <div class="space-y-6">
-            <div class="card">
+        <div class="relative group">
+            // Timeline Dot
+            <div class=format!("absolute -left-[51px] top-2 w-10 h-10 rounded-full border-2 bg-slate-950 flex items-center justify-center z-10 group-hover:scale-110 transition-transform shadow-glass {}", accent_color)>
+                <svg width="20" height="20" attr:class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    {icon_content}
+                </svg>
+            </div>
+
+            // Card
+            <div class="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm group-hover:border-slate-700 transition-all shadow-xl shadow-black/20">
                 <div class="flex items-center justify-between mb-4">
-                    <h2 class="card-header mb-0">"Agent Trace (Live)"</h2>
-                    <div class="flex space-x-2">
-                        <button
-                            class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium"
-                            on:click=move |_| set_is_paused.update(|p| *p = !*p)
-                        >
-                            {move || if is_paused.get() { "▶️ Resume" } else { "⏸️ Pause" }}
-                        </button>
-                        <button
-                            class="px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-sm font-medium"
-                            on:click=on_clear
-                        >
-                            "🗑️ Clear"
-                        </button>
+                    <div class="flex items-center gap-3">
+                        <span class=format!("text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded border {}", accent_color)>
+                            {format!("{:?}", node.node_type)}
+                        </span>
+                        <span class="text-[10px] text-slate-500 font-mono">"0.4s duration"</span>
                     </div>
+                    <span class="text-[10px] text-slate-500 font-mono">"14:20:45"</span>
                 </div>
 
-                <div class="bg-blue-900/20 border border-blue-500 rounded p-3 text-sm text-blue-300 mb-4">
-                    <strong>"Live Simulation: "</strong> "New trace nodes are being added every 800ms to simulate real-time Agent thinking process."
+                <div class="text-slate-200 leading-relaxed font-sans text-sm">
+                    {node.content}
                 </div>
 
-                // Trace timeline container with auto-scroll
-                <div
-                    node_ref=scroll_container_ref
-                    class="bg-gray-900 rounded-lg p-4 max-h-[600px] overflow-y-auto space-y-3"
-                >
-                    <For
-                        each=move || trace_nodes.get()
-                        key=|node| node.id.clone()
-                        children=move |node: TraceNode| {
-                            view! {
-                                <TraceNodeComponent node=node />
-                            }
-                        }
-                    />
-
-                    {move || {
-                        if trace_nodes.get().is_empty() {
-                            view! {
-                                <div class="text-center text-gray-500 py-8">
-                                    "No trace data yet. Streaming will start automatically..."
-                                </div>
-                            }.into_view()
-                        } else {
-                            view! { <div></div> }.into_view()
-                        }
-                    }}
-                </div>
-
-                // Statistics
-                <div class="mt-4 grid grid-cols-3 gap-4 text-sm">
-                    <div class="bg-gray-700 rounded p-3">
-                        <div class="text-gray-400">"Total Nodes"</div>
-                        <div class="text-2xl font-bold text-white">
-                            {move || trace_nodes.get().len()}
-                        </div>
-                    </div>
-                    <div class="bg-gray-700 rounded p-3">
-                        <div class="text-gray-400">"In Progress"</div>
-                        <div class="text-2xl font-bold text-amber-400">
-                            {move || trace_nodes.get().iter().filter(|n| n.status == TraceStatus::InProgress).count()}
-                        </div>
-                    </div>
-                    <div class="bg-gray-700 rounded p-3">
-                        <div class="text-gray-400">"Completed"</div>
-                        <div class="text-2xl font-bold text-green-400">
-                            {move || trace_nodes.get().iter().filter(|n| n.status == TraceStatus::Success).count()}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    }
-}
-
-/// Individual trace node component
-#[component]
-fn TraceNodeComponent(node: TraceNode) -> impl IntoView {
-    let type_class = node.type_class();
-    let status_class = node.status_class();
-    let icon = node.type_icon();
-
-    // Format timestamp
-    let timestamp = format_timestamp(node.timestamp);
-
-    // Format duration
-    let duration_text = node.duration_ms
-        .map(|d| format!("{}ms", d))
-        .unwrap_or_else(|| "...".to_string());
-
-    view! {
-        <div class=format!("border-l-4 {} {} rounded-r-lg p-4 transition-all duration-300", type_class, status_class)>
-            <div class="flex items-start justify-between">
-                <div class="flex items-start space-x-3 flex-1">
-                    <span class="text-2xl">{icon}</span>
-                    <div class="flex-1">
-                        <div class="flex items-center space-x-2 mb-1">
-                            <span class="text-xs font-mono text-gray-400">{timestamp}</span>
-                            <span class="text-xs px-2 py-0.5 bg-gray-700 rounded">{format!("{:?}", node.node_type)}</span>
-                            {move || {
-                                if node.status == TraceStatus::InProgress {
-                                    view! {
-                                        <span class="text-xs text-amber-400 animate-pulse">"● In Progress"</span>
-                                    }.into_view()
-                                } else {
-                                    view! { <span></span> }.into_view()
+                {if !node.children.is_empty() {
+                    let children = node.children.clone();
+                    view! {
+                        <div class="mt-4 pt-4 border-t border-slate-800/50 space-y-3">
+                            <For
+                                each=move || children.clone()
+                                key=|child| child.id.clone()
+                                children=move |child| view! {
+                                    <div class="flex items-start gap-3 text-sm text-slate-400 pl-2 border-l border-slate-800">
+                                        <div class="w-1.5 h-1.5 rounded-full bg-slate-700 mt-1.5"></div>
+                                        <div class="flex-1 text-xs">{child.content}</div>
+                                    </div>
                                 }
-                            }}
+                            />
                         </div>
-                        <div class="text-white">{node.content.clone()}</div>
-                    </div>
-                </div>
-                <div class="text-xs text-gray-400 ml-4">
-                    {duration_text}
-                </div>
+                    }.into_any()
+                } else {
+                    view! {}.into_any()
+                }}
             </div>
         </div>
     }
-}
-
-/// Format timestamp to HH:MM:SS
-fn format_timestamp(timestamp: f64) -> String {
-    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(timestamp));
-    format!(
-        "{:02}:{:02}:{:02}",
-        date.get_hours(),
-        date.get_minutes(),
-        date.get_seconds()
-    )
 }
