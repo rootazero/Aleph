@@ -41,10 +41,10 @@ native = [...]
 shared_ui_logic/
 ├── src/
 │   ├── connection/      # 连接层（core feature）
-│   │   ├── connector.rs # AlephConnector trait
-│   │   ├── reconnect.rs # 重连策略
-│   │   ├── wasm.rs      # WASM 实现（TODO）
-│   │   └── native.rs    # 原生实现（TODO）
+│   │   ├── connector.rs # AlephConnector trait ✅
+│   │   ├── reconnect.rs # 重连策略 ✅
+│   │   ├── wasm.rs      # WASM 实现 ✅
+│   │   └── native.rs    # 原生实现 ✅
 │   ├── protocol/        # 协议层（core feature）
 │   │   ├── rpc.rs       # JSON-RPC 封装 ✅
 │   │   ├── streaming.rs # 流式数据 ✅
@@ -77,6 +77,7 @@ shared_ui_logic/
   - [x] AlephConnector trait 定义
   - [x] 重连策略实现（指数退避）
   - [x] 原生连接器实现（tokio-tungstenite）
+  - [x] WASM 连接器实现（web-sys WebSocket）
 - [x] 协议层（Protocol Layer）
   - [x] RPC 客户端（类型安全的 JSON-RPC 2.0）
   - [x] 流式数据处理（StreamHandler, StreamBuffer）
@@ -97,8 +98,6 @@ shared_ui_logic/
 
 ### 📋 待实施
 
-- [ ] 连接层平台实现
-  - [ ] WASM 实现（`connection/wasm.rs`）
 - [ ] 状态层（State Layer - 需要 Leptos 集成）
   - [ ] Agent 状态机
   - [ ] UI 状态管理
