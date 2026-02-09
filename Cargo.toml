@@ -6,6 +6,7 @@ resolver = "2"
 members = [
     "core",
     "shared/protocol",
+    "shared_ui_logic",
     "clients/cli",
     "clients/shared",
     "clients/desktop/src-tauri",
