@@ -42,6 +42,8 @@ pub mod generator;
 pub mod git;
 pub mod pipeline;
 pub mod safety;
+pub mod sandbox_integration;
+pub mod sandboxed_executor;
 pub mod tool_generator;
 pub mod tool_testing;
 pub mod tracker;
@@ -67,3 +69,6 @@ pub use types::{
     CommitResult, ExecutionStatus, GenerationResult, SkillExecution, SkillMetrics,
     SolidificationConfig, SolidificationSuggestion,
 };
+
+#[cfg(test)]
+mod integration_tests;
