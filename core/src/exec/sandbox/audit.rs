@@ -81,6 +81,11 @@ impl SandboxAuditLog {
     pub fn add_violation(&mut self, violation: SandboxViolation) {
         self.violations.push(violation);
     }
+
+    /// Check if execution was successful
+    pub fn is_success(&self) -> bool {
+        matches!(self.execution_result, ExecutionStatus::Success { .. })
+    }
 }
 
 #[cfg(test)]
