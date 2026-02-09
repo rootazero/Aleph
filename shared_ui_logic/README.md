@@ -75,14 +75,18 @@ shared_ui_logic/
 - [x] Feature Flags 配置
 - [x] 连接层 trait 定义（`AlephConnector`）
 - [x] 重连策略实现（指数退避）
-- [x] 单元测试（3 个测试全部通过）
+- [x] 原生连接器实现（`connection/native.rs`）
+  - [x] tokio-tungstenite WebSocket 连接
+  - [x] 后台任务管理 stream
+  - [x] 双向通道通信
+  - [x] JSON 自动序列化/反序列化
+- [x] 单元测试（5 个测试全部通过）
 - [x] 文档测试（2 个测试通过）
 
 ### 🚧 进行中
 
 - [ ] 连接层平台实现
   - [ ] WASM 实现（`connection/wasm.rs`）
-  - [ ] 原生实现（`connection/native.rs`）
 
 ### 📋 待实施
 
