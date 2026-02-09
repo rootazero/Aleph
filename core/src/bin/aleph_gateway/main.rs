@@ -46,7 +46,7 @@ mod commands;
 mod server_init;
 
 use clap::Parser;
-use cli::{Args, Command, PairingAction, DevicesAction, PluginsAction};
+use cli::{Args, Command, PairingAction, DevicesAction, PluginsAction, AuditAction};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -101,8 +101,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Cron { action }) => {
             return commands::handle_cron_command(action).await;
         }
+        #[cfg(feature = "gateway")]
+        Some(Command::Audit { action }) => {
+            return match action {
+                AuditAction::Tools => commands::handle_audit_tools().await,
+                AuditAction::Tool { name, limit } => commands::handle_audit_tool(&name, limit).await,
+                AuditAction::Escalations { limit } => commands::handle_audit_escalations(limit).await,
+            };
+        }
         #[cfg(not(feature = "gateway"))]
-        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) | Some(Command::Plugins { .. }) | Some(Command::Gateway { .. }) | Some(Command::Config { .. }) | Some(Command::Channels { .. }) | Some(Command::Cron { .. }) => {
+        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) | Some(Command::Plugins { .. }) | Some(Command::Gateway { .. }) | Some(Command::Config { .. }) | Some(Command::Channels { .. }) | Some(Command::Cron { .. }) | Some(Command::Audit { .. }) => {
             eprintln!("Error: Gateway feature is not enabled.");
             std::process::exit(1);
         }
