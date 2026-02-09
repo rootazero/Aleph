@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use shared_ui_logic::connection::wasm::WasmConnector;
 use shared_ui_logic::connection::connector::AlephConnector;
+use gloo_timers::future::TimeoutFuture;
 
 #[derive(Clone, Copy)]
 pub struct DashboardState {
@@ -8,6 +9,7 @@ pub struct DashboardState {
     pub reconnect_count: RwSignal<u32>,
     pub gateway_url: RwSignal<String>,
     pub connection_error: RwSignal<Option<String>>,
+    pub is_reconnecting: RwSignal<bool>,
 }
 
 impl DashboardState {
@@ -17,6 +19,7 @@ impl DashboardState {
             reconnect_count: RwSignal::new(0),
             gateway_url: RwSignal::new("ws://127.0.0.1:18789".to_string()),
             connection_error: RwSignal::new(None),
+            is_reconnecting: RwSignal::new(false),
         }
     }
 
@@ -30,6 +33,7 @@ impl DashboardState {
                 self.is_connected.set(true);
                 self.connection_error.set(None);
                 self.reconnect_count.set(0);
+                self.is_reconnecting.set(false);
                 Ok(())
             }
             Err(e) => {
@@ -47,7 +51,47 @@ impl DashboardState {
         // In a real implementation, we'd need to store the connector
         self.is_connected.set(false);
         self.connection_error.set(None);
+        self.is_reconnecting.set(false);
         Ok(())
+    }
+
+    /// Attempt to reconnect with exponential backoff
+    pub async fn reconnect(&self) -> Result<(), String> {
+        let max_attempts = 5;
+
+        self.is_reconnecting.set(true);
+
+        for attempt in 0..max_attempts {
+            self.reconnect_count.set(attempt);
+
+            // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+            let delay_ms = (1000 * 2_u32.pow(attempt)).min(16000);
+
+            web_sys::console::log_1(&format!("Reconnecting in {}ms (attempt {})", delay_ms, attempt + 1).into());
+
+            TimeoutFuture::new(delay_ms).await;
+
+            match self.connect().await {
+                Ok(()) => {
+                    web_sys::console::log_1(&"Reconnection successful".into());
+                    self.is_reconnecting.set(false);
+                    return Ok(());
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Reconnection attempt {} failed: {}", attempt + 1, e).into());
+
+                    if attempt + 1 >= max_attempts {
+                        let error_msg = format!("Failed to reconnect after {} attempts", max_attempts);
+                        self.connection_error.set(Some(error_msg.clone()));
+                        self.is_reconnecting.set(false);
+                        return Err(error_msg);
+                    }
+                }
+            }
+        }
+
+        self.is_reconnecting.set(false);
+        Err("Reconnection failed".to_string())
     }
 }
 
