@@ -69,3 +69,6 @@ pub use types::{
     CommitResult, ExecutionStatus, GenerationResult, SkillExecution, SkillMetrics,
     SolidificationConfig, SolidificationSuggestion,
 };
+
+#[cfg(test)]
+mod integration_tests;
