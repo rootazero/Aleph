@@ -411,6 +411,27 @@ pub struct ControlPlaneAssets;
 - ✅ 零运行时依赖：不需要额外的静态文件目录
 - ✅ 自动跳过构建：如果 `dist/` 存在，`build.rs` 会跳过 UI 构建
 
+#### WASM 初始化机制
+
+**重要**: Control Plane 使用库目标（lib）而非二进制目标（bin）构建 WASM。初始化代码在 `lib.rs` 中：
+
+```rust
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen(start)]
+pub fn main() {
+    use leptos::prelude::*;
+    console_error_panic_hook::set_once();
+    mount_to_body(app::App);
+}
+```
+
+**说明**：
+- `#[wasm_bindgen(start)]` 使函数在 WASM 模块加载时自动执行
+- 无需在 HTML 中手动调用初始化函数
+- `main.rs` 不会被编译（因为没有二进制目标）
+- 所有初始化逻辑必须在 `lib.rs` 中
+
 ### 发布流程
 
 #### 1. 准备发布
