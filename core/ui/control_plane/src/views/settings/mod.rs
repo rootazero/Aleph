@@ -9,6 +9,7 @@ pub mod general;
 pub mod shortcuts;
 pub mod behavior;
 pub mod generation;
+pub mod search;
 
 pub use providers::ProvidersView;
 pub use routing_rules::RoutingRulesView;
@@ -21,6 +22,7 @@ pub use general::GeneralView;
 pub use shortcuts::ShortcutsView;
 pub use behavior::BehaviorView;
 pub use generation::GenerationView;
+pub use search::SearchView;
 
 // Re-export Settings view
 use leptos::prelude::*;
@@ -87,6 +89,16 @@ pub fn Settings() -> impl IntoView {
                         <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
                         <circle cx="8.5" cy="8.5" r="1.5" />
                         <polyline points="21 15 16 10 5 21" />
+                    }
+                />
+
+                <SettingsCard
+                    href="/settings/search"
+                    title="Search"
+                    description="Configure search functionality and PII scrubbing"
+                    icon=view! {
+                        <circle cx="11" cy="11" r="8" />
+                        <path d="m21 21-4.35-4.35" />
                     }
                 />
 
