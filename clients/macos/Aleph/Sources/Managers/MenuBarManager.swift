@@ -27,8 +27,8 @@ final class MenuBarManager {
     /// The status item in the menu bar
     private(set) var statusItem: NSStatusItem?
 
-    /// Settings menu item (for enable/disable control)
-    private(set) var settingsMenuItem: NSMenuItem?
+    /// Settings menu item (for enable/disable control) - REMOVED
+    // Settings functionality has been moved to Control Panel Dashboard
 
     /// Default provider menu item
     private(set) var defaultProviderMenuItem: NSMenuItem?
@@ -45,14 +45,13 @@ final class MenuBarManager {
     ///   - target: Target for menu item actions
     ///   - showAboutAction: Selector for "About" action
     ///   - showConversationAction: Selector for "Show Conversation" action
-    ///   - showSettingsAction: Selector for "Settings" action
+    ///   - showSettingsAction: Selector for "Settings" action - REMOVED
     ///   - quitAction: Selector for "Quit" action
     ///   - debugActions: Optional debug action selectors
     func setup(
         target: AnyObject,
         showAboutAction: Selector,
         showConversationAction: Selector,
-        showSettingsAction: Selector,
         quitAction: Selector,
         debugActions: [(title: String, action: Selector, keyEquivalent: String)]? = nil
     ) {
@@ -106,16 +105,7 @@ final class MenuBarManager {
 
         menu.addItem(NSMenuItem.separator())
 
-        // Create and store Settings menu item for enable/disable control
-        settingsMenuItem = NSMenuItem(
-            title: L("menu.settings"),
-            action: showSettingsAction,
-            keyEquivalent: ","
-        )
-        settingsMenuItem?.target = target
-        if let settingsItem = settingsMenuItem {
-            menu.addItem(settingsItem)
-        }
+        // Settings menu item removed - all configuration now in Control Panel Dashboard
 
         // Debug menu items (only in DEBUG builds)
         #if DEBUG
@@ -188,12 +178,7 @@ final class MenuBarManager {
 
     // MARK: - Menu Item Management
 
-    /// Enable or disable the settings menu item
-    ///
-    /// - Parameter enabled: Whether to enable the item
-    func setSettingsEnabled(_ enabled: Bool) {
-        settingsMenuItem?.isEnabled = enabled
-    }
+    // setSettingsEnabled method removed - Settings menu no longer exists
 
     /// Rebuild the providers submenu
     ///
