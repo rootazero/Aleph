@@ -85,7 +85,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     // Initialize tracing
-    let filter = format!("aleph_gateway={},alephcore::gateway={}", args.log_level, args.log_level);
+    let filter = format!("aleph_server={},alephcore::gateway={}", args.log_level, args.log_level);
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer()
             .with_target(true)

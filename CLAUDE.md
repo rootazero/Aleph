@@ -259,8 +259,8 @@ aleph/
 # Rust Core
 cd core && cargo build && cargo test
 
-# 启动 Gateway
-cargo run -p alephcore --features gateway
+# 启动 Server
+cargo run --bin aleph-server
 
 # macOS App
 cd clients/macos && xcodegen generate && open Aleph.xcodeproj
