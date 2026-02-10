@@ -21,7 +21,8 @@ use crate::views::settings::SearchView;
 use crate::views::settings::PluginsView;
 use crate::views::settings::SkillsView;
 use crate::views::settings::PoliciesView;
-use crate::components::sidebar::Sidebar;
+// TODO: Restore after sidebar refactoring is complete
+// use crate::components::sidebar::Sidebar;
 use crate::context::DashboardContext;
 
 #[component]
@@ -30,8 +31,8 @@ pub fn App() -> impl IntoView {
         <DashboardContext>
             <div class="flex h-screen bg-slate-950 text-slate-50 font-sans selection:bg-indigo-500/30">
                 <Router>
-                    // Left Sidebar
-                    <Sidebar />
+                    // Left Sidebar - TODO: Restore after sidebar refactoring
+                    // <Sidebar />
 
                     // Main Content
                     <main class="flex-1 overflow-y-auto relative">
