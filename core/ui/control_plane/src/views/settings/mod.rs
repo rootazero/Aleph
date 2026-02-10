@@ -8,6 +8,7 @@ pub mod agent;
 pub mod general;
 pub mod shortcuts;
 pub mod behavior;
+pub mod generation;
 
 pub use providers::ProvidersView;
 pub use routing_rules::RoutingRulesView;
@@ -19,6 +20,7 @@ pub use agent::AgentView;
 pub use general::GeneralView;
 pub use shortcuts::ShortcutsView;
 pub use behavior::BehaviorView;
+pub use generation::GenerationView;
 
 // Re-export Settings view
 use leptos::prelude::*;
@@ -74,6 +76,17 @@ pub fn Settings() -> impl IntoView {
                     icon=view! {
                         <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z" />
                         <path d="M12 6v6l4 2" />
+                    }
+                />
+
+                <SettingsCard
+                    href="/settings/generation"
+                    title="Generation"
+                    description="Configure media generation settings and thresholds"
+                    icon=view! {
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                        <circle cx="8.5" cy="8.5" r="1.5" />
+                        <polyline points="21 15 16 10 5 21" />
                     }
                 />
 
