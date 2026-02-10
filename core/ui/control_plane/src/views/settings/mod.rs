@@ -6,6 +6,7 @@ pub mod security;
 pub mod generation_providers;
 pub mod agent;
 pub mod general;
+pub mod shortcuts;
 
 pub use providers::ProvidersView;
 pub use routing_rules::RoutingRulesView;
@@ -15,6 +16,7 @@ pub use security::SecurityView;
 pub use generation_providers::GenerationProvidersView;
 pub use agent::AgentView;
 pub use general::GeneralView;
+pub use shortcuts::ShortcutsView;
 
 // Re-export Settings view
 use leptos::prelude::*;
@@ -42,6 +44,24 @@ pub fn Settings() -> impl IntoView {
                     icon=view! {
                         <circle cx="12" cy="12" r="3" />
                         <path d="M12 1v6m0 6v6M5.64 5.64l4.24 4.24m4.24 4.24l4.24 4.24M1 12h6m6 0h6M5.64 18.36l4.24-4.24m4.24-4.24l4.24-4.24" />
+                    }
+                />
+
+                <SettingsCard
+                    href="/settings/shortcuts"
+                    title="Shortcuts"
+                    description="Configure keyboard shortcuts for quick access"
+                    icon=view! {
+                        <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
+                        <rect x="9" y="9" width="6" height="6" />
+                        <line x1="9" y1="1" x2="9" y2="4" />
+                        <line x1="15" y1="1" x2="15" y2="4" />
+                        <line x1="9" y1="20" x2="9" y2="23" />
+                        <line x1="15" y1="20" x2="15" y2="23" />
+                        <line x1="20" y1="9" x2="23" y2="9" />
+                        <line x1="20" y1="14" x2="23" y2="14" />
+                        <line x1="1" y1="9" x2="4" y2="9" />
+                        <line x1="1" y1="14" x2="4" y2="14" />
                     }
                 />
 

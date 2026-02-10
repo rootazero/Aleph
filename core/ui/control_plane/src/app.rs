@@ -14,6 +14,7 @@ use crate::views::settings::MemoryView;
 use crate::views::settings::SecurityView;
 use crate::views::settings::AgentView;
 use crate::views::settings::GeneralView;
+use crate::views::settings::ShortcutsView;
 use crate::components::sidebar::Sidebar;
 use crate::context::DashboardContext;
 
@@ -39,6 +40,7 @@ pub fn App() -> impl IntoView {
                             <Route path=path!("/memory") view=Memory />
                             <Route path=path!("/settings") view=Settings />
                             <Route path=path!("/settings/general") view=GeneralView />
+                            <Route path=path!("/settings/shortcuts") view=ShortcutsView />
                             <Route path=path!("/settings/providers") view=ProvidersView />
                             <Route path=path!("/settings/generation-providers") view=GenerationProvidersView />
                             <Route path=path!("/settings/agent") view=AgentView />

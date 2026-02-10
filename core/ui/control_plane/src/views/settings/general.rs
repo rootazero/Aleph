@@ -68,7 +68,7 @@ pub fn GeneralView() -> impl IntoView {
                         <div class="flex items-center justify-center py-12">
                             <div class="text-slate-400">"Loading..."</div>
                         </div>
-                    }.into_view()
+                    }.into_any()
                 } else if let Some(cfg) = config.get() {
                     view! {
                         <div class="space-y-6">
@@ -112,11 +112,11 @@ pub fn GeneralView() -> impl IntoView {
                                 }
                             }}
                         </div>
-                    }.into_view()
+                    }.into_any()
                 } else {
                     view! {
                         <div class="text-slate-400">"No configuration loaded"</div>
-                    }.into_view()
+                    }.into_any()
                 }
             }}
         </div>
