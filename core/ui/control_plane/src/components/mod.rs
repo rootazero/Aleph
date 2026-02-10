@@ -2,6 +2,7 @@
 
 pub mod connection_status;
 pub mod forms;
+pub mod layouts;
 pub mod settings_sidebar;
 pub mod sidebar;
 pub mod ui;
@@ -14,3 +15,6 @@ pub use forms::{
 
 // Re-export settings sidebar
 pub use settings_sidebar::SettingsSidebar;
+
+// Re-export layouts
+pub use layouts::SettingsLayout;
