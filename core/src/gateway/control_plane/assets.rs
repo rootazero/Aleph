@@ -6,13 +6,12 @@ use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
 #[folder = "ui/control_plane/dist/"]
-#[prefix = "cp/"]
 pub struct ControlPlaneAssets;
 
 impl ControlPlaneAssets {
     /// Get the index.html file
     pub fn get_index_html() -> Option<Vec<u8>> {
-        Self::get("cp/index.html").map(|f| f.data.to_vec())
+        Self::get("index.html").map(|f| f.data.to_vec())
     }
 }
 

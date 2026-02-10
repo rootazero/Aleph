@@ -1,4 +1,4 @@
-use aleph_control_plane::app::*;
+use aleph_dashboard::app::*;
 use leptos::prelude::*;
 
 fn main() {

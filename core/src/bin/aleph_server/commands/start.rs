@@ -1042,7 +1042,6 @@ async fn start_webchat_server(args: &Args, final_bind: &str, final_port: u16) {
 /// Start ControlPlane embedded web UI server
 #[cfg(all(feature = "gateway", feature = "control-plane"))]
 async fn start_control_plane_server(final_bind: &str, final_port: u16, daemon_mode: bool) {
-    use axum::Router;
     use alephcore::gateway::control_plane::create_control_plane_router;
 
     // Use a different port for ControlPlane (default: 8081)
@@ -1051,27 +1050,14 @@ async fn start_control_plane_server(final_bind: &str, final_port: u16, daemon_mo
         .parse()
         .expect("Invalid control plane address");
 
-    use alephcore::gateway::control_plane::serve_static_asset;
-
-    // Create ControlPlane router for /cp path
-    let cp_router = create_control_plane_router();
-
-    // Add root redirect handler
-    async fn redirect_to_cp() -> axum::response::Redirect {
-        axum::response::Redirect::permanent("/cp")
-    }
-
-    // Mount Control Plane at /cp and also serve static assets at root
-    let app = Router::new()
-        .route("/", axum::routing::get(redirect_to_cp))
-        .route("/{*path}", axum::routing::get(serve_static_asset))  // Serve static assets at root
-        .nest("/cp", cp_router);
+    // Create ControlPlane router (serves at root path)
+    let app = create_control_plane_router();
 
     // Spawn ControlPlane server
     tokio::spawn(async move {
         match tokio::net::TcpListener::bind(control_plane_addr).await {
             Ok(listener) => {
-                tracing::info!("ControlPlane UI available at http://{}/cp", control_plane_addr);
+                tracing::info!("ControlPlane UI available at http://{}", control_plane_addr);
                 if let Err(e) = axum::serve(listener, app).await {
                     tracing::error!("ControlPlane server error: {}", e);
                 }

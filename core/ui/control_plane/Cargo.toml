@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.92"
 
 [lib]
+name = "aleph_dashboard"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
