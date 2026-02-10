@@ -933,3 +933,29 @@ impl GeneralConfigApi {
         Ok(())
     }
 }
+
+// ============================================================================
+// Shortcuts Config API
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortcutsConfig {
+    pub summon: String,
+    pub cancel: Option<String>,
+    pub command_prompt: String,
+}
+
+pub struct ShortcutsConfigApi;
+
+impl ShortcutsConfigApi {
+    pub async fn get(state: &DashboardState) -> Result<ShortcutsConfig, String> {
+        let result = state.rpc_call("shortcuts_config.get", Value::Null).await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
+    pub async fn update(state: &DashboardState, config: ShortcutsConfig) -> Result<(), String> {
+        let params = serde_json::to_value(&config).map_err(|e| e.to_string())?;
+        state.rpc_call("shortcuts_config.update", params).await?;
+        Ok(())
+    }
+}
