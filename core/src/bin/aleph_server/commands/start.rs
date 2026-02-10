@@ -1051,11 +1051,21 @@ async fn start_control_plane_server(final_bind: &str, final_port: u16, daemon_mo
         .parse()
         .expect("Invalid control plane address");
 
-    // Create ControlPlane router
+    use alephcore::gateway::control_plane::serve_static_asset;
+
+    // Create ControlPlane router for /cp path
     let cp_router = create_control_plane_router();
 
-    // Mount under /cp path
-    let app = Router::new().nest("/cp", cp_router);
+    // Add root redirect handler
+    async fn redirect_to_cp() -> axum::response::Redirect {
+        axum::response::Redirect::permanent("/cp")
+    }
+
+    // Mount Control Plane at /cp and also serve static assets at root
+    let app = Router::new()
+        .route("/", axum::routing::get(redirect_to_cp))
+        .route("/{*path}", axum::routing::get(serve_static_asset))  // Serve static assets at root
+        .nest("/cp", cp_router);
 
     // Spawn ControlPlane server
     tokio::spawn(async move {

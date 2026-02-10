@@ -16,7 +16,7 @@ use super::assets::ControlPlaneAssets;
 pub fn create_control_plane_router() -> Router {
     Router::new()
         .route("/", get(serve_index))
-        .route("/{*path}", get(serve_static))
+        .route("/{*path}", get(serve_static_or_index))
 }
 
 /// Serve the index.html file
@@ -27,13 +27,19 @@ async fn serve_index() -> impl IntoResponse {
     }
 }
 
-/// Serve static assets
-async fn serve_static(AxumPath(path): AxumPath<String>) -> Response {
+/// Serve static assets or index.html for SPA routing
+pub async fn serve_static_asset(AxumPath(path): AxumPath<String>) -> Response {
+    serve_static_or_index(AxumPath(path)).await
+}
+
+/// Serve static assets or index.html for SPA routing (internal)
+async fn serve_static_or_index(AxumPath(path): AxumPath<String>) -> Response {
     // If path is empty, just "/", or ends with "/", serve index.html
     if path.is_empty() || path == "/" || path.ends_with('/') {
         return serve_index().await.into_response();
     }
 
+    // Try to serve as static asset first (with cp/ prefix)
     let asset_path = format!("cp/{}", path);
 
     match ControlPlaneAssets::get(&asset_path) {
