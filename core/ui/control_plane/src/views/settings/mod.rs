@@ -5,6 +5,7 @@ pub mod memory;
 pub mod security;
 pub mod generation_providers;
 pub mod agent;
+pub mod general;
 
 pub use providers::ProvidersView;
 pub use routing_rules::RoutingRulesView;
@@ -13,6 +14,7 @@ pub use memory::MemoryView;
 pub use security::SecurityView;
 pub use generation_providers::GenerationProvidersView;
 pub use agent::AgentView;
+pub use general::GeneralView;
 
 // Re-export Settings view
 use leptos::prelude::*;
@@ -33,6 +35,16 @@ pub fn Settings() -> impl IntoView {
 
             // Settings categories grid
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <SettingsCard
+                    href="/settings/general"
+                    title="General"
+                    description="Language, output directory, and general settings"
+                    icon=view! {
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M12 1v6m0 6v6M5.64 5.64l4.24 4.24m4.24 4.24l4.24 4.24M1 12h6m6 0h6M5.64 18.36l4.24-4.24m4.24-4.24l4.24-4.24" />
+                    }
+                />
+
                 <SettingsCard
                     href="/settings/providers"
                     title="AI Providers"
