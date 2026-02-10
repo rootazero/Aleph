@@ -45,6 +45,7 @@ pub mod echo;
 pub mod version;
 pub mod agent;
 pub mod agent_config;
+pub mod general_config;
 pub mod session;
 pub mod auth;
 pub mod events;
