@@ -368,9 +368,8 @@ wasm-bindgen --target web \
   --out-name aleph-dashboard \
   /Volumes/TBU4/Workspace/Aleph/target/wasm32-unknown-unknown/release/aleph_dashboard.wasm
 
-# 3. 复制静态资源
-cp index.html dist/
-cp dist/.stage/tailwind-*.css dist/tailwind.css  # 使用预构建的 CSS
+# 3. 编译 Tailwind CSS
+npm run build:css  # 编译 styles/tailwind.css -> dist/tailwind.css
 
 # 4. 更新 index.html（确保引用正确的文件名）
 # 编辑 dist/index.html，引用：
@@ -391,6 +390,7 @@ cd core/ui/control_plane && \
 cargo build --lib --target wasm32-unknown-unknown --release && \
 wasm-bindgen --target web --out-dir dist --out-name aleph-dashboard \
   /Volumes/TBU4/Workspace/Aleph/target/wasm32-unknown-unknown/release/aleph_dashboard.wasm && \
+npm run build:css && \
 cd ../../.. && \
 cargo build --bin aleph-server --features control-plane
 ```
@@ -431,6 +431,32 @@ pub fn main() {
 - 无需在 HTML 中手动调用初始化函数
 - `main.rs` 不会被编译（因为没有二进制目标）
 - 所有初始化逻辑必须在 `lib.rs` 中
+
+#### Tailwind CSS 编译
+
+Control Plane UI 使用 Tailwind CSS v3 进行样式管理，CSS 在构建时编译并嵌入二进制：
+
+```bash
+# 安装依赖（首次）
+cd core/ui/control_plane
+npm install
+
+# 编译 CSS
+npm run build:css
+
+# 输出：dist/tailwind.css (约 40KB minified)
+```
+
+**配置文件**：
+- `tailwind.config.js`: 配置内容扫描路径（Rust 源文件 + HTML）
+- `styles/tailwind.css`: 源 CSS 文件（包含 @tailwind 指令）
+- `dist/tailwind.css`: 编译后的 CSS（嵌入到二进制）
+
+**关键特性**：
+- ✅ 本地编译：无需 CDN，完全离线可用
+- ✅ 自动扫描：从 Rust 源文件中提取 Tailwind 类名
+- ✅ 生产优化：minified，仅包含使用的类
+- ✅ 嵌入二进制：通过 rust-embed 打包进可执行文件
 
 ### 发布流程
 
