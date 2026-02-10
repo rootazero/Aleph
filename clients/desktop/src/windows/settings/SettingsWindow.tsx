@@ -12,11 +12,8 @@ import { GeneralSettings } from './tabs/GeneralSettings';
 import { ShortcutsSettings } from './tabs/ShortcutsSettings';
 import { BehaviorSettings } from './tabs/BehaviorSettings';
 import { GenerationSettings } from './tabs/GenerationSettings';
-import { PluginsSettings } from './tabs/PluginsSettings';
-import { SkillsSettings } from './tabs/SkillsSettings';
 import { AgentSettings } from './tabs/AgentSettings';
 import { SearchSettings } from './tabs/SearchSettings';
-import { PoliciesSettings } from './tabs/PoliciesSettings';
 import { MigratedToDashboard } from './tabs/MigratedToDashboard';
 
 export function SettingsWindow() {
@@ -68,15 +65,15 @@ export function SettingsWindow() {
       case 'mcp':
         return <MigratedToDashboard featureName="MCP Plugins" dashboardPath="/settings/mcp" />;
       case 'plugins':
-        return <PluginsSettings />;
+        return <MigratedToDashboard featureName="Plugins" dashboardPath="/settings/plugins" />;
       case 'skills':
-        return <SkillsSettings />;
+        return <MigratedToDashboard featureName="Skills" dashboardPath="/settings/skills" />;
       case 'agent':
         return <AgentSettings />;
       case 'search':
         return <SearchSettings />;
       case 'policies':
-        return <PoliciesSettings />;
+        return <MigratedToDashboard featureName="Policies" dashboardPath="/settings/policies" />;
       default:
         return <GeneralSettings />;
     }
