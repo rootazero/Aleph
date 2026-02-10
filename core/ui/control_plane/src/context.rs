@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use futures::{StreamExt, FutureExt};
 use futures::channel::{oneshot, mpsc};
 use serde_json::Value;
+use crate::components::sidebar::{SidebarMode, SystemAlert};
 
 // RPC request sent to the message loop
 struct RpcRequest {
@@ -45,6 +46,12 @@ pub struct DashboardState {
 
     // Channel for stopping the message loop
     disconnect_tx: StoredValue<Option<oneshot::Sender<()>>>,
+
+    /// System alert state bus
+    pub alerts: RwSignal<HashMap<&'static str, SystemAlert>>,
+
+    /// Sidebar mode override (user manual setting)
+    pub sidebar_mode_override: RwSignal<Option<SidebarMode>>,
 }
 
 impl DashboardState {
@@ -59,6 +66,8 @@ impl DashboardState {
             next_id: StoredValue::new(Arc::new(Mutex::new(1))),
             event_handlers: StoredValue::new(Arc::new(Mutex::new(Vec::new()))),
             disconnect_tx: StoredValue::new(None),
+            alerts: RwSignal::new(HashMap::new()),
+            sidebar_mode_override: RwSignal::new(None),
         }
     }
 
@@ -83,6 +92,25 @@ impl DashboardState {
             // Replace with a no-op handler instead of removing to preserve indices
             handlers[id] = Arc::new(|_| {});
         }
+    }
+
+    /// Update alert state
+    pub fn update_alert(&self, key: &'static str, alert: SystemAlert) {
+        self.alerts.update(|map| {
+            map.insert(key, alert);
+        });
+    }
+
+    /// Get alert state
+    pub fn get_alert(&self, key: &'static str) -> Option<SystemAlert> {
+        self.alerts.with(|map| map.get(key).cloned())
+    }
+
+    /// Clear alert state
+    pub fn clear_alert(&self, key: &'static str) {
+        self.alerts.update(|map| {
+            map.remove(key);
+        });
     }
 
     /// Dispatch event to all subscribers
