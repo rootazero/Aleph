@@ -1,8 +1,8 @@
-//! Shortcuts configuration RPC handlers
+//! Behavior configuration RPC handlers
 //!
-//! Provides RPC methods for managing keyboard shortcuts configuration.
+//! Provides RPC methods for managing behavior configuration (output mode, typing speed).
 
-use crate::config::{Config, ShortcutsConfig};
+use crate::config::{BehaviorConfig, Config};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use serde::{Deserialize, Serialize};
@@ -11,31 +11,29 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShortcutsConfigDto {
-    pub summon: String,
-    pub cancel: Option<String>,
-    pub command_prompt: String,
+pub struct BehaviorConfigDto {
+    pub output_mode: String,
+    pub typing_speed: u32,
 }
 
-/// Get shortcuts configuration
+/// Get behavior configuration
 pub async fn handle_get(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
 ) -> JsonRpcResponse {
     let cfg = config.read().await;
-    let default_shortcuts = ShortcutsConfig::default();
-    let shortcuts = cfg.shortcuts.as_ref().unwrap_or(&default_shortcuts);
+    let default_behavior = BehaviorConfig::default();
+    let behavior = cfg.behavior.as_ref().unwrap_or(&default_behavior);
 
-    let dto = ShortcutsConfigDto {
-        summon: shortcuts.summon.clone(),
-        cancel: shortcuts.cancel.clone(),
-        command_prompt: shortcuts.command_prompt.clone(),
+    let dto = BehaviorConfigDto {
+        output_mode: behavior.output_mode.clone(),
+        typing_speed: behavior.typing_speed,
     };
 
     JsonRpcResponse::success(request.id, serde_json::to_value(dto).unwrap())
 }
 
-/// Update shortcuts configuration
+/// Update behavior configuration
 pub async fn handle_update(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
@@ -52,7 +50,7 @@ pub async fn handle_update(
         }
     };
 
-    let dto: ShortcutsConfigDto = match serde_json::from_value(params) {
+    let dto: BehaviorConfigDto = match serde_json::from_value(params) {
         Ok(d) => d,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -63,18 +61,35 @@ pub async fn handle_update(
         }
     };
 
+    // Validate output_mode
+    if dto.output_mode != "typewriter" && dto.output_mode != "instant" {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "output_mode must be 'typewriter' or 'instant'".to_string(),
+        );
+    }
+
+    // Validate typing_speed
+    if dto.typing_speed < 50 || dto.typing_speed > 400 {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "typing_speed must be between 50 and 400".to_string(),
+        );
+    }
+
     {
         let mut cfg = config.write().await;
 
-        // Initialize shortcuts if None
-        if cfg.shortcuts.is_none() {
-            cfg.shortcuts = Some(ShortcutsConfig::default());
+        // Initialize behavior if None
+        if cfg.behavior.is_none() {
+            cfg.behavior = Some(BehaviorConfig::default());
         }
 
-        if let Some(shortcuts) = &mut cfg.shortcuts {
-            shortcuts.summon = dto.summon.clone();
-            shortcuts.cancel = dto.cancel.clone();
-            shortcuts.command_prompt = dto.command_prompt.clone();
+        if let Some(behavior) = &mut cfg.behavior {
+            behavior.output_mode = dto.output_mode.clone();
+            behavior.typing_speed = dto.typing_speed;
         }
 
         if let Err(e) = cfg.save() {
@@ -88,7 +103,7 @@ pub async fn handle_update(
 
     // Broadcast config change event
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
-        section: Some("shortcuts".to_string()),
+        section: Some("behavior".to_string()),
         value: serde_json::to_value(&dto).unwrap_or(Value::Null),
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
