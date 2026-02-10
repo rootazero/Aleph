@@ -39,10 +39,8 @@ async fn serve_static_or_index(AxumPath(path): AxumPath<String>) -> Response {
         return serve_index().await.into_response();
     }
 
-    // Try to serve as static asset first (with cp/ prefix)
-    let asset_path = format!("cp/{}", path);
-
-    match ControlPlaneAssets::get(&asset_path) {
+    // Try to serve as static asset first
+    match ControlPlaneAssets::get(&path) {
         Some(content) => {
             let mime = mime_guess::from_path(&path)
                 .first_or_octet_stream();

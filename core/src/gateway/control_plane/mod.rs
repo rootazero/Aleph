@@ -9,4 +9,4 @@ pub mod assets;
 pub mod server;
 
 #[cfg(feature = "control-plane")]
-pub use server::{create_control_plane_router, serve_static_asset};
+pub use server::create_control_plane_router;
