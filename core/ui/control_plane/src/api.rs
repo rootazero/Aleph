@@ -1015,3 +1015,35 @@ impl GenerationConfigApi {
         Ok(())
     }
 }
+
+// ============================================================================
+// Search Config API
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchConfig {
+    pub enabled: bool,
+    pub default_provider: String,
+    pub max_results: u64,
+    pub timeout_seconds: u64,
+    pub pii_enabled: bool,
+    pub pii_scrub_email: bool,
+    pub pii_scrub_phone: bool,
+    pub pii_scrub_ssn: bool,
+    pub pii_scrub_credit_card: bool,
+}
+
+pub struct SearchConfigApi;
+
+impl SearchConfigApi {
+    pub async fn get(state: &DashboardState) -> Result<SearchConfig, String> {
+        let result = state.rpc_call("search_config.get", Value::Null).await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
+    pub async fn update(state: &DashboardState, config: SearchConfig) -> Result<(), String> {
+        let params = serde_json::to_value(&config).map_err(|e| e.to_string())?;
+        state.rpc_call("search_config.update", params).await?;
+        Ok(())
+    }
+}
