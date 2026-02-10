@@ -2,6 +2,7 @@
 
 pub mod connection_status;
 pub mod forms;
+pub mod settings_sidebar;
 pub mod sidebar;
 pub mod ui;
 
@@ -10,3 +11,6 @@ pub use forms::{
     ErrorMessage, ErrorMessageDynamic, FormField, NumberInput, SaveButton, SelectInput,
     SettingsSection, SuccessMessage, SwitchInput, TextInput,
 };
+
+// Re-export settings sidebar
+pub use settings_sidebar::SettingsSidebar;
