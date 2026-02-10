@@ -8,9 +8,10 @@ rust-version = "1.92"
 name = "aleph_dashboard"
 crate-type = ["cdylib", "rlib"]
 
-[[bin]]
-name = "aleph-control-plane"
-path = "src/main.rs"
+# Binary target not needed for WASM build
+# [[bin]]
+# name = "aleph-control-plane"
+# path = "src/main.rs"
 
 [dependencies]
 # Leptos framework (0.8.15 - The latest and greatest)

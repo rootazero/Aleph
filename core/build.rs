@@ -28,16 +28,22 @@ fn main() {
 
         println!("cargo:warning=Building ControlPlane UI...");
 
-        let status = Command::new("trunk")
+        match Command::new("trunk")
             .args(&["build", "--release"])
             .current_dir(control_plane_dir)
             .status()
-            .expect("Failed to execute trunk. Make sure trunk is installed: cargo install trunk");
-
-        if !status.success() {
-            panic!("ControlPlane build failed. Check trunk output above.");
+        {
+            Ok(status) if status.success() => {
+                println!("cargo:warning=ControlPlane UI built successfully");
+            }
+            Ok(_) => {
+                println!("cargo:warning=ControlPlane build failed. Server will run without UI.");
+                println!("cargo:warning=To enable Control Plane UI, fix the build issues and rebuild.");
+            }
+            Err(e) => {
+                println!("cargo:warning=Failed to execute trunk: {}. Server will run without UI.", e);
+                println!("cargo:warning=Install trunk with: cargo install trunk");
+            }
         }
-
-        println!("cargo:warning=ControlPlane UI built successfully");
     }
 }
