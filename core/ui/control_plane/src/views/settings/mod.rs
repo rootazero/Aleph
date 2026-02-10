@@ -4,6 +4,7 @@ pub mod mcp;
 pub mod memory;
 pub mod security;
 pub mod generation_providers;
+pub mod agent;
 
 pub use providers::ProvidersView;
 pub use routing_rules::RoutingRulesView;
@@ -11,6 +12,7 @@ pub use mcp::McpView;
 pub use memory::MemoryView;
 pub use security::SecurityView;
 pub use generation_providers::GenerationProvidersView;
+pub use agent::AgentView;
 
 // Re-export Settings view
 use leptos::prelude::*;
@@ -50,6 +52,16 @@ pub fn Settings() -> impl IntoView {
                         <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
                         <circle cx="8.5" cy="8.5" r="1.5" />
                         <polyline points="21 15 16 10 5 21" />
+                    }
+                />
+
+                <SettingsCard
+                    href="/settings/agent"
+                    title="Agent Behavior"
+                    description="Configure file operations, code execution, and agent settings"
+                    icon=view! {
+                        <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z" />
+                        <path d="M12 6v6l4 2" />
                     }
                 />
 
