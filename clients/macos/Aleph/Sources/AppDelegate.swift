@@ -20,7 +20,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // Legacy properties for gradual migration
     private var statusItem: NSStatusItem? { menuBarManager?.statusItem }
-    private var settingsMenuItem: NSMenuItem? { menuBarManager?.settingsMenuItem }
 
     // interface (rig-core based) - unified AI processing interface
     @Published internal var core: AlephCore?
@@ -29,9 +28,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Halo overlay window
     private var haloWindow: HaloWindow?
 
-
-    // Settings window (used by legacy Settings scene and WindowGroup)
-    private var settingsWindow: NSWindow?
+    // Settings window removed - all configuration now in Control Panel Dashboard
 
     // Permission gate active state (backward compatibility - synced with permissionCoordinator.isActive)
     private var isPermissionGateActive: Bool = false
@@ -74,15 +71,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Set up menu bar
         setupMenuBar()
 
-        // UI Testing mode: Skip permission gate and open settings directly
+        // UI Testing mode: Skip permission gate and initialize directly
         if isUITesting {
             print("[Aleph] UI Testing mode detected, skipping permission gate")
             Task { @MainActor [weak self] in
                 try? await Task.sleep(seconds: 0.3)
                 self?.initializeRustCore()
-                // Open settings window for UI tests
-                try? await Task.sleep(seconds: 0.5)
-                self?.showSettings()
             }
             return
         }
@@ -278,13 +272,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             target: self,
             showAboutAction: #selector(showAbout),
             showConversationAction: #selector(showConversation),
-            showSettingsAction: #selector(showSettings),
             quitAction: #selector(quit),
             debugActions: debugActions
         )
-
-        // Initially disable Settings menu if permissions not granted
-        menuBarManager?.setSettingsEnabled(!isPermissionGateActive)
     }
 
     @objc private func showAbout() {
@@ -300,132 +290,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Called from menu bar item
     @objc private func showConversation() {
         HaloInputCoordinator.shared.showOrBringToFront()
-    }
-
-    @objc private func showSettings() {
-        // Skip checks in UI testing mode
-        if !isUITesting {
-            // Block settings access if permission gate is active
-            if isPermissionGateActive {
-                print("[Aleph] Settings blocked - permission gate is active")
-                return
-            }
-
-            // CRITICAL: Check if core is initialized before opening settings
-            guard core != nil else {
-                print("[Aleph] ERROR: Core not initialized, cannot open settings")
-                eventHandler?.showToast(
-                    type: .warning,
-                    title: L("error.core_not_initialized"),
-                    message: L("error.core_not_initialized.suggestion"),
-                    autoDismiss: false
-                )
-                return
-            }
-        }
-
-        // GHOST MODE: Stay in accessory mode (no Dock icon)
-        // Using NSPanel with proper configuration allows keyboard shortcuts to work
-        // without needing to switch to regular activation policy
-        print("[AppDelegate] Opening settings panel in GHOST MODE (no Dock icon)")
-
-        // Check if settings window already exists and is valid
-        // First check if reference exists and window is still alive (not released)
-        if let window = settingsWindow {
-            // Safely check if window is still valid before accessing properties
-            if window.isVisible {
-                // Window exists and is visible, reset to minimum size and bring to front
-                window.setContentSize(NSSize(width: 980, height: 750))
-                window.center()
-                // GHOST MODE: Bring to front without activating app
-                window.orderFrontRegardless()
-                window.makeKey()
-                return
-            } else {
-                // Window exists but not visible, clean up stale reference
-                settingsWindow = nil
-            }
-        }
-
-        // Create new settings window with RootContentView
-        // RootContentView gets core from appDelegate internally
-        let settingsView = RootContentView()
-            .environmentObject(self)
-
-        let hostingController = NSHostingController(rootView: settingsView)
-        hostingController.sizingOptions = []  // Disable auto-sizing
-
-        // UI Testing Mode: Use standard NSWindow for XCTest accessibility detection
-        // NSPanel with nonactivatingPanel style is invisible to XCTest
-        if isUITesting {
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 980, height: 750),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-                backing: .buffered,
-                defer: false
-            )
-
-            window.title = "Settings"
-            window.titlebarAppearsTransparent = true
-            window.titleVisibility = .hidden
-            window.contentViewController = hostingController
-            window.identifier = NSUserInterfaceItemIdentifier("SettingsWindow")
-            window.minSize = NSSize(width: 980, height: 750)
-            window.center()
-            window.isReleasedWhenClosed = false
-            window.delegate = self
-
-            settingsWindow = window
-
-            // Show window and activate app for XCTest
-            NSApp.setActivationPolicy(.regular)
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-
-        // GHOST MODE: Use NSPanel instead of NSWindow
-        // NSPanel can receive keyboard events even when app is in accessory mode
-        // This allows Cmd+V/C/X to work without showing Dock icon
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 980, height: 750),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-
-        panel.title = "Settings"
-        panel.titlebarAppearsTransparent = true
-        panel.titleVisibility = .hidden
-        panel.contentViewController = hostingController
-
-        // Accessibility identifier for UI testing
-        panel.identifier = NSUserInterfaceItemIdentifier("SettingsWindow")
-
-        // Set size constraints
-        panel.minSize = NSSize(width: 980, height: 750)
-        panel.center()
-
-        // GHOST MODE: Always stay on top (floating level)
-        panel.level = .floating
-
-        // CRITICAL: Allow panel to become key window for keyboard input
-        // This is essential for TextField/TextEditor to receive keystrokes
-        panel.becomesKeyOnlyIfNeeded = false
-
-        // Window management
-        panel.hidesOnDeactivate = false
-        panel.isReleasedWhenClosed = false
-        panel.delegate = self
-
-        settingsWindow = panel
-
-        // GHOST MODE: Show panel without activating the app (avoids Dock icon)
-        // Use orderFrontRegardless() instead of makeKeyAndOrderFront() to avoid activation
-        panel.orderFrontRegardless()
-
-        // Make the panel key window for keyboard input, but don't activate the app
-        panel.makeKey()
     }
 
     @objc private func quit() {
@@ -1131,18 +995,4 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         )
     }
     #endif
-}
-
-// MARK: - NSWindowDelegate Extension
-
-extension AppDelegate: NSWindowDelegate {
-    /// Called when settings window is about to close
-    /// Clear the window reference (GHOST MODE: no policy switching needed)
-    func windowWillClose(_ notification: Notification) {
-        if let window = notification.object as? NSWindow, window == settingsWindow {
-            print("[AppDelegate] Settings panel closing, clearing reference")
-            settingsWindow = nil
-            // GHOST MODE: We stay in accessory mode throughout, no policy switch needed
-        }
-    }
 }
