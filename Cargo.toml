@@ -8,6 +8,7 @@ members = [
     "core/ui/control_plane",
     "shared/protocol",
     "shared/ui_logic",
+    "shared_ui_logic",
     "clients/cli",
     "clients/shared",
     "clients/desktop/src-tauri",
