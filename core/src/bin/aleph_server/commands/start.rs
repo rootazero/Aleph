@@ -1070,7 +1070,7 @@ async fn start_control_plane_server(final_bind: &str, final_port: u16, daemon_mo
 
     if !daemon_mode {
         println!("ControlPlane UI:");
-        println!("  - URL: http://{}/cp", control_plane_addr);
+        println!("  - URL: http://{}", control_plane_addr);
         println!("  - Embedded: rust-embed (WASM)");
         println!();
     }
