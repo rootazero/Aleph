@@ -36,10 +36,17 @@ export class IntoUnderlyingSource {
     pull(controller: ReadableStreamDefaultController): Promise<any>;
 }
 
+/**
+ * Initialize the Leptos application
+ * This function is automatically called when the WASM module is loaded
+ */
+export function main(): void;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly main: () => void;
     readonly __wbg_intounderlyingsink_free: (a: number, b: number) => void;
     readonly intounderlyingsink_abort: (a: number, b: any) => any;
     readonly intounderlyingsink_close: (a: number) => any;
@@ -53,12 +60,24 @@ export interface InitOutput {
     readonly intounderlyingbytesource_pull: (a: number, b: any) => any;
     readonly intounderlyingbytesource_start: (a: number, b: any) => void;
     readonly intounderlyingbytesource_type: (a: number) => number;
+    readonly wasm_bindgen__closure__destroy__hccdd22bf2e98c404: (a: number, b: number) => void;
+    readonly wasm_bindgen__closure__destroy__h2555acef68b97c9d: (a: number, b: number) => void;
+    readonly wasm_bindgen__closure__destroy__h3e2591cd64b659bd: (a: number, b: number) => void;
+    readonly wasm_bindgen__closure__destroy__h4d7bc04d353f2b99: (a: number, b: number) => void;
     readonly wasm_bindgen__closure__destroy__h73880085a057feae: (a: number, b: number) => void;
     readonly wasm_bindgen__convert__closures_____invoke__h6e021d5227f87c04: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hf61d36537798c9f8: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h81d2726b1a17fda2: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hd14e83c4e005e09f: (a: number, b: number, c: any) => void;
     readonly wasm_bindgen__convert__closures_____invoke__h38dcb847c9018752: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hb4a63da9ffae8c94: (a: number, b: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__he6d46f6f90a6bc37: (a: number, b: number) => void;
+    readonly __wbindgen_malloc: (a: number, b: number) => number;
+    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }
 
