@@ -10,6 +10,9 @@ pub mod shortcuts;
 pub mod behavior;
 pub mod generation;
 pub mod search;
+pub mod plugins;
+pub mod skills;
+pub mod policies;
 
 pub use providers::ProvidersView;
 pub use routing_rules::RoutingRulesView;
@@ -23,6 +26,9 @@ pub use shortcuts::ShortcutsView;
 pub use behavior::BehaviorView;
 pub use generation::GenerationView;
 pub use search::SearchView;
+pub use plugins::PluginsView;
+pub use skills::SkillsView;
+pub use policies::PoliciesView;
 
 // Re-export Settings view with new sidebar layout
 use leptos::prelude::*;
