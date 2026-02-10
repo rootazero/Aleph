@@ -1097,6 +1097,7 @@ fn register_config_handlers(
     use alephcore::gateway::handlers::agent_config;
     use alephcore::gateway::handlers::general_config;
     use alephcore::gateway::handlers::shortcuts_config;
+    use alephcore::gateway::handlers::behavior_config;
 
     // config.get
     let config_get = config.clone();
@@ -1439,5 +1440,21 @@ fn register_config_handlers(
         let cfg = config_shortcuts_update.clone();
         let bus = event_bus_shortcuts_update.clone();
         async move { shortcuts_config::handle_update(req, cfg, bus).await }
+    });
+
+    // behavior_config.get
+    let config_behavior_get = config.clone();
+    server.handlers_mut().register("behavior_config.get", move |req| {
+        let cfg = config_behavior_get.clone();
+        async move { behavior_config::handle_get(req, cfg).await }
+    });
+
+    // behavior_config.update
+    let config_behavior_update = config.clone();
+    let event_bus_behavior_update = event_bus.clone();
+    server.handlers_mut().register("behavior_config.update", move |req| {
+        let cfg = config_behavior_update.clone();
+        let bus = event_bus_behavior_update.clone();
+        async move { behavior_config::handle_update(req, cfg, bus).await }
     });
 }

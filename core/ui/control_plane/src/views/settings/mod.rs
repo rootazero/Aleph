@@ -7,6 +7,7 @@ pub mod generation_providers;
 pub mod agent;
 pub mod general;
 pub mod shortcuts;
+pub mod behavior;
 
 pub use providers::ProvidersView;
 pub use routing_rules::RoutingRulesView;
@@ -17,6 +18,7 @@ pub use generation_providers::GenerationProvidersView;
 pub use agent::AgentView;
 pub use general::GeneralView;
 pub use shortcuts::ShortcutsView;
+pub use behavior::BehaviorView;
 
 // Re-export Settings view
 use leptos::prelude::*;
@@ -62,6 +64,16 @@ pub fn Settings() -> impl IntoView {
                         <line x1="20" y1="14" x2="23" y2="14" />
                         <line x1="1" y1="9" x2="4" y2="9" />
                         <line x1="1" y1="14" x2="4" y2="14" />
+                    }
+                />
+
+                <SettingsCard
+                    href="/settings/behavior"
+                    title="Behavior"
+                    description="Configure output mode and typing speed"
+                    icon=view! {
+                        <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z" />
+                        <path d="M12 6v6l4 2" />
                     }
                 />
 

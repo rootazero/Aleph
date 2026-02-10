@@ -959,3 +959,28 @@ impl ShortcutsConfigApi {
         Ok(())
     }
 }
+
+// ============================================================================
+// Behavior Config API
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BehaviorConfig {
+    pub output_mode: String,
+    pub typing_speed: u32,
+}
+
+pub struct BehaviorConfigApi;
+
+impl BehaviorConfigApi {
+    pub async fn get(state: &DashboardState) -> Result<BehaviorConfig, String> {
+        let result = state.rpc_call("behavior_config.get", Value::Null).await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
+    pub async fn update(state: &DashboardState, config: BehaviorConfig) -> Result<(), String> {
+        let params = serde_json::to_value(&config).map_err(|e| e.to_string())?;
+        state.rpc_call("behavior_config.update", params).await?;
+        Ok(())
+    }
+}

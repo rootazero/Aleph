@@ -15,6 +15,7 @@ use crate::views::settings::SecurityView;
 use crate::views::settings::AgentView;
 use crate::views::settings::GeneralView;
 use crate::views::settings::ShortcutsView;
+use crate::views::settings::BehaviorView;
 use crate::components::sidebar::Sidebar;
 use crate::context::DashboardContext;
 
@@ -41,6 +42,7 @@ pub fn App() -> impl IntoView {
                             <Route path=path!("/settings") view=Settings />
                             <Route path=path!("/settings/general") view=GeneralView />
                             <Route path=path!("/settings/shortcuts") view=ShortcutsView />
+                            <Route path=path!("/settings/behavior") view=BehaviorView />
                             <Route path=path!("/settings/providers") view=ProvidersView />
                             <Route path=path!("/settings/generation-providers") view=GenerationProvidersView />
                             <Route path=path!("/settings/agent") view=AgentView />
