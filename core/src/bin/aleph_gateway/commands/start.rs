@@ -1094,6 +1094,7 @@ fn register_config_handlers(
     use alephcore::gateway::handlers::memory_config;
     use alephcore::gateway::handlers::security_config;
     use alephcore::gateway::handlers::generation_providers;
+    use alephcore::gateway::handlers::agent_config;
 
     // config.get
     let config_get = config.clone();
@@ -1356,5 +1357,53 @@ fn register_config_handlers(
     server.handlers_mut().register("generation_providers.test", move |req| {
         let cfg = config_gen_test.clone();
         async move { generation_providers::handle_test_connection(req, cfg).await }
+    });
+
+    // agent_config.get
+    let config_agent_get = config.clone();
+    server.handlers_mut().register("agent_config.get", move |req| {
+        let cfg = config_agent_get.clone();
+        async move { agent_config::handle_get(req, cfg).await }
+    });
+
+    // agent_config.update
+    let config_agent_update = config.clone();
+    let event_bus_agent_update = event_bus.clone();
+    server.handlers_mut().register("agent_config.update", move |req| {
+        let cfg = config_agent_update.clone();
+        let bus = event_bus_agent_update.clone();
+        async move { agent_config::handle_update(req, cfg, bus).await }
+    });
+
+    // agent_config.get_file_ops
+    let config_agent_file_ops_get = config.clone();
+    server.handlers_mut().register("agent_config.get_file_ops", move |req| {
+        let cfg = config_agent_file_ops_get.clone();
+        async move { agent_config::handle_get_file_ops(req, cfg).await }
+    });
+
+    // agent_config.update_file_ops
+    let config_agent_file_ops_update = config.clone();
+    let event_bus_agent_file_ops_update = event_bus.clone();
+    server.handlers_mut().register("agent_config.update_file_ops", move |req| {
+        let cfg = config_agent_file_ops_update.clone();
+        let bus = event_bus_agent_file_ops_update.clone();
+        async move { agent_config::handle_update_file_ops(req, cfg, bus).await }
+    });
+
+    // agent_config.get_code_exec
+    let config_agent_code_exec_get = config.clone();
+    server.handlers_mut().register("agent_config.get_code_exec", move |req| {
+        let cfg = config_agent_code_exec_get.clone();
+        async move { agent_config::handle_get_code_exec(req, cfg).await }
+    });
+
+    // agent_config.update_code_exec
+    let config_agent_code_exec_update = config.clone();
+    let event_bus_agent_code_exec_update = event_bus.clone();
+    server.handlers_mut().register("agent_config.update_code_exec", move |req| {
+        let cfg = config_agent_code_exec_update.clone();
+        let bus = event_bus_agent_code_exec_update.clone();
+        async move { agent_config::handle_update_code_exec(req, cfg, bus).await }
     });
 }
