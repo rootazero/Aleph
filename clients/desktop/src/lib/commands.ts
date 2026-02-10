@@ -11,130 +11,29 @@ export interface AppVersion {
   build: string;
 }
 
-export interface GeneralSettings {
-  sound_enabled: boolean;
-  launch_at_login: boolean;
-  language: string;
+export interface WindowPosition {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
-export interface ShortcutSettings {
-  show_halo: string;
-  command_completion: string;
-  toggle_listening: string;
-  quick_capture: string;
+export interface AlephPaths {
+  base: string;
+  config: string;
+  data: string;
+  memory: string;
+  attachments: string;
+  skills: string;
+  mcp: string;
+  plugins: string;
+  cache: string;
+  logs: string;
 }
 
-export interface BehaviorSettings {
-  output_mode: 'replace' | 'append' | 'clipboard' | 'typewriter' | 'instant';
-  typing_speed: number; // 50-400 chars/sec
-  auto_dismiss_delay: number; // seconds
-  show_notifications: boolean;
-  pii_masking: boolean;
-  pii_keywords: string[];
-  // PII scrubbing options (macOS-aligned)
-  pii_scrub_email?: boolean;
-  pii_scrub_phone?: boolean;
-  pii_scrub_ssn?: boolean;
-  pii_scrub_credit_card?: boolean;
-}
-
-export interface ProviderConfig {
-  id: string;
-  name: string;
-  type: 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'custom';
-  api_key?: string;
-  base_url?: string;
-  model?: string;
-  enabled: boolean;
-  is_default: boolean;
-}
-
-export interface ProvidersSettings {
-  providers: ProviderConfig[];
-  default_provider_id: string;
-}
-
-export interface GenerationSettings {
-  temperature: number;
-  max_tokens: number;
-  top_p: number;
-  frequency_penalty: number;
-  presence_penalty: number;
-  streaming: boolean;
-}
-
-export interface GenerationProviderConfig {
-  id: string;
-  name: string;
-  type: string;
-  category: 'image' | 'video' | 'audio';
-  api_key?: string;
-  base_url?: string;
-  model?: string;
-  enabled: boolean;
-  is_default: boolean;
-}
-
-export interface GenerationProvidersSettings {
-  providers: GenerationProviderConfig[];
-  default_image_provider_id: string;
-  default_video_provider_id: string;
-  default_audio_provider_id: string;
-}
-
-export interface MemorySettings {
-  enabled: boolean;
-  auto_save: boolean;
-  max_history: number;
-  embedding_model: string;
-  similarity_threshold: number;
-}
-
-export interface McpServer {
-  id: string;
-  name: string;
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-  enabled: boolean;
-}
-
-export interface McpSettings {
-  servers: McpServer[];
-}
-
-export interface Plugin {
-  id: string;
-  name: string;
-  version: string;
-  description: string;
-  source: 'git' | 'zip' | 'local';
-  source_url?: string;
-  enabled: boolean;
-  config?: Record<string, unknown>;
-}
-
-export interface PluginsSettings {
-  plugins: Plugin[];
-  auto_update: boolean;
-}
-
-export interface Skill {
-  id: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  trigger_keywords: string[];
-}
-
-export interface SkillsSettings {
-  skills: Skill[];
-}
-
-export interface FileOpsConfig {
-  enabled: boolean;
-  allowed_paths: string[];
-  denied_paths: string[];
+// ============================================================================
+// AI Core Types
+// ============================================================================
   max_file_size: number;
   require_confirmation_for_write: boolean;
   require_confirmation_for_delete: boolean;
@@ -287,11 +186,6 @@ export const commands = {
   // Windows
   showHaloWindow: () => invoke('show_halo_window'),
   hideHaloWindow: () => invoke('hide_halo_window'),
-  openSettingsWindow: () => invoke('open_settings_window'),
-
-  // Settings
-  getSettings: () => invoke<Settings>('get_settings'),
-  saveSettings: (settings: Settings) => invoke('save_settings', { newSettings: settings }),
 
   // Window position
   saveWindowPosition: (windowName: string) => invoke('save_window_position', { windowName }),
