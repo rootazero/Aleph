@@ -191,8 +191,8 @@ inquire = { version = "0.7", optional = true }
 # No build dependencies - using Gateway WebSocket architecture
 
 [[bin]]
-name = "aleph-gateway"
-path = "src/bin/aleph_gateway/main.rs"
+name = "aleph-server"
+path = "src/bin/aleph_server/main.rs"
 required-features = ["gateway"]
 
 [dev-dependencies]

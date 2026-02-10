@@ -1,28 +1,38 @@
-//! Aleph Gateway - WebSocket Control Plane
+//! Aleph Server - Self-hosted AI Assistant Server
 //!
-//! A standalone WebSocket server that provides a JSON-RPC 2.0 interface
-//! for controlling Aleph agents and receiving events.
+//! A standalone server that provides the complete Aleph backend, including:
+//! - Gateway Layer: WebSocket control plane (JSON-RPC 2.0)
+//! - Control Plane: Configuration management UI
+//! - Agent Loop: Observe-Think-Act-Feedback cycle
+//! - Execution Layer: Tool execution, MCP, extensions
+//! - Storage Layer: Memory, config, keychain
+//!
+//! # Architecture
+//!
+//! Aleph follows a Server-Client architecture:
+//! - **Server** (this binary): Core AI engine and execution environment
+//! - **Clients**: macOS App, Tauri Desktop, CLI, Telegram, Discord
 //!
 //! # Usage
 //!
 //! ```bash
 //! # Run with default settings (127.0.0.1:18789)
-//! cargo run --features gateway --bin aleph-gateway
+//! cargo run --features gateway --bin aleph-server
 //!
 //! # Specify custom bind address and port
-//! cargo run --features gateway --bin aleph-gateway -- --bind 0.0.0.0 --port 9000
+//! cargo run --features gateway --bin aleph-server -- --bind 0.0.0.0 --port 9000
 //!
 //! # Load configuration from file
-//! cargo run --features gateway --bin aleph-gateway -- --config ~/.aleph/gateway.toml
+//! cargo run --features gateway --bin aleph-server -- --config ~/.aleph/gateway.toml
 //!
 //! # Run as daemon (background process)
-//! cargo run --features gateway --bin aleph-gateway -- --daemon
+//! cargo run --features gateway --bin aleph-server -- --daemon
 //!
 //! # Stop a running daemon
-//! cargo run --features gateway --bin aleph-gateway -- stop
+//! cargo run --features gateway --bin aleph-server -- stop
 //!
-//! # Check gateway status
-//! cargo run --features gateway --bin aleph-gateway -- status
+//! # Check server status
+//! cargo run --features gateway --bin aleph-server -- status
 //! ```
 //!
 //! # Testing
