@@ -110,6 +110,399 @@ match ax_notification {
 }
 ```
 
+## Cross-Platform Architecture
+
+### Architectural Positioning: Worker-in-Situ
+
+**Core Principle**: Aleph Server runs in the user's working environment, not as a remote cloud service.
+
+- **Client Role**: Pure UI window for conversation (text input/output, file attachments)
+- **Server Role**: All business logic, perception, and execution
+- **Deployment Model**: Server runs where the user works (macOS Desktop / Linux Desktop / Windows Desktop)
+
+**Implications**:
+- Server must have cross-platform perception capabilities
+- Server must handle platform-specific APIs (Accessibility, Screen Capture, Input Simulation)
+- Client never processes business logic or tool execution
+
+### Platform Abstraction Layer (PAL)
+
+To elegantly handle cross-platform differences in Rust, we define a **SystemSensor** trait:
+
+```rust
+// core/src/perception/sensor.rs
+
+#[async_trait]
+pub trait SystemSensor: Send + Sync {
+    /// Get currently focused application ID (bundle ID / process name)
+    async fn get_focused_app(&self) -> Result<String>;
+
+    /// Capture UI tree (AX Tree / UIA Tree / AT-SPI)
+    async fn capture_ui_tree(&self, app_id: &str) -> Result<UINodeTree>;
+
+    /// Visual fallback: capture screenshot
+    async fn capture_screenshot(&self) -> Result<DynamicImage>;
+
+    /// Check if sensor is available in current environment
+    fn is_available(&self) -> bool;
+
+    /// Get sensor capabilities
+    fn capabilities(&self) -> SensorCapabilities;
+}
+
+/// Platform-specific implementations
+pub struct MacosSensor {
+    ax_observer: AxObserver,
+    screen_capture: ScreenCaptureKit,
+}
+
+pub struct WindowsSensor {
+    uia_client: UIAutomationClient,
+    gdi_capture: GdiScreenCapture,
+}
+
+pub struct LinuxSensor {
+    atspi_client: AtSpiClient,  // X11/Wayland
+    x11_capture: X11ScreenCapture,
+}
+```
+
+### Tiered Perception Strategy
+
+**Core Design**: Graceful degradation from structured APIs to visual recognition.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Level 1: Structured API (Accessibility)                    │
+│  ├─ macOS: Accessibility API (AXUIElement)                  │
+│  ├─ Windows: UI Automation API (IUIAutomation)              │
+│  ├─ Linux: AT-SPI (Assistive Technology Service Provider)   │
+│  └─ Precision: High | Cost: Low | Coverage: 80%             │
+└─────────────────────────────────────────────────────────────┘
+                          ↓ Fallback
+┌─────────────────────────────────────────────────────────────┐
+│  Level 2: Local Vision (Screenshot + OCR)                   │
+│  ├─ Screenshot: Platform-specific capture                   │
+│  ├─ OCR: tesseract-rs / ocrs (local)                        │
+│  ├─ Element Detection: Local vision model (optional)        │
+│  └─ Precision: Medium | Cost: Medium | Coverage: 95%        │
+└─────────────────────────────────────────────────────────────┘
+                          ↓ Fallback
+┌─────────────────────────────────────────────────────────────┐
+│  Level 3: Cloud Vision (Multimodal API)                     │
+│  ├─ Providers: GPT-4o / Claude 3.5 / Gemini                 │
+│  ├─ Set-of-Mark: Visual prompting with numbered anchors     │
+│  ├─ Privacy: Local pre-redaction before upload              │
+│  └─ Precision: Highest | Cost: High | Coverage: 100%        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Selection Logic**:
+```rust
+impl SystemStateBus {
+    async fn sense_ui(&self, app_id: &str) -> Result<AppState> {
+        // Level 1: Try structured API first
+        if let Ok(state) = self.sensor.capture_ui_tree(app_id).await {
+            return Ok(state);
+        }
+
+        // Level 2: Fallback to local vision
+        if self.config.enable_local_vision {
+            let screenshot = self.sensor.capture_screenshot().await?;
+            if let Ok(state) = self.local_vision.analyze(screenshot).await {
+                return Ok(state);
+            }
+        }
+
+        // Level 3: Fallback to cloud vision (if enabled)
+        if self.config.enable_cloud_vision {
+            let screenshot = self.sensor.capture_screenshot().await?;
+            let state = self.cloud_vision.analyze(screenshot).await?;
+            return Ok(state);
+        }
+
+        Err(AlephError::perception("No available perception method"))
+    }
+}
+```
+
+### Platform-Specific Implementations
+
+#### macOS: Accessibility API
+
+**Status**: Primary implementation target (Phase 6)
+
+**Key APIs**:
+- `AXUIElementCreateApplication`: Get app's root element
+- `AXObserverCreate`: Register for UI change notifications
+- `AXUIElementCopyAttributeValue`: Extract element properties
+
+**Challenges**:
+- Requires Screen Recording permission
+- CFRunLoop thread isolation required
+- Some apps (Electron) have incomplete AX trees
+
+#### Windows: UI Automation
+
+**Status**: Planned (Phase 7)
+
+**Key APIs**:
+- `IUIAutomation`: Main automation interface
+- `IUIAutomationElement`: Element inspection
+- `IUIAutomationTreeWalker`: Tree traversal
+
+**Challenges**:
+- COM initialization required
+- Some legacy apps don't support UIA
+
+#### Linux: AT-SPI
+
+**Status**: Planned (Phase 7)
+
+**Key APIs**:
+- `atspi_get_desktop`: Get desktop root
+- `atspi_accessible_get_child_at_index`: Tree traversal
+- `atspi_event_listener_register`: Event notifications
+
+**Challenges**:
+- X11 vs Wayland differences
+- Inconsistent support across desktop environments
+
+### Cross-Platform Input Simulation
+
+**Requirement**: Server must simulate mouse/keyboard input on the platform it runs on.
+
+**Implementation Strategy**:
+```rust
+// core/src/perception/actuator.rs
+
+#[async_trait]
+pub trait InputActuator: Send + Sync {
+    async fn click(&self, x: i32, y: i32) -> Result<()>;
+    async fn type_text(&self, text: &str) -> Result<()>;
+    async fn press_key(&self, key: Key) -> Result<()>;
+}
+
+// Platform implementations
+pub struct MacosActuator;  // CGEventCreateMouseEvent
+pub struct WindowsActuator; // SendInput
+pub struct LinuxActuator;   // XTest / libei
+```
+
+**Recommended Libraries**:
+- `enigo`: Cross-platform input simulation (consider forking for SSB integration)
+- `autopilot-rs`: Alternative with better coordinate handling
+
+### Permission Management and Health Check
+
+**Critical Requirement**: Server needs elevated permissions on all platforms.
+
+**Health Check Module**:
+```rust
+// core/src/perception/health.rs
+
+pub struct PerceptionHealth {
+    pub accessibility_enabled: bool,
+    pub screen_recording_enabled: bool,
+    pub input_monitoring_enabled: bool,
+    pub platform_support: PlatformSupport,
+}
+
+impl PerceptionHealth {
+    pub async fn check() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self {
+                accessibility_enabled: check_ax_permission(),
+                screen_recording_enabled: check_screen_recording(),
+                input_monitoring_enabled: check_input_monitoring(),
+                platform_support: PlatformSupport::Full,
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            Self {
+                accessibility_enabled: check_atspi_available(),
+                screen_recording_enabled: check_x11_capture(),
+                input_monitoring_enabled: check_xtest(),
+                platform_support: if is_wayland() {
+                    PlatformSupport::Partial
+                } else {
+                    PlatformSupport::Full
+                },
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            Self {
+                accessibility_enabled: check_uia_available(),
+                screen_recording_enabled: true, // Always available
+                input_monitoring_enabled: check_admin_rights(),
+                platform_support: PlatformSupport::Full,
+            }
+        }
+    }
+}
+```
+
+**User Guidance**: When permissions are missing, provide platform-specific instructions:
+- macOS: "Open System Settings → Privacy & Security → Accessibility"
+- Windows: "Run as Administrator or grant UIAccess"
+- Linux: "Install at-spi2-core package"
+
+### Graceful Degradation for Headless Environments
+
+**Scenario**: Server deployed on headless Linux server (no GUI).
+
+**Strategy**: SSB modules gracefully degrade, returning `NotSupported` errors.
+
+```rust
+impl SystemSensor for LinuxSensor {
+    async fn capture_ui_tree(&self, app_id: &str) -> Result<UINodeTree> {
+        if !self.has_display() {
+            return Err(AlephError::not_supported(
+                "UI sensing requires display server (X11/Wayland)"
+            ));
+        }
+        // ... normal implementation
+    }
+}
+```
+
+**Agent Behavior**: When SSB returns `NotSupported`, Agent knows:
+- "I cannot see the screen"
+- "I can only operate files and APIs"
+- "I should suggest user run Server on desktop environment"
+
+### Cloud Vision Integration Strategy
+
+**Use Case**: When structured APIs fail (Canvas apps, games, custom-drawn UIs).
+
+**Architecture**: Structured Semantic Anchors (Skeleton & Skin)
+
+```rust
+// core/src/perception/cloud_vision.rs
+
+pub struct CloudVisionProvider {
+    client: reqwest::Client,
+    api_key: String,
+}
+
+impl CloudVisionProvider {
+    pub async fn analyze_with_context(
+        &self,
+        screenshot: DynamicImage,
+        ax_context: SimplifiedAxTree,
+    ) -> Result<UIUnderstanding> {
+        // 1. Draw Set-of-Mark annotations on screenshot
+        let annotated = self.draw_som_markers(&screenshot, &ax_context)?;
+
+        // 2. Build multimodal prompt with AX context
+        let prompt = format!(
+            "The screenshot shows an application UI. \
+             I've marked {} interactive elements with numbers. \
+             Element details: {:?}. \
+             Please identify what each numbered element does.",
+            ax_context.elements.len(),
+            ax_context.elements
+        );
+
+        // 3. Call cloud vision API
+        let response = self.call_vision_api(annotated, prompt).await?;
+
+        Ok(response)
+    }
+
+    fn draw_som_markers(
+        &self,
+        screenshot: &DynamicImage,
+        ax_context: &SimplifiedAxTree,
+    ) -> Result<DynamicImage> {
+        let mut img = screenshot.clone();
+        for (idx, element) in ax_context.elements.iter().enumerate() {
+            // Draw small numbered circle at element position
+            draw_text_mut(
+                &mut img,
+                Rgba([255, 0, 0, 255]),
+                element.rect.x,
+                element.rect.y,
+                Scale::uniform(16.0),
+                &self.font,
+                &format!("{}", idx + 1),
+            );
+        }
+        Ok(img)
+    }
+}
+```
+
+**Optimization Strategies**:
+
+1. **Visual Debouncing**: Only call cloud API when AX tree hash changes significantly
+2. **Region Cropping**: Send only the relevant window, not full 4K screenshot
+3. **Local Pre-Redaction**: Blur password fields and sensitive areas before upload
+4. **Caching**: Cache cloud responses for identical UI states
+
+**Privacy Safeguards**:
+```rust
+impl CloudVisionProvider {
+    fn redact_sensitive_regions(
+        &self,
+        screenshot: &mut DynamicImage,
+        ax_context: &SimplifiedAxTree,
+    ) {
+        for element in &ax_context.elements {
+            if element.role == "password" || element.is_secure {
+                // Apply Gaussian blur to sensitive region
+                blur_region(screenshot, element.rect, 20.0);
+            }
+        }
+    }
+}
+```
+
+### Performance Considerations
+
+**On-Demand Sensing**: Don't run OCR continuously in background.
+
+```rust
+impl SystemStateBus {
+    pub async fn sense_on_demand(&self, trigger: SenseTrigger) -> Result<()> {
+        match trigger {
+            SenseTrigger::AgentQuery => {
+                // Agent asked "what's on screen?"
+                self.perform_full_sense().await?;
+            }
+            SenseTrigger::AxTreeChange => {
+                // Lightweight: only update changed elements
+                self.perform_incremental_sense().await?;
+            }
+            SenseTrigger::Idle => {
+                // Do nothing, save CPU
+            }
+        }
+        Ok(())
+    }
+}
+```
+
+**CPU Budget**: Target < 2% CPU usage in idle state, < 10% during active sensing.
+
+### Summary: Cross-Platform Execution Model
+
+| Component | macOS | Windows | Linux | Headless |
+|-----------|-------|---------|-------|----------|
+| **Structured API** | AX API | UI Automation | AT-SPI | ❌ |
+| **Screenshot** | ScreenCaptureKit | GDI+ | X11/Wayland | ❌ |
+| **Local OCR** | ✅ | ✅ | ✅ | ✅ (if image provided) |
+| **Cloud Vision** | ✅ | ✅ | ✅ | ✅ (if image provided) |
+| **Input Simulation** | CGEvent | SendInput | XTest | ❌ |
+| **Graceful Degradation** | N/A | N/A | ✅ | ✅ |
+
+**Key Takeaway**: SSB is designed to work best on desktop environments with GUI, but gracefully degrades in headless scenarios by returning `NotSupported` errors and allowing Agent to adapt its behavior.
+
 ## Protocol Design
 
 ### Topic Naming Convention
