@@ -18,14 +18,21 @@
 //! # Health Checking
 //!
 //! Use [`PerceptionHealth::check()`] to verify permissions and capabilities.
+//!
+//! # Platform Sensors
+//!
+//! Use [`sensors::create_platform_sensor()`] to automatically create the
+//! appropriate sensor for the current platform.
 
 pub mod actuator;
 pub mod health;
 pub mod sensor;
+pub mod sensors;
 pub mod types;
 
 // Re-export main types
 pub use actuator::{InputActuator, Key, Modifier};
 pub use health::{PerceptionHealth, PlatformSupport};
 pub use sensor::SystemSensor;
+pub use sensors::create_platform_sensor;
 pub use types::{PalRect, Platform, SensorCapabilities, UINode, UINodeState, UINodeTree};
