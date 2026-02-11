@@ -26,6 +26,7 @@ use crate::error::{AlephError, Result};
 use crate::exec::sandbox::parameter_binding::RequiredCapabilities;
 
 use super::types::SolidificationSuggestion;
+use super::success_manifest::SuccessManifest;
 
 /// Approval metadata for tool definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +83,9 @@ pub struct GeneratedToolDefinition {
     /// Approval metadata for this tool
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_metadata: Option<ApprovalMetadata>,
+    /// Success manifest defining semantic constraints
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success_manifest: Option<SuccessManifest>,
     /// Generation metadata
     pub generated: GenerationMetadata,
 }
@@ -188,6 +192,7 @@ impl ToolGenerator {
             requires_confirmation: self.config.require_confirmation,
             required_capabilities: Some(Self::generate_required_capabilities(&suggestion)),
             approval_metadata: None,
+            success_manifest: None, // Will be populated by collaborative pipeline
             generated: GenerationMetadata {
                 pattern_id: suggestion.pattern_id.clone(),
                 confidence: suggestion.confidence,
@@ -827,6 +832,7 @@ mod tests {
                 parameter_bindings: Default::default(),
             }),
             approval_metadata: None,
+            success_manifest: None,
             generated: GenerationMetadata {
                 pattern_id: "test".to_string(),
                 confidence: 0.9,
