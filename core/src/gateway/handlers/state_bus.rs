@@ -3,6 +3,7 @@
 use crate::error::{AlephError, Result};
 use crate::gateway::context::GatewayContext;
 use crate::perception::state_bus::{SubscribeParams, SubscribeResult, UnsubscribeParams};
+use crate::perception::{ActionRequest, ActionResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -104,9 +105,31 @@ pub async fn handle_query(
     Ok(serde_json::to_value(result)?)
 }
 
+/// Handle system.action.execute RPC method.
+pub async fn handle_execute_action(
+    ctx: Arc<GatewayContext>,
+    params: Value,
+) -> Result<Value> {
+    let request: ActionRequest = serde_json::from_value(params)
+        .map_err(|e| AlephError::invalid_input(format!("Invalid action request: {}", e)))?;
+
+    info!("Executing action on element: {}", request.target_id);
+
+    // TODO: Get ActionDispatcher from context
+    // For now, return not implemented
+    let result = ActionResult {
+        success: false,
+        error: Some("Action dispatcher not yet integrated with Gateway".to_string()),
+        used_fallback: false,
+    };
+
+    Ok(serde_json::to_value(result)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::perception::{ActionMethod, ConditionType, ExpectCondition};
 
     #[tokio::test]
     async fn test_subscribe_params_parsing() {
@@ -142,5 +165,26 @@ mod tests {
         assert_eq!(parsed.app_id, "com.apple.mail");
         assert_eq!(parsed.timestamp, 1739268000);
         assert_eq!(parsed.max_age_secs, 30);
+    }
+
+    #[tokio::test]
+    async fn test_action_request_parsing() {
+        let params = serde_json::json!({
+            "target_id": "btn_send_001",
+            "method": {
+                "type": "click"
+            },
+            "expect": {
+                "condition": {
+                    "type": "element_disappear"
+                },
+                "timeout_ms": 500
+            }
+        });
+
+        let parsed: ActionRequest = serde_json::from_value(params).unwrap();
+        assert_eq!(parsed.target_id, "btn_send_001");
+        assert!(matches!(parsed.method, ActionMethod::Click));
+        assert!(matches!(parsed.expect.condition, ConditionType::ElementDisappear));
     }
 }

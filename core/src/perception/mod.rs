@@ -7,8 +7,12 @@ mod macos;
 mod stub;
 
 pub mod state_bus;
+pub mod simulation_executor;
+pub mod action_dispatcher;
 
 pub use types::*;
+pub use simulation_executor::SimulationExecutor;
+pub use action_dispatcher::{ActionDispatcher, ActionRequest, ActionResult, ActionMethod, ExpectCondition, ConditionType};
 
 use crate::error::Result;
 
