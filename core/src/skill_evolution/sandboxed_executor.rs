@@ -1,3 +1,55 @@
+//! Sandboxed Tool Executor with Constraint Validation
+//!
+//! This module provides execution of generated tools with pre-execution
+//! constraint validation. It integrates the SuccessManifest validation
+//! into the tool execution pipeline.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use alephcore::skill_evolution::sandboxed_executor::SandboxedToolExecutor;
+//! use alephcore::skill_evolution::tool_generator::GeneratedToolDefinition;
+//! use std::sync::Arc;
+//! use std::path::PathBuf;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let sandbox_adapter = todo!();
+//! let executor = SandboxedToolExecutor::new(sandbox_adapter);
+//!
+//! # let tool_def: GeneratedToolDefinition = todo!();
+//! # let parameters = serde_json::json!({});
+//! # let package_dir = PathBuf::from("/tmp");
+//! // Execute tool with constraint validation
+//! match executor.execute_tool(&tool_def, parameters, package_dir).await {
+//!     Ok((output, audit_log)) => {
+//!         println!("Tool output: {}", output);
+//!         println!("Audit log: {:?}", audit_log);
+//!     }
+//!     Err(e) => {
+//!         eprintln!("Execution failed: {}", e);
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Constraint Validation Flow
+//!
+//! 1. Resolve capabilities from tool definition and parameters
+//! 2. If SuccessManifest exists, validate against capabilities
+//! 3. Block execution if validation errors found
+//! 4. Log warnings if validation warnings found
+//! 5. Execute tool in sandbox
+//! 6. Add validation results to audit log
+//!
+//! # Integration with Collaborative Evolution
+//!
+//! This executor is the runtime enforcement point for the dual-layer
+//! constraint system:
+//!
+//! - **Design Time**: CollaborativeSolidificationPipeline generates constraints
+//! - **Runtime**: SandboxedToolExecutor validates and enforces constraints
+
 use std::sync::Arc;
 use std::path::PathBuf;
 

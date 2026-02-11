@@ -6,6 +6,64 @@
 //! 3. Validate constraints match using ConstraintValidator
 //! 4. Request LLM to fix mismatches
 //! 5. Queue proposals for user approval
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use alephcore::skill_evolution::collaborative_pipeline::CollaborativeSolidificationPipeline;
+//! use alephcore::skill_evolution::tracker::EvolutionTracker;
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let tracker = Arc::new(EvolutionTracker::new("evolution.db")?);
+//! let pipeline = CollaborativeSolidificationPipeline::new(tracker);
+//!
+//! // Run detection and generation
+//! let result = pipeline.run().await?;
+//!
+//! for proposal in result.proposals {
+//!     println!("Skill: {}", proposal.manifest.metadata.skill_id);
+//!     println!("Validation: {} errors, {} warnings",
+//!         proposal.validation_report.errors.len(),
+//!         proposal.validation_report.warnings.len()
+//!     );
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Architecture
+//!
+//! The pipeline orchestrates the collaborative evolution workflow:
+//!
+//! ```text
+//! ┌─────────────────┐
+//! │ Detect Patterns │
+//! └────────┬────────┘
+//!          │
+//! ┌────────▼────────┐
+//! │ Generate Proposal│
+//! │ (Manifest + Caps)│
+//! └────────┬────────┘
+//!          │
+//! ┌────────▼────────┐
+//! │ Validate        │
+//! │ Constraints     │
+//! └────────┬────────┘
+//!          │
+//!     ┌────▼────┐
+//!     │ Errors? │
+//!     └────┬────┘
+//!          │
+//!     ┌────▼────┐
+//!     │ Fix (LLM)│
+//!     └────┬────┘
+//!          │
+//! ┌────────▼────────┐
+//! │ Queue for       │
+//! │ User Approval   │
+//! └─────────────────┘
+//! ```
 
 use std::sync::Arc;
 use tracing::{debug, info, warn};

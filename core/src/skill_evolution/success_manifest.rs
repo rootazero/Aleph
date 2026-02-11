@@ -6,6 +6,33 @@
 //!
 //! This is the "soft constraint" layer that complements the "hard constraint"
 //! layer (Capabilities + Sandbox).
+//!
+//! # Example
+//!
+//! ```rust
+//! use alephcore::skill_evolution::success_manifest::SuccessManifest;
+//!
+//! // Create a new manifest for a file processing skill
+//! let manifest = SuccessManifest::new(
+//!     "file_processor",
+//!     "Process CSV files and generate reports"
+//! );
+//!
+//! // Check if network access is prohibited
+//! assert!(manifest.prohibits_network());
+//!
+//! // Check if a path is allowed for reading
+//! assert!(manifest.allows_read_from("/data/input.csv"));
+//! ```
+//!
+//! # Architecture
+//!
+//! The SuccessManifest is part of the dual-layer constraint system:
+//!
+//! - **Soft Layer (SuccessManifest)**: Semantic, human-readable constraints
+//! - **Hard Layer (Capabilities)**: Enforced by sandbox at runtime
+//!
+//! The ConstraintValidator ensures these layers are consistent.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
