@@ -1,4 +1,13 @@
 // core/ui/control_plane/src/components/sidebar/sidebar_item.rs
+//
+// SidebarItem component with real-time alert display.
+//
+// Alert Integration:
+// - Subscribes to DashboardState.alerts via Signal::derive()
+// - Reactively displays StatusBadge when alert exists
+// - Shows Tooltip with alert details in narrow mode
+// - Alert state is updated by WebSocket events from Gateway
+//
 use leptos::prelude::*;
 use leptos_router::components::A;
 use crate::context::DashboardState;
