@@ -380,6 +380,63 @@ impl DashboardState {
         self.is_reconnecting.set(false);
         Err("Reconnection failed".to_string())
     }
+
+    /// Setup alert subscriptions
+    ///
+    /// This method subscribes to alert-related events from the Gateway and
+    /// updates the DashboardState.alerts HashMap when events arrive.
+    pub async fn setup_alert_subscriptions(&self) -> Result<(), String> {
+        // Subscribe to alert events on the Gateway
+        self.subscribe_topic("alerts.**").await?;
+
+        web_sys::console::log_1(&"Subscribed to alerts.** events".into());
+
+        // Setup event handler for alert events
+        let state = *self;
+        self.subscribe_events(move |event: GatewayEvent| {
+            web_sys::console::log_1(&format!("Alert event received: {} - {:?}", event.topic, event.data).into());
+
+            // Parse alert data and update state
+            if event.topic.starts_with("alerts.") {
+                // Extract alert type from topic (e.g., "alerts.system.health" -> "system.health")
+                let alert_key = event.topic.strip_prefix("alerts.").unwrap_or(&event.topic);
+
+                // Parse alert data
+                if let Some(severity) = event.data.get("severity").and_then(|s| s.as_str()) {
+                    let level = match severity {
+                        "info" => crate::components::sidebar::AlertLevel::Info,
+                        "warning" => crate::components::sidebar::AlertLevel::Warning,
+                        "error" | "critical" => crate::components::sidebar::AlertLevel::Critical,
+                        _ => crate::components::sidebar::AlertLevel::None,
+                    };
+
+                    let count = event.data.get("count")
+                        .and_then(|c| c.as_u64())
+                        .map(|c| c as u32);
+
+                    let message = event.data.get("message")
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string());
+
+                    // Create SystemAlert
+                    let alert = crate::components::sidebar::SystemAlert {
+                        key: Box::leak(alert_key.to_string().into_boxed_str()),
+                        level,
+                        count,
+                        message,
+                    };
+
+                    // Update alert state
+                    state.update_alert(alert.key, alert);
+                } else {
+                    // If no severity, clear the alert
+                    state.clear_alert(Box::leak(alert_key.to_string().into_boxed_str()));
+                }
+            }
+        });
+
+        Ok(())
+    }
 }
 
 #[component]
