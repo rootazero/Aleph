@@ -1,4 +1,4 @@
-//! Perception subsystem for SnapshotTool.
+//! Perception subsystem for SnapshotTool and System State Bus.
 
 mod types;
 #[cfg(target_os = "macos")]
@@ -6,7 +6,14 @@ mod macos;
 #[cfg(not(target_os = "macos"))]
 mod stub;
 
+pub mod state_bus;
+pub mod simulation_executor;
+pub mod action_dispatcher;
+pub mod connectors;
+
 pub use types::*;
+pub use simulation_executor::SimulationExecutor;
+pub use action_dispatcher::{ActionDispatcher, ActionRequest, ActionResult, ActionMethod, ExpectCondition, ConditionType};
 
 use crate::error::Result;
 
