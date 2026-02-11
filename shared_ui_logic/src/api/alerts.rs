@@ -133,7 +133,6 @@ impl<C: AlephConnector> AlertsApi<C> {
         struct HealthResponse {
             status: String,
             timestamp: String,
-            #[serde(skip_serializing_if = "Option::is_none")]
             message: Option<String>,
         }
 
@@ -144,7 +143,12 @@ impl<C: AlephConnector> AlertsApi<C> {
             "healthy" => HealthStatus::Healthy,
             "degraded" => HealthStatus::Degraded,
             "unhealthy" => HealthStatus::Unhealthy,
-            _ => HealthStatus::Healthy, // Default to healthy for unknown status
+            unknown => {
+                return Err(RpcError::ServerError(format!(
+                    "Unknown health status: {}",
+                    unknown
+                )))
+            }
         };
 
         Ok(SystemHealthData {
