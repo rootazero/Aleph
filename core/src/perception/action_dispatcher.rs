@@ -270,8 +270,8 @@ impl ActionDispatcher {
 mod tests {
     use super::*;
     use crate::gateway::event_bus::GatewayEventBus;
-    use crate::perception::state_bus::types::{
-        AppState, Element, ElementSource, ElementState, StateSource,
+    use crate::perception::state_bus::{
+        AppState, Element, ElementSource, ElementState, Rect, StateSource,
     };
 
     fn create_test_state_bus() -> Arc<SystemStateBus> {
@@ -280,7 +280,8 @@ mod tests {
     }
 
     async fn populate_cache(state_bus: &SystemStateBus) {
-        let mut cache = state_bus.state_cache().write().await;
+        let cache_arc = state_bus.state_cache();
+        let mut cache = cache_arc.write().await;
 
         let state = AppState {
             app_id: "com.test.app".to_string(),
@@ -289,7 +290,7 @@ mod tests {
                 role: "button".to_string(),
                 label: Some("Test Button".to_string()),
                 current_value: None,
-                rect: Some(crate::perception::state_bus::types::Rect {
+                rect: Some(Rect {
                     x: 100.0,
                     y: 200.0,
                     width: 50.0,
@@ -359,7 +360,8 @@ mod tests {
 
         // Add disabled element
         {
-            let mut cache = state_bus.state_cache().write().await;
+            let cache_arc = state_bus.state_cache();
+            let mut cache = cache_arc.write().await;
             let state = AppState {
                 app_id: "com.test.app".to_string(),
                 elements: vec![Element {
@@ -367,7 +369,7 @@ mod tests {
                     role: "button".to_string(),
                     label: Some("Disabled Button".to_string()),
                     current_value: None,
-                    rect: Some(crate::perception::state_bus::types::Rect {
+                    rect: Some(Rect {
                         x: 100.0,
                         y: 200.0,
                         width: 50.0,

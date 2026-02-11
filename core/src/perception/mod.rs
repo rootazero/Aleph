@@ -9,6 +9,7 @@ mod stub;
 pub mod state_bus;
 pub mod simulation_executor;
 pub mod action_dispatcher;
+pub mod connectors;
 
 pub use types::*;
 pub use simulation_executor::SimulationExecutor;
