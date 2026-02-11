@@ -117,7 +117,7 @@ pub struct Rect {
 }
 
 /// State source type.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StateSource {
     /// macOS Accessibility API
@@ -129,7 +129,7 @@ pub enum StateSource {
 }
 
 /// Element source type.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ElementSource {
     /// From AX API
