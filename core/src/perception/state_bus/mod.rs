@@ -52,6 +52,7 @@ pub use ax_observer::AxObserver;
 use crate::error::Result;
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 use crate::perception::connectors::ConnectorRegistry;
+use crate::perception::pal::SystemSensor;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -72,7 +73,10 @@ pub struct SystemStateBus {
     /// Connector registry for multi-source state capture
     connector_registry: Arc<ConnectorRegistry>,
 
-    /// AX observer (macOS only)
+    /// Platform sensor (optional, for cross-platform perception)
+    sensor: Option<Arc<dyn SystemSensor>>,
+
+    /// AX observer (macOS only, legacy)
     #[cfg(target_os = "macos")]
     ax_observer: Option<Arc<AxObserver>>,
 }
@@ -86,6 +90,21 @@ impl SystemStateBus {
             state_history: Arc::new(RwLock::new(StateHistory::new(30))),
             privacy_filter: Arc::new(PrivacyFilter::default()),
             connector_registry: Arc::new(ConnectorRegistry::new()),
+            sensor: None,
+            #[cfg(target_os = "macos")]
+            ax_observer: None,
+        }
+    }
+
+    /// Create with a platform sensor for cross-platform perception.
+    pub fn with_sensor(event_bus: GatewayEventBus, sensor: Arc<dyn SystemSensor>) -> Self {
+        Self {
+            event_bus,
+            state_cache: Arc::new(RwLock::new(StateCache::new())),
+            state_history: Arc::new(RwLock::new(StateHistory::new(30))),
+            privacy_filter: Arc::new(PrivacyFilter::default()),
+            connector_registry: Arc::new(ConnectorRegistry::new()),
+            sensor: Some(sensor),
             #[cfg(target_os = "macos")]
             ax_observer: None,
         }
@@ -99,6 +118,7 @@ impl SystemStateBus {
             state_history: Arc::new(RwLock::new(StateHistory::new(30))),
             privacy_filter: Arc::new(PrivacyFilter::new(privacy_config)),
             connector_registry: Arc::new(ConnectorRegistry::new()),
+            sensor: None,
             #[cfg(target_os = "macos")]
             ax_observer: None,
         }
@@ -198,6 +218,7 @@ impl SystemStateBus {
             state_history: self.state_history.clone(),
             privacy_filter: self.privacy_filter.clone(),
             connector_registry: self.connector_registry.clone(),
+            sensor: self.sensor.clone(),
             #[cfg(target_os = "macos")]
             ax_observer: self.ax_observer.clone(),
         }
@@ -264,4 +285,95 @@ impl SystemStateBus {
     pub async fn stop_monitoring(&self, bundle_id: &str) -> Result<()> {
         self.connector_registry.stop_monitoring(bundle_id).await
     }
+
+    /// Sense UI using platform sensor (PAL).
+    ///
+    /// This method uses the tiered perception strategy:
+    /// 1. Try structured API (Accessibility) if available
+    /// 2. Fallback to screenshot + OCR (not yet implemented)
+    /// 3. Fallback to cloud vision (not yet implemented)
+    ///
+    /// Returns error if no sensor is configured or available.
+    pub async fn sense_ui(&self, app_id: &str) -> Result<AppState> {
+        use crate::AlephError;
+
+        let sensor = self.sensor.as_ref().ok_or_else(|| AlephError::Other {
+            message: "No sensor configured".to_string(),
+            suggestion: Some("Use SystemStateBus::with_sensor() to configure a sensor".to_string()),
+        })?;
+
+        // Check if sensor is available
+        if !sensor.is_available() {
+            return Err(AlephError::PermissionDenied {
+                message: "Sensor not available (missing permissions or headless environment)"
+                    .to_string(),
+                suggestion: Some("Check permissions with PerceptionHealth::check()".to_string()),
+            });
+        }
+
+        // Try structured API first
+        let caps = sensor.capabilities();
+        if caps.has_structured_api {
+            match sensor.capture_ui_tree(app_id).await {
+                Ok(ui_tree) => {
+                    // Convert UINodeTree to AppState
+                    let state = self.convert_ui_tree_to_app_state(ui_tree);
+                    return Ok(state);
+                }
+                Err(e) => {
+                    tracing::warn!("Structured API failed: {}, will try fallback", e);
+                }
+            }
+        }
+
+        // TODO: Fallback to screenshot + OCR (Phase 6 Task 3)
+        // TODO: Fallback to cloud vision (Phase 6 Task 3)
+
+        Err(AlephError::Other {
+            message: "All perception methods failed or unavailable".to_string(),
+            suggestion: Some("Enable accessibility permissions or use a supported platform".to_string()),
+        })
+    }
+
+    /// Convert UINodeTree (PAL) to AppState (SSB).
+    ///
+    /// This is a temporary conversion until we fully integrate PAL types.
+    fn convert_ui_tree_to_app_state(
+        &self,
+        ui_tree: crate::perception::pal::UINodeTree,
+    ) -> AppState {
+        use crate::perception::state_bus::types::{AppState, Element, ElementSource, StateSource};
+
+        // Convert PAL UINode to SSB Element
+        fn convert_node(node: crate::perception::pal::UINode) -> Element {
+            Element {
+                id: node.id,
+                role: node.role,
+                label: node.label,
+                current_value: node.value,
+                rect: Some(crate::perception::state_bus::types::Rect {
+                    x: node.rect.x as f64,
+                    y: node.rect.y as f64,
+                    width: node.rect.width as f64,
+                    height: node.rect.height as f64,
+                }),
+                state: crate::perception::state_bus::types::ElementState {
+                    focused: node.state.focused,
+                    enabled: node.state.enabled,
+                    selected: false, // PAL doesn't track selection state yet
+                },
+                source: ElementSource::Ax,
+                confidence: 1.0, // Structured API has high confidence
+            }
+        }
+
+        AppState {
+            app_id: ui_tree.app_id,
+            elements: vec![convert_node(ui_tree.root)],
+            app_context: None,
+            source: StateSource::Accessibility,
+            confidence: 1.0, // Structured API has high confidence
+        }
+    }
 }
+
