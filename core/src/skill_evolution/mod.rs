@@ -36,7 +36,9 @@
 //! ```
 
 pub mod approval;
+pub mod collaborative_pipeline;
 pub mod compiler;
+pub mod constraint_validator;
 pub mod detector;
 pub mod generator;
 pub mod git;
@@ -44,13 +46,21 @@ pub mod pipeline;
 pub mod safety;
 pub mod sandbox_integration;
 pub mod sandboxed_executor;
+pub mod success_manifest;
 pub mod tool_generator;
 pub mod tool_testing;
 pub mod tracker;
 pub mod types;
 
 pub use approval::{ApprovalConfig, ApprovalManager, ApprovalRequest, ApprovalStatus};
+pub use collaborative_pipeline::{
+    CollaborativePipelineResult, CollaborativeSolidificationPipeline, SkillProposal,
+};
 pub use compiler::{CompilationResult, CompilerStatus, SkillCompiler};
+pub use constraint_validator::{
+    ConstraintMismatch, ConstraintValidator, ValidationError, ValidationReport,
+    ValidationWarning,
+};
 pub use detector::SolidificationDetector;
 pub use generator::SkillGenerator;
 pub use git::GitCommitter;
@@ -58,6 +68,11 @@ pub use pipeline::{PipelineResult, PipelineStatus, SolidificationPipeline};
 pub use safety::{
     ConcernType, FirstRunConfirmation, SafetyConcern, SafetyGate, SafetyGateConfig, SafetyLevel,
     SafetyReport,
+};
+pub use success_manifest::{
+    AllowedOperations, DataProcessing, FileSystemOperations, FileSystemRestrictions,
+    NetworkRestrictions, ProcessRestrictions, ProhibitedOperations, RecommendedTool,
+    ScriptExecution, SkillMetadata, SuccessManifest,
 };
 pub use tool_generator::{
     GeneratedToolDefinition, GenerationMetadata, ToolGenerationResult, ToolGenerator,

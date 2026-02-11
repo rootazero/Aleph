@@ -78,6 +78,7 @@ mod tests {
                 parameter_bindings: Default::default(),
             }),
             approval_metadata: None,
+            success_manifest: None,
             generated: GenerationMetadata {
                 pattern_id: "test".to_string(),
                 confidence: 0.9,

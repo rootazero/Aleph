@@ -617,6 +617,7 @@ mod tests {
             requires_confirmation: false,
             required_capabilities: None,
             approval_metadata: None,
+            success_manifest: None,
             generated: super::super::tool_generator::GenerationMetadata {
                 pattern_id: "test".to_string(),
                 confidence: 0.9,
