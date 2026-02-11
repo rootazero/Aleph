@@ -59,6 +59,8 @@ impl EventDatabase {
                 InfoEvent::ToolExecuted { agent_id: id, .. } => id == agent_id,
                 InfoEvent::FileAccessed { agent_id: id, .. } => id == agent_id,
                 InfoEvent::SymbolSearched { agent_id: id, .. } => id == agent_id,
+                InfoEvent::ActionStarted { agent_id: id, .. } => id == agent_id,
+                InfoEvent::InsightCaptured { agent_id: id, .. } => id == agent_id,
             })
             .take(count)
             .collect()
@@ -214,6 +216,36 @@ impl CollectiveMemory {
                     agent_id,
                     symbol,
                     context_str
+                )
+            }
+            InfoEvent::ActionStarted {
+                agent_id,
+                action_type,
+                target,
+                timestamp,
+            } => {
+                let target_str = target
+                    .as_ref()
+                    .map(|t| format!(" ({})", t))
+                    .unwrap_or_default();
+                format!(
+                    "[{}] {} started {}{}",
+                    Self::format_timestamp(*timestamp),
+                    agent_id,
+                    action_type,
+                    target_str
+                )
+            }
+            InfoEvent::InsightCaptured {
+                agent_id,
+                insight,
+                timestamp,
+            } => {
+                format!(
+                    "[{}] {} captured insight: {}",
+                    Self::format_timestamp(*timestamp),
+                    agent_id,
+                    insight
                 )
             }
         }

@@ -93,6 +93,14 @@ pub enum CriticalEvent {
         #[serde(default = "current_timestamp")]
         timestamp: u64,
     },
+
+    /// Error detected during execution
+    ErrorDetected {
+        agent_id: String,
+        error_message: String,
+        #[serde(default = "current_timestamp")]
+        timestamp: u64,
+    },
 }
 
 impl CriticalEvent {
@@ -102,6 +110,7 @@ impl CriticalEvent {
             Self::BugRootCauseFound { timestamp, .. } => *timestamp,
             Self::TaskCancelled { timestamp, .. } => *timestamp,
             Self::GlobalFailure { timestamp, .. } => *timestamp,
+            Self::ErrorDetected { timestamp, .. } => *timestamp,
         }
     }
 }
@@ -134,6 +143,25 @@ pub enum ImportantEvent {
         #[serde(default = "current_timestamp")]
         timestamp: u64,
     },
+
+    /// Tool executed by an agent
+    ToolExecuted {
+        agent_id: String,
+        tool_name: String,
+        result: String,
+        duration_ms: u64,
+        #[serde(default = "current_timestamp")]
+        timestamp: u64,
+    },
+
+    /// Decision broadcast by an agent
+    DecisionBroadcast {
+        agent_id: String,
+        decision: String,
+        affected_files: Vec<String>,
+        #[serde(default = "current_timestamp")]
+        timestamp: u64,
+    },
 }
 
 impl ImportantEvent {
@@ -143,6 +171,8 @@ impl ImportantEvent {
             Self::Hotspot { timestamp, .. } => *timestamp,
             Self::ConfirmedInsight { timestamp, .. } => *timestamp,
             Self::SwarmStateSummary { timestamp, .. } => *timestamp,
+            Self::ToolExecuted { timestamp, .. } => *timestamp,
+            Self::DecisionBroadcast { timestamp, .. } => *timestamp,
         }
     }
 }
@@ -177,6 +207,23 @@ pub enum InfoEvent {
         #[serde(default = "current_timestamp")]
         timestamp: u64,
     },
+
+    /// Action started event
+    ActionStarted {
+        agent_id: String,
+        action_type: String,
+        target: Option<String>,
+        #[serde(default = "current_timestamp")]
+        timestamp: u64,
+    },
+
+    /// Insight captured event
+    InsightCaptured {
+        agent_id: String,
+        insight: String,
+        #[serde(default = "current_timestamp")]
+        timestamp: u64,
+    },
 }
 
 impl InfoEvent {
@@ -186,6 +233,8 @@ impl InfoEvent {
             Self::ToolExecuted { timestamp, .. } => *timestamp,
             Self::FileAccessed { timestamp, .. } => *timestamp,
             Self::SymbolSearched { timestamp, .. } => *timestamp,
+            Self::ActionStarted { timestamp, .. } => *timestamp,
+            Self::InsightCaptured { timestamp, .. } => *timestamp,
         }
     }
 }

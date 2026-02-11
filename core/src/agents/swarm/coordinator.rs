@@ -10,6 +10,8 @@ use super::aggregator::{IntelligenceLayer, SemanticAggregator};
 use super::bus::AgentMessageBus;
 use super::collective_memory::CollectiveMemory;
 use super::context_injector::ContextInjector;
+use super::events::*;
+use crate::agent_loop::{AgentLoopEvent, InsightSeverity};
 use crate::error::Result;
 
 /// Swarm Coordinator Configuration
@@ -132,6 +134,72 @@ impl SwarmCoordinator {
             bus_stats: self.bus.statistics().await,
             context_window_size: self.injector.window_size().await,
             memory_event_count: self.memory.event_count().await,
+        }
+    }
+
+    /// Publish AgentLoop event (converts to internal event and classifies by tier)
+    ///
+    /// This method converts AgentLoopEvent to internal swarm events and publishes
+    /// them to the message bus. Events are classified by tier for proper delivery:
+    /// - Critical: Interrupt-driven delivery
+    /// - Important: Passive injection before Think phase
+    /// - Info: On-demand query via tools
+    pub async fn publish_event(&self, event: AgentLoopEvent) {
+        // Convert to internal event and classify by tier
+        let swarm_event = match event {
+            AgentLoopEvent::ActionInitiated {
+                agent_id,
+                action_type,
+                target,
+            } => AgentEvent::Info(InfoEvent::ActionStarted {
+                agent_id,
+                action_type,
+                target,
+                timestamp: chrono::Utc::now().timestamp() as u64,
+            }),
+            AgentLoopEvent::ActionCompleted {
+                agent_id,
+                action_type,
+                result,
+                duration_ms,
+            } => AgentEvent::Important(ImportantEvent::ToolExecuted {
+                agent_id,
+                tool_name: action_type,
+                result: format!("{:?}", result),
+                duration_ms,
+                timestamp: chrono::Utc::now().timestamp() as u64,
+            }),
+            AgentLoopEvent::DecisionMade {
+                agent_id,
+                decision,
+                affected_files,
+            } => AgentEvent::Important(ImportantEvent::DecisionBroadcast {
+                agent_id,
+                decision,
+                affected_files,
+                timestamp: chrono::Utc::now().timestamp() as u64,
+            }),
+            AgentLoopEvent::InsightCaptured {
+                agent_id,
+                insight,
+                severity,
+            } => match severity {
+                InsightSeverity::Critical => AgentEvent::Critical(CriticalEvent::ErrorDetected {
+                    agent_id,
+                    error_message: insight,
+                    timestamp: chrono::Utc::now().timestamp() as u64,
+                }),
+                _ => AgentEvent::Info(InfoEvent::InsightCaptured {
+                    agent_id,
+                    insight,
+                    timestamp: chrono::Utc::now().timestamp() as u64,
+                }),
+            },
+        };
+
+        // Publish to bus
+        if let Err(e) = self.bus.publish(swarm_event).await {
+            tracing::warn!("Failed to publish swarm event: {}", e);
         }
     }
 }

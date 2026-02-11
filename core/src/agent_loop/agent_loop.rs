@@ -17,6 +17,31 @@ use super::overflow::OverflowDetector;
 use super::session_sync::SessionSync;
 use super::state::{LoopState, LoopStep, RequestContext};
 use super::traits::{ActionExecutor, CompressorTrait, ThinkerTrait};
+use super::swarm_events::AgentLoopEvent;
+
+/// Extract file paths from tool arguments
+fn extract_affected_files(arguments: &serde_json::Value) -> Vec<String> {
+    let mut files = Vec::new();
+
+    // Check common argument names for file paths
+    if let Some(obj) = arguments.as_object() {
+        for key in &["path", "file_path", "file", "files", "target"] {
+            if let Some(value) = obj.get(*key) {
+                if let Some(s) = value.as_str() {
+                    files.push(s.to_string());
+                } else if let Some(arr) = value.as_array() {
+                    for item in arr {
+                        if let Some(s) = item.as_str() {
+                            files.push(s.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    files
+}
 
 /// Context for running an agent loop execution
 ///
@@ -99,6 +124,8 @@ where
     compaction_trigger: OptionalCompactionTrigger,
     /// Optional overflow detector for real-time overflow checking
     pub(crate) overflow_detector: Option<Arc<OverflowDetector>>,
+    /// Optional SwarmCoordinator for swarm intelligence integration
+    swarm_coordinator: Option<Arc<crate::agents::swarm::coordinator::SwarmCoordinator>>,
 }
 
 impl<T, E, C> AgentLoop<T, E, C>
@@ -116,6 +143,7 @@ where
             config,
             compaction_trigger: OptionalCompactionTrigger::new(None),
             overflow_detector: None,
+            swarm_coordinator: None,
         }
     }
 
@@ -139,6 +167,7 @@ where
             config,
             compaction_trigger: OptionalCompactionTrigger::new(Some(event_bus)),
             overflow_detector: None,
+            swarm_coordinator: None,
         }
     }
 
@@ -182,6 +211,7 @@ where
             config,
             compaction_trigger: OptionalCompactionTrigger::new(event_bus),
             overflow_detector,
+            swarm_coordinator: None,
         }
     }
 
@@ -249,6 +279,17 @@ where
             return detector.usage_percent(&session);
         }
         0
+    }
+
+    /// Set the swarm coordinator for swarm intelligence integration
+    ///
+    /// This enables event publishing to the swarm for collective intelligence.
+    pub fn with_swarm_coordinator(
+        mut self,
+        coordinator: Arc<crate::agents::swarm::coordinator::SwarmCoordinator>,
+    ) -> Self {
+        self.swarm_coordinator = Some(coordinator);
+        self
     }
 
     /// Run the Agent Loop
@@ -580,6 +621,19 @@ where
                         }
                     }
 
+                    // ===== SWARM EVENT: Decision Made =====
+                    // Publish decision event to swarm coordinator (shadow mode)
+                    if let Some(ref swarm) = self.swarm_coordinator {
+                        let affected_files = extract_affected_files(arguments);
+                        swarm
+                            .publish_event(AgentLoopEvent::DecisionMade {
+                                agent_id: state.session_id.clone(),
+                                decision: format!("Using {} to accomplish task", tool_name),
+                                affected_files,
+                            })
+                            .await;
+                    }
+
                     // Check if confirmation required
                     if guard.requires_confirmation(tool_name) {
                         let confirmed = callback
@@ -642,6 +696,20 @@ where
             // ===== Execute =====
             callback.on_action_start(&action).await;
 
+            // ===== SWARM EVENT: Action Initiated =====
+            // Publish action initiated event to swarm coordinator (shadow mode)
+            if let Some(ref swarm) = self.swarm_coordinator {
+                if let Action::ToolCall { tool_name, .. } = &action {
+                    swarm
+                        .publish_event(AgentLoopEvent::ActionInitiated {
+                            agent_id: state.session_id.clone(),
+                            action_type: action.action_type(),
+                            target: Some(tool_name.clone()),
+                        })
+                        .await;
+                }
+            }
+
             let start_time = std::time::Instant::now();
             let started_at = chrono::Utc::now().timestamp_millis();
             let result = self.executor.execute(&action, &identity).await;
@@ -649,6 +717,19 @@ where
             let completed_at = chrono::Utc::now().timestamp_millis();
 
             callback.on_action_done(&action, &result).await;
+
+            // ===== SWARM EVENT: Action Completed =====
+            // Publish action completed event to swarm coordinator (shadow mode)
+            if let Some(ref swarm) = self.swarm_coordinator {
+                swarm
+                    .publish_event(AgentLoopEvent::ActionCompleted {
+                        agent_id: state.session_id.clone(),
+                        action_type: action.action_type(),
+                        result: result.clone(),
+                        duration_ms,
+                    })
+                    .await;
+            }
 
             // ===== COMPACTION TRIGGER: After Tool Execution =====
             // Emit ToolCallCompleted for SessionCompactor pruning check

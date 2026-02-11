@@ -211,6 +211,34 @@ impl ContextInjector {
             ImportantEvent::SwarmStateSummary { summary, .. } => {
                 format!("Swarm summary: {}", summary)
             }
+            ImportantEvent::ToolExecuted {
+                agent_id,
+                tool_name,
+                duration_ms,
+                ..
+            } => {
+                format!(
+                    "Agent {} executed {} ({}ms)",
+                    agent_id, tool_name, duration_ms
+                )
+            }
+            ImportantEvent::DecisionBroadcast {
+                agent_id,
+                decision,
+                affected_files,
+                ..
+            } => {
+                if affected_files.is_empty() {
+                    format!("Agent {} decided: {}", agent_id, decision)
+                } else {
+                    format!(
+                        "Agent {} decided: {} (affects {} files)",
+                        agent_id,
+                        decision,
+                        affected_files.len()
+                    )
+                }
+            }
         }
     }
 
@@ -229,6 +257,13 @@ impl ContextInjector {
             }
             CriticalEvent::GlobalFailure { error, .. } => {
                 format!("Global failure: {}", error)
+            }
+            CriticalEvent::ErrorDetected {
+                agent_id,
+                error_message,
+                ..
+            } => {
+                format!("Agent {} error: {}", agent_id, error_message)
             }
         }
     }
