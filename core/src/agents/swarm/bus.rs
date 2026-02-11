@@ -3,10 +3,9 @@
 //! Pub/Sub event bus for horizontal agent communication.
 //! Supports tiered event delivery with zero-blocking latency.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::events::{AgentEvent, EventTier};
 use crate::error::{AlephError, Result};

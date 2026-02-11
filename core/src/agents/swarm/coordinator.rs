@@ -134,6 +134,29 @@ impl SwarmCoordinator {
             memory_event_count: self.memory.event_count().await,
         }
     }
+
+    /// Start background statistics logging
+    ///
+    /// Logs event statistics every 60 seconds for monitoring.
+    pub fn start_statistics_logging(&self) {
+        let bus = self.bus.clone();
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+
+            loop {
+                interval.tick().await;
+
+                let stats = bus.statistics().await;
+                info!(
+                    total_critical = stats.critical_published,
+                    total_important = stats.important_published,
+                    total_info = stats.info_published,
+                    "Swarm event statistics"
+                );
+            }
+        });
+    }
 }
 
 /// Swarm statistics
