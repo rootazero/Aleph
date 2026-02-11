@@ -33,12 +33,18 @@
 
 mod types;
 mod state_cache;
+mod element_id;
+mod state_history;
+mod privacy_filter;
 
 #[cfg(target_os = "macos")]
 mod ax_observer;
 
 pub use types::*;
 pub use state_cache::StateCache;
+pub use element_id::{StableElementId, ElementInfo};
+pub use state_history::{StateHistory, JsonPatch};
+pub use privacy_filter::{PrivacyFilter, PrivacyFilterConfig};
 
 #[cfg(target_os = "macos")]
 pub use ax_observer::AxObserver;
@@ -56,6 +62,12 @@ pub struct SystemStateBus {
     /// Current state cache (app_id -> AppState)
     state_cache: Arc<RwLock<StateCache>>,
 
+    /// State history (I-Frame + P-Frame)
+    state_history: Arc<RwLock<StateHistory>>,
+
+    /// Privacy filter middleware
+    privacy_filter: Arc<PrivacyFilter>,
+
     /// AX observer (macOS only)
     #[cfg(target_os = "macos")]
     ax_observer: Option<Arc<AxObserver>>,
@@ -67,6 +79,20 @@ impl SystemStateBus {
         Self {
             event_bus,
             state_cache: Arc::new(RwLock::new(StateCache::new())),
+            state_history: Arc::new(RwLock::new(StateHistory::new(30))),
+            privacy_filter: Arc::new(PrivacyFilter::default()),
+            #[cfg(target_os = "macos")]
+            ax_observer: None,
+        }
+    }
+
+    /// Create with custom privacy filter configuration.
+    pub fn with_privacy_config(event_bus: GatewayEventBus, privacy_config: PrivacyFilterConfig) -> Self {
+        Self {
+            event_bus,
+            state_cache: Arc::new(RwLock::new(StateCache::new())),
+            state_history: Arc::new(RwLock::new(StateHistory::new(30))),
+            privacy_filter: Arc::new(PrivacyFilter::new(privacy_config)),
             #[cfg(target_os = "macos")]
             ax_observer: None,
         }
@@ -137,6 +163,19 @@ impl SystemStateBus {
             _ => return Ok(()),
         };
 
+        // Store P-Frame in history
+        let patches = vec![JsonPatch {
+            op: "replace".to_string(),
+            path: "/elements/0/value".to_string(),
+            value: Some(patch.clone()),
+        }];
+        self.state_history.write().await.store_pframe(patches);
+
+        // Check if we should store I-Frame
+        if self.state_history.read().await.should_store_iframe() {
+            // TODO: Get full state from cache and store as I-Frame
+        }
+
         // Publish to event bus
         let topic = format!("system.state.{}.delta", app_id);
         let event = TopicEvent::new(topic, patch);
@@ -150,6 +189,8 @@ impl SystemStateBus {
         Self {
             event_bus: self.event_bus.clone(),
             state_cache: self.state_cache.clone(),
+            state_history: self.state_history.clone(),
+            privacy_filter: self.privacy_filter.clone(),
             #[cfg(target_os = "macos")]
             ax_observer: self.ax_observer.clone(),
         }
@@ -158,5 +199,15 @@ impl SystemStateBus {
     /// Get read access to state cache.
     pub fn state_cache(&self) -> Arc<RwLock<StateCache>> {
         self.state_cache.clone()
+    }
+
+    /// Get read access to state history.
+    pub fn state_history(&self) -> Arc<RwLock<StateHistory>> {
+        self.state_history.clone()
+    }
+
+    /// Get privacy filter.
+    pub fn privacy_filter(&self) -> Arc<PrivacyFilter> {
+        self.privacy_filter.clone()
     }
 }
