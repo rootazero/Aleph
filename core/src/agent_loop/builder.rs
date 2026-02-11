@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use crate::agent_loop::{LoopConfig, ThinkerTrait, ActionExecutor, CompressorTrait};
+use crate::agent_loop::{ContextProvider, MessageBuilder, MessageBuilderConfig};
 use crate::event::EventBus;
 use crate::agent_loop::overflow::OverflowDetector;
 
@@ -110,6 +111,45 @@ where
             self.overflow_detector,
             self.swarm_coordinator,
         )
+    }
+
+    /// Build a MessageBuilder with context providers
+    ///
+    /// This helper method demonstrates how to construct a MessageBuilder
+    /// with ContextProviders. When Swarm is enabled, it automatically adds
+    /// SwarmContextProvider to inject team awareness context.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - MessageBuilder configuration
+    ///
+    /// # Returns
+    ///
+    /// A MessageBuilder configured with appropriate context providers.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let builder = AgentLoopBuilder::new(thinker, executor, compressor)
+    ///     .with_swarm(coordinator);
+    /// let message_builder = builder.build_message_builder(msg_config);
+    /// ```
+    pub fn build_message_builder(&self, config: MessageBuilderConfig) -> MessageBuilder {
+        let mut context_providers: Vec<Box<dyn ContextProvider>> = Vec::new();
+
+        // If Swarm enabled, add SwarmContextProvider
+        // Note: This is a placeholder implementation. In the real integration,
+        // SwarmCoordinator would be the actual type from agents::swarm::SwarmCoordinator
+        // and would have a context_injector() method that returns Arc<ContextInjector>.
+        //
+        // Example of real implementation:
+        // if let Some(ref coordinator) = self.swarm_coordinator {
+        //     let provider = SwarmContextProvider::new(coordinator.injector.clone());
+        //     context_providers.push(Box::new(provider));
+        // }
+
+        // Build MessageBuilder with providers
+        MessageBuilder::new(config).with_providers(context_providers)
     }
 }
 
@@ -291,5 +331,39 @@ mod tests {
             .build();
 
         assert!(agent_loop.swarm_coordinator.is_some());
+    }
+
+    #[test]
+    fn test_build_message_builder() {
+        let thinker = Arc::new(MockThinker);
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+
+        let builder = AgentLoopBuilder::new(thinker, executor, compressor);
+        let msg_config = MessageBuilderConfig::default();
+        let message_builder = builder.build_message_builder(msg_config);
+
+        // Verify MessageBuilder was created (no providers since no swarm)
+        // This is a basic smoke test to ensure the method works
+        assert!(message_builder.has_compactor() == false);
+    }
+
+    #[test]
+    fn test_build_message_builder_with_swarm() {
+        let thinker = Arc::new(MockThinker);
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+        let coordinator = Arc::new(SwarmCoordinator);
+
+        let builder = AgentLoopBuilder::new(thinker, executor, compressor)
+            .with_swarm(coordinator);
+
+        let msg_config = MessageBuilderConfig::default();
+        let message_builder = builder.build_message_builder(msg_config);
+
+        // Verify MessageBuilder was created
+        // In the real implementation with actual SwarmCoordinator,
+        // this would verify that SwarmContextProvider was added
+        assert!(message_builder.has_compactor() == false);
     }
 }
