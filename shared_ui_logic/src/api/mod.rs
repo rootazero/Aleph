@@ -8,6 +8,7 @@
 //! - [`config`]: Config API - 配置管理
 //! - [`plugins`]: Plugins API - 插件管理
 //! - [`providers`]: Providers API - AI 提供商管理
+//! - [`alerts`]: Alerts API - 系统健康和告警监控
 //!
 //! ## 使用示例
 //!
@@ -75,12 +76,34 @@
 //! }
 //! ```
 
+//! ### Alerts API
+//!
+//! ```rust,ignore
+//! use aleph_ui_logic::api::AlertsApi;
+//! use aleph_ui_logic::connection::create_connector;
+//!
+//! let connector = create_connector();
+//! let alerts = AlertsApi::new(connector);
+//!
+//! // Get system health
+//! let health = alerts.get_system_health().await?;
+//! println!("System status: {:?}", health.status);
+//!
+//! // Get memory status
+//! let memory = alerts.get_memory_status().await?;
+//! println!("Total memories: {}", memory.total_memories);
+//! ```
+
+pub mod alerts;
 pub mod config;
 pub mod memory;
 pub mod plugins;
 pub mod providers;
 
 // Re-export commonly used types
+pub use alerts::{
+    AlertData, AlertSeverity, AlertsApi, HealthStatus, MemoryStatusData, SystemHealthData,
+};
 pub use config::{
     BehaviorConfig, CodeExecConfig, ConfigApi, FileOpsConfig, PoliciesConfig, SearchConfig,
     ShortcutsConfig,
