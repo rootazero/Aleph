@@ -26,7 +26,7 @@ pub enum AlertLevel {
 #[derive(Clone, Debug)]
 pub struct SystemAlert {
     /// 告警 key（如 "system.health"）
-    pub key: &'static str,
+    pub key: String,
     /// 告警级别
     pub level: AlertLevel,
     /// 可选的数字徽章（如 "3 个错误"）
