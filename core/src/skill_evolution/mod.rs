@@ -37,6 +37,7 @@
 
 pub mod approval;
 pub mod compiler;
+pub mod constraint_validator;
 pub mod detector;
 pub mod generator;
 pub mod git;
@@ -52,6 +53,10 @@ pub mod types;
 
 pub use approval::{ApprovalConfig, ApprovalManager, ApprovalRequest, ApprovalStatus};
 pub use compiler::{CompilationResult, CompilerStatus, SkillCompiler};
+pub use constraint_validator::{
+    ConstraintMismatch, ConstraintValidator, ValidationError, ValidationReport,
+    ValidationWarning,
+};
 pub use detector::SolidificationDetector;
 pub use generator::SkillGenerator;
 pub use git::GitCommitter;
