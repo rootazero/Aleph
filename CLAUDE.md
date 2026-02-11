@@ -183,6 +183,30 @@ Aleph 支持 **Server-Client 分布式架构**，实现"大脑在云端，手脚
 | **PreferServer** | Server 执行 | Server 执行 |
 | **PreferClient** | Client 执行 | Server 回退 |
 
+#### ⚠️ 关键架构原则：Server-Side Execution
+
+**IMPORTANT**: 在 Aleph 的 Server-Client 架构中：
+
+- **Client 的定义**: Client **仅仅是对话窗口（UI）**，负责消息的输入输出和展示
+- **Server 的职责**: **所有任务都在 Server 端完成**，包括但不限于：
+  - 屏幕识别和截图分析
+  - 浏览器自动化
+  - 文件系统操作
+  - Shell 命令执行
+  - 工具调用和编排
+  - AI 推理和决策
+
+**架构意图**：
+- Client 是"眼睛和嘴巴"（输入输出界面）
+- Server 是"大脑和手脚"（思考和执行中心）
+- 即使在分布式部署中，所有的感知（Perception）、思考（Thinking）、行动（Action）都发生在 Server 侧
+
+**实施指导**：
+- 开发新功能时，默认所有逻辑在 Server 实现
+- Client 只负责 WebSocket 通信和 UI 渲染
+- 不要在 Client 侧实现业务逻辑或工具执行
+- System State Bus (SSB) 等感知系统运行在 Server 侧
+
 详见：[Server-Client 架构设计](docs/plans/2026-02-06-server-client-architecture-design.md) | [实施计划](docs/plans/2026-02-06-server-client-implementation.md)
 
 ---
