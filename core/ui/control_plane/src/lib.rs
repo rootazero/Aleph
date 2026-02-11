@@ -6,7 +6,6 @@ pub mod generation;
 pub mod models;
 pub mod preset_providers;
 pub mod views;
-pub mod mock_data;
 
 use wasm_bindgen::prelude::*;
 

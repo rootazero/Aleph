@@ -131,15 +131,27 @@ pub fn Memory() -> impl IntoView {
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                  <Card class="bg-indigo-500/5 border-indigo-500/10 p-6 flex flex-col items-start".to_string()>
                     <span class="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1.5">"Total Facts"</span>
-                    <span class="text-3xl font-bold font-mono">"1,248"</span>
+                    <span class="text-3xl font-bold font-mono">
+                        {move || {
+                            stats.get()
+                                .map(|s| s.total_facts.to_string())
+                                .unwrap_or_else(|| "—".to_string())
+                        }}
+                    </span>
                  </Card>
                  <Card class="bg-emerald-500/5 border-emerald-500/10 p-6 flex flex-col items-start".to_string()>
                     <span class="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-1.5">"Vector Size"</span>
-                    <span class="text-3xl font-bold font-mono">"42.8 MB"</span>
+                    <span class="text-3xl font-bold font-mono">
+                        {move || {
+                            stats.get()
+                                .map(|s| format!("{:.1} MB", s.total_size as f64 / 1_048_576.0))
+                                .unwrap_or_else(|| "—".to_string())
+                        }}
+                    </span>
                  </Card>
                  <Card class="bg-purple-500/5 border-purple-500/10 p-6 flex flex-col items-start".to_string()>
                     <span class="text-[10px] font-bold text-purple-400 uppercase tracking-widest mb-1.5">"Active Sources"</span>
-                    <span class="text-3xl font-bold font-mono">"12"</span>
+                    <span class="text-3xl font-bold font-mono">"—"</span>
                  </Card>
             </div>
 
@@ -155,11 +167,50 @@ pub fn Memory() -> impl IntoView {
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-800/50">
-                        <MemoryRow content="User prefers TypeScript over JavaScript for all web projects." source="Chat Session #42" date="2026-02-08" />
-                        <MemoryRow content="The product launch is scheduled for early March 2026." source="EMail Analysis" date="2026-02-07" />
-                        <MemoryRow content="Aleph architecture uses a decentralized gateway pattern." source="Core Docs" date="2026-02-06" />
-                        <MemoryRow content="Favorite color palette is deep slate with indigo accents." source="System Prefs" date="2026-02-05" />
-                        <MemoryRow content="Key stakeholder for the Aether project is Dr. Aris." source="Meeting Notes" date="2026-02-04" />
+                        {move || {
+                            if !state.is_connected.get() {
+                                view! {
+                                    <tr>
+                                        <td colspan="4" class="p-8 text-center text-slate-500">
+                                            "Connect to Gateway to view memory facts"
+                                        </td>
+                                    </tr>
+                                }.into_any()
+                            } else if is_searching.get() {
+                                view! {
+                                    <tr>
+                                        <td colspan="4" class="p-8 text-center text-slate-500">
+                                            "Searching..."
+                                        </td>
+                                    </tr>
+                                }.into_any()
+                            } else if search_results.get().is_empty() {
+                                view! {
+                                    <tr>
+                                        <td colspan="4" class="p-8 text-center text-slate-500">
+                                            "No facts found. Try searching for something."
+                                        </td>
+                                    </tr>
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <For
+                                        each=move || search_results.get()
+                                        key=|fact| fact.id.clone()
+                                        children=move |fact| {
+                                            let created_at = fact.created_at.clone().unwrap_or_else(|| "Unknown".to_string());
+                                            view! {
+                                                <MemoryRow
+                                                    content=fact.content
+                                                    source="Memory".to_string()
+                                                    date=created_at
+                                                />
+                                            }
+                                        }
+                                    />
+                                }.into_any()
+                            }
+                        }}
                     </tbody>
                 </table>
             </Card>
@@ -169,9 +220,9 @@ pub fn Memory() -> impl IntoView {
 
 #[component]
 fn MemoryRow(
-    content: &'static str,
-    source: &'static str,
-    date: &'static str,
+    content: String,
+    source: String,
+    date: String,
 ) -> impl IntoView {
     view! {
         <tr class="group hover:bg-slate-800/20 transition-colors">

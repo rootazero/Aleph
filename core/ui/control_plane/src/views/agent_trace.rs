@@ -1,6 +1,5 @@
 use leptos::prelude::*;
 use crate::models::{TraceNode, TraceNodeType};
-use crate::mock_data::generate_mock_trace_nodes;
 use crate::context::{DashboardState, GatewayEvent};
 
 #[component]
@@ -8,8 +7,8 @@ pub fn AgentTrace() -> impl IntoView {
     // Get dashboard state from context
     let state = expect_context::<DashboardState>();
 
-    // State
-    let nodes = RwSignal::new(generate_mock_trace_nodes());
+    // State - start with empty nodes instead of mock data
+    let nodes = RwSignal::new(Vec::<TraceNode>::new());
     let is_active = RwSignal::new(true);
 
     // Subscribe to agent events when connected
@@ -147,15 +146,34 @@ pub fn AgentTrace() -> impl IntoView {
             // Timeline Content
             <div class="flex-1 overflow-y-auto p-8">
                 <div class="max-w-4xl mx-auto">
-                    <div class="relative border-l-2 border-slate-800 ml-4 pl-10 space-y-12 pb-24">
-                        <For
-                            each=move || nodes.get()
-                            key=|node| node.id.clone()
-                            children=move |node| view! {
-                                <TraceNodeItem node=node />
-                            }
-                        />
-                    </div>
+                    {move || {
+                        let node_list = nodes.get();
+                        if node_list.is_empty() {
+                            view! {
+                                <div class="text-center py-16">
+                                    <div class="text-slate-500 mb-2">
+                                        <svg width="48" height="48" attr:class="w-12 h-12 mx-auto mb-4 opacity-50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                                        </svg>
+                                    </div>
+                                    <p class="text-slate-400">"No agent trace events yet"</p>
+                                    <p class="text-sm text-slate-500 mt-2">"Events will appear here when the agent starts processing"</p>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <div class="relative border-l-2 border-slate-800 ml-4 pl-10 space-y-12 pb-24">
+                                    <For
+                                        each=move || nodes.get()
+                                        key=|node| node.id.clone()
+                                        children=move |node| view! {
+                                            <TraceNodeItem node=node />
+                                        }
+                                    />
+                                </div>
+                            }.into_any()
+                        }
+                    }}
                 </div>
             </div>
         </div>
