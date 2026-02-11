@@ -14,6 +14,7 @@ pub mod context_injector;
 pub mod collective_memory;
 pub mod coordinator;
 pub mod tools;
+pub mod context_provider;
 
 pub use events::{AgentEvent, CriticalEvent, ImportantEvent, InfoEvent, EventTier, FileOperation};
 pub use bus::AgentMessageBus;
@@ -23,3 +24,4 @@ pub use context_injector::{ContextInjector, SwarmContextEntry};
 pub use collective_memory::{CollectiveMemory, TeamHistoryQuery};
 pub use coordinator::{SwarmCoordinator, SwarmConfig, SwarmStatistics};
 pub use tools::GetTeamActivityTool;
+pub use context_provider::SwarmContextProvider;
