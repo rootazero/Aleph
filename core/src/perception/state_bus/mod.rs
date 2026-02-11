@@ -51,6 +51,7 @@ pub use ax_observer::AxObserver;
 
 use crate::error::Result;
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
+use crate::perception::connectors::ConnectorRegistry;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -68,6 +69,9 @@ pub struct SystemStateBus {
     /// Privacy filter middleware
     privacy_filter: Arc<PrivacyFilter>,
 
+    /// Connector registry for multi-source state capture
+    connector_registry: Arc<ConnectorRegistry>,
+
     /// AX observer (macOS only)
     #[cfg(target_os = "macos")]
     ax_observer: Option<Arc<AxObserver>>,
@@ -81,6 +85,7 @@ impl SystemStateBus {
             state_cache: Arc::new(RwLock::new(StateCache::new())),
             state_history: Arc::new(RwLock::new(StateHistory::new(30))),
             privacy_filter: Arc::new(PrivacyFilter::default()),
+            connector_registry: Arc::new(ConnectorRegistry::new()),
             #[cfg(target_os = "macos")]
             ax_observer: None,
         }
@@ -93,6 +98,7 @@ impl SystemStateBus {
             state_cache: Arc::new(RwLock::new(StateCache::new())),
             state_history: Arc::new(RwLock::new(StateHistory::new(30))),
             privacy_filter: Arc::new(PrivacyFilter::new(privacy_config)),
+            connector_registry: Arc::new(ConnectorRegistry::new()),
             #[cfg(target_os = "macos")]
             ax_observer: None,
         }
@@ -191,6 +197,7 @@ impl SystemStateBus {
             state_cache: self.state_cache.clone(),
             state_history: self.state_history.clone(),
             privacy_filter: self.privacy_filter.clone(),
+            connector_registry: self.connector_registry.clone(),
             #[cfg(target_os = "macos")]
             ax_observer: self.ax_observer.clone(),
         }
@@ -209,5 +216,52 @@ impl SystemStateBus {
     /// Get privacy filter.
     pub fn privacy_filter(&self) -> Arc<PrivacyFilter> {
         self.privacy_filter.clone()
+    }
+
+    /// Get connector registry.
+    pub fn connector_registry(&self) -> Arc<ConnectorRegistry> {
+        self.connector_registry.clone()
+    }
+
+    /// Capture state using the best available connector.
+    ///
+    /// This method uses the ConnectorRegistry to automatically select
+    /// the best connector for the given application (AX > Plugin > Vision).
+    pub async fn capture_state_with_connector(
+        &self,
+        bundle_id: &str,
+        window_id: &str,
+    ) -> Result<AppState> {
+        // Capture state using connector
+        let mut state = self
+            .connector_registry
+            .capture_state(bundle_id, window_id)
+            .await?;
+
+        // Apply privacy filter
+        self.privacy_filter.filter(&mut state);
+
+        // Update cache
+        self.state_cache.write().await.update(state.clone());
+
+        // Store in history
+        if self.state_history.read().await.should_store_iframe() {
+            self.state_history
+                .write()
+                .await
+                .store_iframe(state.clone());
+        }
+
+        Ok(state)
+    }
+
+    /// Start monitoring an application using connectors.
+    pub async fn start_monitoring(&self, bundle_id: &str) -> Result<()> {
+        self.connector_registry.start_monitoring(bundle_id).await
+    }
+
+    /// Stop monitoring an application.
+    pub async fn stop_monitoring(&self, bundle_id: &str) -> Result<()> {
+        self.connector_registry.stop_monitoring(bundle_id).await
     }
 }
