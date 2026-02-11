@@ -392,11 +392,20 @@ impl DashboardState {
     ///
     /// This method subscribes to alert-related events from the Gateway and
     /// updates the DashboardState.alerts HashMap when events arrive.
+    /// It also fetches initial alert states on mount.
     pub async fn setup_alert_subscriptions(&self) -> Result<(), String> {
         // Subscribe to alert events on the Gateway
         self.subscribe_topic("alerts.**").await?;
 
         web_sys::console::log_1(&"Subscribed to alerts.** events".into());
+
+        // Load initial alert states
+        let state_for_init = *self;
+        spawn_local(async move {
+            if let Err(e) = state_for_init.load_initial_alerts().await {
+                web_sys::console::error_1(&format!("Failed to load initial alerts: {}", e).into());
+            }
+        });
 
         // Setup event handler for alert events
         let state = *self;
@@ -449,6 +458,73 @@ impl DashboardState {
         // Store subscription ID for cleanup
         self.alert_subscription_id.set_value(Some(subscription_id));
 
+        Ok(())
+    }
+
+    /// Load initial alert states from Gateway
+    ///
+    /// This method fetches the current alert states when the UI first connects,
+    /// ensuring that existing alerts are displayed even if no new events arrive.
+    async fn load_initial_alerts(&self) -> Result<(), String> {
+        web_sys::console::log_1(&"Loading initial alert states...".into());
+
+        // Fetch system health
+        match self.rpc_call("health", serde_json::json!({})).await {
+            Ok(result) => {
+                if let Some(status) = result.get("status").and_then(|s| s.as_str()) {
+                    let level = match status {
+                        "healthy" => crate::components::sidebar::AlertLevel::None,
+                        "degraded" => crate::components::sidebar::AlertLevel::Warning,
+                        "unhealthy" => crate::components::sidebar::AlertLevel::Critical,
+                        _ => crate::components::sidebar::AlertLevel::None,
+                    };
+
+                    if level != crate::components::sidebar::AlertLevel::None {
+                        let message = result.get("message")
+                            .and_then(|m| m.as_str())
+                            .map(|s| s.to_string());
+
+                        let alert = crate::components::sidebar::SystemAlert {
+                            key: "system.health".to_string(),
+                            level,
+                            count: None,
+                            message,
+                        };
+
+                        self.update_alert(alert.key.clone(), alert);
+                        web_sys::console::log_1(&format!("Loaded system.health alert: {:?}", level).into());
+                    }
+                }
+            }
+            Err(e) => {
+                web_sys::console::warn_1(&format!("Failed to fetch system health: {}", e).into());
+            }
+        }
+
+        // Fetch memory status
+        match self.rpc_call("memory.stats", serde_json::json!({})).await {
+            Ok(result) => {
+                if let Some(db_size) = result.get("databaseSizeMb").and_then(|s| s.as_f64()) {
+                    // Warn if database is larger than 100MB
+                    if db_size > 100.0 {
+                        let alert = crate::components::sidebar::SystemAlert {
+                            key: "memory.status".to_string(),
+                            level: crate::components::sidebar::AlertLevel::Warning,
+                            count: None,
+                            message: Some(format!("Database size: {:.1} MB", db_size)),
+                        };
+
+                        self.update_alert(alert.key.clone(), alert);
+                        web_sys::console::log_1(&format!("Loaded memory.status alert: {:.1} MB", db_size).into());
+                    }
+                }
+            }
+            Err(e) => {
+                web_sys::console::warn_1(&format!("Failed to fetch memory stats: {}", e).into());
+            }
+        }
+
+        web_sys::console::log_1(&"Initial alert states loaded".into());
         Ok(())
     }
 

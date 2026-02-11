@@ -1,4 +1,18 @@
 // core/ui/control_plane/src/components/sidebar/sidebar.rs
+//
+// Sidebar component with real-time alert integration.
+//
+// Alert Flow:
+// 1. Gateway emits alert events (e.g., "alerts.system.health")
+// 2. DashboardState.setup_alert_subscriptions() subscribes to "alerts.**"
+// 3. Event handler updates DashboardState.alerts HashMap
+// 4. SidebarItem subscribes to alerts via Signal::derive()
+// 5. StatusBadge/Tooltip display alert state reactively
+//
+// Initial State Loading:
+// - DashboardState.load_initial_alerts() fetches current alert states on mount
+// - Ensures existing alerts are displayed even if no new events arrive
+//
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_location;
