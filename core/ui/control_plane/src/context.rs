@@ -465,6 +465,15 @@ impl DashboardState {
     ///
     /// This method fetches the current alert states when the UI first connects,
     /// ensuring that existing alerts are displayed even if no new events arrive.
+    ///
+    /// # Implementation Note
+    ///
+    /// Currently uses direct `rpc_call()` methods instead of `AlertsApi` from shared_ui_logic.
+    /// This is because the `AlertsApi` in `/Volumes/TBU4/Workspace/Aleph/shared_ui_logic/` uses
+    /// a different `RpcClient` implementation that is incompatible with the current architecture.
+    ///
+    /// **TODO**: Refactor to use `AlertsApi::get_system_health()` and `AlertsApi::get_memory_status()`
+    /// once the shared_ui_logic crate is unified and the RpcClient implementations are aligned.
     async fn load_initial_alerts(&self) -> Result<(), String> {
         web_sys::console::log_1(&"Loading initial alert states...".into());
 
