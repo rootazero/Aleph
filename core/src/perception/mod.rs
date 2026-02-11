@@ -1,10 +1,12 @@
-//! Perception subsystem for SnapshotTool.
+//! Perception subsystem for SnapshotTool and System State Bus.
 
 mod types;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(not(target_os = "macos"))]
 mod stub;
+
+pub mod state_bus;
 
 pub use types::*;
 
