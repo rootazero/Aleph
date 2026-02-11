@@ -8,6 +8,35 @@
 //! - Manifest says "no network" but Capabilities allow network
 //! - Manifest allows file access but Capabilities don't grant it
 //! - Capabilities grant permissions that Manifest doesn't explicitly allow
+//!
+//! # Example
+//!
+//! ```rust
+//! use alephcore::skill_evolution::constraint_validator::ConstraintValidator;
+//! use alephcore::skill_evolution::success_manifest::SuccessManifest;
+//! use alephcore::exec::sandbox::capabilities::Capabilities;
+//!
+//! let manifest = SuccessManifest::new("test_skill", "Test skill");
+//! let capabilities = Capabilities::default();
+//!
+//! // Validate constraints
+//! match ConstraintValidator::validate(&manifest, &capabilities) {
+//!     Ok(report) => {
+//!         println!("Validation passed with {} warnings", report.warnings.len());
+//!     }
+//!     Err(mismatch) => {
+//!         eprintln!("Validation failed: {:?}", mismatch);
+//!     }
+//! }
+//! ```
+//!
+//! # Validation Rules
+//!
+//! 1. **Network**: If manifest prohibits network, capabilities must deny network
+//! 2. **Filesystem Read**: Manifest-allowed paths must be granted by capabilities
+//! 3. **Filesystem Write**: Manifest-allowed write paths must be granted
+//! 4. **Unauthorized Permissions**: Capabilities shouldn't grant undeclared permissions
+//! 5. **Process**: If manifest prohibits fork, capabilities must deny process spawn
 
 use crate::exec::sandbox::capabilities::{
     Capabilities, FileSystemCapability, NetworkCapability,
