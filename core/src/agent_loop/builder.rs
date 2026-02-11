@@ -22,8 +22,8 @@ use crate::agent_loop::{ContextProvider, MessageBuilder, MessageBuilderConfig};
 use crate::event::EventBus;
 use crate::agent_loop::overflow::OverflowDetector;
 
-/// Placeholder for SwarmCoordinator (to be implemented in later tasks)
-pub struct SwarmCoordinator;
+// Re-export SwarmCoordinator from agents::swarm
+pub use crate::agents::swarm::coordinator::SwarmCoordinator;
 
 /// Builder for constructing AgentLoop instances with optional components
 ///
@@ -98,10 +98,18 @@ where
     /// Consumes the builder and constructs a complete AgentLoop with all
     /// configured components (EventBus, OverflowDetector, SwarmCoordinator).
     ///
+    /// If SwarmCoordinator is enabled, automatically starts background
+    /// statistics logging (every 60 seconds).
+    ///
     /// # Returns
     ///
     /// A fully configured AgentLoop instance ready for execution.
     pub fn build(self) -> crate::agent_loop::AgentLoop<T, E, C> {
+        // If Swarm enabled, start statistics logging
+        if let Some(ref coordinator) = self.swarm_coordinator {
+            coordinator.start_statistics_logging();
+        }
+
         crate::agent_loop::AgentLoop::from_builder(
             self.thinker,
             self.executor,
@@ -273,12 +281,12 @@ mod tests {
         assert!(builder.overflow_detector.is_some());
     }
 
-    #[test]
-    fn test_builder_with_swarm_coordinator() {
+    #[tokio::test]
+    async fn test_builder_with_swarm_coordinator() {
         let thinker = Arc::new(MockThinker);
         let executor = Arc::new(MockExecutor);
         let compressor = Arc::new(MockCompressor);
-        let coordinator = Arc::new(SwarmCoordinator);
+        let coordinator = Arc::new(SwarmCoordinator::new().await.unwrap());
 
         let builder = AgentLoopBuilder::new(thinker, executor, compressor)
             .with_swarm(coordinator.clone());
@@ -286,14 +294,14 @@ mod tests {
         assert!(builder.swarm_coordinator.is_some());
     }
 
-    #[test]
-    fn test_builder_fluent_api() {
+    #[tokio::test]
+    async fn test_builder_fluent_api() {
         let thinker = Arc::new(MockThinker);
         let executor = Arc::new(MockExecutor);
         let compressor = Arc::new(MockCompressor);
         let event_bus = Arc::new(EventBus::new());
         let detector = Arc::new(OverflowDetector::new(Default::default()));
-        let coordinator = Arc::new(SwarmCoordinator);
+        let coordinator = Arc::new(SwarmCoordinator::new().await.unwrap());
 
         let builder = AgentLoopBuilder::new(thinker, executor, compressor)
             .with_config(LoopConfig::default().with_max_steps(200))
@@ -319,12 +327,12 @@ mod tests {
         assert!(agent_loop.swarm_coordinator.is_none());
     }
 
-    #[test]
-    fn test_builder_build_with_swarm() {
+    #[tokio::test]
+    async fn test_builder_build_with_swarm() {
         let thinker = Arc::new(MockThinker);
         let executor = Arc::new(MockExecutor);
         let compressor = Arc::new(MockCompressor);
-        let coordinator = Arc::new(SwarmCoordinator);
+        let coordinator = Arc::new(SwarmCoordinator::new().await.unwrap());
 
         let agent_loop = AgentLoopBuilder::new(thinker, executor, compressor)
             .with_swarm(coordinator.clone())
@@ -348,12 +356,12 @@ mod tests {
         assert!(message_builder.has_compactor() == false);
     }
 
-    #[test]
-    fn test_build_message_builder_with_swarm() {
+    #[tokio::test]
+    async fn test_build_message_builder_with_swarm() {
         let thinker = Arc::new(MockThinker);
         let executor = Arc::new(MockExecutor);
         let compressor = Arc::new(MockCompressor);
-        let coordinator = Arc::new(SwarmCoordinator);
+        let coordinator = Arc::new(SwarmCoordinator::new().await.unwrap());
 
         let builder = AgentLoopBuilder::new(thinker, executor, compressor)
             .with_swarm(coordinator);
