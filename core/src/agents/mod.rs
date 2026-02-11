@@ -37,6 +37,9 @@ pub mod rig;
 /// Specialized sub-agents for task delegation.
 pub mod sub_agents;
 
+/// Swarm intelligence for horizontal agent collaboration.
+pub mod swarm;
+
 #[cfg(test)]
 mod integration_test;
 
@@ -55,6 +58,11 @@ pub use rig::{
 pub use sub_agents::{
     DelegateTool, McpSubAgent, SkillSubAgent, SubAgent, SubAgentCapability, SubAgentDispatcher,
     SubAgentRequest, SubAgentResult, SubAgentType,
+};
+
+// Re-export swarm module types for convenience
+pub use swarm::{
+    AgentEvent, AgentMessageBus, CriticalEvent, EventTier, ImportantEvent, InfoEvent,
 };
 
 // Re-export thinking module types for convenience
