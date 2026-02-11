@@ -44,6 +44,7 @@ pub mod pipeline;
 pub mod safety;
 pub mod sandbox_integration;
 pub mod sandboxed_executor;
+pub mod success_manifest;
 pub mod tool_generator;
 pub mod tool_testing;
 pub mod tracker;
@@ -58,6 +59,11 @@ pub use pipeline::{PipelineResult, PipelineStatus, SolidificationPipeline};
 pub use safety::{
     ConcernType, FirstRunConfirmation, SafetyConcern, SafetyGate, SafetyGateConfig, SafetyLevel,
     SafetyReport,
+};
+pub use success_manifest::{
+    AllowedOperations, DataProcessing, FileSystemOperations, FileSystemRestrictions,
+    NetworkRestrictions, ProcessRestrictions, ProhibitedOperations, RecommendedTool,
+    ScriptExecution, SkillMetadata, SuccessManifest,
 };
 pub use tool_generator::{
     GeneratedToolDefinition, GenerationMetadata, ToolGenerationResult, ToolGenerator,
