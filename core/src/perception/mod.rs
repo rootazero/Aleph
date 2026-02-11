@@ -10,6 +10,7 @@ pub mod state_bus;
 pub mod simulation_executor;
 pub mod action_dispatcher;
 pub mod connectors;
+pub mod pal; // Platform Abstraction Layer
 
 pub use types::*;
 pub use simulation_executor::SimulationExecutor;
