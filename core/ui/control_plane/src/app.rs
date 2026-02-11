@@ -23,6 +23,7 @@ use crate::views::settings::SkillsView;
 use crate::views::settings::PoliciesView;
 // TODO: Restore after sidebar refactoring is complete
 // use crate::components::sidebar::Sidebar;
+use crate::components::SettingsLayout;
 use crate::context::DashboardContext;
 
 #[component]
@@ -45,22 +46,7 @@ pub fn App() -> impl IntoView {
                             <Route path=path!("/status") view=SystemStatus />
                             <Route path=path!("/trace") view=AgentTrace />
                             <Route path=path!("/memory") view=Memory />
-                            <Route path=path!("/settings") view=Settings />
-                            <Route path=path!("/settings/general") view=GeneralView />
-                            <Route path=path!("/settings/shortcuts") view=ShortcutsView />
-                            <Route path=path!("/settings/behavior") view=BehaviorView />
-                            <Route path=path!("/settings/generation") view=GenerationView />
-                            <Route path=path!("/settings/search") view=SearchView />
-                            <Route path=path!("/settings/providers") view=ProvidersView />
-                            <Route path=path!("/settings/generation-providers") view=GenerationProvidersView />
-                            <Route path=path!("/settings/agent") view=AgentView />
-                            <Route path=path!("/settings/routing") view=RoutingRulesView />
-                            <Route path=path!("/settings/mcp") view=McpView />
-                            <Route path=path!("/settings/plugins") view=PluginsView />
-                            <Route path=path!("/settings/skills") view=SkillsView />
-                            <Route path=path!("/settings/memory") view=MemoryView />
-                            <Route path=path!("/settings/security") view=SecurityView />
-                            <Route path=path!("/settings/policies") view=PoliciesView />
+                            <Route path=path!("/settings/*any") view=SettingsLayout />
                         </Routes>
                     </main>
                 </Router>

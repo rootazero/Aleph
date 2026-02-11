@@ -1,7 +1,9 @@
 // core/ui/control_plane/src/components/layouts/settings_layout.rs
 use leptos::prelude::*;
-use leptos_router::components::Outlet;
+use leptos_router::components::{Outlet, Route, Routes};
+use leptos_router::path;
 use crate::components::SettingsSidebar;
+use crate::views::settings::*;
 
 /// Settings 域的布局容器
 ///
@@ -14,9 +16,26 @@ pub fn SettingsLayout() -> impl IntoView {
             // 第二栏：Settings 专用侧边栏
             <SettingsSidebar />
 
-            // 第三栏：内容区（通过 Outlet 渲染子路由）
+            // 第三栏：内容区（通过嵌套路由渲染）
             <div class="flex-1 overflow-y-auto">
-                <Outlet />
+                <Routes fallback=|| view! { <div class="p-8">"Settings page not found"</div> }>
+                    <Route path=path!("") view=Settings />
+                    <Route path=path!("general") view=GeneralView />
+                    <Route path=path!("shortcuts") view=ShortcutsView />
+                    <Route path=path!("behavior") view=BehaviorView />
+                    <Route path=path!("generation") view=GenerationView />
+                    <Route path=path!("search") view=SearchView />
+                    <Route path=path!("providers") view=ProvidersView />
+                    <Route path=path!("generation-providers") view=GenerationProvidersView />
+                    <Route path=path!("agent") view=AgentView />
+                    <Route path=path!("routing") view=RoutingRulesView />
+                    <Route path=path!("mcp") view=McpView />
+                    <Route path=path!("plugins") view=PluginsView />
+                    <Route path=path!("skills") view=SkillsView />
+                    <Route path=path!("memory") view=MemoryView />
+                    <Route path=path!("security") view=SecurityView />
+                    <Route path=path!("policies") view=PoliciesView />
+                </Routes>
             </div>
         </div>
     }
