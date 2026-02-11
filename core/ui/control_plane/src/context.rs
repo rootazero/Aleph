@@ -48,10 +48,13 @@ pub struct DashboardState {
     disconnect_tx: StoredValue<Option<oneshot::Sender<()>>>,
 
     /// System alert state bus
-    pub alerts: RwSignal<HashMap<&'static str, SystemAlert>>,
+    pub alerts: RwSignal<HashMap<String, SystemAlert>>,
 
     /// Sidebar mode override (user manual setting)
     pub sidebar_mode_override: RwSignal<Option<SidebarMode>>,
+
+    /// Alert subscription ID for cleanup
+    alert_subscription_id: StoredValue<Option<usize>>,
 }
 
 impl DashboardState {
@@ -68,6 +71,7 @@ impl DashboardState {
             disconnect_tx: StoredValue::new(None),
             alerts: RwSignal::new(HashMap::new()),
             sidebar_mode_override: RwSignal::new(None),
+            alert_subscription_id: StoredValue::new(None),
         }
     }
 
@@ -78,7 +82,7 @@ impl DashboardState {
         F: Fn(GatewayEvent) + Send + Sync + 'static,
     {
         let handlers = self.event_handlers.with_value(|h| h.clone());
-        let mut handlers = handlers.lock().unwrap();
+        let mut handlers = handlers.lock().expect("event handlers mutex poisoned");
         let id = handlers.len();
         handlers.push(Arc::new(handler));
         id
@@ -87,7 +91,7 @@ impl DashboardState {
     /// Unsubscribe from events
     pub fn unsubscribe_events(&self, id: usize) {
         let handlers = self.event_handlers.with_value(|h| h.clone());
-        let mut handlers = handlers.lock().unwrap();
+        let mut handlers = handlers.lock().expect("event handlers mutex poisoned");
         if id < handlers.len() {
             // Replace with a no-op handler instead of removing to preserve indices
             handlers[id] = Arc::new(|_| {});
@@ -95,19 +99,19 @@ impl DashboardState {
     }
 
     /// Update alert state
-    pub fn update_alert(&self, key: &'static str, alert: SystemAlert) {
+    pub fn update_alert(&self, key: String, alert: SystemAlert) {
         self.alerts.update(|map| {
             map.insert(key, alert);
         });
     }
 
     /// Get alert state
-    pub fn get_alert(&self, key: &'static str) -> Option<SystemAlert> {
+    pub fn get_alert(&self, key: &str) -> Option<SystemAlert> {
         self.alerts.with(|map| map.get(key).cloned())
     }
 
     /// Clear alert state
-    pub fn clear_alert(&self, key: &'static str) {
+    pub fn clear_alert(&self, key: &str) {
         self.alerts.update(|map| {
             map.remove(key);
         });
@@ -116,7 +120,7 @@ impl DashboardState {
     /// Dispatch event to all subscribers
     fn dispatch_event(&self, event: GatewayEvent) {
         let handlers = self.event_handlers.with_value(|h| h.clone());
-        let handlers = handlers.lock().unwrap();
+        let handlers = handlers.lock().expect("event handlers mutex poisoned");
         for handler in handlers.iter() {
             handler(event.clone());
         }
@@ -143,7 +147,7 @@ impl DashboardState {
         // Generate unique ID
         let id = {
             let next_id = self.next_id.with_value(|n| n.clone());
-            let mut id_gen = next_id.lock().unwrap();
+            let mut id_gen = next_id.lock().expect("RPC ID generator mutex poisoned");
             let id = *id_gen;
             *id_gen += 1;
             id.to_string()
@@ -323,6 +327,9 @@ impl DashboardState {
 
     /// Disconnect from the gateway
     pub async fn disconnect(&self) -> Result<(), String> {
+        // Cleanup alert subscriptions first
+        self.cleanup_alert_subscriptions();
+
         // Send disconnect signal to message loop (take ownership)
         let mut tx_opt = None;
         self.disconnect_tx.update_value(|v| {
@@ -393,7 +400,7 @@ impl DashboardState {
 
         // Setup event handler for alert events
         let state = *self;
-        self.subscribe_events(move |event: GatewayEvent| {
+        let subscription_id = self.subscribe_events(move |event: GatewayEvent| {
             web_sys::console::log_1(&format!("Alert event received: {} - {:?}", event.topic, event.data).into());
 
             // Parse alert data and update state
@@ -407,7 +414,10 @@ impl DashboardState {
                         "info" => crate::components::sidebar::AlertLevel::Info,
                         "warning" => crate::components::sidebar::AlertLevel::Warning,
                         "error" | "critical" => crate::components::sidebar::AlertLevel::Critical,
-                        _ => crate::components::sidebar::AlertLevel::None,
+                        _ => {
+                            web_sys::console::warn_1(&format!("Unknown alert severity: {}", severity).into());
+                            crate::components::sidebar::AlertLevel::None
+                        }
                     };
 
                     let count = event.data.get("count")
@@ -418,24 +428,39 @@ impl DashboardState {
                         .and_then(|m| m.as_str())
                         .map(|s| s.to_string());
 
-                    // Create SystemAlert
+                    // Create SystemAlert with String key (no memory leak)
                     let alert = crate::components::sidebar::SystemAlert {
-                        key: Box::leak(alert_key.to_string().into_boxed_str()),
+                        key: alert_key.to_string(),
                         level,
                         count,
                         message,
                     };
 
                     // Update alert state
-                    state.update_alert(alert.key, alert);
+                    state.update_alert(alert.key.clone(), alert);
                 } else {
                     // If no severity, clear the alert
-                    state.clear_alert(Box::leak(alert_key.to_string().into_boxed_str()));
+                    web_sys::console::warn_1(&format!("Alert event missing severity field: {}", event.topic).into());
+                    state.clear_alert(alert_key);
                 }
             }
         });
 
+        // Store subscription ID for cleanup
+        self.alert_subscription_id.set_value(Some(subscription_id));
+
         Ok(())
+    }
+
+    /// Cleanup alert subscriptions
+    ///
+    /// This method unsubscribes from alert events and clears the subscription ID.
+    pub fn cleanup_alert_subscriptions(&self) {
+        if let Some(subscription_id) = self.alert_subscription_id.get_value() {
+            self.unsubscribe_events(subscription_id);
+            self.alert_subscription_id.set_value(None);
+            web_sys::console::log_1(&"Unsubscribed from alert events".into());
+        }
     }
 }
 
