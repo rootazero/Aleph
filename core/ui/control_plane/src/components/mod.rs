@@ -16,5 +16,8 @@ pub use forms::{
 // Re-export settings sidebar
 pub use settings_sidebar::SettingsSidebar;
 
+// Re-export sidebar components
+pub use sidebar::{Sidebar, SidebarItem};
+
 // Re-export layouts
 pub use layouts::SettingsLayout;
