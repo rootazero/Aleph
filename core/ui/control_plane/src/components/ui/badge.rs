@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use tailwind_fuse::*;
+use crate::components::sidebar::AlertLevel;
 
 #[derive(TwVariant, PartialEq)]
 pub enum BadgeVariant {
@@ -28,4 +29,26 @@ pub fn Badge(
             {children()}
         </span>
     }
+}
+
+#[component]
+pub fn StatusBadge(
+    level: AlertLevel,
+    #[prop(optional)] count: Option<u32>,
+) -> impl IntoView {
+    let (bg_class, animation_class) = match level {
+        AlertLevel::None => return view! {}.into_any(),
+        AlertLevel::Info => ("bg-blue-500", ""),
+        AlertLevel::Warning => ("bg-yellow-500", ""),
+        AlertLevel::Critical => ("bg-red-500", "animate-pulse"),
+    };
+
+    view! {
+        <div class=format!(
+            "absolute -top-1 -right-1 {} {} rounded-full min-w-[16px] h-4 flex items-center justify-center text-[10px] font-bold text-white px-1",
+            bg_class, animation_class
+        )>
+            {count.map(|c| c.to_string()).unwrap_or_default()}
+        </div>
+    }.into_any()
 }
