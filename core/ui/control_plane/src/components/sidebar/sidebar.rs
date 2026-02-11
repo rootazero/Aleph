@@ -1,19 +1,41 @@
 // core/ui/control_plane/src/components/sidebar/sidebar.rs
 use leptos::prelude::*;
 use leptos_router::components::A;
+use leptos_router::hooks::use_location;
 use super::sidebar_item::SidebarItem;
+use crate::context::DashboardState;
+use crate::components::sidebar::SidebarMode;
 
 #[component]
 pub fn Sidebar() -> impl IntoView {
+    let location = use_location();
+    let state = expect_context::<DashboardState>();
+
+    // 默认：根据路由自动判断
+    let auto_mode = move || {
+        if location.pathname.get().starts_with("/settings") {
+            SidebarMode::Narrow
+        } else {
+            SidebarMode::Wide
+        }
+    };
+
+    // 最终模式：用户覆盖 > 自动判断
+    let mode = move || {
+        state.sidebar_mode_override.get()
+            .unwrap_or_else(|| auto_mode())
+    };
+
     view! {
-        <aside class="w-64 border-r border-slate-800 bg-slate-900/50 backdrop-blur-xl flex flex-col">
-            // Logo
-            <div class="p-6 flex items-center gap-3">
-                <div class="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/20">
-                    <span class="text-white font-bold text-xl">"A"</span>
-                </div>
-                <h1 class="text-xl font-semibold tracking-tight">"Aleph Hub"</h1>
-            </div>
+        <aside class=move || {
+            let base = "border-r border-slate-800 bg-slate-900/50 backdrop-blur-xl flex flex-col transition-all duration-300";
+            match mode() {
+                SidebarMode::Narrow => format!("{} w-16 items-center", base),
+                SidebarMode::Wide => format!("{} w-64", base),
+            }
+        }>
+            // Logo 区域（窄模式下只显示图标）
+            <LogoSection mode=mode />
 
             // Navigation
             <nav class="flex-1 px-4 py-4 space-y-2">
@@ -54,5 +76,27 @@ pub fn Sidebar() -> impl IntoView {
                 </A>
             </div>
         </aside>
+    }
+}
+
+#[component]
+fn LogoSection(mode: impl Fn() -> SidebarMode + 'static + Copy + Send) -> impl IntoView {
+    view! {
+        <div class=move || {
+            match mode() {
+                SidebarMode::Wide => "p-6 flex items-center gap-3",
+                SidebarMode::Narrow => "p-4 flex items-center justify-center",
+            }
+        }>
+            <div class="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                <span class="text-white font-bold text-xl">"A"</span>
+            </div>
+            {move || match mode() {
+                SidebarMode::Wide => Some(view! {
+                    <h1 class="text-xl font-semibold tracking-tight">"Aleph Hub"</h1>
+                }),
+                SidebarMode::Narrow => None,
+            }}
+        </div>
     }
 }
