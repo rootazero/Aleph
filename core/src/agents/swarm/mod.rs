@@ -10,8 +10,10 @@ pub mod events;
 pub mod bus;
 pub mod aggregator;
 pub mod rules;
+pub mod context_injector;
 
 pub use events::{AgentEvent, CriticalEvent, ImportantEvent, InfoEvent, EventTier, FileOperation};
 pub use bus::AgentMessageBus;
 pub use aggregator::{SemanticAggregator, IntelligenceLayer};
 pub use rules::{AggregationRule, EventPattern, RuleEngine};
+pub use context_injector::{ContextInjector, SwarmContextEntry};
