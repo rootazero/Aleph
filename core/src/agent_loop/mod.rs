@@ -50,6 +50,7 @@
 
 // Submodules
 pub mod answer;
+pub mod builder;
 pub mod callback;
 pub mod config;
 pub mod decision;
@@ -73,6 +74,7 @@ pub mod callback_cli;
 
 // Re-export public types
 pub use answer::UserAnswer;
+pub use builder::AgentLoopBuilder;
 pub use callback::{CollectingCallback, LoggingCallback, LoopCallback, LoopEvent, NoOpLoopCallback};
 pub use config::{CompressionConfig, LoopConfig, ModelRoutingConfig, ThinkRetryConfig};
 pub use decision::{Action, ActionResult, Decision, LlmAction, LlmResponse};
