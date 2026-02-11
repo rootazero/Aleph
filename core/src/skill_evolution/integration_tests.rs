@@ -66,6 +66,7 @@ mod tests {
                 parameter_bindings: bindings,
             }),
             approval_metadata: None,
+            success_manifest: None,
             generated: GenerationMetadata {
                 pattern_id: "test".to_string(),
                 confidence: 0.9,
