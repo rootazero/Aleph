@@ -1,7 +1,37 @@
 use leptos::prelude::*;
+use crate::context::DashboardState;
+use crate::api::{MemoryApi, SystemApi};
 
 #[component]
 pub fn Home() -> impl IntoView {
+    // Get dashboard state from context
+    let state = expect_context::<DashboardState>();
+
+    // State for stats
+    let memory_stats = RwSignal::new(None::<(u64, u64)>); // (count, size)
+    let system_info = RwSignal::new(None::<String>); // version
+
+    // Fetch stats when connected
+    Effect::new(move || {
+        if state.is_connected.get() {
+            let state_clone = state.clone();
+            leptos::task::spawn_local(async move {
+                // Fetch memory stats
+                if let Ok(stats) = MemoryApi::stats(&state_clone).await {
+                    memory_stats.set(Some((stats.total_facts, stats.total_size)));
+                }
+
+                // Fetch system info
+                if let Ok(info) = SystemApi::info(&state_clone).await {
+                    system_info.set(Some(info.version));
+                }
+            });
+        } else {
+            memory_stats.set(None);
+            system_info.set(None);
+        }
+    });
+
     view! {
         <div class="p-8 max-w-7xl mx-auto space-y-12">
             // Header
@@ -10,22 +40,47 @@ pub fn Home() -> impl IntoView {
                 <p class="text-slate-400">"Command center for your personal AI instance."</p>
             </header>
 
+            // Connection warning
+            {move || {
+                if !state.is_connected.get() {
+                    view! {
+                        <div class="bg-amber-500/10 border border-amber-500/20 rounded-xl p-6 flex items-start gap-4">
+                            <svg width="24" height="24" attr:class="w-6 h-6 text-amber-500 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                                <line x1="12" y1="9" x2="12" y2="13" />
+                                <line x1="12" y1="17" x2="12.01" y2="17" />
+                            </svg>
+                            <div>
+                                <h3 class="text-amber-400 font-semibold mb-1">"Gateway Connection Required"</h3>
+                                <p class="text-sm text-amber-300/80">"Please connect to the Aleph Gateway from the System Status page to view real-time data."</p>
+                            </div>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! { <div></div> }.into_any()
+                }
+            }}
+
             // Stats Grid
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 pt-8">
-                <StatCard label="Active Tasks" value="3" color="text-indigo-400">
+                <StatCard label="Active Tasks" value=Signal::derive(move || "—".to_string()) color="text-indigo-400">
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                 </StatCard>
-                <StatCard label="CPU Usage" value="12%" color="text-emerald-400">
+                <StatCard label="CPU Usage" value=Signal::derive(move || "—".to_string()) color="text-emerald-400">
                     <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
                     <rect x="9" y="9" width="6" height="6" />
                     <line x1="9" y1="1" x2="9" y2="4" />
                     <line x1="15" y1="1" x2="15" y2="4" />
                 </StatCard>
-                <StatCard label="Knowledge Base" value="1,248 facts" color="text-purple-400">
+                <StatCard label="Knowledge Base" value=Signal::derive(move || {
+                    memory_stats.get()
+                        .map(|(count, _)| format!("{} facts", count))
+                        .unwrap_or_else(|| "Loading...".to_string())
+                }) color="text-purple-400">
                     <ellipse cx="12" cy="5" rx="9" ry="3" />
                     <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
                 </StatCard>
-                <StatCard label="Gateway Latency" value="14ms" color="text-amber-400">
+                <StatCard label="Gateway Latency" value=Signal::derive(move || "—".to_string()) color="text-amber-400">
                     <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
                 </StatCard>
             </div>
@@ -41,10 +96,14 @@ pub fn Home() -> impl IntoView {
                                 <button class="text-xs text-indigo-400 hover:text-indigo-300">"View All"</button>
                             </div>
                         </div>
-                        <div class="p-2">
-                             <ActivityItem time="2m ago" action="Tool Execution" target="shell_exec" status="Success" />
-                             <ActivityItem time="15m ago" action="Memory Scan" target="local_files" status="Running" />
-                             <ActivityItem time="1h ago" action="Agent Run" target="market_research" status="Success" />
+                        <div class="p-8 text-center text-slate-500">
+                            {move || {
+                                if !state.is_connected.get() {
+                                    view! { <p>"Connect to Gateway to view activity"</p> }.into_any()
+                                } else {
+                                    view! { <p>"No recent activity"</p> }.into_any()
+                                }
+                            }}
                         </div>
                     </div>
                 </div>
@@ -76,7 +135,7 @@ pub fn Home() -> impl IntoView {
 #[component]
 fn StatCard(
     label: &'static str,
-    value: &'static str,
+    value: Signal<String>,
     color: &'static str,
     children: Children,
 ) -> impl IntoView {
@@ -90,36 +149,7 @@ fn StatCard(
                 </div>
             </div>
             <div class="text-sm font-medium text-slate-400 mb-1 group-hover:text-slate-300 transition-colors">{label}</div>
-            <div class="text-2xl font-bold tracking-tight">{value}</div>
-        </div>
-    }
-}
-
-#[component]
-fn ActivityItem(
-    time: &'static str,
-    action: &'static str,
-    target: &'static str,
-    status: &'static str,
-) -> impl IntoView {
-    view! {
-        <div class="flex items-center justify-between p-3 hover:bg-slate-800/30 rounded-xl transition-colors">
-            <div class="flex items-center gap-4">
-                <div class="w-2 h-2 rounded-full bg-indigo-500 shadow-neon-indigo"></div>
-                <div>
-                    <div class="text-sm font-medium text-slate-200">{action}</div>
-                    <div class="text-xs text-slate-500 font-mono">{target}</div>
-                </div>
-            </div>
-            <div class="text-right">
-                <div class="text-[10px] text-slate-500 font-mono mb-1">{time}</div>
-                <div class=format!("text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-wider font-bold {}",
-                    if status == "Success" { "border-green-500/20 text-green-500 bg-green-500/5" }
-                    else { "border-amber-500/20 text-amber-500 bg-amber-500/5" }
-                )>
-                    {status}
-                </div>
-            </div>
+            <div class="text-2xl font-bold tracking-tight">{move || value.get()}</div>
         </div>
     }
 }
