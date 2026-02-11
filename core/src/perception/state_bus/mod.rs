@@ -110,6 +110,13 @@ impl SystemStateBus {
         }
     }
 
+    /// Create with platform-specific sensor (auto-detected).
+    pub fn new_with_platform_sensor(event_bus: GatewayEventBus) -> Result<Self> {
+        use crate::perception::pal::sensors::create_platform_sensor;
+        let sensor = create_platform_sensor()?;
+        Ok(Self::with_sensor(event_bus, sensor))
+    }
+
     /// Create with custom privacy filter configuration.
     pub fn with_privacy_config(event_bus: GatewayEventBus, privacy_config: PrivacyFilterConfig) -> Self {
         Self {
