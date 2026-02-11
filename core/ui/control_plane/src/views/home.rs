@@ -25,6 +25,12 @@ pub fn Home() -> impl IntoView {
                 if let Ok(info) = SystemApi::info(&state_clone).await {
                     system_info.set(Some(info.version));
                 }
+
+                // Note: The following stats are not yet available via Gateway RPC:
+                // - Active Tasks: No task.list or task.stats RPC method exists
+                // - CPU Usage: No system.metrics or system.resources RPC method exists
+                // - Gateway Latency: Could be calculated from RPC round-trip time
+                // These will show "—" until the corresponding RPC methods are implemented
             });
         } else {
             memory_stats.set(None);
