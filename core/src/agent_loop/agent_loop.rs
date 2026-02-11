@@ -99,6 +99,8 @@ where
     compaction_trigger: OptionalCompactionTrigger,
     /// Optional overflow detector for real-time overflow checking
     pub(crate) overflow_detector: Option<Arc<OverflowDetector>>,
+    /// Optional swarm coordinator for multi-agent coordination
+    pub(crate) swarm_coordinator: Option<Arc<crate::agent_loop::builder::SwarmCoordinator>>,
 }
 
 impl<T, E, C> AgentLoop<T, E, C>
@@ -116,6 +118,7 @@ where
             config,
             compaction_trigger: OptionalCompactionTrigger::new(None),
             overflow_detector: None,
+            swarm_coordinator: None,
         }
     }
 
@@ -139,6 +142,7 @@ where
             config,
             compaction_trigger: OptionalCompactionTrigger::new(Some(event_bus)),
             overflow_detector: None,
+            swarm_coordinator: None,
         }
     }
 
@@ -182,6 +186,41 @@ where
             config,
             compaction_trigger: OptionalCompactionTrigger::new(event_bus),
             overflow_detector,
+            swarm_coordinator: None,
+        }
+    }
+
+    /// Create a new AgentLoop from builder components
+    ///
+    /// This constructor is used by AgentLoopBuilder to construct the final
+    /// AgentLoop instance with all optional components.
+    ///
+    /// # Arguments
+    ///
+    /// * `thinker` - The thinking layer implementation
+    /// * `executor` - The action executor implementation
+    /// * `compressor` - The context compressor implementation
+    /// * `config` - Loop configuration
+    /// * `event_bus` - Optional EventBus for compaction triggers
+    /// * `overflow_detector` - Optional overflow detector for real-time checks
+    /// * `swarm_coordinator` - Optional swarm coordinator for multi-agent coordination
+    pub(crate) fn from_builder(
+        thinker: Arc<T>,
+        executor: Arc<E>,
+        compressor: Arc<C>,
+        config: LoopConfig,
+        event_bus: Option<Arc<EventBus>>,
+        overflow_detector: Option<Arc<OverflowDetector>>,
+        swarm_coordinator: Option<Arc<crate::agent_loop::builder::SwarmCoordinator>>,
+    ) -> Self {
+        Self {
+            thinker,
+            executor,
+            compressor,
+            config,
+            compaction_trigger: OptionalCompactionTrigger::new(event_bus),
+            overflow_detector,
+            swarm_coordinator,
         }
     }
 

@@ -91,6 +91,26 @@ where
         self.swarm_coordinator = Some(coordinator);
         self
     }
+
+    /// Build the AgentLoop instance
+    ///
+    /// Consumes the builder and constructs a complete AgentLoop with all
+    /// configured components (EventBus, OverflowDetector, SwarmCoordinator).
+    ///
+    /// # Returns
+    ///
+    /// A fully configured AgentLoop instance ready for execution.
+    pub fn build(self) -> crate::agent_loop::AgentLoop<T, E, C> {
+        crate::agent_loop::AgentLoop::from_builder(
+            self.thinker,
+            self.executor,
+            self.compressor,
+            self.config,
+            self.event_bus,
+            self.overflow_detector,
+            self.swarm_coordinator,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -245,5 +265,31 @@ mod tests {
         assert!(builder.event_bus.is_some());
         assert!(builder.overflow_detector.is_some());
         assert!(builder.swarm_coordinator.is_some());
+    }
+
+    #[test]
+    fn test_builder_build_basic() {
+        let thinker = Arc::new(MockThinker);
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+
+        let agent_loop = AgentLoopBuilder::new(thinker, executor, compressor)
+            .build();
+
+        assert!(agent_loop.swarm_coordinator.is_none());
+    }
+
+    #[test]
+    fn test_builder_build_with_swarm() {
+        let thinker = Arc::new(MockThinker);
+        let executor = Arc::new(MockExecutor);
+        let compressor = Arc::new(MockCompressor);
+        let coordinator = Arc::new(SwarmCoordinator);
+
+        let agent_loop = AgentLoopBuilder::new(thinker, executor, compressor)
+            .with_swarm(coordinator.clone())
+            .build();
+
+        assert!(agent_loop.swarm_coordinator.is_some());
     }
 }
