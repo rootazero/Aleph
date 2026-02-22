@@ -96,6 +96,7 @@ futures = "0.3"
 fastembed = "4"
 # LanceDB vector database (replacing sqlite-vec)
 lancedb = "0.26"
+lance-index = "2.0"
 arrow-array = "57"
 arrow-schema = "57"
 arrow-cast = "57"
