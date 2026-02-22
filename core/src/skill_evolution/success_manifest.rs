@@ -18,11 +18,11 @@
 //!     "Process CSV files and generate reports"
 //! );
 //!
-//! // Check if network access is prohibited
+//! // New manifests prohibit network by default
 //! assert!(manifest.prohibits_network());
 //!
-//! // Check if a path is allowed for reading
-//! assert!(manifest.allows_read_from("/data/input.csv"));
+//! // New manifests have no read paths configured
+//! assert!(manifest.allowed_read_paths().is_empty());
 //! ```
 //!
 //! # Architecture

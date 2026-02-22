@@ -24,8 +24,8 @@
 //! for proposal in result.proposals {
 //!     println!("Skill: {}", proposal.manifest.metadata.skill_id);
 //!     println!("Validation: {} errors, {} warnings",
-//!         proposal.validation_report.errors.len(),
-//!         proposal.validation_report.warnings.len()
+//!         proposal.validation.errors.len(),
+//!         proposal.validation.warnings.len()
 //!     );
 //! }
 //! # Ok(())
