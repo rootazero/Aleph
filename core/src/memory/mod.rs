@@ -38,6 +38,7 @@ pub mod retrieval;
 pub mod scratchpad;
 pub mod smart_embedder;
 pub mod embedding_provider;
+pub mod embedding_migration;
 pub mod cli;
 pub mod transcript_indexer;
 pub mod context_comptroller;
@@ -92,6 +93,7 @@ pub use embedding_provider::{
     EmbeddingProvider, LocalEmbeddingProvider, RemoteEmbeddingProvider,
     create_embedding_provider, truncate_and_normalize,
 };
+pub use embedding_migration::{EmbeddingMigration, MigrationProgress};
 pub use cli::{LockError, LockMode, MemoryLock};
 pub use transcript_indexer::{
     SemanticChunkConfig, SemanticChunker, TranscriptIndexer, TranscriptIndexerConfig,
