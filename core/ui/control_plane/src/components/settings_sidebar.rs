@@ -26,7 +26,10 @@ pub enum SettingsTab {
     Skills,
 
     // Channels
+    Telegram,
     Discord,
+    WhatsApp,
+    IMessage,
 
     // Advanced
     Agent,
@@ -48,7 +51,10 @@ impl SettingsTab {
             Self::Mcp => "/settings/mcp",
             Self::Plugins => "/settings/plugins",
             Self::Skills => "/settings/skills",
+            Self::Telegram => "/settings/channels/telegram",
             Self::Discord => "/settings/channels/discord",
+            Self::WhatsApp => "/settings/channels/whatsapp",
+            Self::IMessage => "/settings/channels/imessage",
             Self::Agent => "/settings/agent",
             Self::Search => "/settings/search",
             Self::Policies => "/settings/policies",
@@ -68,7 +74,10 @@ impl SettingsTab {
             Self::Mcp => "MCP Plugins",
             Self::Plugins => "Plugins",
             Self::Skills => "Skills",
+            Self::Telegram => "Telegram",
             Self::Discord => "Discord",
+            Self::WhatsApp => "WhatsApp",
+            Self::IMessage => "iMessage",
             Self::Agent => "Agent Behavior",
             Self::Search => "Search",
             Self::Policies => "Policies",
@@ -88,7 +97,10 @@ impl SettingsTab {
             Self::Mcp => r#"<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>"#,
             Self::Plugins => r#"<circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6"/>"#,
             Self::Skills => r#"<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>"#,
+            Self::Telegram => r#"<path d="M21.2 4.4L2.9 11.3c-1.2.5-1.2 1.2-.2 1.5l4.7 1.5 1.8 5.6c.2.6.1.8.7.8.4 0 .6-.2.9-.4l2.1-2.1 4.4 3.3c.8.4 1.4.2 1.6-.8L22.4 5.6c.3-1.2-.5-1.7-1.2-1.2zM8.5 13.5l9.4-5.9c.4-.3.8-.1.5.2l-7.8 7-.3 3.2-1.8-4.5z"/>"#,
             Self::Discord => r#"<path d="M18.59 5.89c-1.23-.57-2.54-.99-3.92-1.23-.17.3-.37.71-.5 1.03-1.46-.22-2.91-.22-4.34 0-.14-.32-.34-.73-.51-1.03-1.38.24-2.69.66-3.92 1.23C2.18 10.73 1.34 15.44 1.76 20.09A18.07 18.07 0 0 0 7.2 22.5c.44-.6.83-1.24 1.17-1.91-.64-.24-1.26-.54-1.84-.89.15-.11.3-.23.45-.34a12.84 12.84 0 0 0 10.04 0c.15.12.3.23.45.34-.58.35-1.2.65-1.84.89.34.67.73 1.31 1.17 1.91a18 18 0 0 0 5.44-2.41c.49-5.15-.84-9.82-3.65-13.61zM8.35 17.24c-1.18 0-2.15-1.09-2.15-2.42s.95-2.42 2.15-2.42 2.17 1.09 2.15 2.42c0 1.33-.95 2.42-2.15 2.42zm6.3 0c-1.18 0-2.15-1.09-2.15-2.42s.95-2.42 2.15-2.42 2.17 1.09 2.15 2.42c0 1.33-.95 2.42-2.15 2.42z"/>"#,
+            Self::WhatsApp => r#"<path d="M17.47 14.38c-.29-.14-1.7-.84-1.96-.94-.27-.1-.46-.14-.65.14-.2.29-.75.94-.92 1.13-.17.2-.34.22-.63.07-.29-.14-1.22-.45-2.32-1.43-.86-.77-1.44-1.71-1.61-2-.17-.29-.02-.45.13-.59.13-.13.29-.34.44-.51.14-.17.2-.29.29-.48.1-.2.05-.37-.02-.51-.07-.15-.65-1.56-.89-2.14-.24-.56-.48-.49-.65-.49-.17 0-.37-.02-.56-.02-.2 0-.51.07-.78.37-.27.29-1.02 1-1.02 2.43 0 1.43 1.04 2.82 1.19 3.01.14.2 2.05 3.13 4.97 4.39.7.3 1.24.48 1.66.61.7.22 1.33.19 1.83.12.56-.08 1.7-.7 1.94-1.37.24-.68.24-1.26.17-1.38-.07-.12-.27-.2-.56-.34zM12 2C6.48 2 2 6.48 2 12c0 1.77.46 3.43 1.27 4.88L2 22l5.23-1.37A9.93 9.93 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2z"/>"#,
+            Self::IMessage => r#"<path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>"#,
             Self::Agent => r#"<path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"/><path d="M12 6v6l4 2"/>"#,
             Self::Search => r#"<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>"#,
             Self::Policies => r#"<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>"#,
@@ -124,7 +136,10 @@ const SETTINGS_GROUPS: &[SettingsGroup] = &[
     SettingsGroup {
         label: "Channels",
         tabs: &[
+            SettingsTab::Telegram,
             SettingsTab::Discord,
+            SettingsTab::WhatsApp,
+            SettingsTab::IMessage,
         ],
     },
     SettingsGroup {
