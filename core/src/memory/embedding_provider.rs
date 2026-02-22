@@ -334,4 +334,100 @@ mod tests {
         assert!(err.to_string().contains("Unknown embedding provider"));
     }
 
+
+    // =========================================================================
+    // Mock provider for testing
+    // =========================================================================
+
+    /// Mock embedding provider for tests
+    pub struct MockEmbeddingProvider {
+        dim: usize,
+        model: String,
+    }
+
+    impl MockEmbeddingProvider {
+        pub fn new(dim: usize, model: &str) -> Self {
+            Self {
+                dim,
+                model: model.to_string(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for MockEmbeddingProvider {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> {
+            Ok(vec![0.1; self.dim])
+        }
+
+        async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+            Ok(texts.iter().map(|_| vec![0.1; self.dim]).collect())
+        }
+
+        fn dimensions(&self) -> usize {
+            self.dim
+        }
+
+        fn model_name(&self) -> &str {
+            &self.model
+        }
+
+        fn provider_type(&self) -> &str {
+            "mock"
+        }
+    }
+
+    #[tokio::test]
+    async fn test_full_embedding_evolution_flow() {
+        use crate::memory::database::VectorDatabase;
+        use crate::memory::embedding_migration::EmbeddingMigration;
+        use crate::memory::context::{MemoryFact, FactType, FactSpecificity, TemporalScope, FactSource};
+
+        // 1. Create database
+        let db = Arc::new(VectorDatabase::in_memory().unwrap());
+
+        // 2. Insert a fact with old model metadata
+        let fact = MemoryFact {
+            id: "test-fact-1".to_string(),
+            content: "User prefers dark mode".to_string(),
+            fact_type: FactType::Preference,
+            embedding: Some(vec![0.5; 384]),
+            source_memory_ids: vec!["mem-1".to_string()],
+            created_at: 1000,
+            updated_at: 1000,
+            confidence: 0.9,
+            is_valid: true,
+            invalidation_reason: None,
+            decay_invalidated_at: None,
+            specificity: FactSpecificity::Pattern,
+            temporal_scope: TemporalScope::Contextual,
+            similarity_score: None,
+            path: "aleph://user/preferences/".to_string(),
+            fact_source: FactSource::Extracted,
+            content_hash: "abc123".to_string(),
+            parent_path: "aleph://user/".to_string(),
+            embedding_model: "old-model-v1".to_string(),
+        };
+
+        db.insert_fact(fact).await.unwrap();
+
+        // 3. Create a new provider (different model name)
+        let provider: Arc<dyn EmbeddingProvider> =
+            Arc::new(MockEmbeddingProvider::new(384, "new-model-v2"));
+
+        // 4. Check migration detects the mismatch
+        let migration = EmbeddingMigration::new(Arc::clone(&db), provider, 10);
+
+        let pending = migration.pending_count().await.unwrap();
+        assert_eq!(pending, 1, "Should detect 1 fact needing migration");
+
+        // 5. Run migration
+        let progress = migration.run_batch().await.unwrap();
+        assert_eq!(progress.migrated, 1);
+        assert_eq!(progress.remaining, 0);
+
+        // 6. Verify fact was updated
+        let updated = db.get_fact("test-fact-1").await.unwrap().unwrap();
+        assert_eq!(updated.embedding_model, "new-model-v2");
+    }
 }
