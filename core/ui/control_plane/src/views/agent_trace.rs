@@ -67,22 +67,22 @@ pub fn AgentTrace() -> impl IntoView {
     view! {
         <div class="h-full flex flex-col">
             // Header
-            <header class="p-8 border-b border-slate-800 bg-slate-900/20 backdrop-blur-md sticky top-0 z-10">
+            <header class="p-8 border-b border-border bg-surface-raised sticky top-0 z-10">
                 <div class="max-w-7xl mx-auto flex items-center justify-between">
                     <div>
-                        <h2 class="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3 text-slate-100">
-                            <svg width="32" height="32" attr:class="w-8 h-8 text-indigo-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <h2 class="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3 text-text-primary">
+                            <svg width="32" height="32" attr:class="w-8 h-8 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                             </svg>
                             "Live Agent Trace"
                         </h2>
-                        <p class="text-slate-400">"Real-time observation of Agent's internal reasoning and actions."</p>
+                        <p class="text-text-secondary">"Real-time observation of Agent's internal reasoning and actions."</p>
                     </div>
 
                     <div class="flex items-center gap-3">
                         <button
                             on:click=move |_| is_active.update(|v| *v = !*v)
-                            class="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors border border-slate-700 hover:border-slate-600 shadow-sm"
+                            class="flex items-center gap-2 px-4 py-2 rounded-lg bg-surface-sunken hover:bg-surface-raised transition-colors border border-border hover:border-border-strong"
                             disabled=move || !state.is_connected.get()
                         >
                             {move || if is_active.get() {
@@ -108,7 +108,7 @@ pub fn AgentTrace() -> impl IntoView {
                         </button>
                         <button
                             on:click=move |_| nodes.set(Vec::new())
-                            class="p-2 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-400/10 transition-all border border-transparent hover:border-red-400/20"
+                            class="p-2 rounded-lg text-text-secondary hover:text-danger hover:bg-danger-subtle transition-all border border-transparent hover:border-danger/20"
                         >
                             <svg width="20" height="20" attr:class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M3 6h18" />
@@ -125,15 +125,15 @@ pub fn AgentTrace() -> impl IntoView {
                 if !state.is_connected.get() {
                     view! {
                         <div class="p-8">
-                            <div class="max-w-4xl mx-auto bg-amber-500/10 border border-amber-500/20 rounded-xl p-6 flex items-start gap-4">
-                                <svg width="24" height="24" attr:class="w-6 h-6 text-amber-500 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <div class="max-w-4xl mx-auto bg-warning-subtle border border-warning/20 rounded-xl p-6 flex items-start gap-4">
+                                <svg width="24" height="24" attr:class="w-6 h-6 text-warning flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
                                     <line x1="12" y1="9" x2="12" y2="13" />
                                     <line x1="12" y1="17" x2="12.01" y2="17" />
                                 </svg>
                                 <div>
-                                    <h3 class="text-amber-400 font-semibold mb-1">"Gateway Connection Required"</h3>
-                                    <p class="text-sm text-amber-300/80">"Please connect to the Aleph Gateway from the System Status page to receive live Agent trace events."</p>
+                                    <h3 class="text-warning font-semibold mb-1">"Gateway Connection Required"</h3>
+                                    <p class="text-sm text-text-secondary">"Please connect to the Aleph Gateway from the System Status page to receive live Agent trace events."</p>
                                 </div>
                             </div>
                         </div>
@@ -151,18 +151,18 @@ pub fn AgentTrace() -> impl IntoView {
                         if node_list.is_empty() {
                             view! {
                                 <div class="text-center py-16">
-                                    <div class="text-slate-500 mb-2">
+                                    <div class="text-text-tertiary mb-2">
                                         <svg width="48" height="48" attr:class="w-12 h-12 mx-auto mb-4 opacity-50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                             <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                                         </svg>
                                     </div>
-                                    <p class="text-slate-400">"No agent trace events yet"</p>
-                                    <p class="text-sm text-slate-500 mt-2">"Events will appear here when the agent starts processing"</p>
+                                    <p class="text-text-secondary">"No agent trace events yet"</p>
+                                    <p class="text-sm text-text-tertiary mt-2">"Events will appear here when the agent starts processing"</p>
                                 </div>
                             }.into_any()
                         } else {
                             view! {
-                                <div class="relative border-l-2 border-slate-800 ml-4 pl-10 space-y-12 pb-24">
+                                <div class="relative border-l-2 border-border ml-4 pl-10 space-y-12 pb-24">
                                     <For
                                         each=move || nodes.get()
                                         key=|node| node.id.clone()
@@ -200,47 +200,47 @@ fn TraceNodeItem(node: TraceNode) -> impl IntoView {
     };
 
     let accent_color = match node.node_type {
-        TraceNodeType::Thinking => "text-blue-400 bg-blue-400/10 border-blue-400/20",
-        TraceNodeType::ToolCall => "text-amber-400 bg-amber-400/10 border-amber-400/20",
-        TraceNodeType::ToolResult => "text-emerald-400 bg-emerald-400/10 border-emerald-400/20",
-        _ => "text-slate-400 bg-slate-800 border-slate-700",
+        TraceNodeType::Thinking => "text-info bg-info-subtle border-info/20",
+        TraceNodeType::ToolCall => "text-warning bg-warning-subtle border-warning/20",
+        TraceNodeType::ToolResult => "text-success bg-success-subtle border-success/20",
+        _ => "text-text-tertiary bg-surface-sunken border-border",
     };
 
     view! {
         <div class="relative group">
             // Timeline Dot
-            <div class=format!("absolute -left-[51px] top-2 w-10 h-10 rounded-full border-2 bg-slate-950 flex items-center justify-center z-10 group-hover:scale-110 transition-transform shadow-glass {}", accent_color)>
+            <div class=format!("absolute -left-[51px] top-2 w-10 h-10 rounded-full border-2 bg-surface flex items-center justify-center z-10 group-hover:scale-110 transition-transform {}", accent_color)>
                 <svg width="20" height="20" attr:class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     {icon_content}
                 </svg>
             </div>
 
             // Card
-            <div class="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm group-hover:border-slate-700 transition-all shadow-xl shadow-black/20">
+            <div class="bg-surface-raised border border-border rounded-2xl p-6 group-hover:border-border-strong transition-all">
                 <div class="flex items-center justify-between mb-4">
                     <div class="flex items-center gap-3">
                         <span class=format!("text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded border {}", accent_color)>
                             {format!("{:?}", node.node_type)}
                         </span>
-                        <span class="text-[10px] text-slate-500 font-mono">"0.4s duration"</span>
+                        <span class="text-[10px] text-text-tertiary font-mono">"0.4s duration"</span>
                     </div>
-                    <span class="text-[10px] text-slate-500 font-mono">"14:20:45"</span>
+                    <span class="text-[10px] text-text-tertiary font-mono">"14:20:45"</span>
                 </div>
 
-                <div class="text-slate-200 leading-relaxed font-sans text-sm">
+                <div class="text-text-primary leading-relaxed font-sans text-sm">
                     {node.content}
                 </div>
 
                 {if !node.children.is_empty() {
                     let children = node.children.clone();
                     view! {
-                        <div class="mt-4 pt-4 border-t border-slate-800/50 space-y-3">
+                        <div class="mt-4 pt-4 border-t border-border-subtle space-y-3">
                             <For
                                 each=move || children.clone()
                                 key=|child| child.id.clone()
                                 children=move |child| view! {
-                                    <div class="flex items-start gap-3 text-sm text-slate-400 pl-2 border-l border-slate-800">
-                                        <div class="w-1.5 h-1.5 rounded-full bg-slate-700 mt-1.5"></div>
+                                    <div class="flex items-start gap-3 text-sm text-text-secondary pl-2 border-l border-border">
+                                        <div class="w-1.5 h-1.5 rounded-full bg-border mt-1.5"></div>
                                         <div class="flex-1 text-xs">{child.content}</div>
                                     </div>
                                 }
