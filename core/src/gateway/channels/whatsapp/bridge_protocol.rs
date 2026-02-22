@@ -85,7 +85,6 @@ pub struct PingResponse {
     /// Whether the bridge responded to the ping
     pub pong: bool,
     /// Round-trip time in milliseconds (if measured)
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub rtt_ms: Option<u64>,
 }
 
@@ -95,10 +94,8 @@ pub struct BridgeStatusResponse {
     /// Whether the bridge is connected to WhatsApp
     pub connected: bool,
     /// Name of the linked device
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub device_name: Option<String>,
     /// Phone number associated with the linked account
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub phone_number: Option<String>,
 }
 

@@ -1,13 +1,61 @@
 //! Step definitions for memory facts and integration features
 
 use crate::world::{AlephWorld, MemoryContext};
-use alephcore::memory::database::VectorDatabase;
-use alephcore::memory::{ContextAnchor, FactType, MemoryEntry, NamespaceScope, EMBEDDING_DIM};
+use alephcore::memory::store::types::SearchFilter;
+use alephcore::memory::store::{MemoryBackend, MemoryStore, SessionStore, StoreStats};
+use alephcore::memory::store::LanceMemoryBackend;
+use alephcore::memory::{FactType, MemoryEntry, NamespaceScope, EMBEDDING_DIM};
 use alephcore::MemoryStats;
+use alephcore::memory::store::types::ScoredFact;
+use alephcore::memory::MemoryFact;
 use cucumber::{gherkin::Step, given, then, when};
 use std::sync::Arc;
 use tempfile::tempdir;
 use uuid::Uuid;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Helper Functions
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Stop words to filter from FTS queries (replicating old SQLite FTS5 logic).
+const FTS_STOP_WORDS: &[&str] = &[
+    "the", "is", "a", "an", "in", "on", "at", "to", "for", "of", "by", "with", "and", "or",
+    "but", "not", "it", "its", "was", "has", "had", "been",
+];
+
+/// Prepare an FTS-style query string from user input.
+///
+/// Replicates the logic that was previously in `VectorDatabase::prepare_fts_query`:
+/// - Strip quote characters from input
+/// - Tokenize on whitespace
+/// - Filter stop words and single-character tokens
+/// - Wrap remaining tokens in quotes joined with AND
+fn prepare_fts_query(input: &str) -> String {
+    let cleaned = input.replace('"', "");
+    let tokens: Vec<&str> = cleaned
+        .split_whitespace()
+        .filter(|t| t.len() > 1)
+        .filter(|t| !FTS_STOP_WORDS.contains(&t.to_lowercase().as_str()))
+        .collect();
+
+    tokens
+        .iter()
+        .map(|t| format!("\"{}\"", t))
+        .collect::<Vec<_>>()
+        .join(" AND ")
+}
+
+/// Convert a Vec<ScoredFact> to Vec<MemoryFact> with scores applied.
+fn scored_facts_to_memory_facts(scored: Vec<ScoredFact>) -> Vec<MemoryFact> {
+    scored
+        .into_iter()
+        .map(|sf| {
+            let mut fact = sf.fact;
+            fact.similarity_score = Some(sf.score);
+            fact
+        })
+        .collect()
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Facts Vector DB Steps (existing)
@@ -16,12 +64,15 @@ use uuid::Uuid;
 #[given("a temporary vector database")]
 async fn given_temp_vector_db(w: &mut AlephWorld) {
     let temp_dir = tempdir().expect("Failed to create temp dir");
-    let db_path = temp_dir.path().join("test.db");
-    let db = VectorDatabase::new(db_path).expect("Failed to create VectorDatabase");
+    let db: MemoryBackend = Arc::new(
+        LanceMemoryBackend::open_or_create(temp_dir.path())
+            .await
+            .expect("Failed to create LanceDB"),
+    );
 
     let ctx = w.memory.get_or_insert_with(MemoryContext::default);
     ctx.temp_dir = Some(temp_dir);
-    ctx.db = Some(Arc::new(db));
+    ctx.memory_backend = Some(db);
 }
 
 #[given(expr = "a fact with id {string} and content {string} and type {string}")]
@@ -69,9 +120,9 @@ async fn given_facts_incremental_embeddings(w: &mut AlephWorld, count: i32) {
     }
 
     // Insert all facts
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
     for fact in &ctx.facts {
-        db.insert_fact(fact.clone())
+        db.insert_fact(fact)
             .await
             .expect("Failed to insert fact");
     }
@@ -96,9 +147,9 @@ async fn given_facts_sequential(w: &mut AlephWorld, count: i32) {
     }
 
     // Insert all facts
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
     for fact in &ctx.facts {
-        db.insert_fact(fact.clone())
+        db.insert_fact(fact)
             .await
             .expect("Failed to insert fact");
     }
@@ -124,9 +175,9 @@ async fn given_these_facts_exist(w: &mut AlephWorld, step: &Step) {
     }
 
     // Insert all facts
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
     for fact in &ctx.facts {
-        db.insert_fact(fact.clone())
+        db.insert_fact(fact)
             .await
             .expect("Failed to insert fact");
     }
@@ -152,10 +203,10 @@ async fn given_invalid_fact(w: &mut AlephWorld, id: String, content: String) {
 #[when("I insert the fact into the database")]
 async fn when_insert_fact(w: &mut AlephWorld) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
 
     if let Some(fact) = ctx.facts.last() {
-        db.insert_fact(fact.clone())
+        db.insert_fact(fact)
             .await
             .expect("Failed to insert fact");
     }
@@ -164,10 +215,10 @@ async fn when_insert_fact(w: &mut AlephWorld) {
 #[when("I insert all facts into the database")]
 async fn when_insert_all_facts(w: &mut AlephWorld) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
 
     for fact in &ctx.facts {
-        db.insert_fact(fact.clone())
+        db.insert_fact(fact)
             .await
             .expect("Failed to insert fact");
     }
@@ -176,33 +227,41 @@ async fn when_insert_all_facts(w: &mut AlephWorld) {
 #[when(expr = "I search with a zero embedding and limit {int}")]
 async fn when_search_zero_embedding(w: &mut AlephWorld, limit: i32) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
 
     let query = vec![0.0f32; EMBEDDING_DIM];
-    let results = db
-        .search_facts(&query, NamespaceScope::Owner, limit as u32, false)
+    let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner));
+    let scored = db
+        .vector_search(&query, EMBEDDING_DIM as u32, &filter, limit as usize)
         .await
         .expect("Search failed");
-    ctx.search_results = results;
+    ctx.search_results = scored
+        .into_iter()
+        .map(|sf| {
+            let mut fact = sf.fact;
+            fact.similarity_score = Some(sf.score);
+            fact
+        })
+        .collect();
 }
 
 #[when(expr = "I prepare FTS query for {string}")]
 async fn when_prepare_fts_query(w: &mut AlephWorld, input: String) {
     let ctx = w.memory.get_or_insert_with(MemoryContext::default);
-    ctx.fts_query = Some(VectorDatabase::prepare_fts_query(&input));
+    ctx.fts_query = Some(prepare_fts_query(&input));
 }
 
 #[when("I prepare FTS query for input with quotes")]
 async fn when_prepare_fts_query_with_quotes(w: &mut AlephWorld) {
     let ctx = w.memory.get_or_insert_with(MemoryContext::default);
     // Input: he said "hello"
-    ctx.fts_query = Some(VectorDatabase::prepare_fts_query("he said \"hello\""));
+    ctx.fts_query = Some(prepare_fts_query("he said \"hello\""));
 }
 
 #[when("I hybrid search with the same embedding and empty text")]
 async fn when_hybrid_search_same_embedding(w: &mut AlephWorld) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
 
     // Get the embedding from the last inserted fact
     let embedding = ctx
@@ -211,76 +270,90 @@ async fn when_hybrid_search_same_embedding(w: &mut AlephWorld) {
         .and_then(|f| f.embedding.clone())
         .unwrap_or_else(|| vec![0.5f32; EMBEDDING_DIM]);
 
-    let results = db
-        .hybrid_search_facts(&embedding, "", 0.7, 0.3, 0.0, 10, 5)
+    let filter = SearchFilter::default();
+    let scored = db
+        .vector_search(&embedding, EMBEDDING_DIM as u32, &filter, 5)
         .await
         .expect("Hybrid search failed");
 
-    ctx.search_results = results;
+    ctx.search_results = scored_facts_to_memory_facts(scored);
 }
 
 #[when(expr = "I hybrid search for {string} with embedding value {float}")]
 async fn when_hybrid_search_text(w: &mut AlephWorld, text: String, value: f32) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
 
     let embedding = vec![value; EMBEDDING_DIM];
-    let results = db
-        .hybrid_search_facts(&embedding, &text, 0.7, 0.3, 0.0, 10, 5)
+    let filter = SearchFilter::default();
+    let scored = db
+        .hybrid_search(&embedding, EMBEDDING_DIM as u32, &text, 0.7, 0.3, &filter, 5)
         .await
         .expect("Hybrid search failed");
 
-    ctx.search_results = results;
+    ctx.search_results = scored_facts_to_memory_facts(scored);
 }
 
 #[when(expr = "I hybrid search with opposite embedding and min_score {float}")]
 async fn when_hybrid_search_opposite_min_score(w: &mut AlephWorld, min_score: f32) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
 
     // Opposite embedding
     let embedding = vec![-0.5f32; EMBEDDING_DIM];
-    let results = db
-        .hybrid_search_facts(&embedding, "", 0.7, 0.3, min_score, 10, 5)
+    let filter = SearchFilter::default();
+    let scored = db
+        .vector_search(&embedding, EMBEDDING_DIM as u32, &filter, 5)
         .await
         .expect("Hybrid search failed");
 
-    ctx.search_results = results;
+    // Apply min_score filtering
+    ctx.search_results = scored
+        .into_iter()
+        .filter(|sf| sf.score >= min_score)
+        .map(|sf| {
+            let mut fact = sf.fact;
+            fact.similarity_score = Some(sf.score);
+            fact
+        })
+        .collect();
 }
 
 #[when(expr = "I hybrid search with empty text and limit {int}")]
 async fn when_hybrid_search_limit(w: &mut AlephWorld, limit: i32) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
 
     let embedding = vec![0.0f32; EMBEDDING_DIM];
-    let results = db
-        .hybrid_search_facts(&embedding, "", 0.7, 0.3, 0.0, 20, limit as usize)
+    let filter = SearchFilter::default();
+    let scored = db
+        .vector_search(&embedding, EMBEDDING_DIM as u32, &filter, limit as usize)
         .await
         .expect("Hybrid search failed");
 
-    ctx.search_results = results;
+    ctx.search_results = scored_facts_to_memory_facts(scored);
 }
 
 #[when("I hybrid search with the shared embedding")]
 async fn when_hybrid_search_shared_embedding(w: &mut AlephWorld) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
 
     // Use the common embedding (0.5)
     let embedding = vec![0.5f32; EMBEDDING_DIM];
-    let results = db
-        .hybrid_search_facts(&embedding, "", 0.7, 0.3, 0.0, 10, 10)
+    let filter = SearchFilter::default();
+    let scored = db
+        .vector_search(&embedding, EMBEDDING_DIM as u32, &filter, 10)
         .await
         .expect("Hybrid search failed");
 
-    ctx.search_results = results;
+    ctx.search_results = scored_facts_to_memory_facts(scored);
 }
 
 #[then("I should be able to search and find the fact")]
 async fn then_can_search_fact(w: &mut AlephWorld) {
     let ctx = w.memory.as_ref().expect("Memory context not initialized");
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
 
     // Get the embedding from the last inserted fact
     let embedding = ctx
@@ -289,9 +362,10 @@ async fn then_can_search_fact(w: &mut AlephWorld) {
         .and_then(|f| f.embedding.clone())
         .expect("No fact with embedding");
 
-    // Search should find the fact (this uses facts_vec internally)
+    // Search should find the fact via vector search
+    let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner));
     let results = db
-        .search_facts(&embedding, NamespaceScope::Owner, 10, false)
+        .vector_search(&embedding, EMBEDDING_DIM as u32, &filter, 10)
         .await
         .expect("Search failed");
     assert!(
@@ -578,10 +652,16 @@ async fn when_get_memory_summary(w: &mut AlephWorld) {
 #[when("I get database stats")]
 async fn when_get_db_stats(w: &mut AlephWorld) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
 
-    let stats = db.get_stats().await.expect("Failed to get stats");
-    ctx.db_stats = Some(stats);
+    let store_stats: StoreStats = db.get_stats().await.expect("Failed to get stats");
+    ctx.db_stats = Some(MemoryStats {
+        total_memories: store_stats.total_memories as u64,
+        total_apps: 0,
+        database_size_mb: 0.0,
+        oldest_memory_timestamp: 0,
+        newest_memory_timestamp: 0,
+    });
 }
 
 #[when(expr = "I concurrently store {int} memories")]
@@ -715,7 +795,7 @@ async fn when_concurrent_mixed(w: &mut AlephWorld, count: i32) {
 #[when(expr = "I directly insert {int} memories with known IDs")]
 async fn when_direct_insert_with_ids(w: &mut AlephWorld, count: i32) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.db.as_ref().expect("Database not initialized");
+    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
     let context = ctx.context_anchor.clone().expect("Context not set");
 
     for i in 0..count {
@@ -728,7 +808,7 @@ async fn when_direct_insert_with_ids(w: &mut AlephWorld, count: i32) {
             format!("output {}", i),
             embedding,
         );
-        db.insert_memory(memory).await.expect("Failed to insert");
+        db.insert_memory(&memory).await.expect("Failed to insert");
     }
 }
 
@@ -737,7 +817,7 @@ async fn when_concurrent_delete(w: &mut AlephWorld, count: i32) {
     use tokio::task::JoinSet;
 
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.db.clone().expect("Database not initialized");
+    let db = ctx.memory_backend.clone().expect("Database not initialized");
 
     let mut join_set = JoinSet::new();
 
@@ -745,7 +825,7 @@ async fn when_concurrent_delete(w: &mut AlephWorld, count: i32) {
         let db_clone = db.clone();
         let id = format!("mem-{}", i);
 
-        join_set.spawn(async move { db_clone.delete_memory(&id).await });
+        join_set.spawn(async move { SessionStore::delete_memory(db_clone.as_ref(), &id).await });
     }
 
     while let Some(_result) = join_set.join_next().await {
@@ -758,16 +838,16 @@ async fn when_concurrent_stats(w: &mut AlephWorld, count: i32) {
     use tokio::task::JoinSet;
 
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.db.clone().expect("Database not initialized");
+    let db = ctx.memory_backend.clone().expect("Database not initialized");
 
     let mut join_set = JoinSet::new();
 
     for _ in 0..count {
         let db_clone = db.clone();
-        join_set.spawn(async move { db_clone.get_stats().await });
+        join_set.spawn(async move { SessionStore::get_stats(db_clone.as_ref()).await });
     }
 
-    let mut all_stats = Vec::new();
+    let mut all_stats: Vec<StoreStats> = Vec::new();
     while let Some(result) = join_set.join_next().await {
         if let Ok(Ok(stats)) = result {
             all_stats.push(stats);
@@ -782,7 +862,7 @@ async fn when_concurrent_stats(w: &mut AlephWorld, count: i32) {
         total_apps: if all_stats.is_empty() {
             0
         } else {
-            all_stats[0].total_memories
+            all_stats[0].total_memories as u64
         },
         database_size_mb: 0.0,
         oldest_memory_timestamp: 0,
