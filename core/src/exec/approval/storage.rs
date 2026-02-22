@@ -233,7 +233,6 @@ impl ApprovalAuditStorage {
     }
 
     /// Test helper: Insert capability approval (available for integration tests)
-    #[cfg(any(test, feature = "test-helpers"))]
     pub async fn insert_test_capability_approval(
         &self,
         tool_name: &str,
@@ -259,7 +258,6 @@ impl ApprovalAuditStorage {
     }
 
     /// Test helper: Insert escalation (available for integration tests)
-    #[cfg(any(test, feature = "test-helpers"))]
     pub async fn insert_test_escalation(
         &self,
         tool_name: &str,
@@ -278,7 +276,6 @@ impl ApprovalAuditStorage {
     }
 
     /// Test helper: Insert tool execution (available for integration tests)
-    #[cfg(any(test, feature = "test-helpers"))]
     pub async fn insert_test_execution(
         &self,
         tool_name: &str,
