@@ -99,6 +99,27 @@ pub enum PairingData {
     QrCode(String),
 }
 
+/// Fine-grained pairing state for WhatsApp (mirrors server's PairingState)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum PairingState {
+    Idle,
+    Initializing,
+    WaitingQr {
+        qr_data: String,
+        expires_at: String,
+    },
+    QrExpired,
+    Scanned,
+    Syncing { progress: f32 },
+    Connected {
+        device_name: String,
+        phone_number: String,
+    },
+    Disconnected { reason: String },
+    Failed { error: String },
+}
+
 /// Tool metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolMetrics {
