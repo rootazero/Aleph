@@ -5,6 +5,7 @@
 
 use crate::memory::context::{FactType, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
+use crate::memory::workspace::WorkspaceFilter;
 
 // ---------------------------------------------------------------------------
 // SearchFilter — filter for memory fact searches
@@ -25,6 +26,8 @@ use crate::memory::namespace::NamespaceScope;
 pub struct SearchFilter {
     /// Restrict to a specific namespace scope.
     pub namespace: Option<NamespaceScope>,
+    /// Restrict to a specific workspace.
+    pub workspace: Option<WorkspaceFilter>,
     /// Restrict to a specific fact type.
     pub fact_type: Option<FactType>,
     /// Filter by validity flag (`true` = only valid, `false` = only invalid).
@@ -49,6 +52,7 @@ impl SearchFilter {
     pub fn valid_only(namespace: Option<NamespaceScope>) -> Self {
         Self {
             namespace,
+            workspace: None,
             is_valid: Some(true),
             ..Default::default()
         }
@@ -59,6 +63,12 @@ impl SearchFilter {
     /// Set namespace scope.
     pub fn with_namespace(mut self, ns: NamespaceScope) -> Self {
         self.namespace = Some(ns);
+        self
+    }
+
+    /// Set workspace filter.
+    pub fn with_workspace(mut self, ws: WorkspaceFilter) -> Self {
+        self.workspace = Some(ws);
         self
     }
 
@@ -110,6 +120,13 @@ impl SearchFilter {
         if let Some(ref ns) = self.namespace {
             let val = ns.to_namespace_value();
             clauses.push(format!("namespace = '{}'", val));
+        }
+
+        if let Some(ref ws) = self.workspace {
+            match ws {
+                WorkspaceFilter::All => {} // no filter needed
+                _ => clauses.push(ws.to_sql_filter()),
+            }
         }
 
         if let Some(ref ft) = self.fact_type {
@@ -175,6 +192,8 @@ pub struct MemoryFilter {
     pub window_title: Option<String>,
     /// Restrict to a specific namespace scope.
     pub namespace: Option<NamespaceScope>,
+    /// Restrict to a specific workspace.
+    pub workspace: Option<WorkspaceFilter>,
     /// Only memories created at or after this Unix timestamp (seconds).
     pub after_timestamp: Option<i64>,
 }
@@ -190,6 +209,7 @@ impl MemoryFilter {
         Self {
             app_bundle_id: Some(app_bundle_id.into()),
             window_title: Some(window_title.into()),
+            workspace: None,
             ..Default::default()
         }
     }
@@ -211,6 +231,13 @@ impl MemoryFilter {
         if let Some(ref ns) = self.namespace {
             let val = ns.to_namespace_value();
             clauses.push(format!("namespace = '{}'", val));
+        }
+
+        if let Some(ref ws) = self.workspace {
+            match ws {
+                WorkspaceFilter::All => {} // no filter needed
+                _ => clauses.push(ws.to_sql_filter()),
+            }
         }
 
         if let Some(ts) = self.after_timestamp {
@@ -297,5 +324,51 @@ mod tests {
         let expr = f.to_lance_filter().unwrap();
         assert!(expr.contains("namespace = 'shared'"));
         assert!(expr.contains("created_at >= 1700000000"));
+    }
+
+    #[test]
+    fn search_filter_workspace_single() {
+        let f = SearchFilter::new()
+            .with_workspace(WorkspaceFilter::Single("crypto".into()));
+        let sql = f.to_lance_filter().unwrap();
+        assert_eq!(sql, "workspace = 'crypto'");
+    }
+
+    #[test]
+    fn search_filter_workspace_multiple() {
+        let f = SearchFilter::new()
+            .with_workspace(WorkspaceFilter::Multiple(vec!["a".into(), "b".into()]));
+        let sql = f.to_lance_filter().unwrap();
+        assert_eq!(sql, "workspace IN ('a', 'b')");
+    }
+
+    #[test]
+    fn search_filter_workspace_all_no_filter() {
+        let f = SearchFilter::new()
+            .with_workspace(WorkspaceFilter::All);
+        // All means no workspace filtering, so no SQL generated
+        assert!(f.to_lance_filter().is_none());
+    }
+
+    #[test]
+    fn search_filter_combined_namespace_workspace() {
+        let f = SearchFilter::new()
+            .with_namespace(NamespaceScope::Owner)
+            .with_workspace(WorkspaceFilter::Single("crypto".into()))
+            .with_valid_only();
+        let sql = f.to_lance_filter().unwrap();
+        assert!(sql.contains("workspace = 'crypto'"));
+        assert!(sql.contains("namespace = 'owner'"));
+        assert!(sql.contains("is_valid = true"));
+    }
+
+    #[test]
+    fn memory_filter_with_workspace() {
+        let f = MemoryFilter {
+            workspace: Some(WorkspaceFilter::Single("novel".into())),
+            ..Default::default()
+        };
+        let sql = f.to_lance_filter().unwrap();
+        assert_eq!(sql, "workspace = 'novel'");
     }
 }
