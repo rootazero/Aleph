@@ -7,8 +7,8 @@
 ## Overview
 
 Aleph's memory system provides:
-- **Facts Database**: SQLite + sqlite-vec for structured storage
-- **Hybrid Retrieval**: Vector similarity + BM25 keyword search
+- **Facts Database**: LanceDB for unified vector + metadata storage (migrated from SQLite + sqlite-vec)
+- **Hybrid Retrieval**: Vector similarity (ANN) + BM25 full-text search
 - **Context Augmentation**: Inject relevant memories into prompts
 - **Intelligent Compression**: Automatic session compaction with importance scoring
 - **Transcript Indexing**: Near-realtime conversation indexing with semantic chunking
@@ -39,14 +39,15 @@ Aleph's memory system provides:
 │                           ▼                                      │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │                    Storage Layer                           │  │
-│  │  ┌────────────────────┐  ┌────────────────────┐          │  │
-│  │  │     Facts DB       │  │   Vector Index     │          │  │
-│  │  │    (SQLite)        │  │   (sqlite-vec)     │          │  │
-│  │  │                    │  │                    │          │  │
-│  │  │ • id, content      │  │ • id → embedding   │          │  │
-│  │  │ • tags, metadata   │  │ • 384 dimensions   │          │  │
-│  │  │ • timestamps       │  │ • cosine distance  │          │  │
-│  │  └────────────────────┘  └────────────────────┘          │  │
+│  │  ┌──────────────────────────────────────────────────┐    │  │
+│  │  │              LanceDB (Unified)                    │    │  │
+│  │  │                                                    │    │  │
+│  │  │  facts       │ graph_nodes │ graph_edges │ memories│    │  │
+│  │  │  • content   │ • name      │ • relation  │ • input │    │  │
+│  │  │  • embedding │ • kind      │ • weight    │ • embed │    │  │
+│  │  │  • metadata  │ • aliases   │ • context   │ • anchor│    │  │
+│  │  │  • FTS index │ • decay     │ • decay     │ • FTS   │    │  │
+│  │  └──────────────────────────────────────────────────┘    │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                           │                                      │
 │                           ▼                                      │
@@ -71,56 +72,74 @@ Aleph's memory system provides:
 
 ## Facts Database
 
-**Location**: `core/src/memory/database/`
+**Location**: `core/src/memory/store/` (LanceDB backend)
 
-### Schema
+> **Migration Note**: The storage layer was migrated from SQLite + sqlite-vec to LanceDB in Feb 2026.
+> The old SQLite implementation remains at `core/src/memory/database/` for resilience CRUD operations
+> but all memory storage now uses LanceDB via the `MemoryBackend` type alias.
 
-```sql
-CREATE TABLE facts (
-    id TEXT PRIMARY KEY,
-    content TEXT NOT NULL,
-    embedding BLOB,           -- 384-dim float32 vector
-    tags TEXT,                -- JSON array
-    source TEXT,              -- 'user', 'session', 'tool'
-    session_key TEXT,
-    created_at INTEGER,
-    updated_at INTEGER,
-    access_count INTEGER DEFAULT 0,
-    decay_score REAL DEFAULT 1.0
-);
+### Storage Architecture
 
-CREATE INDEX idx_facts_tags ON facts(tags);
-CREATE INDEX idx_facts_session ON facts(session_key);
-CREATE INDEX idx_facts_created ON facts(created_at);
+LanceDB provides unified columnar storage with embedded vector indexes:
 
--- Vector index (sqlite-vec)
-CREATE VIRTUAL TABLE vec_facts USING vec0(
-    id TEXT PRIMARY KEY,
-    embedding FLOAT[384]
-);
+```
+memory.lance/
+├── facts/          -- MemoryFact records with embeddings + FTS index
+├── graph_nodes/    -- Knowledge graph entity nodes
+├── graph_edges/    -- Knowledge graph relationships
+└── memories/       -- Raw conversation memory entries (Layer 1)
+```
+
+### Storage Traits
+
+```rust
+/// Layer 2: Compressed facts
+pub trait MemoryStore: Send + Sync {
+    async fn insert_fact(&self, fact: &MemoryFact) -> Result<()>;
+    async fn vector_search(&self, embedding: &[f32], dim_hint: u32,
+                           filter: &SearchFilter, limit: usize) -> Result<Vec<ScoredFact>>;
+    async fn hybrid_search(&self, embedding: &[f32], dim_hint: u32,
+                           query_text: &str, ...) -> Result<Vec<ScoredFact>>;
+    // ... 17 total methods
+}
+
+/// Knowledge graph
+pub trait GraphStore: Send + Sync {
+    async fn upsert_node(&self, node: &GraphNode) -> Result<()>;
+    async fn resolve_entity(&self, query: &str, context_key: Option<&str>) -> Result<Vec<ResolvedEntity>>;
+    // ... 7 total methods
+}
+
+/// Layer 1: Raw memories
+pub trait SessionStore: Send + Sync {
+    async fn insert_memory(&self, memory: &MemoryEntry) -> Result<()>;
+    async fn search_memories(&self, embedding: &[f32], filter: &MemoryFilter, limit: usize) -> Result<Vec<MemoryEntry>>;
+    // ... 10 total methods
+}
+
+/// Unified backend type
+pub type MemoryBackend = Arc<LanceMemoryBackend>;
 ```
 
 ### Fact Structure
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Fact {
+pub struct MemoryFact {
     pub id: String,
     pub content: String,
-    pub tags: Vec<String>,
-    pub source: FactSource,
-    pub session_key: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub access_count: u32,
-    pub decay_score: f32,
-}
-
-pub enum FactSource {
-    User,       // Explicitly stored by user
-    Session,    // Extracted from conversation
-    Tool,       // Generated by tool execution
-    System,     // System-generated
+    pub fact_type: FactType,
+    pub embedding: Option<Vec<f32>>,
+    pub source_memory_ids: Vec<String>,
+    pub path: String,              // VFS path (e.g. "aleph://user/preferences/coding")
+    pub parent_path: String,
+    pub fact_source: FactSource,   // Extracted | Summary | Document | Manual
+    pub content_hash: String,
+    pub embedding_model: String,
+    pub confidence: f32,
+    pub is_valid: bool,
+    pub specificity: FactSpecificity,
+    pub temporal_scope: TemporalScope,
+    // ... timestamps, invalidation fields
 }
 ```
 
@@ -427,7 +446,7 @@ Provides near-realtime conversation transcript indexing with semantic chunking.
 
 ```rust
 pub struct TranscriptIndexer {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     embedder: Arc<SmartEmbedder>,
     config: TranscriptIndexerConfig,
 }
@@ -615,7 +634,7 @@ Local knowledge exploration through multi-hop vector similarity traversal.
 
 ```rust
 pub struct RippleTask {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     config: RippleConfig,
 }
 
@@ -656,7 +675,7 @@ pub struct ContradictionDetector {
 }
 
 pub struct EvolutionChain {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
 }
 
 pub enum ResolutionStrategy {
@@ -695,7 +714,7 @@ User profile distillation through frequency analysis and categorization.
 
 ```rust
 pub struct ConsolidationAnalyzer {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     embedder: Arc<SmartEmbedder>,
     config: ConsolidationConfig,
 }
@@ -739,7 +758,7 @@ AlephTool implementation that integrates all memory components.
 
 ```rust
 pub struct MemorySearchTool {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     comptroller: Arc<ContextComptroller>,
 }
 
@@ -784,7 +803,7 @@ enabled = true
 embedding_model = "bge-small-zh-v1.5"
 max_context_items = 5
 retention_days = 90
-vector_db = "sqlite-vec"
+vector_db = "lancedb"              # LanceDB unified storage (default)
 similarity_threshold = 0.7
 excluded_apps = ["com.apple.keychainaccess", "com.agilebits.onepassword7"]
 

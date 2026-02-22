@@ -131,7 +131,7 @@ pub trait ValueObject: Eq + Clone {}
                                 │
 ┌───────────────────────────────┴─────────────────────────────────┐
 │                         STORAGE LAYER                            │
-│          Memory (Facts DB + Vector) │ Config │ Keychain          │
+│          Memory (LanceDB + Vector)  │ Config │ Keychain          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -144,7 +144,7 @@ pub trait ValueObject: Eq + Clone {}
 | **Thinker** | LLM 交互，Thinking Levels，流式响应 | [Agent System](docs/AGENT_SYSTEM.md) |
 | **Dispatcher** | 任务编排，DAG 调度，多步执行 | [Agent System](docs/AGENT_SYSTEM.md) |
 | **Tool Server** | AlephTool trait，19+ 内置工具 | [Tool System](docs/TOOL_SYSTEM.md) |
-| **Memory** | Facts DB + sqlite-vec，混合检索 (Vector + BM25) | [Memory System](docs/MEMORY_SYSTEM.md) |
+| **Memory** | LanceDB 统一存储，混合检索 (ANN + FTS/BM25) | [Memory System](docs/MEMORY_SYSTEM.md) |
 | **Extension** | WASM + Node.js 插件运行时 | [Extension System](docs/EXTENSION_SYSTEM.md) |
 | **Exec** | Shell 执行安全，审批工作流 | [Security](docs/SECURITY.md) |
 
@@ -229,7 +229,9 @@ aleph/
 │       ├── providers/              # AI 提供商 (21 files)
 │       ├── tools/                  # AlephTool trait
 │       ├── builtin_tools/          # 内置工具 (19 files)
-│       ├── memory/                 # 记忆系统 (18 files)
+│       ├── memory/                 # 记忆系统 (LanceDB backend)
+│       │   └── store/             # LanceDB 存储抽象层
+│       ├── resilience/            # 任务弹性系统 (recovery, governance)
 │       ├── extension/              # 插件系统 (17 files)
 │       ├── exec/                   # Shell 执行安全 (17 files)
 │       ├── mcp/                    # MCP 协议客户端
@@ -265,7 +267,7 @@ aleph/
 |-------|------------|
 | **Runtime** | Rust + Tokio (async/await) |
 | **Gateway** | tokio-tungstenite + axum |
-| **Database** | rusqlite + sqlite-vec (向量搜索) |
+| **Database** | LanceDB (向量+元数据统一存储) + rusqlite (会话/审批) |
 | **Embedding** | fastembed (bge-small-zh-v1.5, 本地) |
 | **Providers** | Claude, GPT-4, Gemini, Ollama, DeepSeek, Moonshot |
 | **Plugins** | Extism (WASM), Node.js IPC |
