@@ -8,8 +8,8 @@ use sqlite_vec::sqlite3_vec_init;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// Current embedding dimension (multilingual-e5-small)
-pub const CURRENT_EMBEDDING_DIM: u32 = 384;
+/// Default embedding dimension (multilingual-e5-small)
+pub const DEFAULT_EMBEDDING_DIM: u32 = 384;
 
 /// Vector database for storing and searching memory embeddings
 pub struct VectorDatabase {
@@ -31,9 +31,12 @@ impl VectorDatabase {
     }
 
     /// Create the database schema
-    fn create_schema(conn: &Connection) -> Result<(), AlephError> {
+    fn create_schema(conn: &Connection, embedding_dim: u32) -> Result<(), AlephError> {
         conn.execute_batch(Self::schema_sql())
-            .map_err(|e| AlephError::config(format!("Failed to create schema: {}", e)))
+            .map_err(|e| AlephError::config(format!("Failed to create schema: {}", e)))?;
+        conn.execute_batch(&Self::vec_schema_sql(embedding_dim))
+            .map_err(|e| AlephError::config(format!("Failed to create vec0 tables: {}", e)))?;
+        Ok(())
     }
 
     /// SQL for creating the database schema
@@ -257,18 +260,8 @@ impl VectorDatabase {
                 ON memory_audit_log(action);
 
             -- ================================================================
-            -- sqlite-vec Virtual Tables for Vector Search
+            -- sqlite-vec Virtual Tables: created dynamically via vec_schema_sql()
             -- ================================================================
-
-            -- Vector index for memories (384-dim float32, multilingual-e5-small)
-            CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
-                embedding float[384]
-            );
-
-            -- Vector index for facts (384-dim float32, multilingual-e5-small)
-            CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(
-                embedding float[384]
-            );
 
             -- ================================================================
             -- FTS5 Full-Text Search Tables (Hybrid Search)
@@ -402,6 +395,21 @@ impl VectorDatabase {
             "#
     }
 
+    /// SQL for creating vec0 virtual tables with dynamic dimension
+    fn vec_schema_sql(dim: u32) -> String {
+        format!(
+            r#"
+            CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
+                embedding float[{dim}]
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(
+                embedding float[{dim}]
+            );
+            "#,
+            dim = dim
+        )
+    }
+
     /// Create an in-memory database for testing
     ///
     /// This creates a SQLite database in memory (:memory:) without persisting to disk.
@@ -414,12 +422,12 @@ impl VectorDatabase {
             .map_err(|e| AlephError::config(format!("Failed to open in-memory database: {}", e)))?;
 
         // Initialize the database schema
-        Self::create_schema(&conn)?;
+        Self::create_schema(&conn, DEFAULT_EMBEDDING_DIM)?;
 
         // Update embedding dimension in schema_info
         conn.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('embedding_dimension', ?1)",
-            params![CURRENT_EMBEDDING_DIM.to_string()],
+            params![DEFAULT_EMBEDDING_DIM.to_string()],
         )
         .map_err(|e| AlephError::config(format!("Failed to update schema_info: {}", e)))?;
 
@@ -456,13 +464,13 @@ impl VectorDatabase {
 
             tracing::info!(
                 old_dim = 384,
-                new_dim = CURRENT_EMBEDDING_DIM,
+                new_dim = DEFAULT_EMBEDDING_DIM,
                 "Cleared memories table for embedding dimension migration"
             );
         }
 
         // Create schema with version metadata
-        Self::create_schema(&conn)?;
+        Self::create_schema(&conn, DEFAULT_EMBEDDING_DIM)?;
 
         // Migrate existing databases to add namespace support (idempotent)
         migration::migrate_add_namespace(&conn)?;
@@ -479,7 +487,7 @@ impl VectorDatabase {
         // Update embedding dimension in schema_info
         conn.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('embedding_dimension', ?1)",
-            params![CURRENT_EMBEDDING_DIM.to_string()],
+            params![DEFAULT_EMBEDDING_DIM.to_string()],
         )
         .map_err(|e| AlephError::config(format!("Failed to update schema_info: {}", e)))?;
 
@@ -593,11 +601,11 @@ impl VectorDatabase {
             .unwrap_or(None);
 
         match current_dimension {
-            Some(dim) if dim == CURRENT_EMBEDDING_DIM.to_string() => Ok(false), // Already at current dimension
+            Some(dim) if dim == DEFAULT_EMBEDDING_DIM.to_string() => Ok(false), // Already at current dimension
             Some(dim) => {
                 tracing::info!(
                     stored_dim = %dim,
-                    current_dim = CURRENT_EMBEDDING_DIM,
+                    current_dim = DEFAULT_EMBEDDING_DIM,
                     "Embedding dimension mismatch detected"
                 );
                 Ok(true) // Needs migration (different dimension)
@@ -822,7 +830,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(dim, CURRENT_EMBEDDING_DIM.to_string());
+        assert_eq!(dim, DEFAULT_EMBEDDING_DIM.to_string());
     }
 
     #[test]
