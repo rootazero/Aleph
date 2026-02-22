@@ -408,6 +408,8 @@ mod tests {
             content_hash: "abc123".to_string(),
             parent_path: "aleph://user/".to_string(),
             embedding_model: "old-model-v1".to_string(),
+            namespace: "owner".to_string(),
+            workspace: "default".to_string(),
         };
 
         crate::memory::store::MemoryStore::insert_fact(db.as_ref(), &fact).await.unwrap();

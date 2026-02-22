@@ -96,6 +96,8 @@ pub struct GraphNode {
     pub created_at: i64,
     /// Last update timestamp (Unix seconds).
     pub updated_at: i64,
+    /// Domain isolation workspace ID.
+    pub workspace: String,
 }
 
 /// A knowledge-graph edge.
@@ -123,6 +125,8 @@ pub struct GraphEdge {
     pub updated_at: i64,
     /// Timestamp of most recent reference (Unix seconds).
     pub last_seen_at: i64,
+    /// Domain isolation workspace ID.
+    pub workspace: String,
 }
 
 /// A VFS path entry returned by directory listing operations.

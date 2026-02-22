@@ -337,6 +337,7 @@ mod tests {
             decay_score: 1.0,
             created_at: 1700000000,
             updated_at: 1700000000,
+            workspace: "default".to_string(),
         }
     }
 
@@ -360,6 +361,7 @@ mod tests {
             created_at: 1700000000,
             updated_at: 1700000000,
             last_seen_at: 1700000000,
+            workspace: "default".to_string(),
         }
     }
 
