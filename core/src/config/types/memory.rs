@@ -78,6 +78,13 @@ pub struct MemoryConfig {
     pub raw_memory_fallback_count: u32,
 
     // ========================================
+    // Embedding Settings
+    // ========================================
+    /// Embedding provider configuration
+    #[serde(default)]
+    pub embedding: EmbeddingConfig,
+
+    // ========================================
     // Dreaming + Memory Graph
     // ========================================
     /// DreamDaemon scheduling configuration
@@ -89,6 +96,52 @@ pub struct MemoryConfig {
     /// Memory fact decay policy
     #[serde(default)]
     pub memory_decay: MemoryDecayPolicy,
+}
+
+// =============================================================================
+// EmbeddingConfig
+// =============================================================================
+
+/// Embedding provider configuration
+///
+/// Supports local (fastembed) and remote (OpenAI-compatible) embedding providers.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EmbeddingConfig {
+    /// Embedding provider: "local" (fastembed) or "openai" / "remote"
+    #[serde(default = "default_embedding_provider")]
+    pub provider: String,
+    /// Model name for embedding
+    #[serde(default = "default_embedding_model_name")]
+    pub model: String,
+    /// Embedding vector dimension
+    #[serde(default = "default_embedding_dimension")]
+    pub dimension: u32,
+    /// Environment variable name for API key (remote providers)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+    /// Base URL for remote embedding API
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_base: Option<String>,
+    /// Request timeout in milliseconds
+    #[serde(default = "default_embedding_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Batch size for embedding requests
+    #[serde(default = "default_embedding_batch_size")]
+    pub batch_size: u32,
+}
+
+impl Default for EmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_embedding_provider(),
+            model: default_embedding_model_name(),
+            dimension: default_embedding_dimension(),
+            api_key_env: None,
+            api_base: None,
+            timeout_ms: default_embedding_timeout_ms(),
+            batch_size: default_embedding_batch_size(),
+        }
+    }
 }
 
 // =============================================================================
@@ -264,6 +317,27 @@ pub fn default_raw_memory_fallback_count() -> u32 {
     3
 }
 
+// Embedding configuration defaults
+pub fn default_embedding_provider() -> String {
+    "local".to_string()
+}
+
+pub fn default_embedding_model_name() -> String {
+    "multilingual-e5-small".to_string()
+}
+
+pub fn default_embedding_dimension() -> u32 {
+    384
+}
+
+pub fn default_embedding_timeout_ms() -> u64 {
+    10000 // 10 seconds
+}
+
+pub fn default_embedding_batch_size() -> u32 {
+    32
+}
+
 // Dreaming defaults
 pub fn default_dreaming_enabled() -> bool {
     true
@@ -343,6 +417,8 @@ impl Default for MemoryConfig {
             conflict_similarity_threshold: default_conflict_similarity_threshold(),
             max_facts_in_context: default_max_facts_in_context(),
             raw_memory_fallback_count: default_raw_memory_fallback_count(),
+            // Embedding settings
+            embedding: EmbeddingConfig::default(),
             dreaming: DreamingConfig::default(),
             graph_decay: GraphDecayPolicy::default(),
             memory_decay: MemoryDecayPolicy::default(),
