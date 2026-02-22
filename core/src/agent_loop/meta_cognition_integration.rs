@@ -9,7 +9,7 @@ use crate::memory::cortex::meta_cognition::{
     AnchorRetriever, AnchorStore, BehavioralAnchor, FailureSignal, FailureSnapshot,
     ReactiveReflector, TagExtractor,
 };
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::MemoryBackend;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -67,33 +67,11 @@ impl MetaCognitionIntegration {
     ///
     /// # Arguments
     ///
-    /// * `db` - Vector database for storing failure experiences
+    /// * `db` - Memory backend for storing failure experiences
     /// * `anchor_store` - Store for persisting behavioral anchors
     /// * `config` - Configuration for meta-cognition features
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use std::sync::{Arc, RwLock};
-    /// use alephcore::memory::database::VectorDatabase;
-    /// use alephcore::memory::cortex::meta_cognition::AnchorStore;
-    /// use alephcore::agent_loop::meta_cognition_integration::{
-    ///     MetaCognitionIntegration, MetaCognitionConfig
-    /// };
-    /// use rusqlite::Connection;
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let db = Arc::new(VectorDatabase::open_in_memory().await?);
-    /// let conn = Arc::new(Connection::open_in_memory()?);
-    /// let anchor_store = Arc::new(RwLock::new(AnchorStore::new(conn)));
-    /// let config = MetaCognitionConfig::default();
-    ///
-    /// let integration = MetaCognitionIntegration::new(db, anchor_store, config)?;
-    /// # Ok(())
-    /// # }
-    /// ```
     pub fn new(
-        db: Arc<VectorDatabase>,
+        db: MemoryBackend,
         anchor_store: Arc<RwLock<AnchorStore>>,
         config: MetaCognitionConfig,
     ) -> Result<Self, AlephError> {
@@ -393,14 +371,17 @@ impl MetaCognitionIntegration {
 mod tests {
     use super::*;
     use crate::memory::cortex::meta_cognition::types::{AnchorScope, AnchorSource};
+    use crate::memory::store::LanceMemoryBackend;
     use rusqlite::Connection;
     use tempfile::TempDir;
 
     async fn setup_integration() -> Result<MetaCognitionIntegration, AlephError> {
-        // Create temporary directory for vector database
+        // Create temporary directory for memory backend
         let temp_dir = TempDir::new().map_err(|e| AlephError::config(e.to_string()))?;
-        let db_path = temp_dir.path().join("test.db");
-        let db = Arc::new(VectorDatabase::new(db_path)?);
+        let db_path = temp_dir.path().join("lance_db");
+        let db: MemoryBackend = Arc::new(LanceMemoryBackend::open_or_create(&db_path)
+            .await
+            .map_err(|e| AlephError::config(e.to_string()))?);
 
         let conn = Arc::new(Connection::open_in_memory().map_err(|e| AlephError::config(e.to_string()))?);
 
@@ -430,8 +411,8 @@ mod tests {
     #[tokio::test]
     async fn test_disabled_integration_returns_none() {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let db = Arc::new(VectorDatabase::new(db_path).unwrap());
+        let db_path = temp_dir.path().join("lance_db");
+        let db: MemoryBackend = Arc::new(LanceMemoryBackend::open_or_create(&db_path).await.unwrap());
         let conn = Arc::new(Connection::open_in_memory().unwrap());
         crate::memory::cortex::meta_cognition::schema::initialize_schema(&conn).unwrap();
         let anchor_store = Arc::new(RwLock::new(AnchorStore::new(conn)));
@@ -457,8 +438,8 @@ mod tests {
     #[tokio::test]
     async fn test_retrieve_anchors_empty_when_disabled() {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let db = Arc::new(VectorDatabase::new(db_path).unwrap());
+        let db_path = temp_dir.path().join("lance_db");
+        let db: MemoryBackend = Arc::new(LanceMemoryBackend::open_or_create(&db_path).await.unwrap());
         let conn = Arc::new(Connection::open_in_memory().unwrap());
         crate::memory::cortex::meta_cognition::schema::initialize_schema(&conn).unwrap();
         let anchor_store = Arc::new(RwLock::new(AnchorStore::new(conn)));

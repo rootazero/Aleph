@@ -7,7 +7,7 @@
 use super::types::{AnchorScope, AnchorSource, BehavioralAnchor};
 use super::AnchorStore;
 use crate::error::AlephError;
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::MemoryBackend;
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -125,7 +125,7 @@ impl Default for LLMConfig {
 /// behavioral anchors with high priority (100) and confidence (0.8).
 pub struct ReactiveReflector {
     #[allow(dead_code)]
-    db: Arc<VectorDatabase>,
+    db: MemoryBackend,
     #[allow(dead_code)]
     anchor_store: Arc<RwLock<AnchorStore>>,
     #[allow(dead_code)]
@@ -138,33 +138,12 @@ impl ReactiveReflector {
     ///
     /// # Arguments
     ///
-    /// * `db` - Vector database for storing failure experiences
+    /// * `db` - Memory backend for storing failure experiences
     /// * `anchor_store` - Store for persisting behavioral anchors
     /// * `llm_config` - LLM configuration for root cause analysis
     /// * `provider` - AI provider for LLM calls
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use std::sync::{Arc, RwLock};
-    /// use alephcore::memory::database::VectorDatabase;
-    /// use alephcore::memory::cortex::meta_cognition::{AnchorStore, reactive::{ReactiveReflector, LLMConfig}};
-    /// use alephcore::providers::create_mock_provider;
-    /// use rusqlite::Connection;
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let db = Arc::new(VectorDatabase::open_in_memory().await?);
-    /// let conn = Arc::new(Connection::open_in_memory()?);
-    /// let anchor_store = Arc::new(RwLock::new(AnchorStore::new(conn)));
-    /// let llm_config = LLMConfig::default();
-    /// let provider = create_mock_provider();
-    ///
-    /// let reflector = ReactiveReflector::new(db, anchor_store, llm_config, provider);
-    /// # Ok(())
-    /// # }
-    /// ```
     pub fn new(
-        db: Arc<VectorDatabase>,
+        db: MemoryBackend,
         anchor_store: Arc<RwLock<AnchorStore>>,
         llm_config: LLMConfig,
         provider: Arc<dyn AiProvider>,
@@ -187,32 +166,6 @@ impl ReactiveReflector {
     ///
     /// * `Result<ReflectionResult>` - Reflection result with anchor and snapshot
     ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use std::sync::{Arc, RwLock};
-    /// # use std::collections::HashMap;
-    /// # use alephcore::memory::database::VectorDatabase;
-    /// # use alephcore::memory::cortex::meta_cognition::{AnchorStore, reactive::{ReactiveReflector, LLMConfig, FailureSignal}};
-    /// # use alephcore::providers::create_mock_provider;
-    /// # use rusqlite::Connection;
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(VectorDatabase::open_in_memory().await?);
-    /// # let conn = Arc::new(Connection::open_in_memory()?);
-    /// # let anchor_store = Arc::new(RwLock::new(AnchorStore::new(conn)));
-    /// # let provider = create_mock_provider();
-    /// # let reflector = ReactiveReflector::new(db, anchor_store, LLMConfig::default(), provider);
-    /// let signal = FailureSignal::ExecutionError {
-    ///     task_id: "task-123".to_string(),
-    ///     error: "Python version mismatch".to_string(),
-    ///     context: HashMap::new(),
-    /// };
-    ///
-    /// let result = reflector.handle_failure(signal)?;
-    /// println!("Generated anchor: {}", result.anchor.rule_text);
-    /// # Ok(())
-    /// # }
-    /// ```
     pub fn handle_failure(&self, signal: FailureSignal) -> Result<ReflectionResult, AlephError> {
         // Step 1: Create failure snapshot
         let snapshot = self.create_failure_snapshot(&signal)?;
@@ -541,6 +494,7 @@ impl ReactiveReflector {
 mod tests {
     use super::*;
     use crate::memory::cortex::meta_cognition::schema::initialize_schema;
+    use crate::memory::store::LanceMemoryBackend;
     use crate::providers::MockProvider;
     use rusqlite::Connection;
     use tempfile::TempDir;
@@ -551,10 +505,11 @@ mod tests {
         initialize_schema(&conn).unwrap();
         let anchor_store = Arc::new(RwLock::new(AnchorStore::new(conn)));
 
-        // Create temporary directory for vector database
+        // Create temporary directory for memory backend
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let db = Arc::new(VectorDatabase::new(db_path).unwrap());
+        let db_path = temp_dir.path().join("lance_db");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let db: MemoryBackend = Arc::new(rt.block_on(LanceMemoryBackend::open_or_create(&db_path)).unwrap());
 
         // Create mock provider that returns properly formatted JSON
         let mock_response = r#"{

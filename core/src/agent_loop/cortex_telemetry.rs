@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use crate::memory::cortex::EnvironmentContext;
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::MemoryBackend;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -63,20 +63,20 @@ impl ExecutionTelemetry {
 /// Cortex telemetry collector
 pub struct CortexTelemetry {
     #[allow(dead_code)]
-    db: Arc<VectorDatabase>,
+    db: Option<MemoryBackend>,
     enabled: bool,
 }
 
 impl CortexTelemetry {
     /// Create a new telemetry collector
-    pub fn new(db: Arc<VectorDatabase>) -> Self {
-        Self { db, enabled: true }
+    pub fn new(db: MemoryBackend) -> Self {
+        Self { db: Some(db), enabled: true }
     }
 
     /// Create a disabled telemetry collector (no-op)
     pub fn disabled() -> Self {
         Self {
-            db: Arc::new(VectorDatabase::new(std::path::PathBuf::from(":memory:")).unwrap()),
+            db: None,
             enabled: false,
         }
     }

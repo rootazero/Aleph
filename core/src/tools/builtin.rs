@@ -142,7 +142,7 @@ impl AlephToolServer {
     /// ```
     pub fn with_memory_search(
         self,
-        database: std::sync::Arc<crate::memory::VectorDatabase>,
+        database: crate::memory::store::MemoryBackend,
     ) -> Self {
         self.tool(MemorySearchTool::new(database))
     }

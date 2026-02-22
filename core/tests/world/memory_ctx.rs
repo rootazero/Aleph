@@ -1,6 +1,7 @@
 //! Memory test context for Facts Vector DB and Integration operations
 
 use alephcore::memory::database::VectorDatabase;
+use alephcore::memory::store::{LanceMemoryBackend, MemoryBackend};
 use alephcore::memory::{
     ContextAnchor, FactSpecificity, FactType, MemoryEntry, MemoryFact, MemoryIngestion,
     MemoryRetrieval, PromptAugmenter, SmartEmbedder, TemporalScope, EMBEDDING_DIM,
@@ -16,6 +17,8 @@ pub struct MemoryContext {
     pub temp_dir: Option<TempDir>,
     /// Vector database instance (VectorDatabase doesn't impl Debug)
     pub db: Option<Arc<VectorDatabase>>,
+    /// LanceDB memory backend for retrieval (Phase 4 migration)
+    pub memory_backend: Option<MemoryBackend>,
     /// Facts created during test
     pub facts: Vec<MemoryFact>,
     /// Search results from queries
@@ -55,6 +58,7 @@ impl std::fmt::Debug for MemoryContext {
         f.debug_struct("MemoryContext")
             .field("temp_dir", &self.temp_dir)
             .field("db", &self.db.is_some())
+            .field("memory_backend", &self.memory_backend.is_some())
             .field("facts", &self.facts.len())
             .field("search_results", &self.search_results.len())
             .field("fts_query", &self.fts_query)
@@ -78,6 +82,7 @@ impl Default for MemoryContext {
         Self {
             temp_dir: None,
             db: None,
+            memory_backend: None,
             facts: Vec::new(),
             search_results: Vec::new(),
             fts_query: None,
@@ -144,8 +149,16 @@ impl MemoryContext {
     /// Create and store test database, embedder and config
     pub fn setup_integration(&mut self, temp_dir: TempDir, db_path: std::path::PathBuf) {
         let db = Arc::new(VectorDatabase::new(db_path).expect("Failed to create VectorDatabase"));
+        // Create LanceDB backend for MemoryRetrieval (Phase 4 migration)
+        let lance_path = temp_dir.path().join("lance_db");
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+        let lance_db: MemoryBackend = Arc::new(
+            rt.block_on(LanceMemoryBackend::open_or_create(&lance_path))
+                .expect("Failed to create LanceDB backend"),
+        );
         self.temp_dir = Some(temp_dir);
         self.db = Some(db);
+        self.memory_backend = Some(lance_db);
     }
 
     /// Initialize the smart embedder (requires embedding model)
@@ -184,17 +197,23 @@ impl MemoryContext {
     }
 
     /// Initialize ingestion and retrieval services
+    ///
+    /// NOTE: MemoryIngestion still uses VectorDatabase (will be migrated in Phase 5).
+    /// MemoryRetrieval now uses MemoryBackend (LanceDB). During the transition period,
+    /// integration tests that store via ingestion and retrieve via retrieval won't
+    /// share data across backends.
     pub fn init_services(&mut self) {
         let db = self.db.clone().expect("Database not initialized");
+        let memory_backend = self.memory_backend.clone().expect("MemoryBackend not initialized");
         let embedder = self.embedder.clone().expect("Embedder not initialized");
         let config = self.config.clone().expect("Config not initialized");
 
         self.ingestion = Some(MemoryIngestion::new(
-            db.clone(),
+            db,
             embedder.clone(),
             config.clone(),
         ));
-        self.retrieval = Some(MemoryRetrieval::new(db, embedder, config));
+        self.retrieval = Some(MemoryRetrieval::new(memory_backend, embedder, config));
     }
 
     /// Initialize prompt augmenter with default settings
