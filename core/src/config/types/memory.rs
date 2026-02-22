@@ -85,6 +85,13 @@ pub struct MemoryConfig {
     pub embedding: EmbeddingConfig,
 
     // ========================================
+    // LanceDB Settings
+    // ========================================
+    /// LanceDB-specific configuration
+    #[serde(default)]
+    pub lancedb: LanceDbConfig,
+
+    // ========================================
     // Dreaming + Memory Graph
     // ========================================
     /// DreamDaemon scheduling configuration
@@ -140,6 +147,38 @@ impl Default for EmbeddingConfig {
             api_base: None,
             timeout_ms: default_embedding_timeout_ms(),
             batch_size: default_embedding_batch_size(),
+        }
+    }
+}
+
+// =============================================================================
+// LanceDbConfig
+// =============================================================================
+
+/// LanceDB-specific configuration
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LanceDbConfig {
+    /// Data directory for LanceDB files
+    #[serde(default = "default_lance_data_dir")]
+    pub data_dir: String,
+    /// ANN index type: "IVF_PQ", "IVF_HNSW_SQ", or "none"
+    #[serde(default = "default_ann_index_type")]
+    pub ann_index_type: String,
+    /// Row count threshold to auto-build ANN index
+    #[serde(default = "default_ann_index_threshold")]
+    pub ann_index_threshold: usize,
+    /// FTS tokenizer: "default", "jieba", "simple"
+    #[serde(default = "default_fts_tokenizer")]
+    pub fts_tokenizer: String,
+}
+
+impl Default for LanceDbConfig {
+    fn default() -> Self {
+        Self {
+            data_dir: default_lance_data_dir(),
+            ann_index_type: default_ann_index_type(),
+            ann_index_threshold: default_ann_index_threshold(),
+            fts_tokenizer: default_fts_tokenizer(),
         }
     }
 }
@@ -261,7 +300,7 @@ pub fn default_retention_days() -> u32 {
 }
 
 pub fn default_vector_db() -> String {
-    "sqlite-vec".to_string()
+    "lancedb".to_string()
 }
 
 pub fn default_similarity_threshold() -> f32 {
@@ -389,6 +428,23 @@ pub fn default_memory_decay_protected_types() -> Vec<String> {
     vec!["personal".to_string()]
 }
 
+// LanceDB configuration defaults
+pub fn default_lance_data_dir() -> String {
+    "~/.aleph".to_string()
+}
+
+pub fn default_ann_index_type() -> String {
+    "none".to_string()
+}
+
+pub fn default_ann_index_threshold() -> usize {
+    10000
+}
+
+pub fn default_fts_tokenizer() -> String {
+    "default".to_string()
+}
+
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
@@ -419,6 +475,8 @@ impl Default for MemoryConfig {
             raw_memory_fallback_count: default_raw_memory_fallback_count(),
             // Embedding settings
             embedding: EmbeddingConfig::default(),
+            // LanceDB settings
+            lancedb: LanceDbConfig::default(),
             dreaming: DreamingConfig::default(),
             graph_decay: GraphDecayPolicy::default(),
             memory_decay: MemoryDecayPolicy::default(),

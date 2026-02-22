@@ -82,8 +82,60 @@ impl LanceMemoryBackend {
 }
 
 // ---------------------------------------------------------------------------
+// Index management
+// ---------------------------------------------------------------------------
+
+impl LanceMemoryBackend {
+    /// Create FTS and ANN indexes on all tables (idempotent).
+    ///
+    /// **Note:** This should only be called after data has been inserted into the
+    /// tables, because LanceDB cannot build indexes on empty tables.
+    pub async fn ensure_indexes(&self) -> Result<(), AlephError> {
+        // FTS on facts.content
+        self.create_fts_index_if_needed(&self.facts_table, "content")
+            .await?;
+        // FTS on graph_nodes.name
+        self.create_fts_index_if_needed(&self.nodes_table, "name")
+            .await?;
+        // FTS on memories.user_input
+        self.create_fts_index_if_needed(&self.memories_table, "user_input")
+            .await?;
+        // FTS on memories.ai_output
+        self.create_fts_index_if_needed(&self.memories_table, "ai_output")
+            .await?;
+        Ok(())
+    }
+
+    /// Create an FTS index on a single column if needed.
+    ///
+    /// LanceDB's `create_index` with `replace(true)` is idempotent —
+    /// it replaces the existing index if one already exists.
+    /// NativeTable only supports single-column indexes.
+    async fn create_fts_index_if_needed(
+        &self,
+        table: &Table,
+        column: &str,
+    ) -> Result<(), AlephError> {
+        use lancedb::index::Index;
+
+        table
+            .create_index(&[column], Index::FTS(Default::default()))
+            .replace(true)
+            .execute()
+            .await
+            .map_err(|e| {
+                AlephError::config(format!("FTS index on '{}': {}", column, e))
+            })?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod integration_tests;
 
 #[cfg(test)]
 mod tests {
