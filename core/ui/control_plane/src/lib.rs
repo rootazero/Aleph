@@ -32,10 +32,10 @@ fn init_theme() {
     let html = document.document_element().expect("no html element");
 
     // Check localStorage for saved preference
-    let storage = window.local_storage().ok().flatten();
-    let saved_theme = storage
+    let storage: Option<web_sys::Storage> = window.local_storage().ok().flatten();
+    let saved_theme: Option<String> = storage
         .as_ref()
-        .and_then(|s| s.get_item("aleph-theme").ok())
+        .and_then(|s: &web_sys::Storage| s.get_item("aleph-theme").ok())
         .flatten();
 
     match saved_theme.as_deref() {
