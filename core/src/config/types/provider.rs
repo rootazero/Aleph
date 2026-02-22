@@ -47,6 +47,10 @@ pub struct ProviderConfig {
     #[serde(default)]
     #[schemars(skip)]
     pub api_key: Option<String>,
+    /// Reference to a secret in the vault (replaces plaintext api_key)
+    #[serde(default)]
+    #[schemars(skip)]
+    pub secret_name: Option<String>,
     /// Model name (e.g., "gpt-4o", "claude-3-5-sonnet-20241022", "gemini-3-flash", "llama3.2")
     pub model: String,
     /// Base URL for API endpoint (optional, defaults to official API)
@@ -140,6 +144,7 @@ impl ProviderConfig {
         Self {
             protocol: None,
             api_key: Some("test-key".to_string()),
+            secret_name: None,
             model: model.into(),
             base_url: None,
             color: default_provider_color(),
@@ -183,6 +188,7 @@ mod tests {
             protocol: Some("anthropic".to_string()),
             model: "claude-3-5-sonnet".to_string(),
             api_key: None,
+            secret_name: None,
             base_url: None,
             color: default_provider_color(),
             timeout_seconds: default_timeout_seconds(),
@@ -208,6 +214,7 @@ mod tests {
             protocol: None,
             model: "gpt-4".to_string(),
             api_key: None,
+            secret_name: None,
             base_url: None,
             color: default_provider_color(),
             timeout_seconds: default_timeout_seconds(),

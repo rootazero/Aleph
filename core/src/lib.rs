@@ -92,6 +92,7 @@ pub mod resilience;
 pub mod resilient;
 pub mod daemon;
 pub mod scheduler;
+pub mod secrets;
 
 /// Unified initialization module (re-export for backward compatibility)
 pub mod initialization {

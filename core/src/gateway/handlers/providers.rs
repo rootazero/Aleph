@@ -190,6 +190,7 @@ pub async fn handle_update(
         let provider_config = ProviderConfig {
             protocol: params.config.protocol,
             api_key: params.config.api_key,
+            secret_name: None,
             model: params.config.model.clone(),
             base_url: params.config.base_url,
             color: params.config.color.unwrap_or_else(|| "#808080".to_string()),
@@ -296,6 +297,7 @@ pub async fn handle_create(
         let provider_config = ProviderConfig {
             protocol: params.config.protocol,
             api_key: params.config.api_key,
+            secret_name: None,
             model: params.config.model.clone(),
             base_url: params.config.base_url,
             color: params.config.color.unwrap_or_else(|| "#808080".to_string()),
@@ -476,6 +478,7 @@ pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
     let provider_config = ProviderConfig {
         protocol: params.config.protocol,
         api_key: params.config.api_key,
+        secret_name: None,
         model: params.config.model.clone(),
         base_url: params.config.base_url,
         color: params.config.color.unwrap_or_else(|| "#808080".to_string()),

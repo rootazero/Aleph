@@ -166,6 +166,7 @@ impl AuthProfileProviderRegistry {
         let provider_config = ProviderConfig {
             protocol: Some(self.config.provider_type.clone()),
             api_key,
+            secret_name: None,
             model: self.config.model.clone(),
             base_url: self.config.base_url.clone(),
             color: "#d97757".to_string(), // Default Claude color
