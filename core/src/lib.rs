@@ -88,6 +88,7 @@ pub mod vision;
 pub mod wizard;
 pub mod spec_driven;
 pub mod skill_evolution;
+pub mod resilience;
 pub mod resilient;
 pub mod daemon;
 pub mod scheduler;

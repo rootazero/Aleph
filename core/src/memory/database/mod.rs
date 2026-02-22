@@ -19,13 +19,19 @@ mod experiences;
 mod facts;
 mod memory_ops;
 pub mod migration;
-pub mod resilience;
+mod resilience_events;
+mod resilience_sessions;
+mod resilience_tasks;
+mod resilience_traces;
 mod retention;
 
 // Re-export main types
 pub use core::{MemoryStats, VectorDatabase, DEFAULT_EMBEDDING_DIM};
 pub use facts::PathEntry;
-pub use resilience::{
+
+// Re-export resilience types for backward compatibility
+// (types now live in crate::resilience, CRUD impl blocks are in resilience_*.rs above)
+pub use crate::resilience::{
     AgentEvent, AgentTask, CoordinatorConfig, DivergenceStatus, EmitterConfig, EventClassifier,
     EventEmitter, EventTier, EventType, GapFillResult, GovernorConfig, GovernorStats,
     GracefulShutdown, Lane, PulseBuffer, QuotaCheckResult, QuotaConfig, QuotaManager, QuotaUsage,
