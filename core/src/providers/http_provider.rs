@@ -57,7 +57,39 @@ impl HttpProvider {
 
     /// Execute a request (non-streaming)
     async fn execute(&self, payload: RequestPayload<'_>) -> Result<String> {
-        let request = self.adapter.build_request(&payload, &self.config, false)?;
+        // PII filtering: filter outbound message before sending to API
+        let filtered_input;
+        let final_payload = if let Some(engine_lock) = crate::pii::PiiEngine::global() {
+            if let Ok(engine) = engine_lock.read() {
+                if !engine.is_provider_excluded(&self.name) {
+                    let result = engine.filter(payload.input);
+                    if result.has_detections() {
+                        filtered_input = result.text;
+                        RequestPayload {
+                            input: &filtered_input,
+                            system_prompt: payload.system_prompt,
+                            image: payload.image,
+                            attachments: payload.attachments,
+                            think_level: payload.think_level,
+                            force_standard_mode: payload.force_standard_mode,
+                        }
+                    } else {
+                        payload
+                    }
+                } else {
+                    payload
+                }
+            } else {
+                payload
+            }
+        } else {
+            // PII engine not initialized — pass through
+            payload
+        };
+
+        let request = self
+            .adapter
+            .build_request(&final_payload, &self.config, false)?;
         let response = request.send().await.map_err(|e| {
             if e.is_timeout() {
                 crate::error::AlephError::Timeout {
@@ -76,7 +108,39 @@ impl HttpProvider {
         &self,
         payload: RequestPayload<'_>,
     ) -> Result<BoxStream<'static, Result<String>>> {
-        let request = self.adapter.build_request(&payload, &self.config, true)?;
+        // PII filtering: filter outbound message before sending to API
+        let filtered_input;
+        let final_payload = if let Some(engine_lock) = crate::pii::PiiEngine::global() {
+            if let Ok(engine) = engine_lock.read() {
+                if !engine.is_provider_excluded(&self.name) {
+                    let result = engine.filter(payload.input);
+                    if result.has_detections() {
+                        filtered_input = result.text;
+                        RequestPayload {
+                            input: &filtered_input,
+                            system_prompt: payload.system_prompt,
+                            image: payload.image,
+                            attachments: payload.attachments,
+                            think_level: payload.think_level,
+                            force_standard_mode: payload.force_standard_mode,
+                        }
+                    } else {
+                        payload
+                    }
+                } else {
+                    payload
+                }
+            } else {
+                payload
+            }
+        } else {
+            // PII engine not initialized — pass through
+            payload
+        };
+
+        let request = self
+            .adapter
+            .build_request(&final_payload, &self.config, true)?;
         let response = request.send().await.map_err(|e| {
             crate::error::AlephError::network(format!("Network error: {}", e))
         })?;
@@ -201,5 +265,16 @@ mod tests {
     fn test_http_provider_creation() {
         // This test just verifies the type compiles correctly
         // Actual functionality tested via integration tests
+    }
+
+    #[test]
+    fn test_pii_filtering_integration() {
+        use crate::config::PrivacyConfig;
+        use crate::pii::PiiEngine;
+
+        let engine = PiiEngine::new(PrivacyConfig::default());
+        let result = engine.filter("User: Call 13812345678 for info");
+        assert!(result.text.contains("[PHONE]"));
+        assert!(!result.text.contains("13812345678"));
     }
 }
