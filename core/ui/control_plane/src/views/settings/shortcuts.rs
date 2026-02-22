@@ -41,8 +41,8 @@ pub fn ShortcutsView() -> impl IntoView {
     view! {
         <div class="p-6 space-y-6">
             <div>
-                <h1 class="text-2xl font-bold text-slate-900">"Shortcuts Settings"</h1>
-                <p class="mt-1 text-sm text-slate-600">
+                <h1 class="text-2xl font-bold text-text-primary">"Shortcuts Settings"</h1>
+                <p class="mt-1 text-sm text-text-tertiary">
                     "Configure keyboard shortcuts for quick access"
                 </p>
             </div>
@@ -51,12 +51,12 @@ pub fn ShortcutsView() -> impl IntoView {
                 if loading.get() {
                     view! {
                         <div class="flex items-center justify-center py-12">
-                            <div class="text-slate-500">"Loading..."</div>
+                            <div class="text-text-tertiary">"Loading..."</div>
                         </div>
                     }.into_any()
                 } else if let Some(err) = error.get() {
                     view! {
-                        <div class="p-4 bg-red-50 border border-red-200 rounded text-red-700">
+                        <div class="p-4 bg-danger-subtle border border-danger/20 rounded text-danger">
                             {err}
                         </div>
                     }.into_any()
@@ -112,15 +112,15 @@ fn SummonSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
     });
 
     view! {
-        <div class="bg-white rounded-lg border border-slate-200 p-6">
-            <h2 class="text-lg font-semibold text-slate-900 mb-4">"Summon Hotkey"</h2>
-            <p class="text-sm text-slate-600 mb-4">
+        <div class="bg-surface-raised rounded-lg border border-border p-6">
+            <h2 class="text-lg font-semibold text-text-primary mb-4">"Summon Hotkey"</h2>
+            <p class="text-sm text-text-tertiary mb-4">
                 "Global hotkey to summon the Aleph window"
             </p>
 
             <div class="space-y-4">
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Hotkey"
                     </label>
                     <input
@@ -128,15 +128,15 @@ fn SummonSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
                         value=move || summon.get()
                         on:input=move |ev| summon.set(event_target_value(&ev))
                         placeholder="Command+Grave"
-                        class="w-full px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        class="w-full px-3 py-2 border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-slate-500">
+                    <p class="mt-1 text-xs text-text-tertiary">
                         "Format: Modifier+Key (e.g., Command+Grave, Option+Space)"
                     </p>
                 </div>
 
                 {move || save_error.get().map(|e| view! {
-                    <div class="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                    <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
                         {e}
                     </div>
                 })}
@@ -144,7 +144,7 @@ fn SummonSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
                 {move || {
                     if save_success.get() {
                         Some(view! {
-                            <div class="p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
                                 "Saved successfully"
                             </div>
                         })
@@ -156,7 +156,7 @@ fn SummonSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
                 <button
                     on:click=move |_| save_config_fn.with_value(|f| f())
                     disabled=move || saving.get()
-                    class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+                    class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
                 >
                     {move || if saving.get() { "Saving..." } else { "Save" }}
                 </button>
@@ -207,15 +207,15 @@ fn CancelSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
     });
 
     view! {
-        <div class="bg-white rounded-lg border border-slate-200 p-6">
-            <h2 class="text-lg font-semibold text-slate-900 mb-4">"Cancel Hotkey"</h2>
-            <p class="text-sm text-slate-600 mb-4">
+        <div class="bg-surface-raised rounded-lg border border-border p-6">
+            <h2 class="text-lg font-semibold text-text-primary mb-4">"Cancel Hotkey"</h2>
+            <p class="text-sm text-text-tertiary mb-4">
                 "Hotkey to cancel current operation (optional)"
             </p>
 
             <div class="space-y-4">
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Hotkey"
                     </label>
                     <input
@@ -223,15 +223,15 @@ fn CancelSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
                         value=move || cancel.get()
                         on:input=move |ev| cancel.set(event_target_value(&ev))
                         placeholder="Escape"
-                        class="w-full px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        class="w-full px-3 py-2 border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-slate-500">
+                    <p class="mt-1 text-xs text-text-tertiary">
                         "Leave empty to disable"
                     </p>
                 </div>
 
                 {move || save_error.get().map(|e| view! {
-                    <div class="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                    <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
                         {e}
                     </div>
                 })}
@@ -239,7 +239,7 @@ fn CancelSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
                 {move || {
                     if save_success.get() {
                         Some(view! {
-                            <div class="p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
                                 "Saved successfully"
                             </div>
                         })
@@ -251,7 +251,7 @@ fn CancelSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
                 <button
                     on:click=move |_| save_config_fn.with_value(|f| f())
                     disabled=move || saving.get()
-                    class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+                    class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
                 >
                     {move || if saving.get() { "Saving..." } else { "Save" }}
                 </button>
@@ -297,15 +297,15 @@ fn CommandPromptSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
     });
 
     view! {
-        <div class="bg-white rounded-lg border border-slate-200 p-6">
-            <h2 class="text-lg font-semibold text-slate-900 mb-4">"Command Prompt Hotkey"</h2>
-            <p class="text-sm text-slate-600 mb-4">
+        <div class="bg-surface-raised rounded-lg border border-border p-6">
+            <h2 class="text-lg font-semibold text-text-primary mb-4">"Command Prompt Hotkey"</h2>
+            <p class="text-sm text-text-tertiary mb-4">
                 "Hotkey to open command completion prompt"
             </p>
 
             <div class="space-y-4">
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Hotkey"
                     </label>
                     <input
@@ -313,15 +313,15 @@ fn CommandPromptSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
                         value=move || command_prompt.get()
                         on:input=move |ev| command_prompt.set(event_target_value(&ev))
                         placeholder="Option+Space"
-                        class="w-full px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        class="w-full px-3 py-2 border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-slate-500">
+                    <p class="mt-1 text-xs text-text-tertiary">
                         "Format: Modifier+Key (e.g., Option+Space, Control+K)"
                     </p>
                 </div>
 
                 {move || save_error.get().map(|e| view! {
-                    <div class="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                    <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
                         {e}
                     </div>
                 })}
@@ -329,7 +329,7 @@ fn CommandPromptSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
                 {move || {
                     if save_success.get() {
                         Some(view! {
-                            <div class="p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
                                 "Saved successfully"
                             </div>
                         })
@@ -341,7 +341,7 @@ fn CommandPromptSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
                 <button
                     on:click=move |_| save_config_fn.with_value(|f| f())
                     disabled=move || saving.get()
-                    class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+                    class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
                 >
                     {move || if saving.get() { "Saving..." } else { "Save" }}
                 </button>

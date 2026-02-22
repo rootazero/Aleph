@@ -46,8 +46,8 @@ pub fn GenerationView() -> impl IntoView {
     view! {
         <div class="p-6 space-y-6">
             <div>
-                <h1 class="text-2xl font-bold text-slate-900">"Generation Settings"</h1>
-                <p class="mt-1 text-sm text-slate-600">
+                <h1 class="text-2xl font-bold text-text-primary">"Generation Settings"</h1>
+                <p class="mt-1 text-sm text-text-tertiary">
                     "Configure media generation settings"
                 </p>
             </div>
@@ -56,12 +56,12 @@ pub fn GenerationView() -> impl IntoView {
                 if loading.get() {
                     view! {
                         <div class="flex items-center justify-center py-12">
-                            <div class="text-slate-500">"Loading..."</div>
+                            <div class="text-text-tertiary">"Loading..."</div>
                         </div>
                     }.into_any()
                 } else if let Some(err) = error.get() {
                     view! {
-                        <div class="p-4 bg-red-50 border border-red-200 rounded text-red-700">
+                        <div class="p-4 bg-danger-subtle border border-danger/20 rounded text-danger">
                             {err}
                         </div>
                     }.into_any()
@@ -116,15 +116,15 @@ fn OutputDirSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
     });
 
     view! {
-        <div class="bg-white rounded-lg border border-slate-200 p-6">
-            <h2 class="text-lg font-semibold text-slate-900 mb-4">"Output Directory"</h2>
-            <p class="text-sm text-slate-600 mb-4">
+        <div class="bg-surface-raised rounded-lg border border-border p-6">
+            <h2 class="text-lg font-semibold text-text-primary mb-4">"Output Directory"</h2>
+            <p class="text-sm text-text-tertiary mb-4">
                 "Directory where generated files (images, videos, audio) will be saved"
             </p>
 
             <div class="space-y-4">
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Directory Path"
                     </label>
                     <input
@@ -132,15 +132,15 @@ fn OutputDirSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                         value=move || output_dir.get()
                         on:input=move |ev| output_dir.set(event_target_value(&ev))
                         placeholder="~/Downloads/aleph-gen"
-                        class="w-full px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        class="w-full px-3 py-2 border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-slate-500">
+                    <p class="mt-1 text-xs text-text-tertiary">
                         "Supports ~ for home directory expansion"
                     </p>
                 </div>
 
                 {move || save_error.get().map(|e| view! {
-                    <div class="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                    <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
                         {e}
                     </div>
                 })}
@@ -148,7 +148,7 @@ fn OutputDirSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                 {move || {
                     if save_success.get() {
                         Some(view! {
-                            <div class="p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
                                 "Saved successfully"
                             </div>
                         })
@@ -160,7 +160,7 @@ fn OutputDirSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                 <button
                     on:click=move |_| save_config_fn.with_value(|f| f())
                     disabled=move || saving.get()
-                    class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+                    class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
                 >
                     {move || if saving.get() { "Saving..." } else { "Save" }}
                 </button>
@@ -208,16 +208,16 @@ fn ThresholdsSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
     });
 
     view! {
-        <div class="bg-white rounded-lg border border-slate-200 p-6">
-            <h2 class="text-lg font-semibold text-slate-900 mb-4">"Thresholds"</h2>
-            <p class="text-sm text-slate-600 mb-4">
+        <div class="bg-surface-raised rounded-lg border border-border p-6">
+            <h2 class="text-lg font-semibold text-text-primary mb-4">"Thresholds"</h2>
+            <p class="text-sm text-text-tertiary mb-4">
                 "Configure automatic behavior thresholds"
             </p>
 
             <div class="space-y-6">
                 <div>
                     <div class="flex items-center justify-between mb-2">
-                        <label class="block text-sm font-medium text-slate-700">
+                        <label class="block text-sm font-medium text-text-secondary">
                             "Auto-paste threshold: " {move || auto_paste_threshold.get()} " MB"
                         </label>
                     </div>
@@ -232,16 +232,16 @@ fn ThresholdsSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                                 auto_paste_threshold.set(val);
                             }
                         }
-                        class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
                     />
-                    <p class="mt-1 text-xs text-slate-500">
+                    <p class="mt-1 text-xs text-text-tertiary">
                         "Files smaller than this will be auto-pasted to clipboard"
                     </p>
                 </div>
 
                 <div>
                     <div class="flex items-center justify-between mb-2">
-                        <label class="block text-sm font-medium text-slate-700">
+                        <label class="block text-sm font-medium text-text-secondary">
                             "Background task threshold: " {move || background_task_threshold.get()} " seconds"
                         </label>
                     </div>
@@ -256,15 +256,15 @@ fn ThresholdsSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                                 background_task_threshold.set(val);
                             }
                         }
-                        class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
                     />
-                    <p class="mt-1 text-xs text-slate-500">
+                    <p class="mt-1 text-xs text-text-tertiary">
                         "Tasks longer than this will run in background"
                     </p>
                 </div>
 
                 {move || save_error.get().map(|e| view! {
-                    <div class="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                    <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
                         {e}
                     </div>
                 })}
@@ -272,7 +272,7 @@ fn ThresholdsSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                 {move || {
                     if save_success.get() {
                         Some(view! {
-                            <div class="p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
                                 "Saved successfully"
                             </div>
                         })
@@ -284,7 +284,7 @@ fn ThresholdsSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                 <button
                     on:click=move |_| save_config_fn.with_value(|f| f())
                     disabled=move || saving.get()
-                    class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+                    class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
                 >
                     {move || if saving.get() { "Saving..." } else { "Save" }}
                 </button>
@@ -330,9 +330,9 @@ fn SmartRoutingSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
     });
 
     view! {
-        <div class="bg-white rounded-lg border border-slate-200 p-6">
-            <h2 class="text-lg font-semibold text-slate-900 mb-4">"Smart Routing"</h2>
-            <p class="text-sm text-slate-600 mb-4">
+        <div class="bg-surface-raised rounded-lg border border-border p-6">
+            <h2 class="text-lg font-semibold text-text-primary mb-4">"Smart Routing"</h2>
+            <p class="text-sm text-text-tertiary mb-4">
                 "Automatically select the best provider based on generation type and capabilities"
             </p>
 
@@ -342,18 +342,18 @@ fn SmartRoutingSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                         type="checkbox"
                         checked=move || smart_routing.get()
                         on:change=move |ev| smart_routing.set(event_target_checked(&ev))
-                        class="w-4 h-4 text-indigo-600 focus:ring-indigo-500 rounded"
+                        class="w-4 h-4 text-primary focus:ring-primary/30 rounded"
                     />
                     <div>
-                        <div class="font-medium text-slate-900">"Enable Smart Routing"</div>
-                        <div class="text-sm text-slate-500">
+                        <div class="font-medium text-text-primary">"Enable Smart Routing"</div>
+                        <div class="text-sm text-text-tertiary">
                             "Automatically route requests to the most suitable provider"
                         </div>
                     </div>
                 </label>
 
                 {move || save_error.get().map(|e| view! {
-                    <div class="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                    <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
                         {e}
                     </div>
                 })}
@@ -361,7 +361,7 @@ fn SmartRoutingSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                 {move || {
                     if save_success.get() {
                         Some(view! {
-                            <div class="p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
                                 "Saved successfully"
                             </div>
                         })
@@ -373,7 +373,7 @@ fn SmartRoutingSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                 <button
                     on:click=move |_| save_config_fn.with_value(|f| f())
                     disabled=move || saving.get()
-                    class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+                    class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
                 >
                     {move || if saving.get() { "Saving..." } else { "Save" }}
                 </button>

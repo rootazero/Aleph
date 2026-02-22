@@ -94,21 +94,21 @@ fn ProviderList(
     };
 
     view! {
-        <div class="w-80 border-r border-slate-800 bg-slate-900/30 flex flex-col">
+        <div class="w-80 border-r border-border bg-surface-raised flex flex-col">
             // Header
-            <div class="p-4 border-b border-slate-800">
+            <div class="p-4 border-b border-border">
                 <div class="flex items-center justify-between mb-4">
-                    <h2 class="text-lg font-semibold text-slate-200">
+                    <h2 class="text-lg font-semibold text-text-primary">
                         "Providers"
                     </h2>
                     <button
                         on:click=on_add
-                        class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg transition-colors"
+                        class="px-3 py-1.5 bg-primary hover:bg-primary-hover text-white text-sm rounded-lg transition-colors"
                     >
                         "+ Add"
                     </button>
                 </div>
-                <p class="text-xs text-slate-400">
+                <p class="text-xs text-text-secondary">
                     "Manage AI provider configurations"
                 </p>
             </div>
@@ -118,13 +118,13 @@ fn ProviderList(
                 {move || {
                     if loading.get() {
                         view! {
-                            <div class="text-center py-8 text-slate-400 text-sm">
+                            <div class="text-center py-8 text-text-secondary text-sm">
                                 "Loading providers..."
                             </div>
                         }.into_any()
                     } else if providers.get().is_empty() {
                         view! {
-                            <div class="text-center py-8 text-slate-500 text-sm">
+                            <div class="text-center py-8 text-text-tertiary text-sm">
                                 "No providers configured"
                             </div>
                         }.into_any()
@@ -178,20 +178,20 @@ fn ProviderCard(
             class=move || {
                 let base = "w-full text-left p-3 rounded-lg border transition-all";
                 if is_selected.get() {
-                    format!("{} bg-indigo-500/10 border-indigo-500/50", base)
+                    format!("{} bg-primary-subtle border-primary", base)
                 } else {
-                    format!("{} bg-slate-800/30 border-slate-700 hover:bg-slate-800/50 hover:border-slate-600", base)
+                    format!("{} bg-surface-sunken border-border hover:bg-surface-sunken hover:border-border-strong", base)
                 }
             }
         >
             <div class="flex items-start justify-between mb-1">
                 <div class="flex items-center gap-2">
-                    <span class="font-medium text-slate-200 text-sm">
+                    <span class="font-medium text-text-primary text-sm">
                         {name}
                     </span>
                     {move || if is_default {
                         view! {
-                            <span class="px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 text-xs rounded">
+                            <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded">
                                 "Default"
                             </span>
                         }.into_any()
@@ -201,13 +201,13 @@ fn ProviderCard(
                 </div>
                 <div class=move || {
                     if enabled {
-                        "w-2 h-2 rounded-full bg-emerald-500"
+                        "w-2 h-2 rounded-full bg-success"
                     } else {
-                        "w-2 h-2 rounded-full bg-slate-600"
+                        "w-2 h-2 rounded-full bg-surface-sunken"
                     }
                 }></div>
             </div>
-            <div class="text-xs text-slate-400 truncate">
+            <div class="text-xs text-text-secondary truncate">
                 {model}
             </div>
         </button>
@@ -451,7 +451,7 @@ fn ProviderEditor(
             {move || {
                 if !is_editing() {
                     view! {
-                        <div class="flex items-center justify-center h-full text-slate-500">
+                        <div class="flex items-center justify-center h-full text-text-tertiary">
                             "Select a provider to edit or add a new one"
                         </div>
                     }.into_any()
@@ -460,10 +460,10 @@ fn ProviderEditor(
                         <div class="p-8 max-w-3xl mx-auto">
                             // Header
                             <div class="mb-6">
-                                <h2 class="text-2xl font-bold text-slate-200 mb-2">
+                                <h2 class="text-2xl font-bold text-text-primary mb-2">
                                     {move || if is_new() { "Add Provider" } else { "Edit Provider" }}
                                 </h2>
-                                <p class="text-sm text-slate-400">
+                                <p class="text-sm text-text-secondary">
                                     "Configure AI provider settings"
                                 </p>
                             </div>
@@ -472,7 +472,7 @@ fn ProviderEditor(
                             {move || {
                                 if let Some(err) = error.get() {
                                     view! {
-                                        <div class="mb-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+                                        <div class="mb-4 p-4 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">
                                             {err}
                                         </div>
                                     }.into_any()
@@ -485,7 +485,7 @@ fn ProviderEditor(
                             <div class="space-y-6">
                                 // Name
                                 <div>
-                                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                                    <label class="block text-sm font-medium text-text-secondary mb-2">
                                         "Provider Name"
                                     </label>
                                     <input
@@ -493,23 +493,23 @@ fn ProviderEditor(
                                         prop:value=move || form_name.get()
                                         on:input=move |ev| form_name.set(event_target_value(&ev))
                                         prop:disabled=move || !is_new()
-                                        class="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed"
                                         placeholder="e.g., openai, claude, gemini"
                                     />
-                                    <p class="mt-1 text-xs text-slate-500">
+                                    <p class="mt-1 text-xs text-text-tertiary">
                                         "Unique identifier for this provider"
                                     </p>
                                 </div>
 
                                 // Protocol
                                 <div>
-                                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                                    <label class="block text-sm font-medium text-text-secondary mb-2">
                                         "Protocol"
                                     </label>
                                     <select
                                         prop:value=move || form_protocol.get()
                                         on:change=move |ev| form_protocol.set(event_target_value(&ev))
-                                        class="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:border-indigo-500"
+                                        class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                     >
                                         <option value="openai">"OpenAI"</option>
                                         <option value="anthropic">"Anthropic (Claude)"</option>
@@ -520,48 +520,48 @@ fn ProviderEditor(
 
                                 // Model
                                 <div>
-                                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                                    <label class="block text-sm font-medium text-text-secondary mb-2">
                                         "Model"
                                     </label>
                                     <input
                                         type="text"
                                         prop:value=move || form_model.get()
                                         on:input=move |ev| form_model.set(event_target_value(&ev))
-                                        class="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:border-indigo-500"
+                                        class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                         placeholder="e.g., gpt-4o, claude-sonnet-4-5, gemini-3-flash"
                                     />
                                 </div>
 
                                 // API Key
                                 <div>
-                                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                                    <label class="block text-sm font-medium text-text-secondary mb-2">
                                         "API Key"
                                     </label>
                                     <input
                                         type="password"
                                         prop:value=move || form_api_key.get()
                                         on:input=move |ev| form_api_key.set(event_target_value(&ev))
-                                        class="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:border-indigo-500"
+                                        class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                         placeholder="sk-..."
                                     />
-                                    <p class="mt-1 text-xs text-slate-500">
+                                    <p class="mt-1 text-xs text-text-tertiary">
                                         "Optional for local providers like Ollama"
                                     </p>
                                 </div>
 
                                 // Base URL
                                 <div>
-                                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                                    <label class="block text-sm font-medium text-text-secondary mb-2">
                                         "Base URL"
                                     </label>
                                     <input
                                         type="text"
                                         prop:value=move || form_base_url.get()
                                         on:input=move |ev| form_base_url.set(event_target_value(&ev))
-                                        class="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:border-indigo-500"
+                                        class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                         placeholder="https://api.openai.com/v1"
                                     />
-                                    <p class="mt-1 text-xs text-slate-500">
+                                    <p class="mt-1 text-xs text-text-tertiary">
                                         "Optional, defaults to official API endpoint"
                                     </p>
                                 </div>
@@ -572,22 +572,22 @@ fn ProviderEditor(
                                         type="checkbox"
                                         prop:checked=move || form_enabled.get()
                                         on:change=move |ev| form_enabled.set(event_target_checked(&ev))
-                                        class="w-4 h-4 rounded border-slate-700 bg-slate-800 text-indigo-600 focus:ring-indigo-500"
+                                        class="w-4 h-4 rounded border-border bg-surface-sunken text-primary focus:ring-primary/30"
                                     />
-                                    <label class="text-sm font-medium text-slate-300">
+                                    <label class="text-sm font-medium text-text-secondary">
                                         "Enabled"
                                     </label>
                                 </div>
 
                                 // Advanced settings (collapsible)
                                 <details class="group">
-                                    <summary class="cursor-pointer text-sm font-medium text-slate-300 hover:text-slate-200">
+                                    <summary class="cursor-pointer text-sm font-medium text-text-secondary hover:text-text-primary">
                                         "Advanced Settings"
                                     </summary>
-                                    <div class="mt-4 space-y-4 pl-4 border-l-2 border-slate-800">
+                                    <div class="mt-4 space-y-4 pl-4 border-l-2 border-border">
                                         // Timeout
                                         <div>
-                                            <label class="block text-sm font-medium text-slate-300 mb-2">
+                                            <label class="block text-sm font-medium text-text-secondary mb-2">
                                                 "Timeout (seconds)"
                                             </label>
                                             <input
@@ -598,27 +598,27 @@ fn ProviderEditor(
                                                         form_timeout.set(val);
                                                     }
                                                 }
-                                                class="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:border-indigo-500"
+                                                class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                             />
                                         </div>
 
                                         // Max Tokens
                                         <div>
-                                            <label class="block text-sm font-medium text-slate-300 mb-2">
+                                            <label class="block text-sm font-medium text-text-secondary mb-2">
                                                 "Max Tokens"
                                             </label>
                                             <input
                                                 type="number"
                                                 prop:value=move || form_max_tokens.get()
                                                 on:input=move |ev| form_max_tokens.set(event_target_value(&ev))
-                                                class="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:border-indigo-500"
+                                                class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                                 placeholder="Optional"
                                             />
                                         </div>
 
                                         // Temperature
                                         <div>
-                                            <label class="block text-sm font-medium text-slate-300 mb-2">
+                                            <label class="block text-sm font-medium text-text-secondary mb-2">
                                                 "Temperature"
                                             </label>
                                             <input
@@ -626,7 +626,7 @@ fn ProviderEditor(
                                                 step="0.1"
                                                 prop:value=move || form_temperature.get()
                                                 on:input=move |ev| form_temperature.set(event_target_value(&ev))
-                                                class="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:border-indigo-500"
+                                                class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                                 placeholder="0.0 - 2.0"
                                             />
                                         </div>
@@ -639,7 +639,7 @@ fn ProviderEditor(
                                 <button
                                     on:click=on_save
                                     prop:disabled=move || saving.get()
-                                    class="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-600/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
+                                    class="px-6 py-2 bg-primary hover:bg-primary-hover disabled:bg-primary/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
                                 >
                                     {move || if saving.get() { "Saving..." } else { "Save" }}
                                 </button>
@@ -647,7 +647,7 @@ fn ProviderEditor(
                                 <button
                                     on:click=on_test
                                     prop:disabled=move || testing.get() || saving.get()
-                                    class="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
+                                    class="px-6 py-2 bg-primary hover:bg-primary-hover disabled:bg-primary/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
                                 >
                                     {move || if testing.get() { "Testing..." } else { "Test Connection" }}
                                 </button>
@@ -659,7 +659,7 @@ fn ProviderEditor(
                                                 <button
                                                     on:click=on_set_default
                                                     prop:disabled=move || saving.get()
-                                                    class="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-600/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
+                                                    class="px-6 py-2 bg-success hover:bg-success disabled:bg-success/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
                                                 >
                                                     "Set as Default"
                                                 </button>
@@ -667,7 +667,7 @@ fn ProviderEditor(
                                                 <button
                                                     on:click=on_delete
                                                     prop:disabled=move || saving.get()
-                                                    class="px-6 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-600/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
+                                                    class="px-6 py-2 bg-danger hover:bg-danger disabled:bg-danger/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
                                                 >
                                                     "Delete"
                                                 </button>
@@ -680,7 +680,7 @@ fn ProviderEditor(
 
                                 <button
                                     on:click=move |_| selected.set(None)
-                                    class="px-6 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors"
+                                    class="px-6 py-2 bg-surface-sunken hover:bg-surface-sunken text-text-primary rounded-lg transition-colors"
                                 >
                                     "Cancel"
                                 </button>
@@ -691,8 +691,8 @@ fn ProviderEditor(
                                 if let Some(result) = test_result.get() {
                                     if result.success {
                                         view! {
-                                            <div class="mt-4 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
-                                                <div class="flex items-center gap-2 text-emerald-400">
+                                            <div class="mt-4 p-4 bg-success-subtle border border-success/20 rounded-lg">
+                                                <div class="flex items-center gap-2 text-success">
                                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
                                                     </svg>
@@ -701,7 +701,7 @@ fn ProviderEditor(
                                                 {move || {
                                                     if let Some(latency) = result.latency_ms {
                                                         view! {
-                                                            <p class="mt-1 text-sm text-emerald-300">
+                                                            <p class="mt-1 text-sm text-success">
                                                                 {format!("Latency: {}ms", latency)}
                                                             </p>
                                                         }.into_any()
@@ -713,8 +713,8 @@ fn ProviderEditor(
                                         }.into_any()
                                     } else {
                                         view! {
-                                            <div class="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
-                                                <div class="flex items-center gap-2 text-red-400">
+                                            <div class="mt-4 p-4 bg-danger-subtle border border-danger/20 rounded-lg">
+                                                <div class="flex items-center gap-2 text-danger">
                                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
                                                     </svg>
@@ -723,7 +723,7 @@ fn ProviderEditor(
                                                 {move || {
                                                     if let Some(err) = result.error.clone() {
                                                         view! {
-                                                            <p class="mt-1 text-sm text-red-300">
+                                                            <p class="mt-1 text-sm text-danger">
                                                                 {err}
                                                             </p>
                                                         }.into_any()
@@ -745,5 +745,4 @@ fn ProviderEditor(
         </div>
     }
 }
-
 

@@ -69,13 +69,13 @@ fn ServerList(
     };
 
     view! {
-        <div class="w-80 border-r border-gray-200 dark:border-gray-700 flex flex-col">
-            <div class="p-4 border-b border-gray-200 dark:border-gray-700">
+        <div class="w-80 border-r border-border flex flex-col">
+            <div class="p-4 border-b border-border">
                 <div class="flex items-center justify-between mb-4">
                     <h2 class="text-lg font-semibold">"MCP Servers"</h2>
                     <button
                         on:click=add_server
-                        class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600"
+                        class="px-3 py-1 bg-info text-white rounded hover:bg-primary-hover"
                     >
                         "Add"
                     </button>
@@ -85,13 +85,13 @@ fn ServerList(
             <div class="flex-1 overflow-y-auto p-4">
                 {move || {
                     if loading.get() {
-                        view! { <div class="text-gray-500">"Loading..."</div> }.into_any()
+                        view! { <div class="text-text-tertiary">"Loading..."</div> }.into_any()
                     } else if let Some(err) = error.get() {
-                        view! { <div class="text-red-500">{err}</div> }.into_any()
+                        view! { <div class="text-danger">{err}</div> }.into_any()
                     } else {
                         let server_list = servers.get();
                         if server_list.is_empty() {
-                            view! { <div class="text-gray-500">"No MCP servers configured"</div> }.into_any()
+                            view! { <div class="text-text-tertiary">"No MCP servers configured"</div> }.into_any()
                         } else {
                             view! {
                                 <div class="space-y-2">
@@ -136,14 +136,14 @@ fn ServerCard(
             class=move || {
                 let base = "p-3 mb-2 rounded cursor-pointer border";
                 if is_selected.get() {
-                    format!("{} bg-blue-50 dark:bg-blue-900 border-blue-500", base)
+                    format!("{} bg-primary-subtle border-primary", base)
                 } else {
-                    format!("{} bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700", base)
+                    format!("{} bg-surface-raised border-border hover:bg-surface-sunken", base)
                 }
             }
         >
             <div class="font-medium">{server.name.clone()}</div>
-            <div class="text-sm text-gray-500 truncate">{server.command.clone()}</div>
+            <div class="text-sm text-text-tertiary truncate">{server.command.clone()}</div>
         </div>
     }
 }
@@ -280,7 +280,7 @@ fn ServerEditor(
             {move || {
                 if selected.get().is_none() {
                     view! {
-                        <div class="text-gray-500 text-center mt-20">
+                        <div class="text-text-tertiary text-center mt-20">
                             "Select a server or click Add to create a new one"
                         </div>
                     }.into_any()
@@ -293,7 +293,7 @@ fn ServerEditor(
                             </h2>
 
                             {move || error.get().map(|e| view! {
-                                <div class="mb-4 p-3 bg-red-50 dark:bg-red-900 text-red-700 dark:text-red-200 rounded">
+                                <div class="mb-4 p-3 bg-danger-subtle text-danger rounded">
                                     {e}
                                 </div>
                             })}
@@ -306,7 +306,7 @@ fn ServerEditor(
                                         prop:value=move || name.get()
                                         on:input=move |ev| name.set(event_target_value(&ev))
                                         prop:disabled=move || !is_new
-                                        class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 disabled:opacity-50"
+                                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised disabled:opacity-50"
                                     />
                                 </div>
 
@@ -316,7 +316,7 @@ fn ServerEditor(
                                         type="text"
                                         prop:value=move || command.get()
                                         on:input=move |ev| command.set(event_target_value(&ev))
-                                        class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                                         placeholder="e.g., npx, python, node"
                                     />
                                 </div>
@@ -327,7 +327,7 @@ fn ServerEditor(
                                         type="text"
                                         prop:value=move || args.get()
                                         on:input=move |ev| args.set(event_target_value(&ev))
-                                        class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                                         placeholder="e.g., -m mcp_server"
                                     />
                                 </div>
@@ -337,18 +337,18 @@ fn ServerEditor(
                                     <textarea
                                         prop:value=move || env.get()
                                         on:input=move |ev| env.set(event_target_value(&ev))
-                                        class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 font-mono text-sm"
+                                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised font-mono text-sm"
                                         rows="6"
                                         placeholder="KEY=value\nANOTHER_KEY=another_value"
                                     />
-                                    <p class="text-xs text-gray-500 mt-1">"One per line, format: KEY=value"</p>
+                                    <p class="text-xs text-text-tertiary mt-1">"One per line, format: KEY=value"</p>
                                 </div>
 
                                 <div class="flex gap-2 pt-4">
                                     <button
                                         on:click=save
                                         prop:disabled=move || saving.get()
-                                        class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
+                                        class="px-4 py-2 bg-info text-white rounded hover:bg-primary-hover disabled:opacity-50"
                                     >
                                         {move || if saving.get() { "Saving..." } else { "Save" }}
                                     </button>
@@ -358,7 +358,7 @@ fn ServerEditor(
                                             view! {
                                                 <button
                                                     on:click=delete
-                                                    class="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+                                                    class="px-4 py-2 bg-danger text-white rounded hover:bg-danger"
                                                 >
                                                     "Delete"
                                                 </button>

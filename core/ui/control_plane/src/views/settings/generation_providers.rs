@@ -53,19 +53,19 @@ pub fn GenerationProvidersView() -> impl IntoView {
     view! {
         <div class="flex h-full">
             // Left panel - Provider list
-            <div class="flex flex-col w-2/3 border-r border-gray-200 dark:border-gray-700">
+            <div class="flex flex-col w-2/3 border-r border-border">
                 // Header
-                <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-                    <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+                <div class="px-6 py-4 border-b border-border">
+                    <h1 class="text-2xl font-semibold text-text-primary">
                         "Generation Providers"
                     </h1>
-                    <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                    <p class="mt-1 text-sm text-text-secondary">
                         "Configure image, video, and audio generation providers"
                     </p>
                 </div>
 
                 // Category Tabs
-                <div class="px-6 py-3 border-b border-gray-200 dark:border-gray-700">
+                <div class="px-6 py-3 border-b border-border">
                     <div class="flex gap-2">
                         <CategoryTab
                             category=GenerationType::Image
@@ -91,13 +91,13 @@ pub fn GenerationProvidersView() -> impl IntoView {
                     if is_loading.get() {
                         view! {
                             <div class="flex items-center justify-center h-full">
-                                <div class="text-gray-500">"Loading..."</div>
+                                <div class="text-text-tertiary">"Loading..."</div>
                             </div>
                         }.into_any()
                     } else if let Some(error) = error_message.get() {
                         view! {
                             <div class="flex items-center justify-center h-full">
-                                <div class="text-red-500">{error}</div>
+                                <div class="text-danger">{error}</div>
                             </div>
                         }.into_any()
                     } else {
@@ -130,7 +130,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
             </div>
 
             // Right panel - Provider details
-            <div class="flex-1 bg-gray-50 dark:bg-gray-900">
+            <div class="flex-1 bg-surface">
                 <ProviderDetailPanel
                     selected_id=selected_provider_id
                     providers=providers
@@ -160,9 +160,9 @@ fn CategoryTab(
             class=move || {
                 let base = "px-4 py-2 rounded-lg font-medium transition-colors";
                 if is_selected() {
-                    format!("{} bg-blue-500 text-white", base)
+                    format!("{} bg-info text-white", base)
                 } else {
-                    format!("{} bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700", base)
+                    format!("{} bg-surface-raised text-text-secondary hover:bg-surface-sunken", base)
                 }
             }
             on:click=move |_| on_select.set(category)
@@ -192,8 +192,8 @@ fn ProviderCard(
     view! {
         <div
             class=move || {
-                let base = "border rounded-lg p-4 hover:border-blue-500 cursor-pointer transition-colors";
-                let selected = if is_selected { " ring-2 ring-blue-500 border-blue-500 bg-blue-50 dark:bg-blue-900/20" } else { " border-gray-200 dark:border-gray-700" };
+                let base = "border rounded-lg p-4 hover:border-primary cursor-pointer transition-colors";
+                let selected = if is_selected { " ring-2 ring-primary/30 border-primary bg-primary-subtle" } else { " border-border" };
                 let opacity = if preset.is_unsupported { " opacity-50" } else { "" };
                 format!("{}{}{}", base, selected, opacity)
             }
@@ -203,11 +203,11 @@ fn ProviderCard(
                 <div class="flex items-center gap-2">
                     <span class="text-2xl">{preset.icon.clone()}</span>
                     <div>
-                        <h3 class="font-semibold text-gray-900 dark:text-gray-100">
+                        <h3 class="font-semibold text-text-primary">
                             {preset.name.clone()}
                         </h3>
                         {preset.is_unsupported.then(|| view! {
-                            <span class="text-xs text-gray-500">"(Unsupported)"</span>
+                            <span class="text-xs text-text-tertiary">"(Unsupported)"</span>
                         })}
                     </div>
                 </div>
@@ -215,20 +215,20 @@ fn ProviderCard(
                     if is_configured {
                         if is_default() {
                             view! {
-                                <span class="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 rounded">
+                                <span class="px-2 py-1 text-xs font-medium bg-primary-subtle text-primary rounded">
                                     "Default"
                                 </span>
                             }.into_view()
                         } else {
                             view! {
-                                <span class="px-2 py-1 text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 rounded">
+                                <span class="px-2 py-1 text-xs font-medium bg-success-subtle text-success rounded">
                                     "Configured"
                                 </span>
                             }.into_view()
                         }
                     } else {
                         view! {
-                            <span class="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 rounded">
+                            <span class="px-2 py-1 text-xs font-medium bg-surface-raised text-text-tertiary rounded">
                                 "Not configured"
                             </span>
                         }.into_view()
@@ -236,11 +236,11 @@ fn ProviderCard(
                 }}
             </div>
 
-            <p class="text-sm text-gray-600 dark:text-gray-400 mb-3">
+            <p class="text-sm text-text-secondary mb-3">
                 {preset.description.clone()}
             </p>
 
-            <div class="flex items-center gap-2 text-xs text-gray-500">
+            <div class="flex items-center gap-2 text-xs text-text-tertiary">
                 <span class="font-mono">{preset.default_model.clone()}</span>
             </div>
         </div>
@@ -292,7 +292,7 @@ fn ProviderDetailPanel(
 fn EmptyState() -> impl IntoView {
     view! {
         <div class="flex items-center justify-center h-full">
-            <div class="text-center text-gray-500 dark:text-gray-400">
+            <div class="text-center text-text-secondary">
                 <p class="text-lg">"Select a provider to view details"</p>
             </div>
         </div>
@@ -408,7 +408,7 @@ fn ProviderDetailView(
         <div class="p-6 space-y-6">
             // Header
             <div class="flex items-center justify-between">
-                <h2 class="text-xl font-semibold text-gray-900 dark:text-gray-100">
+                <h2 class="text-xl font-semibold text-text-primary">
                     {provider.name.clone()}
                 </h2>
             </div>
@@ -428,8 +428,8 @@ fn ProviderDetailView(
             {move || {
                 if has_defaults {
                     view! {
-                        <div class="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded">
-                            <p class="text-sm text-blue-800 dark:text-blue-200">
+                        <div class="p-3 bg-primary-subtle border border-primary/20 rounded">
+                            <p class="text-sm text-primary">
                                 "This is the default provider for: "
                                 {default_for_str.clone()}
                             </p>
@@ -445,17 +445,17 @@ fn ProviderDetailView(
                 if let Some((success, message)) = test_result.get() {
                     if success {
                         view! {
-                            <div class="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded">
-                                <p class="text-sm text-green-800 dark:text-green-200">
-                                    "✓ " {message}
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded">
+                                <p class="text-sm text-success">
+                                    {message}
                                 </p>
                             </div>
                         }.into_any()
                     } else {
                         view! {
-                            <div class="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
-                                <p class="text-sm text-red-800 dark:text-red-200">
-                                    "✗ " {message}
+                            <div class="p-3 bg-danger-subtle border border-danger/20 rounded">
+                                <p class="text-sm text-danger">
+                                    {message}
                                 </p>
                             </div>
                         }.into_any()
@@ -467,25 +467,25 @@ fn ProviderDetailView(
 
             // Action error
             {move || action_error.get().map(|e| view! {
-                <div class="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
                     {e}
                 </div>
             })}
 
             // Actions
-            <div class="space-y-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <div class="space-y-3 pt-4 border-t border-border">
                 // Test connection
                 <button
                     on:click=handle_test
                     disabled=move || testing.get()
-                    class="w-full px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors"
+                    class="w-full px-4 py-2 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors"
                 >
                     {move || if testing.get() { "Testing..." } else { "Test Connection" }}
                 </button>
 
                 // Set as default buttons
                 <div class="space-y-2">
-                    <p class="text-sm font-medium text-gray-700 dark:text-gray-300">"Set as default for:"</p>
+                    <p class="text-sm font-medium text-text-secondary">"Set as default for:"</p>
                     {capabilities.iter().map(|cap| {
                         let gen_type = *cap;
                         let is_default = is_default_for.contains(&gen_type);
@@ -498,9 +498,9 @@ fn ProviderDetailView(
                                 class=move || {
                                     let base = "w-full px-4 py-2 rounded-lg transition-colors";
                                     if is_default {
-                                        format!("{} bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 cursor-not-allowed", base)
+                                        format!("{} bg-primary-subtle text-primary cursor-not-allowed", base)
                                     } else {
-                                        format!("{} bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 disabled:opacity-50", base)
+                                        format!("{} bg-surface-raised text-text-secondary hover:bg-surface-sunken disabled:opacity-50", base)
                                     }
                                 }
                             >
@@ -515,7 +515,7 @@ fn ProviderDetailView(
                 <button
                     on:click=handle_delete
                     disabled=move || deleting.get()
-                    class="w-full px-4 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 disabled:opacity-50 transition-colors"
+                    class="w-full px-4 py-2 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors"
                 >
                     {move || if deleting.get() { "Deleting..." } else { "Delete Provider" }}
                 </button>
@@ -528,10 +528,10 @@ fn ProviderDetailView(
 fn DetailField(label: &'static str, value: String) -> impl IntoView {
     view! {
         <div>
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label class="block text-sm font-medium text-text-secondary mb-1">
                 {label}
             </label>
-            <div class="text-gray-900 dark:text-gray-100">
+            <div class="text-text-primary">
                 {value}
             </div>
         </div>

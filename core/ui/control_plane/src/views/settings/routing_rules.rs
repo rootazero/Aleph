@@ -51,9 +51,9 @@ pub fn RoutingRulesView() -> impl IntoView {
     view! {
         <div class="flex flex-col h-full">
             // Header
-            <div class="p-6 border-b border-slate-700">
-                <h1 class="text-2xl font-bold text-slate-200">"Routing Rules"</h1>
-                <p class="mt-1 text-sm text-slate-400">
+            <div class="p-6 border-b border-border">
+                <h1 class="text-2xl font-bold text-text-primary">"Routing Rules"</h1>
+                <p class="mt-1 text-sm text-text-secondary">
                     "Configure AI routing rules for commands and keywords"
                 </p>
             </div>
@@ -78,12 +78,12 @@ fn RulesList(
     loading: RwSignal<bool>,
 ) -> impl IntoView {
     view! {
-        <div class="w-80 border-r border-slate-700 flex flex-col">
+        <div class="w-80 border-r border-border flex flex-col">
             // Add button
-            <div class="p-4 border-b border-slate-700">
+            <div class="p-4 border-b border-border">
                 <button
                     on:click=move |_| selected.set(Some(usize::MAX))
-                    class="w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors"
+                    class="w-full px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
                 >
                     "+ Add Rule"
                 </button>
@@ -94,13 +94,13 @@ fn RulesList(
                 {move || {
                     if loading.get() {
                         view! {
-                            <div class="p-4 text-center text-slate-400">
+                            <div class="p-4 text-center text-text-secondary">
                                 "Loading..."
                             </div>
                         }.into_any()
                     } else if rules.get().is_empty() {
                         view! {
-                            <div class="p-4 text-center text-slate-400">
+                            <div class="p-4 text-center text-text-secondary">
                                 "No routing rules configured"
                             </div>
                         }.into_any()
@@ -145,27 +145,27 @@ fn RuleCard(
             on:click=move |_| selected.set(Some(index))
             class=move || {
                 if is_selected.get() {
-                    "w-full p-3 bg-indigo-600/20 border border-indigo-500/50 rounded-lg text-left transition-colors"
+                    "w-full p-3 bg-primary-subtle border border-primary rounded-lg text-left transition-colors"
                 } else {
-                    "w-full p-3 bg-slate-800 border border-slate-700 hover:border-slate-600 rounded-lg text-left transition-colors"
+                    "w-full p-3 bg-surface-sunken border border-border hover:border-border-strong rounded-lg text-left transition-colors"
                 }
             }
         >
             <div class="flex items-center justify-between mb-1">
-                <span class="text-xs font-medium text-indigo-400">
+                <span class="text-xs font-medium text-primary">
                     {rule_type.to_uppercase()}
                 </span>
-                <span class="text-xs text-slate-500">
+                <span class="text-xs text-text-tertiary">
                     {"#"}{index}
                 </span>
             </div>
-            <div class="text-sm text-slate-200 font-mono truncate">
+            <div class="text-sm text-text-primary font-mono truncate">
                 {regex}
             </div>
             {move || {
                 if let Some(prov) = provider.clone() {
                     view! {
-                        <div class="mt-1 text-xs text-slate-400">
+                        <div class="mt-1 text-xs text-text-secondary">
                             {prov}
                         </div>
                     }.into_any()
@@ -312,7 +312,7 @@ fn RuleEditor(
             {move || {
                 if !is_editing() {
                     view! {
-                        <div class="flex items-center justify-center h-full text-slate-500">
+                        <div class="flex items-center justify-center h-full text-text-tertiary">
                             "Select a rule to edit or add a new one"
                         </div>
                     }.into_any()
@@ -321,10 +321,10 @@ fn RuleEditor(
                         <div class="p-8 max-w-3xl mx-auto">
                             // Header
                             <div class="mb-6">
-                                <h2 class="text-2xl font-bold text-slate-200 mb-2">
+                                <h2 class="text-2xl font-bold text-text-primary mb-2">
                                     {move || if is_new() { "Add Routing Rule" } else { "Edit Routing Rule" }}
                                 </h2>
-                                <p class="text-sm text-slate-400">
+                                <p class="text-sm text-text-secondary">
                                     "Configure routing rules for AI provider selection"
                                 </p>
                             </div>
@@ -333,7 +333,7 @@ fn RuleEditor(
                             {move || {
                                 if let Some(err) = error.get() {
                                     view! {
-                                        <div class="mb-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+                                        <div class="mb-4 p-4 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">
                                             {err}
                                         </div>
                                     }.into_any()
@@ -346,13 +346,13 @@ fn RuleEditor(
                             <div class="space-y-6">
                                 // Rule Type
                                 <div>
-                                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                                    <label class="block text-sm font-medium text-text-secondary mb-2">
                                         "Rule Type"
                                     </label>
                                     <select
                                         prop:value=move || form_rule_type.get()
                                         on:change=move |ev| form_rule_type.set(event_target_value(&ev))
-                                        class="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:border-indigo-500"
+                                        class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                     >
                                         <option value="command">"Command"</option>
                                         <option value="keyword">"Keyword"</option>
@@ -361,47 +361,47 @@ fn RuleEditor(
 
                                 // Regex Pattern
                                 <div>
-                                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                                    <label class="block text-sm font-medium text-text-secondary mb-2">
                                         "Regex Pattern"
                                     </label>
                                     <input
                                         type="text"
                                         prop:value=move || form_regex.get()
                                         on:input=move |ev| form_regex.set(event_target_value(&ev))
-                                        class="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
+                                        class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary font-mono focus:outline-none focus:border-primary"
                                         placeholder="^/draw\\s+"
                                     />
-                                    <p class="mt-1 text-xs text-slate-500">
+                                    <p class="mt-1 text-xs text-text-tertiary">
                                         "Regular expression to match user input"
                                     </p>
                                 </div>
 
                                 // Provider (for command rules)
                                 <div>
-                                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                                    <label class="block text-sm font-medium text-text-secondary mb-2">
                                         "Provider"
                                     </label>
                                     <input
                                         type="text"
                                         prop:value=move || form_provider.get()
                                         on:input=move |ev| form_provider.set(event_target_value(&ev))
-                                        class="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:border-indigo-500"
+                                        class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                         placeholder="openai, claude, gemini"
                                     />
-                                    <p class="mt-1 text-xs text-slate-500">
+                                    <p class="mt-1 text-xs text-text-tertiary">
                                         "Required for command rules, ignored for keyword rules"
                                     </p>
                                 </div>
 
                                 // System Prompt
                                 <div>
-                                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                                    <label class="block text-sm font-medium text-text-secondary mb-2">
                                         "System Prompt"
                                     </label>
                                     <textarea
                                         prop:value=move || form_system_prompt.get()
                                         on:input=move |ev| form_system_prompt.set(event_target_value(&ev))
-                                        class="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:border-indigo-500"
+                                        class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                         rows="4"
                                         placeholder="You are a helpful assistant..."
                                     ></textarea>
@@ -413,7 +413,7 @@ fn RuleEditor(
                                 <button
                                     on:click=on_save
                                     prop:disabled=move || saving.get()
-                                    class="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-600/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
+                                    class="px-6 py-2 bg-primary hover:bg-primary-hover disabled:bg-primary/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
                                 >
                                     {move || if saving.get() { "Saving..." } else { "Save" }}
                                 </button>
@@ -424,7 +424,7 @@ fn RuleEditor(
                                             <button
                                                 on:click=on_delete
                                                 prop:disabled=move || saving.get()
-                                                class="px-6 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-600/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
+                                                class="px-6 py-2 bg-danger hover:bg-danger disabled:bg-danger/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
                                             >
                                                 "Delete"
                                             </button>
@@ -436,7 +436,7 @@ fn RuleEditor(
 
                                 <button
                                     on:click=move |_| selected.set(None)
-                                    class="px-6 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors"
+                                    class="px-6 py-2 bg-surface-sunken hover:bg-surface-sunken text-text-primary rounded-lg transition-colors"
                                 >
                                     "Cancel"
                                 </button>
