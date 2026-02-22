@@ -34,7 +34,10 @@ pub fn SettingsLayout() -> impl IntoView {
                     <Route path=path!("/settings/memory") view=MemoryView />
                     <Route path=path!("/settings/security") view=SecurityView />
                     <Route path=path!("/settings/policies") view=PoliciesView />
+                    <Route path=path!("/settings/channels/telegram") view=TelegramChannelView />
                     <Route path=path!("/settings/channels/discord") view=DiscordChannelView />
+                    <Route path=path!("/settings/channels/whatsapp") view=WhatsAppChannelView />
+                    <Route path=path!("/settings/channels/imessage") view=IMessageChannelView />
                 </Routes>
             </div>
         </div>
