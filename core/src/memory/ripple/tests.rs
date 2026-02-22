@@ -36,6 +36,7 @@ fn create_test_fact(id: &str, content: &str, embedding: Vec<f32>) -> MemoryFact 
         fact_source: FactSource::Extracted,
         content_hash: String::new(),
         parent_path: String::new(),
+        embedding_model: String::new(),
     }
 }
 

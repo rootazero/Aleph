@@ -88,7 +88,7 @@ impl VectorDatabase {
             SELECT id, content, fact_type, embedding, source_memory_ids,
                    created_at, updated_at, confidence, is_valid, invalidation_reason,
                    specificity, temporal_scope, decay_invalidated_at,
-                   path, fact_source, content_hash, parent_path
+                   path, fact_source, content_hash, parent_path, embedding_model
             FROM memory_facts
             WHERE path LIKE ?1 AND is_valid = 1
             ORDER BY path, updated_at DESC
@@ -113,6 +113,7 @@ impl VectorDatabase {
             let fact_source_str: String = row.get(14)?;
             let content_hash: String = row.get(15)?;
             let parent_path: String = row.get(16)?;
+            let embedding_model: String = row.get(17)?;
 
             let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
             let source_memory_ids: Vec<String> =
@@ -137,6 +138,7 @@ impl VectorDatabase {
                 fact_source: FactSource::from_str_or_default(&fact_source_str),
                 content_hash,
                 parent_path,
+                embedding_model,
             })
         }).map_err(|e| AlephError::config(format!("Failed to query facts by prefix: {}", e)))?
         .collect::<Result<Vec<_>, _>>()
@@ -154,7 +156,7 @@ impl VectorDatabase {
             SELECT id, content, fact_type, embedding, source_memory_ids,
                    created_at, updated_at, confidence, is_valid, invalidation_reason,
                    specificity, temporal_scope, decay_invalidated_at,
-                   path, fact_source, content_hash, parent_path
+                   path, fact_source, content_hash, parent_path, embedding_model
             FROM memory_facts
             WHERE path = ?1 AND fact_source = 'summary' AND is_valid = 1
             ORDER BY updated_at DESC
@@ -179,6 +181,7 @@ impl VectorDatabase {
                 let fact_source_str: String = row.get(14)?;
                 let content_hash: String = row.get(15)?;
                 let parent_path: String = row.get(16)?;
+                let embedding_model: String = row.get(17)?;
 
                 let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
                 let source_memory_ids: Vec<String> =
@@ -203,6 +206,7 @@ impl VectorDatabase {
                     fact_source: FactSource::from_str_or_default(&fact_source_str),
                     content_hash,
                     parent_path,
+                    embedding_model,
                 })
             },
         );

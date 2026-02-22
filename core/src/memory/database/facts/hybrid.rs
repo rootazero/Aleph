@@ -141,6 +141,7 @@ impl VectorDatabase {
                         fact_source: FactSource::from_str_or_default(&fact_source_str),
                         content_hash,
                         parent_path,
+                        embedding_model: String::new(),
                     }, vec_score as f32))
                 },
             )
@@ -274,6 +275,7 @@ impl VectorDatabase {
                         fact_source: FactSource::from_str_or_default(&fact_source_str),
                         content_hash,
                         parent_path,
+                        embedding_model: String::new(),
                     })
                 },
             )

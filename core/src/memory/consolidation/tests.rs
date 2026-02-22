@@ -45,6 +45,7 @@ fn create_test_fact(
         fact_source: FactSource::Extracted,
         content_hash: String::new(),
         parent_path: String::new(),
+        embedding_model: String::new(),
     }
 }
 

@@ -52,7 +52,7 @@ impl VectorDatabase {
             SELECT id, content, fact_type, embedding, source_memory_ids,
                    created_at, updated_at, confidence, is_valid, invalidation_reason,
                    specificity, temporal_scope, decay_invalidated_at,
-                   path, fact_source, content_hash, parent_path
+                   path, fact_source, content_hash, parent_path, embedding_model
             FROM memory_facts
             WHERE id = ?1
             "#,
@@ -75,6 +75,7 @@ impl VectorDatabase {
                 let fact_source_str: String = row.get(14)?;
                 let content_hash: String = row.get(15)?;
                 let parent_path: String = row.get(16)?;
+                let embedding_model: String = row.get(17)?;
 
                 let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
                 let source_memory_ids: Vec<String> =
@@ -99,6 +100,7 @@ impl VectorDatabase {
                     fact_source: FactSource::from_str_or_default(&fact_source_str),
                     content_hash,
                     parent_path,
+                    embedding_model,
                 })
             },
         );
@@ -119,7 +121,7 @@ impl VectorDatabase {
             SELECT id, content, fact_type, embedding, source_memory_ids,
                    created_at, updated_at, confidence, is_valid, invalidation_reason,
                    specificity, temporal_scope, decay_invalidated_at,
-                   path, fact_source, content_hash, parent_path
+                   path, fact_source, content_hash, parent_path, embedding_model
             FROM memory_facts
             ORDER BY updated_at DESC
             "#
@@ -128,7 +130,7 @@ impl VectorDatabase {
             SELECT id, content, fact_type, embedding, source_memory_ids,
                    created_at, updated_at, confidence, is_valid, invalidation_reason,
                    specificity, temporal_scope, decay_invalidated_at,
-                   path, fact_source, content_hash, parent_path
+                   path, fact_source, content_hash, parent_path, embedding_model
             FROM memory_facts
             WHERE is_valid = 1
             ORDER BY updated_at DESC
@@ -158,6 +160,7 @@ impl VectorDatabase {
                 let fact_source_str: String = row.get(14)?;
                 let content_hash: String = row.get(15)?;
                 let parent_path: String = row.get(16)?;
+                let embedding_model: String = row.get(17)?;
 
                 let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
                 let source_memory_ids: Vec<String> =
@@ -182,6 +185,7 @@ impl VectorDatabase {
                     fact_source: FactSource::from_str_or_default(&fact_source_str),
                     content_hash,
                     parent_path,
+                    embedding_model,
                 })
             })
             .map_err(|e| AlephError::config(format!("Failed to query facts: {}", e)))?
@@ -208,8 +212,8 @@ impl VectorDatabase {
                 id, content, fact_type, embedding, source_memory_ids,
                 created_at, updated_at, confidence, is_valid, invalidation_reason,
                 specificity, temporal_scope, decay_invalidated_at,
-                path, fact_source, content_hash, parent_path
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                path, fact_source, content_hash, parent_path, embedding_model
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
             "#,
             params![
                 fact.id,
@@ -229,6 +233,7 @@ impl VectorDatabase {
                 fact.fact_source.as_str(),
                 fact.content_hash,
                 fact.parent_path,
+                fact.embedding_model,
             ],
         )
         .map_err(|e| AlephError::config(format!("Failed to insert fact: {}", e)))?;
@@ -280,8 +285,8 @@ impl VectorDatabase {
                 id, content, fact_type, embedding, source_memory_ids,
                 created_at, updated_at, confidence, is_valid, invalidation_reason,
                 specificity, temporal_scope, decay_invalidated_at, namespace,
-                path, fact_source, content_hash, parent_path
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+                path, fact_source, content_hash, parent_path, embedding_model
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
             "#,
             params![
                 fact.id,
@@ -302,6 +307,7 @@ impl VectorDatabase {
                 fact.fact_source.as_str(),
                 fact.content_hash.clone(),
                 fact.parent_path.clone(),
+                fact.embedding_model.clone(),
             ],
         )
         .map_err(|e| AlephError::config(format!("Failed to insert fact: {}", e)))?;
@@ -346,8 +352,8 @@ impl VectorDatabase {
                     id, content, fact_type, embedding, source_memory_ids,
                     created_at, updated_at, confidence, is_valid, invalidation_reason,
                     specificity, temporal_scope, decay_invalidated_at,
-                    path, fact_source, content_hash, parent_path
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                    path, fact_source, content_hash, parent_path, embedding_model
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
                 "#,
                 params![
                     fact.id,
@@ -367,6 +373,7 @@ impl VectorDatabase {
                     fact.fact_source.as_str(),
                     fact.content_hash,
                     fact.parent_path,
+                    fact.embedding_model,
                 ],
             )
             .map_err(|e| AlephError::config(format!("Failed to insert fact: {}", e)))?;

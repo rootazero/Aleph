@@ -439,6 +439,8 @@ pub struct MemoryFact {
     pub content_hash: String,
     /// Parent path for ls operations
     pub parent_path: String,
+    /// Name of the embedding model that generated this fact's vector
+    pub embedding_model: String,
 }
 
 impl Entity for MemoryFact {
@@ -481,6 +483,7 @@ impl MemoryFact {
             fact_source: FactSource::Extracted,
             content_hash: String::new(),
             parent_path,
+            embedding_model: String::new(),
         }
     }
 
@@ -513,6 +516,7 @@ impl MemoryFact {
             fact_source: FactSource::Extracted,
             content_hash: String::new(),
             parent_path,
+            embedding_model: String::new(),
         }
     }
 
