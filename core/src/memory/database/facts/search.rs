@@ -125,6 +125,7 @@ impl VectorDatabase {
                     fact_source: FactSource::from_str_or_default(&fact_source_str),
                     content_hash,
                     parent_path,
+                    embedding_model: String::new(),
                 })
             })
             .map_err(|e| AlephError::config(format!("Failed to query facts: {}", e)))?
@@ -226,6 +227,7 @@ impl VectorDatabase {
                     fact_source: FactSource::from_str_or_default(&fact_source_str),
                     content_hash,
                     parent_path,
+                    embedding_model: String::new(),
                 })
             })
             .map_err(|e| AlephError::config(format!("Failed to query facts: {}", e)))?
@@ -332,6 +334,7 @@ impl VectorDatabase {
                     fact_source: FactSource::from_str_or_default(&fact_source_str),
                     content_hash,
                     parent_path,
+                    embedding_model: String::new(),
                 })
             })
             .map_err(|e| AlephError::config(format!("Failed to query similar facts: {}", e)))?

@@ -179,6 +179,7 @@ impl ToolIndexCoordinator {
                 fact_source: FactSource::Extracted,
                 content_hash: String::new(),
                 parent_path: String::new(),
+                embedding_model: String::new(),
             };
 
             self.db.insert_fact(fact).await?;
