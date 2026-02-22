@@ -48,6 +48,7 @@ pub mod performance_monitor;
 pub mod cortex;
 pub mod store;
 pub mod vfs;
+pub mod workspace;
 
 #[cfg(test)]
 mod integration_tests;
@@ -120,3 +121,4 @@ pub use vfs::{compute_directory_hash, L1Generator, bootstrap_agent_context, migr
 pub use store::lance::LanceMemoryBackend;
 pub use store::types::{SearchFilter, ScoredFact, MemoryFilter};
 pub use store::MemoryBackend;
+pub use workspace::{Workspace, WorkspaceConfig, WorkspaceFilter, DEFAULT_WORKSPACE};
