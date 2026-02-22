@@ -5,9 +5,10 @@
 
 use crate::error::AlephError;
 use crate::memory::context::{MemoryEntry, MemoryFact};
-use crate::memory::database::VectorDatabase;
+use crate::memory::namespace::NamespaceScope;
 use crate::memory::smart_embedder::SmartEmbedder;
-use std::sync::Arc;
+use crate::memory::store::types::{MemoryFilter, SearchFilter};
+use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
 
 /// Configuration for fact retrieval
 #[derive(Debug, Clone)]
@@ -53,7 +54,7 @@ impl RetrievalResult {
 
 /// Fact-first retrieval service
 pub struct FactRetrieval {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     embedder: SmartEmbedder,
     config: FactRetrievalConfig,
 }
@@ -61,7 +62,7 @@ pub struct FactRetrieval {
 impl FactRetrieval {
     /// Create a new fact retrieval service
     pub fn new(
-        database: Arc<VectorDatabase>,
+        database: MemoryBackend,
         embedder: SmartEmbedder,
         config: FactRetrievalConfig,
     ) -> Self {
@@ -73,7 +74,7 @@ impl FactRetrieval {
     }
 
     /// Create with default configuration
-    pub fn with_defaults(database: Arc<VectorDatabase>, embedder: SmartEmbedder) -> Self {
+    pub fn with_defaults(database: MemoryBackend, embedder: SmartEmbedder) -> Self {
         Self::new(database, embedder, FactRetrievalConfig::default())
     }
 
@@ -91,18 +92,21 @@ impl FactRetrieval {
             .map_err(|e| AlephError::other(format!("Failed to embed query: {}", e)))?;
 
         // 1. Search facts first
-        let facts = self
+        let dim_hint = query_embedding.len() as u32;
+        let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner));
+        let scored_facts = self
             .database
-            .search_facts(&query_embedding, crate::memory::NamespaceScope::Owner, self.config.max_facts, false)
+            .vector_search(&query_embedding, dim_hint, &filter, self.config.max_facts as usize)
             .await?;
 
-        // Filter by similarity threshold
-        let facts: Vec<MemoryFact> = facts
+        // Map ScoredFact -> MemoryFact with similarity_score, and filter by threshold
+        let facts: Vec<MemoryFact> = scored_facts
             .into_iter()
-            .filter(|f| {
-                f.similarity_score
-                    .map(|s| s >= self.config.similarity_threshold)
-                    .unwrap_or(false)
+            .filter(|sf| sf.score >= self.config.similarity_threshold)
+            .map(|sf| {
+                let mut fact = sf.fact;
+                fact.similarity_score = Some(sf.score);
+                fact
             })
             .collect();
 
@@ -112,7 +116,7 @@ impl FactRetrieval {
 
             if remaining > 0 {
                 self.database
-                    .search_memories("", "", &query_embedding, remaining)
+                    .search_memories(&query_embedding, &MemoryFilter::default(), remaining as usize)
                     .await?
             } else {
                 Vec::new()
@@ -140,23 +144,26 @@ impl FactRetrieval {
             .await
             .map_err(|e| AlephError::other(format!("Failed to embed query: {}", e)))?;
 
-        let facts = self
+        let dim_hint = query_embedding.len() as u32;
+        let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner));
+        let scored_facts = self
             .database
-            .search_facts(&query_embedding, crate::memory::NamespaceScope::Owner, max_facts, false)
+            .vector_search(&query_embedding, dim_hint, &filter, max_facts as usize)
             .await?;
 
-        let facts: Vec<MemoryFact> = facts
+        let facts: Vec<MemoryFact> = scored_facts
             .into_iter()
-            .filter(|f| {
-                f.similarity_score
-                    .map(|s| s >= self.config.similarity_threshold)
-                    .unwrap_or(false)
+            .filter(|sf| sf.score >= self.config.similarity_threshold)
+            .map(|sf| {
+                let mut fact = sf.fact;
+                fact.similarity_score = Some(sf.score);
+                fact
             })
             .collect();
 
         let raw_memories = if facts.len() < max_facts as usize && max_raw_fallback > 0 {
             self.database
-                .search_memories("", "", &query_embedding, max_raw_fallback)
+                .search_memories(&query_embedding, &MemoryFilter::default(), max_raw_fallback as usize)
                 .await?
         } else {
             Vec::new()
@@ -250,18 +257,23 @@ impl FactRetrieval {
 mod tests {
     use super::*;
     use crate::memory::context::FactType;
+    use crate::memory::store::lance::LanceMemoryBackend;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
-    async fn create_test_retrieval() -> (FactRetrieval, Arc<VectorDatabase>) {
+    async fn create_test_retrieval() -> (FactRetrieval, MemoryBackend) {
         let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("test_retrieval.db");
-        let database = Arc::new(VectorDatabase::new(db_path).unwrap());
+        let path = temp_dir.path().to_path_buf();
+        let database: MemoryBackend = Arc::new(LanceMemoryBackend::open_or_create(&path).await.unwrap());
 
         let cache_dir = temp_dir.path().join("models");
         std::fs::create_dir_all(&cache_dir).unwrap();
         let embedder = SmartEmbedder::new(cache_dir, 300);
 
-        let retrieval = FactRetrieval::with_defaults(Arc::clone(&database), embedder);
+        // Leak the temp_dir to prevent cleanup during test
+        std::mem::forget(temp_dir);
+
+        let retrieval = FactRetrieval::with_defaults(database.clone(), embedder);
 
         (retrieval, database)
     }

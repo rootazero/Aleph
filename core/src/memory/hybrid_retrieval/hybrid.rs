@@ -15,11 +15,11 @@
 //! - Default weights: vector_weight=0.7, text_weight=0.3
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::types::{SearchFilter, ScoredFact};
+use crate::memory::store::{MemoryBackend, MemoryStore};
 
 /// Hybrid search configuration
 ///
@@ -153,21 +153,21 @@ impl HybridSearchConfig {
 /// Hybrid retrieval engine
 ///
 /// Combines vector similarity search with full-text search for
-/// improved retrieval quality. Requires a VectorDatabase instance
+/// improved retrieval quality. Requires a MemoryBackend instance
 /// to perform actual searches.
 pub struct HybridRetrieval {
     config: HybridSearchConfig,
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
 }
 
 impl HybridRetrieval {
     /// Create a new hybrid retrieval engine with the given configuration
-    pub fn new(config: HybridSearchConfig, database: Arc<VectorDatabase>) -> Self {
+    pub fn new(config: HybridSearchConfig, database: MemoryBackend) -> Self {
         Self { config, database }
     }
 
     /// Create a new hybrid retrieval engine with default configuration
-    pub fn with_defaults(database: Arc<VectorDatabase>) -> Self {
+    pub fn with_defaults(database: MemoryBackend) -> Self {
         Self::new(HybridSearchConfig::default(), database)
     }
 
@@ -186,18 +186,18 @@ impl HybridRetrieval {
         self.config = config;
     }
 
-    /// Search facts using hybrid vector + FTS5 search
+    /// Search facts using hybrid vector + text search
     ///
     /// Combines results from:
-    /// - sqlite-vec vector similarity search (semantic matching)
-    /// - FTS5 BM25 full-text search (lexical/keyword matching)
+    /// - Vector similarity search (semantic matching)
+    /// - Full-text search (lexical/keyword matching)
     ///
     /// Results are scored using the configured weights and filtered
     /// by the minimum score threshold.
     ///
     /// # Arguments
-    /// * `query_embedding` - Vector embedding of the query (384-dim for multilingual-e5-small)
-    /// * `query_text` - Natural language query text for FTS5 search
+    /// * `query_embedding` - Vector embedding of the query
+    /// * `query_text` - Natural language query text for text search
     ///
     /// # Returns
     /// Facts ranked by combined score, filtered by min_score threshold
@@ -206,17 +206,22 @@ impl HybridRetrieval {
         query_embedding: &[f32],
         query_text: &str,
     ) -> Result<Vec<MemoryFact>, AlephError> {
-        self.database
-            .hybrid_search_facts(
+        let dim_hint = query_embedding.len() as u32;
+        let filter = SearchFilter::valid_only(None);
+        let scored = self
+            .database
+            .hybrid_search(
                 query_embedding,
+                dim_hint,
                 query_text,
                 self.config.vector_weight,
                 self.config.text_weight,
-                self.config.min_score,
-                self.config.candidate_pool_size(),
+                &filter,
                 self.config.max_results,
             )
-            .await
+            .await?;
+
+        Ok(Self::apply_min_score(scored, self.config.min_score))
     }
 
     /// Search facts with custom limits (overrides config)
@@ -228,23 +233,40 @@ impl HybridRetrieval {
         query_text: &str,
         max_results: usize,
     ) -> Result<Vec<MemoryFact>, AlephError> {
-        let candidate_limit = max_results * self.config.candidate_multiplier;
-        self.database
-            .hybrid_search_facts(
+        let dim_hint = query_embedding.len() as u32;
+        let filter = SearchFilter::valid_only(None);
+        let scored = self
+            .database
+            .hybrid_search(
                 query_embedding,
+                dim_hint,
                 query_text,
                 self.config.vector_weight,
                 self.config.text_weight,
-                self.config.min_score,
-                candidate_limit,
+                &filter,
                 max_results,
             )
-            .await
+            .await?;
+
+        Ok(Self::apply_min_score(scored, self.config.min_score))
     }
 
     /// Get a reference to the underlying database
-    pub fn database(&self) -> &Arc<VectorDatabase> {
+    pub fn database(&self) -> &MemoryBackend {
         &self.database
+    }
+
+    /// Post-filter scored results by minimum score and convert to MemoryFact.
+    fn apply_min_score(scored: Vec<ScoredFact>, min_score: f32) -> Vec<MemoryFact> {
+        scored
+            .into_iter()
+            .filter(|sf| sf.score >= min_score)
+            .map(|sf| {
+                let mut fact = sf.fact;
+                fact.similarity_score = Some(sf.score);
+                fact
+            })
+            .collect()
     }
 }
 
@@ -379,56 +401,59 @@ mod tests {
     // HybridRetrieval tests require database setup
     // These tests verify the database-dependent functionality
 
-    fn create_test_db() -> std::sync::Arc<crate::memory::database::VectorDatabase> {
+    use crate::memory::store::lance::LanceMemoryBackend;
+    use std::sync::Arc;
+
+    async fn create_test_db() -> MemoryBackend {
         let temp_dir = tempfile::tempdir().unwrap();
-        let db_path = temp_dir.path().join("test_hybrid.db");
+        let path = temp_dir.path().to_path_buf();
         // Leak the temp_dir to prevent cleanup during test
         std::mem::forget(temp_dir);
-        std::sync::Arc::new(crate::memory::database::VectorDatabase::new(db_path).unwrap())
+        Arc::new(LanceMemoryBackend::open_or_create(&path).await.unwrap())
     }
 
-    #[test]
-    fn test_hybrid_retrieval_creation() {
-        let db = create_test_db();
+    #[tokio::test]
+    async fn test_hybrid_retrieval_creation() {
+        let db = create_test_db().await;
         let retrieval = HybridRetrieval::with_defaults(db);
         assert!((retrieval.config().vector_weight - 0.7).abs() < 0.01);
     }
 
-    #[test]
-    fn test_hybrid_retrieval_custom_config() {
-        let db = create_test_db();
+    #[tokio::test]
+    async fn test_hybrid_retrieval_custom_config() {
+        let db = create_test_db().await;
         let config = HybridSearchConfig::with_weights(0.6, 0.4);
         let retrieval = HybridRetrieval::new(config, db);
         assert!((retrieval.config().vector_weight - 0.6).abs() < 0.01);
     }
 
-    #[test]
-    fn test_hybrid_retrieval_set_config() {
-        let db = create_test_db();
+    #[tokio::test]
+    async fn test_hybrid_retrieval_set_config() {
+        let db = create_test_db().await;
         let mut retrieval = HybridRetrieval::with_defaults(db);
         let new_config = HybridSearchConfig::with_weights(0.5, 0.5);
         retrieval.set_config(new_config);
         assert!((retrieval.config().vector_weight - 0.5).abs() < 0.01);
     }
 
-    #[test]
-    fn test_hybrid_retrieval_config_mut() {
-        let db = create_test_db();
+    #[tokio::test]
+    async fn test_hybrid_retrieval_config_mut() {
+        let db = create_test_db().await;
         let mut retrieval = HybridRetrieval::with_defaults(db);
         retrieval.config_mut().max_results = 20;
         assert_eq!(retrieval.config().max_results, 20);
     }
 
-    #[test]
-    fn test_hybrid_retrieval_database_access() {
-        let db = create_test_db();
+    #[tokio::test]
+    async fn test_hybrid_retrieval_database_access() {
+        let db = create_test_db().await;
         let retrieval = HybridRetrieval::with_defaults(db.clone());
-        assert!(std::sync::Arc::ptr_eq(&db, retrieval.database()));
+        assert!(Arc::ptr_eq(&db, retrieval.database()));
     }
 
     #[tokio::test]
     async fn test_hybrid_search_empty_database() {
-        let db = create_test_db();
+        let db = create_test_db().await;
         let retrieval = HybridRetrieval::with_defaults(db);
 
         // Search with empty database should return empty results
@@ -443,8 +468,9 @@ mod tests {
     #[tokio::test]
     async fn test_hybrid_search_with_facts() {
         use crate::memory::context::{FactType, MemoryFact};
+        use crate::memory::store::MemoryStore as _;
 
-        let db = create_test_db();
+        let db = create_test_db().await;
 
         // Insert test facts with embeddings
         let fact1 = MemoryFact::new(
@@ -459,8 +485,8 @@ mod tests {
             vec!["mem-2".to_string()],
         ).with_embedding(vec![0.2f32; 384]);
 
-        db.insert_fact(fact1).await.unwrap();
-        db.insert_fact(fact2).await.unwrap();
+        db.insert_fact(&fact1).await.unwrap();
+        db.insert_fact(&fact2).await.unwrap();
 
         let retrieval = HybridRetrieval::with_defaults(db);
 
@@ -478,8 +504,9 @@ mod tests {
     #[tokio::test]
     async fn test_hybrid_search_vector_only_fallback() {
         use crate::memory::context::{FactType, MemoryFact};
+        use crate::memory::store::MemoryStore as _;
 
-        let db = create_test_db();
+        let db = create_test_db().await;
 
         // Insert fact with embedding
         let fact = MemoryFact::new(
@@ -488,7 +515,7 @@ mod tests {
             vec![],
         ).with_embedding(vec![0.5f32; 384]);
 
-        db.insert_fact(fact).await.unwrap();
+        db.insert_fact(&fact).await.unwrap();
 
         let retrieval = HybridRetrieval::with_defaults(db);
 
@@ -503,8 +530,9 @@ mod tests {
     #[tokio::test]
     async fn test_hybrid_search_with_custom_limit() {
         use crate::memory::context::{FactType, MemoryFact};
+        use crate::memory::store::MemoryStore as _;
 
-        let db = create_test_db();
+        let db = create_test_db().await;
 
         // Insert multiple facts
         for i in 0..5 {
@@ -517,7 +545,7 @@ mod tests {
                 vec![],
             ).with_embedding(embedding);
 
-            db.insert_fact(fact).await.unwrap();
+            db.insert_fact(&fact).await.unwrap();
         }
 
         let retrieval = HybridRetrieval::with_defaults(db);
