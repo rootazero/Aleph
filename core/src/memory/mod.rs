@@ -71,7 +71,7 @@ pub use context::{
     FactStats, FactType, MemoryEntry, MemoryFact, TemporalScope, compute_parent_path,
     PRESET_PATHS,
 };
-pub use database::VectorDatabase;
+pub use database::{VectorDatabase, DEFAULT_EMBEDDING_DIM};
 pub use decay::{DecayConfig, MemoryStrength};
 pub use dreaming::{DailyInsight, DreamStatus, MemoryDecayReport, ensure_dream_daemon, record_activity};
 pub use lazy_decay::{LazyDecayEngine, DecayEvaluation};
