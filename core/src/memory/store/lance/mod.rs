@@ -13,7 +13,9 @@ use crate::error::AlephError;
 
 pub mod arrow_convert;
 pub mod facts;
+pub mod graph;
 pub mod schema;
+pub mod sessions;
 
 /// LanceDB-backed memory storage backend.
 ///
