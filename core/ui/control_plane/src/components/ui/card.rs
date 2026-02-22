@@ -6,7 +6,7 @@ pub fn Card(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <div class=format!("bg-slate-900/40 border border-slate-800 rounded-3xl backdrop-blur-sm shadow-glass {}", class)>
+        <div class=format!("bg-surface-raised border border-border rounded-2xl {}", class)>
             {children()}
         </div>
     }
@@ -18,7 +18,7 @@ pub fn CardHeader(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <div class=format!("p-6 border-b border-slate-800/50 {}", class)>
+        <div class=format!("p-6 border-b border-border-subtle {}", class)>
             {children()}
         </div>
     }
@@ -42,7 +42,7 @@ pub fn CardTitle(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <h3 class=format!("text-xl font-semibold tracking-tight text-slate-100 {}", class)>
+        <h3 class=format!("text-xl font-semibold tracking-tight text-text-primary {}", class)>
             {children()}
         </h3>
     }
@@ -54,7 +54,7 @@ pub fn CardDescription(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <p class=format!("text-sm text-slate-400 mt-1 {}", class)>
+        <p class=format!("text-sm text-text-secondary mt-1 {}", class)>
             {children()}
         </p>
     }
