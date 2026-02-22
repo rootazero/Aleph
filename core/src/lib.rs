@@ -68,6 +68,7 @@ pub mod metrics;
 pub mod payload;
 pub mod permission;
 pub mod perception;
+pub mod pii;
 pub mod poe;
 pub mod prompt;
 pub mod providers;
@@ -310,7 +311,6 @@ pub use crate::providers::AiProvider;
 // =============================================================================
 
 pub use crate::clipboard::{ImageData, ImageFormat};
-pub use crate::utils::pii;
 pub use crate::utils::paths::{get_skills_dir, get_skills_dir_string};
 pub use crate::metrics::StageTimer;
 

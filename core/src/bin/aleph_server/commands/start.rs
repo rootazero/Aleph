@@ -170,6 +170,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         .parse()
         .map_err(|e| format!("Invalid address: {}", e))?;
 
+    // Initialize PII filtering engine from config
+    alephcore::pii::PiiEngine::init(full_config.privacy.clone());
+    if !args.daemon {
+        println!("PII filtering engine initialized (enabled: {})", full_config.privacy.pii_filtering);
+    }
+
     if !args.daemon {
         println!("╔═══════════════════════════════════════════════╗");
         println!("║         Aleph Gateway v{}           ║", env!("CARGO_PKG_VERSION"));
@@ -1013,8 +1019,10 @@ async fn setup_config_watcher(
             // Start watching for config changes
             let watcher_for_watch = watcher.clone();
             let event_bus_for_config = event_bus.clone();
+            let initial_privacy_config = watcher_for_watch.current_config().await.privacy.clone();
             tokio::spawn(async move {
                 let mut config_rx = watcher_for_watch.subscribe();
+                let mut last_privacy = initial_privacy_config;
 
                 // Start the file watcher
                 let watcher_handle = watcher_for_watch.clone().start_watching();
@@ -1026,6 +1034,16 @@ async fn setup_config_watcher(
                             if !daemon_mode {
                                 println!("Configuration reloaded: {} agents", new_config.agents.len());
                             }
+
+                            // Hot-reload PII filtering config if privacy settings changed
+                            if new_config.privacy != last_privacy {
+                                alephcore::pii::PiiEngine::reload(new_config.privacy.clone());
+                                if !daemon_mode {
+                                    println!("PII filtering config reloaded (enabled: {})", new_config.privacy.pii_filtering);
+                                }
+                                last_privacy = new_config.privacy.clone();
+                            }
+
                             // Emit event to connected clients
                             use alephcore::gateway::TopicEvent;
                             let event = TopicEvent::new(
