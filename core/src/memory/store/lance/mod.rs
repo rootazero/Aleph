@@ -4,3 +4,5 @@
 //! using LanceDB as the underlying vector database engine.
 //!
 //! TODO: Implement `LanceMemoryBackend` (Task 6).
+
+pub mod schema;
