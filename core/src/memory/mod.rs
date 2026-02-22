@@ -47,6 +47,7 @@ pub mod evolution;
 pub mod consolidation;
 pub mod performance_monitor;
 pub mod cortex;
+pub mod vfs;
 
 #[cfg(test)]
 mod integration_tests;
@@ -107,3 +108,4 @@ pub use cortex::{
     DistillationMode, DistillationTask, EnvironmentContext, EvolutionStatus, Experience,
     ExperienceBuilder, ParameterConfig, ParameterMapping, ReplayMatch,
 };
+pub use vfs::compute_directory_hash;
