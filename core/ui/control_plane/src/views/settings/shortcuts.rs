@@ -35,6 +35,8 @@ pub fn ShortcutsView() -> impl IntoView {
                     }
                 }
             });
+        } else {
+            loading.set(false);
         }
     });
 

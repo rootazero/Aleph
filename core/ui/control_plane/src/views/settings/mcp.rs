@@ -39,6 +39,8 @@ pub fn McpView() -> impl IntoView {
                 }
                 loading.set(false);
             });
+        } else {
+            loading.set(false);
         }
     });
 

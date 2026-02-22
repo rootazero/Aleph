@@ -50,6 +50,8 @@ pub fn SecurityView() -> impl IntoView {
 
                 loading.set(false);
             });
+        } else {
+            loading.set(false);
         }
     });
 

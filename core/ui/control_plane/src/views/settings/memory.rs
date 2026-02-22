@@ -37,6 +37,8 @@ pub fn MemoryView() -> impl IntoView {
                 }
                 loading.set(false);
             });
+        } else {
+            loading.set(false);
         }
     });
 

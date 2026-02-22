@@ -41,6 +41,8 @@ pub fn SearchView() -> impl IntoView {
                     }
                 }
             });
+        } else {
+            loading.set(false);
         }
     });
 

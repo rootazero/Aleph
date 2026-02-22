@@ -37,6 +37,8 @@ pub fn RoutingRulesView() -> impl IntoView {
                     }
                 }
             });
+        } else {
+            loading.set(false);
         }
     });
 
