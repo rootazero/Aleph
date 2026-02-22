@@ -118,7 +118,8 @@ impl VectorDatabase {
                 path TEXT NOT NULL DEFAULT '',
                 fact_source TEXT NOT NULL DEFAULT 'extracted',
                 content_hash TEXT NOT NULL DEFAULT '',
-                parent_path TEXT NOT NULL DEFAULT ''
+                parent_path TEXT NOT NULL DEFAULT '',
+                embedding_model TEXT NOT NULL DEFAULT ''
             );
 
             -- Index for fact type queries
@@ -481,6 +482,9 @@ impl VectorDatabase {
         // Migrate to add VFS path columns for hierarchical memory (idempotent)
         migration::migrate_add_vfs_paths(&conn)?;
 
+        // Migrate to add embedding_model column for model tracking (idempotent)
+        migration::migrate_add_embedding_model(&conn)?;
+
         // Migrate existing data to vec0 tables (for upgrades from old schema)
         Self::migrate_to_vec0(&conn)?;
 
@@ -495,6 +499,99 @@ impl VectorDatabase {
             conn: Arc::new(Mutex::new(conn)),
             db_path,
         })
+    }
+
+    /// Initialize vector database with a specific embedding dimension
+    ///
+    /// Use this when the embedding dimension is known from configuration.
+    pub fn new_with_dim(db_path: PathBuf, embedding_dim: u32) -> Result<Self, AlephError> {
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                AlephError::config(format!("Failed to create database directory: {}", e))
+            })?;
+        }
+
+        Self::register_sqlite_vec_extension();
+
+        let conn = Connection::open(&db_path)
+            .map_err(|e| AlephError::config(format!("Failed to open database: {}", e)))?;
+
+        // Check if dimension changed
+        let dim_changed = Self::check_dimension_change(&conn, embedding_dim)?;
+
+        if dim_changed {
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS memories_vec;
+                 DROP TABLE IF EXISTS facts_vec;"
+            )
+            .map_err(|e| AlephError::config(format!("Failed to drop vec0 tables: {}", e)))?;
+
+            tracing::info!(
+                new_dim = embedding_dim,
+                "Dropped vec0 tables for dimension change. Embeddings will be re-indexed."
+            );
+        }
+
+        Self::create_schema(&conn, embedding_dim)?;
+
+        // Run migrations
+        migration::migrate_add_namespace(&conn)?;
+        migration::migrate_add_experience_replays(&conn)?;
+        migration::migrate_add_vfs_paths(&conn)?;
+        migration::migrate_add_embedding_model(&conn)?;
+
+        if !dim_changed {
+            Self::migrate_to_vec0(&conn)?;
+        }
+
+        // Store dimension in schema_info
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('embedding_dimension', ?1)",
+            params![embedding_dim.to_string()],
+        )
+        .map_err(|e| AlephError::config(format!("Failed to update schema_info: {}", e)))?;
+
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            db_path,
+        })
+    }
+
+    /// Check if the configured dimension differs from the stored dimension
+    fn check_dimension_change(conn: &Connection, target_dim: u32) -> Result<bool, AlephError> {
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='schema_info'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if !table_exists {
+            return Ok(false);
+        }
+
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT value FROM schema_info WHERE key = 'embedding_dimension'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+
+        match stored {
+            Some(dim) if dim == target_dim.to_string() => Ok(false),
+            Some(dim) => {
+                tracing::info!(
+                    stored_dim = %dim,
+                    target_dim = target_dim,
+                    "Embedding dimension change detected"
+                );
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 
     /// Migrate existing memories and facts to vec0 tables
@@ -840,4 +937,22 @@ mod tests {
         let _valid_call = "db.search_facts(embedding, NamespaceScope::Owner, 10, false)";
         assert!(true); // Placeholder - real test is compile-time
     }
+
+    #[test]
+    fn test_new_with_dim_default() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = VectorDatabase::new_with_dim(db_path, 384).unwrap();
+
+        let conn = db.conn.lock().unwrap();
+        let dim: String = conn
+            .query_row(
+                "SELECT value FROM schema_info WHERE key = 'embedding_dimension'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(dim, "384");
+    }
+
 }
