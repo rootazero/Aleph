@@ -65,6 +65,7 @@ pub fn AgentView() -> impl IntoView {
 
     // Save handler
     let handle_save = move |_| {
+        if !state.is_connected.get() { return; }
         if let Some(cfg) = config.get() {
             set_is_saving.set(true);
             set_error_message.set(None);
@@ -106,12 +107,31 @@ pub fn AgentView() -> impl IntoView {
                 } else if let Some(cfg) = config.get() {
                     view! {
                         <div class="space-y-6">
-                            // Error/Success messages
-                            {move || error_message.get().map(|msg| view! {
-                                <div class="p-4 bg-danger-subtle border border-danger/30 rounded-lg text-danger">
-                                    {msg}
-                                </div>
-                            })}
+                            // Error messages (connection errors shown as info)
+                            {move || {
+                                match error_message.get() {
+                                    Some(e) if e.contains("Send failed") || e.contains("Failed to load") || e.contains("Failed to save: Send") => {
+                                        Some(view! {
+                                            <div class="p-3 bg-info-subtle border border-info/20 rounded-lg text-info text-sm flex items-center gap-2">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                    <circle cx="12" cy="12" r="10"/>
+                                                    <line x1="12" y1="16" x2="12" y2="12"/>
+                                                    <line x1="12" y1="8" x2="12.01" y2="8"/>
+                                                </svg>
+                                                "Gateway not available — showing default settings"
+                                            </div>
+                                        }.into_any())
+                                    }
+                                    Some(e) => {
+                                        Some(view! {
+                                            <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">
+                                                {e}
+                                            </div>
+                                        }.into_any())
+                                    }
+                                    None => None,
+                                }
+                            }}
 
                             {move || success_message.get().map(|msg| view! {
                                 <div class="p-4 bg-success-subtle border border-success/30 rounded-lg text-success">

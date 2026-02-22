@@ -19,6 +19,7 @@ pub fn GeneralView() -> impl IntoView {
 
     // Store save_config in a StoredValue to avoid closure capture issues
     let save_config_fn = store_value(move || {
+        if !state.is_connected.get() { return; }
         if let Some(cfg) = config.get() {
             set_saving.set(true);
             set_error.set(None);
@@ -78,11 +79,32 @@ pub fn GeneralView() -> impl IntoView {
                 } else if let Some(cfg) = config.get() {
                     view! {
                         <div class="space-y-6">
-                            {move || error.get().map(|e| view! {
-                                <div class="p-4 bg-danger-subtle border border-danger/30 rounded-lg text-danger text-sm">
-                                    {e}
-                                </div>
-                            })}
+                            {move || {
+                                match error.get() {
+                                    Some(e) if e.contains("Send failed") || e.contains("Failed to load") || e.contains("Failed to save config: Send") => {
+                                        // Connection-related error: show as info banner
+                                        Some(view! {
+                                            <div class="p-3 bg-info-subtle border border-info/20 rounded-lg text-info text-sm flex items-center gap-2">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                    <circle cx="12" cy="12" r="10"/>
+                                                    <line x1="12" y1="16" x2="12" y2="12"/>
+                                                    <line x1="12" y1="8" x2="12.01" y2="8"/>
+                                                </svg>
+                                                "Gateway not available — showing default settings"
+                                            </div>
+                                        }.into_any())
+                                    }
+                                    Some(e) => {
+                                        // Real error
+                                        Some(view! {
+                                            <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">
+                                                {e}
+                                            </div>
+                                        }.into_any())
+                                    }
+                                    None => None,
+                                }
+                            }}
 
                             <LanguageSection
                                 language=cfg.language.clone()

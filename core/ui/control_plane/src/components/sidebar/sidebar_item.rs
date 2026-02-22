@@ -10,6 +10,7 @@
 //
 use leptos::prelude::*;
 use leptos_router::components::A;
+use leptos_router::hooks::use_location;
 use crate::context::DashboardState;
 use crate::components::sidebar::SidebarMode;
 use crate::components::ui::{Tooltip, StatusBadge};
@@ -23,6 +24,17 @@ pub fn SidebarItem(
     #[prop(optional)] alert_key: Option<&'static str>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let location = use_location();
+
+    // Detect active state
+    let is_active = move || {
+        let path = location.pathname.get();
+        if href == "/" {
+            path == "/"
+        } else {
+            path.starts_with(href)
+        }
+    };
 
     // Subscribe to alert state as a signal
     let alert = Signal::derive(move || {
@@ -30,7 +42,18 @@ pub fn SidebarItem(
     });
 
     view! {
-        <A href=href attr:class="relative group flex items-center gap-3 px-3 py-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-surface-sunken transition-all duration-200">
+        <A href=href attr:class=move || {
+            if is_active() {
+                "relative group flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-accent bg-sidebar-active transition-all duration-200 font-medium"
+            } else {
+                "relative group flex items-center gap-3 px-3 py-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-sidebar-active/50 transition-all duration-200"
+            }
+        }>
+            // Active indicator bar
+            {move || is_active().then(|| view! {
+                <div class="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-sidebar-accent rounded-full"></div>
+            })}
+
             // Icon container (relative for badge positioning)
             <div class="relative flex-shrink-0">
                 <svg

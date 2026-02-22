@@ -5,6 +5,7 @@
 
 use leptos::prelude::*;
 use leptos_router::components::A;
+use leptos_router::hooks::use_location;
 
 /// Settings tab identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,7 +139,7 @@ const SETTINGS_GROUPS: &[SettingsGroup] = &[
 #[component]
 pub fn SettingsSidebar() -> impl IntoView {
     view! {
-        <nav class="w-64 bg-surface-raised border-r border-border p-4 space-y-6 overflow-y-auto">
+        <nav class="w-64 bg-sidebar border-r border-border p-4 space-y-6 overflow-y-auto">
             <div class="mb-6">
                 <h2 class="text-xl font-bold text-text-primary">
                     "Settings"
@@ -174,11 +175,20 @@ fn SettingsSidebarItem(tab: SettingsTab) -> impl IntoView {
     let path = tab.path();
     let label = tab.label();
     let icon_svg = tab.icon_svg();
+    let location = use_location();
+
+    let is_active = move || location.pathname.get() == path;
 
     view! {
         <A
             href=path
-            attr:class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-surface-sunken group text-text-secondary hover:text-text-primary"
+            attr:class=move || {
+                if is_active() {
+                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 bg-sidebar-active text-sidebar-accent font-medium group"
+                } else {
+                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 hover:bg-sidebar-active/50 group text-text-secondary hover:text-text-primary"
+                }
+            }
             exact=true
         >
             <svg
@@ -190,7 +200,13 @@ fn SettingsSidebarItem(tab: SettingsTab) -> impl IntoView {
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round"
-                class="text-text-tertiary group-hover:text-text-secondary"
+                class=move || {
+                    if is_active() {
+                        "text-sidebar-accent"
+                    } else {
+                        "text-text-tertiary group-hover:text-text-secondary"
+                    }
+                }
                 inner_html=icon_svg
             />
             <span>

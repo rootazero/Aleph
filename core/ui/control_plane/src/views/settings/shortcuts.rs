@@ -56,15 +56,33 @@ pub fn ShortcutsView() -> impl IntoView {
                             <div class="text-text-tertiary">"Loading..."</div>
                         </div>
                     }.into_any()
-                } else if let Some(err) = error.get() {
-                    view! {
-                        <div class="p-4 bg-danger-subtle border border-danger/20 rounded text-danger">
-                            {err}
-                        </div>
-                    }.into_any()
                 } else {
                     view! {
                         <div class="space-y-6">
+                            {move || {
+                                match error.get() {
+                                    Some(e) if e.contains("Send failed") || e.contains("Failed to load") => {
+                                        Some(view! {
+                                            <div class="p-3 bg-info-subtle border border-info/20 rounded-lg text-info text-sm flex items-center gap-2">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                    <circle cx="12" cy="12" r="10"/>
+                                                    <line x1="12" y1="16" x2="12" y2="12"/>
+                                                    <line x1="12" y1="8" x2="12.01" y2="8"/>
+                                                </svg>
+                                                "Gateway not available — showing default settings"
+                                            </div>
+                                        }.into_any())
+                                    }
+                                    Some(e) => {
+                                        Some(view! {
+                                            <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">
+                                                {e}
+                                            </div>
+                                        }.into_any())
+                                    }
+                                    None => None,
+                                }
+                            }}
                             <SummonSection config=config />
                             <CancelSection config=config />
                             <CommandPromptSection config=config />
