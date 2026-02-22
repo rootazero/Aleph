@@ -38,6 +38,7 @@ pub struct FactResult {
     pub fact_type: String,
     pub confidence: f32,
     pub similarity_score: f32,
+    pub path: String,
 }
 
 /// A single transcript result
@@ -56,6 +57,43 @@ pub struct MemorySearchOutput {
     pub transcripts: Vec<TranscriptResult>,
     pub query: String,
     pub tokens_saved: usize,
+    pub path_clusters: Vec<PathCluster>,
+}
+
+/// A cluster of facts under the same VFS path
+#[derive(Debug, Clone, Serialize)]
+pub struct PathCluster {
+    pub path: String,
+    pub l1_overview: Option<String>,
+    pub fact_count: usize,
+    pub top_score: f32,
+}
+
+/// Group facts by path, returning clusters where count >= threshold
+fn cluster_facts_by_path(facts: &[FactResult], threshold: usize) -> Vec<PathCluster> {
+    use std::collections::HashMap;
+
+    let mut groups: HashMap<&str, (usize, f32)> = HashMap::new();
+    for fact in facts {
+        if fact.path.is_empty() {
+            continue;
+        }
+        let entry = groups.entry(&fact.path).or_insert((0, 0.0));
+        entry.0 += 1;
+        if fact.similarity_score > entry.1 {
+            entry.1 = fact.similarity_score;
+        }
+    }
+
+    groups.into_iter()
+        .filter(|(_, (count, _))| *count >= threshold)
+        .map(|(path, (count, top_score))| PathCluster {
+            path: path.to_string(),
+            l1_overview: None,
+            fact_count: count,
+            top_score,
+        })
+        .collect()
 }
 
 /// Memory search tool with hybrid retrieval
@@ -157,6 +195,7 @@ impl MemorySearchTool {
                 fact_type: format!("{:?}", f.fact_type),
                 confidence: f.confidence,
                 similarity_score: f.similarity_score.unwrap_or(0.0),
+                path: f.path.clone(),
             })
             .collect();
 
@@ -170,6 +209,14 @@ impl MemorySearchTool {
                 similarity_score: t.similarity_score.unwrap_or(0.0),
             })
             .collect();
+
+        // Step 3b: Compute path clusters
+        let mut path_clusters = cluster_facts_by_path(&facts, 3);
+        for cluster in &mut path_clusters {
+            if let Ok(Some(l1)) = self.database.get_l1_overview(&cluster.path).await {
+                cluster.l1_overview = Some(l1.content);
+            }
+        }
 
         // Notify success
         let result_summary = format!(
@@ -185,6 +232,7 @@ impl MemorySearchTool {
             transcripts,
             query: args.query,
             tokens_saved: arbitrated.tokens_saved,
+            path_clusters,
         })
     }
 }
@@ -245,5 +293,57 @@ mod tests {
     #[test]
     fn test_default_max_results() {
         assert_eq!(default_max_results(), 10);
+    }
+
+    #[test]
+    fn test_path_cluster_serialization() {
+        let cluster = PathCluster {
+            path: "aleph://user/preferences/coding/".to_string(),
+            l1_overview: Some("Overview text".to_string()),
+            fact_count: 5,
+            top_score: 0.85,
+        };
+        let json = serde_json::to_string(&cluster).unwrap();
+        assert!(json.contains("aleph://user/preferences/coding/"));
+        assert!(json.contains("Overview text"));
+    }
+
+    #[test]
+    fn test_cluster_facts_by_path() {
+        let facts = vec![
+            FactResult {
+                content: "Fact 1".into(),
+                fact_type: "Preference".into(),
+                confidence: 0.9,
+                similarity_score: 0.8,
+                path: "aleph://user/preferences/coding/".into(),
+            },
+            FactResult {
+                content: "Fact 2".into(),
+                fact_type: "Preference".into(),
+                confidence: 0.85,
+                similarity_score: 0.75,
+                path: "aleph://user/preferences/coding/".into(),
+            },
+            FactResult {
+                content: "Fact 3".into(),
+                fact_type: "Preference".into(),
+                confidence: 0.8,
+                similarity_score: 0.7,
+                path: "aleph://user/preferences/coding/".into(),
+            },
+            FactResult {
+                content: "Fact 4".into(),
+                fact_type: "Learning".into(),
+                confidence: 0.9,
+                similarity_score: 0.6,
+                path: "aleph://knowledge/learning/".into(),
+            },
+        ];
+
+        let clusters = cluster_facts_by_path(&facts, 3);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].path, "aleph://user/preferences/coding/");
+        assert_eq!(clusters[0].fact_count, 3);
     }
 }
