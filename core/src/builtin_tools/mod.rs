@@ -64,7 +64,7 @@ pub use file_ops::{FileOpsArgs, FileOpsTool};
 pub use invalid::{InvalidTool, InvalidToolArgs, InvalidToolOutput};
 pub use generation::{ImageGenerateArgs, ImageGenerateTool, SpeechGenerateArgs, SpeechGenerateTool};
 pub use mcp_wrapper::McpToolWrapper;
-pub use memory_search::{MemorySearchArgs, MemorySearchOutput, MemorySearchTool};
+pub use memory_search::{MemorySearchArgs, MemorySearchOutput, MemorySearchTool, PathCluster};
 pub use meta_tools::{
     GetToolSchemaArgs, GetToolSchemaOutput, GetToolSchemaTool, ListToolsArgs, ListToolsOutput,
     ListToolsTool,
