@@ -12,6 +12,7 @@ pub mod search;
 pub mod plugins;
 pub mod skills;
 pub mod policies;
+pub mod channels;
 
 pub use providers::ProvidersView;
 pub use routing_rules::RoutingRulesView;
@@ -27,6 +28,7 @@ pub use search::SearchView;
 pub use plugins::PluginsView;
 pub use skills::SkillsView;
 pub use policies::PoliciesView;
+pub use channels::DiscordChannelView;
 
 // Settings default view (sidebar is provided by SettingsLayout)
 use leptos::prelude::*;

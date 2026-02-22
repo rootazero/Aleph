@@ -25,8 +25,10 @@
 //! dm_allowed = true
 //! ```
 
+pub mod api;
 pub mod config;
 pub mod message_ops;
+pub mod permissions;
 
 pub use config::{DiscordConfig, IntentsConfig};
 pub use message_ops::DiscordMessageOps;
