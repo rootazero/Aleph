@@ -46,16 +46,28 @@ pub fn check_path_escalation(
 
 /// Check if path is in sensitive directory
 pub fn is_sensitive_directory(path: &Path) -> bool {
-    let path_str = path.to_string_lossy();
-    let sensitive_patterns = [
-        "/.ssh/",
-        "/.gnupg/",
-        "/Keychain.app/",
-        "/.aws/",
-        "/.config/gcloud/",
-    ];
+    let sensitive_components = [".ssh", ".gnupg", ".aws"];
+    let sensitive_substrings = ["Keychain.app", ".config/gcloud"];
 
-    sensitive_patterns.iter().any(|pattern| path_str.contains(pattern))
+    // Check path components for exact directory matches
+    let has_sensitive_component = path.components().any(|comp| {
+        if let std::path::Component::Normal(name) = comp {
+            let name_str = name.to_string_lossy();
+            sensitive_components.iter().any(|&dir| name_str == dir)
+        } else {
+            false
+        }
+    });
+
+    if has_sensitive_component {
+        return true;
+    }
+
+    // Check full path string for multi-segment patterns
+    let path_str = path.to_string_lossy();
+    sensitive_substrings
+        .iter()
+        .any(|pattern| path_str.contains(pattern))
 }
 
 #[cfg(test)]
