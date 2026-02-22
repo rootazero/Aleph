@@ -6,7 +6,7 @@
 use crate::error::AlephError;
 use crate::resilience::recovery::ShadowReplayEngine;
 use crate::resilience::{SessionStatus, SubagentSession};
-use crate::memory::database::StateDatabase;
+use crate::resilience::database::StateDatabase;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;

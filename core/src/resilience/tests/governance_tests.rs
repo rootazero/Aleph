@@ -7,7 +7,7 @@
 //! - Resource permits
 
 use crate::resilience::*;
-use crate::memory::database::StateDatabase;
+use crate::resilience::database::StateDatabase;
 use std::sync::Arc;
 use tempfile::TempDir;
 

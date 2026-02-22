@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use crate::resilience::AgentEvent;
-use crate::memory::database::StateDatabase;
+use crate::resilience::database::StateDatabase;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;

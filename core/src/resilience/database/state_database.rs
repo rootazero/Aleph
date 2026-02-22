@@ -2,7 +2,7 @@
 ///
 /// Contains the database connection, schema setup, and migration logic.
 use crate::error::AlephError;
-use crate::memory::database::migration;
+use super::migration;
 use rusqlite::{params, Connection, OptionalExtension};
 use sqlite_vec::sqlite3_vec_init;
 use std::path::PathBuf;

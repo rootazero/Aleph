@@ -532,7 +532,7 @@ mod tests {
 
     #[test]
     fn test_migration_integration_with_vector_database() {
-        use super::super::core::StateDatabase;
+        use super::super::StateDatabase;
 
         // Create a test database through StateDatabase::new()
         let temp_dir = std::env::temp_dir();

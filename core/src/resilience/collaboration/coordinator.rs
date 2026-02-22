@@ -8,7 +8,7 @@
 
 use crate::error::AlephError;
 use crate::resilience::{SessionStatus, SubagentSession};
-use crate::memory::database::StateDatabase;
+use crate::resilience::database::StateDatabase;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;

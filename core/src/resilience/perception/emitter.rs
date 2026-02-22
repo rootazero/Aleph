@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use crate::resilience::AgentEvent;
-use crate::memory::database::StateDatabase;
+use crate::resilience::database::StateDatabase;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

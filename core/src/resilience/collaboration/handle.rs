@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use crate::resilience::{SessionStatus, SubagentSession};
-use crate::memory::database::StateDatabase;
+use crate::resilience::database::StateDatabase;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio::sync::RwLock;

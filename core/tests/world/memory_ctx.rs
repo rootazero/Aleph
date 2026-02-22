@@ -1,6 +1,6 @@
 //! Memory test context for Facts Vector DB and Integration operations
 
-use alephcore::memory::database::StateDatabase;
+use alephcore::resilience::database::StateDatabase;
 use alephcore::memory::store::{LanceMemoryBackend, MemoryBackend};
 use alephcore::memory::{
     ContextAnchor, FactSpecificity, FactType, MemoryEntry, MemoryFact, MemoryIngestion,

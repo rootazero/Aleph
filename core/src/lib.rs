@@ -282,7 +282,7 @@ pub use crate::daemon::events::{
 // Memory & Search Exports
 // =============================================================================
 
-pub use crate::memory::database::MemoryStats;
+pub use crate::resilience::database::MemoryStats;
 pub use crate::search::{ProviderTestResult, SearchProviderTestConfig};
 
 // =============================================================================

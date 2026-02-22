@@ -7,7 +7,7 @@
 use crate::agent_loop::message_builder::{Message, ToolCall};
 use crate::error::AlephError;
 use crate::resilience::{TaskTrace, TraceRole};
-use crate::memory::database::StateDatabase;
+use crate::resilience::database::StateDatabase;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

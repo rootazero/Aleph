@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use crate::resilience::AgentEvent;
-use crate::memory::database::StateDatabase;
+use super::StateDatabase;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 
