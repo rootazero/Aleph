@@ -5,4 +5,5 @@
 //!
 //! TODO: Implement `LanceMemoryBackend` (Task 6).
 
+pub mod arrow_convert;
 pub mod schema;
