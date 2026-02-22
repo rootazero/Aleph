@@ -36,3 +36,6 @@ pub async fn bootstrap_agent_context(database: &VectorDatabase) -> String {
 
     format!("## Memory Overview\n\n{}", sections.join("\n\n"))
 }
+
+#[cfg(test)]
+mod integration_tests;
