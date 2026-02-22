@@ -3,13 +3,13 @@ use tailwind_fuse::*;
 
 #[derive(TwVariant, PartialEq)]
 pub enum ButtonVariant {
-    #[tw(default, class = "bg-indigo-600 text-white hover:bg-indigo-500 shadow-indigo-500/20 shadow-lg")]
+    #[tw(default, class = "bg-primary text-text-inverse hover:bg-primary-hover")]
     Primary,
-    #[tw(class = "bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700")]
+    #[tw(class = "bg-surface-sunken text-text-primary border border-border hover:bg-surface-raised")]
     Secondary,
-    #[tw(class = "bg-transparent text-slate-400 hover:text-white hover:bg-slate-800")]
+    #[tw(class = "bg-transparent text-text-secondary hover:text-text-primary hover:bg-surface-sunken")]
     Ghost,
-    #[tw(class = "bg-red-950/30 text-red-500 hover:bg-red-900/40 border border-red-500/20")]
+    #[tw(class = "bg-danger text-text-inverse hover:brightness-95")]
     Destructive,
 }
 
