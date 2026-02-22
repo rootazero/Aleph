@@ -200,6 +200,8 @@ mod tests {
             user_input: "Test input".to_string(),
             ai_output: "Test output".to_string(),
             embedding: Some(vec![0.1; 512]),
+            namespace: "owner".to_string(),
+            workspace: "default".to_string(),
             similarity_score: Some(0.9),
         }];
 

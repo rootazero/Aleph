@@ -59,8 +59,8 @@ impl L1Generator {
 
         // 3. Check existing L1 — skip if hash matches
         // Old: db.get_l1_overview(path)
-        // New: db.get_by_path(path, &NamespaceScope::Owner)
-        if let Some(existing_l1) = self.database.get_by_path(path, &NamespaceScope::Owner).await? {
+        // New: db.get_by_path(path, &NamespaceScope::Owner, "default")
+        if let Some(existing_l1) = self.database.get_by_path(path, &NamespaceScope::Owner, "default").await? {
             if existing_l1.fact_source == FactSource::Summary && existing_l1.content_hash == new_hash {
                 tracing::debug!(path = path, "L1 Overview is current, skipping");
                 return Ok(false);
@@ -90,8 +90,8 @@ impl L1Generator {
         l1_fact.parent_path = parent_path;
 
         // Upsert: invalidate old L1 if exists, then insert new
-        // Old: db.get_l1_overview(path) → New: db.get_by_path(path, &NamespaceScope::Owner)
-        if let Some(old_l1) = self.database.get_by_path(path, &NamespaceScope::Owner).await? {
+        // Old: db.get_l1_overview(path) → New: db.get_by_path(path, &NamespaceScope::Owner, "default")
+        if let Some(old_l1) = self.database.get_by_path(path, &NamespaceScope::Owner, "default").await? {
             if old_l1.fact_source == FactSource::Summary {
                 self.database
                     .invalidate_fact(&old_l1.id, "Superseded by updated L1 Overview")

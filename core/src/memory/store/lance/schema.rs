@@ -37,7 +37,7 @@ fn string_list_field(name: &str, nullable: bool) -> Field {
 // Table schemas
 // ---------------------------------------------------------------------------
 
-/// Schema for the `facts` table (24 columns).
+/// Schema for the `facts` table (25 columns).
 pub fn facts_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -49,6 +49,7 @@ pub fn facts_schema() -> Arc<Schema> {
         Field::new("path", DataType::Utf8, false),
         Field::new("parent_path", DataType::Utf8, false),
         Field::new("namespace", DataType::Utf8, false),
+        Field::new("workspace", DataType::Utf8, false),
         string_list_field("tags", true),
         string_list_field("source_memory_ids", true),
         Field::new("content_hash", DataType::Utf8, false),
@@ -67,7 +68,7 @@ pub fn facts_schema() -> Arc<Schema> {
     ]))
 }
 
-/// Schema for the `graph_nodes` table (8 columns).
+/// Schema for the `graph_nodes` table (9 columns).
 pub fn graph_nodes_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -78,10 +79,11 @@ pub fn graph_nodes_schema() -> Arc<Schema> {
         Field::new("decay_score", DataType::Float32, false),
         Field::new("created_at", DataType::Int64, false),
         Field::new("updated_at", DataType::Int64, false),
+        Field::new("workspace", DataType::Utf8, false),
     ]))
 }
 
-/// Schema for the `graph_edges` table (11 columns).
+/// Schema for the `graph_edges` table (12 columns).
 pub fn graph_edges_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -95,10 +97,11 @@ pub fn graph_edges_schema() -> Arc<Schema> {
         Field::new("created_at", DataType::Int64, false),
         Field::new("updated_at", DataType::Int64, false),
         Field::new("last_seen_at", DataType::Int64, false),
+        Field::new("workspace", DataType::Utf8, false),
     ]))
 }
 
-/// Schema for the `memories` table (10 columns).
+/// Schema for the `memories` table (11 columns).
 pub fn memories_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -110,6 +113,7 @@ pub fn memories_schema() -> Arc<Schema> {
         Field::new("topic_id", DataType::Utf8, true),
         Field::new("session_key", DataType::Utf8, false),
         Field::new("namespace", DataType::Utf8, false),
+        Field::new("workspace", DataType::Utf8, false),
         vector_field("vec_384", 384),
     ]))
 }
@@ -123,9 +127,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn facts_schema_has_24_columns() {
+    fn facts_schema_has_25_columns() {
         let schema = facts_schema();
-        assert_eq!(schema.fields().len(), 24);
+        assert_eq!(schema.fields().len(), 25);
     }
 
     #[test]
@@ -165,7 +169,7 @@ mod tests {
     #[test]
     fn graph_nodes_schema_is_valid() {
         let schema = graph_nodes_schema();
-        assert_eq!(schema.fields().len(), 8);
+        assert_eq!(schema.fields().len(), 9);
     }
 
     #[test]
@@ -183,13 +187,13 @@ mod tests {
     #[test]
     fn graph_edges_schema_is_valid() {
         let schema = graph_edges_schema();
-        assert_eq!(schema.fields().len(), 11);
+        assert_eq!(schema.fields().len(), 12);
     }
 
     #[test]
     fn memories_schema_is_valid() {
         let schema = memories_schema();
-        assert_eq!(schema.fields().len(), 10);
+        assert_eq!(schema.fields().len(), 11);
     }
 
     #[test]
@@ -210,7 +214,7 @@ mod tests {
         let required = [
             "id", "content", "fact_type", "fact_source", "specificity",
             "temporal_scope", "path", "parent_path", "namespace",
-            "content_hash", "confidence", "decay_score", "is_valid",
+            "content_hash", "workspace", "confidence", "decay_score", "is_valid",
             "embedding_model", "created_at", "updated_at", "version",
         ];
         for name in &required {

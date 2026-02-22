@@ -144,7 +144,8 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
     let path_arr = StringArray::from_iter_values(facts.iter().map(|f| f.path.as_str()));
     let parent_path_arr =
         StringArray::from_iter_values(facts.iter().map(|f| f.parent_path.as_str()));
-    let namespace_arr = StringArray::from_iter_values(facts.iter().map(|_| "owner"));
+    let namespace_arr = StringArray::from_iter_values(facts.iter().map(|f| f.namespace.as_str()));
+    let workspace_arr = StringArray::from_iter_values(facts.iter().map(|f| f.workspace.as_str()));
     let content_hash_arr =
         StringArray::from_iter_values(facts.iter().map(|f| f.content_hash.as_str()));
     let embedding_model_arr =
@@ -238,21 +239,22 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
             Arc::new(path_arr),                  // 6  path
             Arc::new(parent_path_arr),           // 7  parent_path
             Arc::new(namespace_arr),             // 8  namespace
-            Arc::new(tags_arr),                  // 9  tags
-            Arc::new(src_ids_arr),               // 10 source_memory_ids
-            Arc::new(content_hash_arr),          // 11 content_hash
-            Arc::new(confidence_arr),            // 12 confidence
-            Arc::new(decay_score_arr),           // 13 decay_score
-            Arc::new(is_valid_arr),              // 14 is_valid
-            Arc::new(invalidation_reason_arr),   // 15 invalidation_reason
-            Arc::new(embedding_model_arr),       // 16 embedding_model
-            Arc::new(created_at_arr),            // 17 created_at
-            Arc::new(updated_at_arr),            // 18 updated_at
-            Arc::new(decay_invalidated_at_arr),  // 19 decay_invalidated_at
-            Arc::new(version_arr),               // 20 version
-            Arc::new(vec_384),                   // 21 vec_384
-            Arc::new(vec_1024),                  // 22 vec_1024
-            Arc::new(vec_1536),                  // 23 vec_1536
+            Arc::new(workspace_arr),             // 9  workspace
+            Arc::new(tags_arr),                  // 10 tags
+            Arc::new(src_ids_arr),               // 11 source_memory_ids
+            Arc::new(content_hash_arr),          // 12 content_hash
+            Arc::new(confidence_arr),            // 13 confidence
+            Arc::new(decay_score_arr),           // 14 decay_score
+            Arc::new(is_valid_arr),              // 15 is_valid
+            Arc::new(invalidation_reason_arr),   // 16 invalidation_reason
+            Arc::new(embedding_model_arr),       // 17 embedding_model
+            Arc::new(created_at_arr),            // 18 created_at
+            Arc::new(updated_at_arr),            // 19 updated_at
+            Arc::new(decay_invalidated_at_arr),  // 20 decay_invalidated_at
+            Arc::new(version_arr),               // 21 version
+            Arc::new(vec_384),                   // 22 vec_384
+            Arc::new(vec_1024),                  // 23 vec_1024
+            Arc::new(vec_1536),                  // 24 vec_1536
         ],
     )
     .map_err(|e| conv_err(e))?;
@@ -277,6 +279,9 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
     let parent_path_col = col::<StringArray>(batch, "parent_path")?;
     let content_hash_col = col::<StringArray>(batch, "content_hash")?;
     let embedding_model_col = col::<StringArray>(batch, "embedding_model")?;
+    // namespace and workspace columns (with fallback for backward compatibility)
+    let namespace_col = col::<StringArray>(batch, "namespace").ok();
+    let workspace_col = col::<StringArray>(batch, "workspace").ok();
     let confidence_col = col::<Float32Array>(batch, "confidence")?;
     let is_valid_col = col::<BooleanArray>(batch, "is_valid")?;
     let invalidation_reason_col = col::<StringArray>(batch, "invalidation_reason")?;
@@ -316,6 +321,12 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
             updated_at: updated_at_col.value(i),
             decay_invalidated_at: read_nullable_i64(decay_invalidated_at_col, i),
             source_memory_ids: read_string_list(src_ids_col, i),
+            namespace: namespace_col
+                .map(|c| c.value(i).to_string())
+                .unwrap_or_else(|| "owner".to_string()),
+            workspace: workspace_col
+                .map(|c| c.value(i).to_string())
+                .unwrap_or_else(|| "default".to_string()),
             embedding,
             similarity_score: None,
         };
@@ -351,6 +362,7 @@ pub fn graph_nodes_to_record_batch(nodes: &[GraphNode]) -> Result<RecordBatch, A
     let decay_score_arr = Float32Array::from_iter_values(nodes.iter().map(|n| n.decay_score));
     let created_at_arr = Int64Array::from_iter_values(nodes.iter().map(|n| n.created_at));
     let updated_at_arr = Int64Array::from_iter_values(nodes.iter().map(|n| n.updated_at));
+    let workspace_arr = StringArray::from_iter_values(nodes.iter().map(|n| n.workspace.as_str()));
 
     // List(Utf8): aliases
     let mut aliases_builder = ListBuilder::new(StringBuilder::new());
@@ -373,6 +385,7 @@ pub fn graph_nodes_to_record_batch(nodes: &[GraphNode]) -> Result<RecordBatch, A
             Arc::new(decay_score_arr), // 5 decay_score
             Arc::new(created_at_arr),  // 6 created_at
             Arc::new(updated_at_arr),  // 7 updated_at
+            Arc::new(workspace_arr),   // 8 workspace
         ],
     )
     .map_err(|e| conv_err(e))?;
@@ -395,6 +408,7 @@ pub fn record_batch_to_graph_nodes(batch: &RecordBatch) -> Result<Vec<GraphNode>
     let decay_score_col = col::<Float32Array>(batch, "decay_score")?;
     let created_at_col = col::<Int64Array>(batch, "created_at")?;
     let updated_at_col = col::<Int64Array>(batch, "updated_at")?;
+    let workspace_col = col::<StringArray>(batch, "workspace").ok();
 
     let mut nodes = Vec::with_capacity(n);
     for i in 0..n {
@@ -407,6 +421,9 @@ pub fn record_batch_to_graph_nodes(batch: &RecordBatch) -> Result<Vec<GraphNode>
             decay_score: decay_score_col.value(i),
             created_at: created_at_col.value(i),
             updated_at: updated_at_col.value(i),
+            workspace: workspace_col
+                .map(|c| c.value(i).to_string())
+                .unwrap_or_else(|| "default".to_string()),
         });
     }
 
@@ -433,6 +450,7 @@ pub fn graph_edges_to_record_batch(edges: &[GraphEdge]) -> Result<RecordBatch, A
     let created_at_arr = Int64Array::from_iter_values(edges.iter().map(|e| e.created_at));
     let updated_at_arr = Int64Array::from_iter_values(edges.iter().map(|e| e.updated_at));
     let last_seen_at_arr = Int64Array::from_iter_values(edges.iter().map(|e| e.last_seen_at));
+    let workspace_arr = StringArray::from_iter_values(edges.iter().map(|e| e.workspace.as_str()));
 
     let batch = RecordBatch::try_new(
         schema,
@@ -448,6 +466,7 @@ pub fn graph_edges_to_record_batch(edges: &[GraphEdge]) -> Result<RecordBatch, A
             Arc::new(created_at_arr),    // 8  created_at
             Arc::new(updated_at_arr),    // 9  updated_at
             Arc::new(last_seen_at_arr),  // 10 last_seen_at
+            Arc::new(workspace_arr),     // 11 workspace
         ],
     )
     .map_err(|e| conv_err(e))?;
@@ -473,6 +492,7 @@ pub fn record_batch_to_graph_edges(batch: &RecordBatch) -> Result<Vec<GraphEdge>
     let created_at_col = col::<Int64Array>(batch, "created_at")?;
     let updated_at_col = col::<Int64Array>(batch, "updated_at")?;
     let last_seen_at_col = col::<Int64Array>(batch, "last_seen_at")?;
+    let workspace_col = col::<StringArray>(batch, "workspace").ok();
 
     let mut edges = Vec::with_capacity(n);
     for i in 0..n {
@@ -488,6 +508,9 @@ pub fn record_batch_to_graph_edges(batch: &RecordBatch) -> Result<Vec<GraphEdge>
             created_at: created_at_col.value(i),
             updated_at: updated_at_col.value(i),
             last_seen_at: last_seen_at_col.value(i),
+            workspace: workspace_col
+                .map(|c| c.value(i).to_string())
+                .unwrap_or_else(|| "default".to_string()),
         });
     }
 
@@ -520,7 +543,8 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
             .collect::<Vec<_>>(),
     );
     let session_key_arr = StringArray::from_iter_values(memories.iter().map(|_| "default"));
-    let namespace_arr = StringArray::from_iter_values(memories.iter().map(|_| "owner"));
+    let namespace_arr = StringArray::from_iter_values(memories.iter().map(|m| m.namespace.as_str()));
+    let workspace_arr = StringArray::from_iter_values(memories.iter().map(|m| m.workspace.as_str()));
 
     // Vector column
     let embeddings: Vec<Option<&Vec<f32>>> = memories
@@ -541,7 +565,8 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
             Arc::new(topic_id_arr),     // 6 topic_id
             Arc::new(session_key_arr),  // 7 session_key
             Arc::new(namespace_arr),    // 8 namespace
-            Arc::new(vec_384),          // 9 vec_384
+            Arc::new(workspace_arr),    // 9 workspace
+            Arc::new(vec_384),          // 10 vec_384
         ],
     )
     .map_err(|e| conv_err(e))?;
@@ -563,6 +588,9 @@ pub fn record_batch_to_memories(batch: &RecordBatch) -> Result<Vec<MemoryEntry>,
     let ai_output_col = col::<StringArray>(batch, "ai_output")?;
     let timestamp_col = col::<Int64Array>(batch, "timestamp")?;
     let topic_id_col = col::<StringArray>(batch, "topic_id").ok();
+    // namespace and workspace columns (with fallback for backward compatibility)
+    let namespace_col = col::<StringArray>(batch, "namespace").ok();
+    let workspace_col = col::<StringArray>(batch, "workspace").ok();
     let vec_384_col = col::<FixedSizeListArray>(batch, "vec_384").ok();
 
     let mut entries = Vec::with_capacity(n);
@@ -586,6 +614,12 @@ pub fn record_batch_to_memories(batch: &RecordBatch) -> Result<Vec<MemoryEntry>,
             user_input: user_input_col.value(i).to_string(),
             ai_output: ai_output_col.value(i).to_string(),
             embedding,
+            namespace: namespace_col
+                .map(|c| c.value(i).to_string())
+                .unwrap_or_else(|| "owner".to_string()),
+            workspace: workspace_col
+                .map(|c| c.value(i).to_string())
+                .unwrap_or_else(|| "default".to_string()),
             similarity_score: None,
         });
     }
@@ -731,6 +765,7 @@ mod tests {
             decay_score: 0.95,
             created_at: 1700000000,
             updated_at: 1700000100,
+            workspace: "default".to_string(),
         };
 
         let batch = graph_nodes_to_record_batch(&[node.clone()]).expect("to_batch");
@@ -761,6 +796,7 @@ mod tests {
             decay_score: 1.0,
             created_at: 1700000000,
             updated_at: 1700000000,
+            workspace: "default".to_string(),
         };
 
         let batch = graph_nodes_to_record_batch(&[node.clone()]).expect("to_batch");
@@ -784,6 +820,7 @@ mod tests {
             created_at: 1700000000,
             updated_at: 1700000100,
             last_seen_at: 1700000200,
+            workspace: "default".to_string(),
         };
 
         let batch = graph_edges_to_record_batch(&[edge.clone()]).expect("to_batch");
@@ -828,6 +865,8 @@ mod tests {
             user_input: "What is Rust?".to_string(),
             ai_output: "Rust is a systems programming language.".to_string(),
             embedding: Some(vec![0.5_f32; 384]),
+            namespace: "owner".to_string(),
+            workspace: "default".to_string(),
             similarity_score: None,
         };
 
@@ -865,6 +904,8 @@ mod tests {
             user_input: "Hello".to_string(),
             ai_output: "Hi there!".to_string(),
             embedding: None,
+            namespace: "owner".to_string(),
+            workspace: "default".to_string(),
             similarity_score: None,
         };
 

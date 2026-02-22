@@ -298,14 +298,15 @@ impl MemoryStore for LanceMemoryBackend {
         &self,
         parent_path: &str,
         ns: &NamespaceScope,
+        workspace: &str,
     ) -> Result<Vec<PathEntry>, AlephError> {
         let ns_value = ns.to_namespace_value();
         let filter = if matches!(ns, NamespaceScope::Owner) {
-            format!("parent_path = '{}'", parent_path)
+            format!("parent_path = '{}' AND workspace = '{}'", parent_path, workspace)
         } else {
             format!(
-                "parent_path = '{}' AND namespace = '{}'",
-                parent_path, ns_value
+                "parent_path = '{}' AND namespace = '{}' AND workspace = '{}'",
+                parent_path, ns_value, workspace
             )
         };
 
@@ -335,12 +336,13 @@ impl MemoryStore for LanceMemoryBackend {
         &self,
         path: &str,
         ns: &NamespaceScope,
+        workspace: &str,
     ) -> Result<Option<MemoryFact>, AlephError> {
         let ns_value = ns.to_namespace_value();
         let filter = if matches!(ns, NamespaceScope::Owner) {
-            format!("path = '{}'", path)
+            format!("path = '{}' AND workspace = '{}'", path, workspace)
         } else {
-            format!("path = '{}' AND namespace = '{}'", path, ns_value)
+            format!("path = '{}' AND namespace = '{}' AND workspace = '{}'", path, ns_value, workspace)
         };
 
         let facts = scan_facts(&self.facts_table, Some(&filter), Some(1)).await?;
@@ -363,16 +365,18 @@ impl MemoryStore for LanceMemoryBackend {
         &self,
         fact_type: FactType,
         ns: &NamespaceScope,
+        workspace: &str,
         limit: usize,
     ) -> Result<Vec<MemoryFact>, AlephError> {
         let ns_value = ns.to_namespace_value();
         let filter = if matches!(ns, NamespaceScope::Owner) {
-            format!("fact_type = '{}'", fact_type.as_str())
+            format!("fact_type = '{}' AND workspace = '{}'", fact_type.as_str(), workspace)
         } else {
             format!(
-                "fact_type = '{}' AND namespace = '{}'",
+                "fact_type = '{}' AND namespace = '{}' AND workspace = '{}'",
                 fact_type.as_str(),
-                ns_value
+                ns_value,
+                workspace
             )
         };
 
@@ -828,13 +832,13 @@ mod tests {
             .unwrap();
 
         let learning = backend
-            .get_facts_by_type(FactType::Learning, &NamespaceScope::Owner, 10)
+            .get_facts_by_type(FactType::Learning, &NamespaceScope::Owner, "default", 10)
             .await
             .unwrap();
         assert_eq!(learning.len(), 2);
 
         let prefs = backend
-            .get_facts_by_type(FactType::Preference, &NamespaceScope::Owner, 10)
+            .get_facts_by_type(FactType::Preference, &NamespaceScope::Owner, "default", 10)
             .await
             .unwrap();
         assert_eq!(prefs.len(), 1);
@@ -918,7 +922,7 @@ mod tests {
             .unwrap();
 
         let entries = backend
-            .list_by_path("aleph://user/preferences/", &NamespaceScope::Owner)
+            .list_by_path("aleph://user/preferences/", &NamespaceScope::Owner, "default")
             .await
             .unwrap();
 
@@ -942,6 +946,7 @@ mod tests {
             .get_by_path(
                 "aleph://user/preferences/coding/rust",
                 &NamespaceScope::Owner,
+                "default",
             )
             .await
             .unwrap();
@@ -951,7 +956,7 @@ mod tests {
 
         // Non-existent path
         let missing = backend
-            .get_by_path("aleph://nonexistent/path", &NamespaceScope::Owner)
+            .get_by_path("aleph://nonexistent/path", &NamespaceScope::Owner, "default")
             .await
             .unwrap();
         assert!(missing.is_none());

@@ -57,6 +57,13 @@ impl ContextAnchor {
     }
 }
 
+fn default_namespace() -> String {
+    "owner".to_string()
+}
+fn default_workspace_id() -> String {
+    "default".to_string()
+}
+
 /// Memory entry representing a stored interaction
 #[derive(Debug, Clone)]
 pub struct MemoryEntry {
@@ -70,6 +77,10 @@ pub struct MemoryEntry {
     pub ai_output: String,
     /// Vector embedding (384-dim for multilingual-e5-small)
     pub embedding: Option<Vec<f32>>,
+    /// Access control scope: "owner", "guest:xxx", "shared"
+    pub namespace: String,
+    /// Domain isolation workspace ID
+    pub workspace: String,
     /// Similarity score (when retrieved from search)
     pub similarity_score: Option<f32>,
 }
@@ -83,6 +94,8 @@ impl MemoryEntry {
             user_input,
             ai_output,
             embedding: None,
+            namespace: "owner".to_string(),
+            workspace: "default".to_string(),
             similarity_score: None,
         }
     }
@@ -101,6 +114,8 @@ impl MemoryEntry {
             user_input,
             ai_output,
             embedding: Some(embedding),
+            namespace: "owner".to_string(),
+            workspace: "default".to_string(),
             similarity_score: None,
         }
     }
@@ -428,6 +443,12 @@ pub struct MemoryFact {
     pub specificity: FactSpecificity,
     /// Temporal scope
     pub temporal_scope: TemporalScope,
+    /// Access control scope: "owner", "guest:xxx", "shared"
+    #[serde(default = "default_namespace")]
+    pub namespace: String,
+    /// Domain isolation workspace ID
+    #[serde(default = "default_workspace_id")]
+    pub workspace: String,
     /// Similarity score (when retrieved from search)
     #[serde(skip)]
     pub similarity_score: Option<f32>,
@@ -478,6 +499,8 @@ impl MemoryFact {
             decay_invalidated_at: None,
             specificity: FactSpecificity::default(),
             temporal_scope: TemporalScope::default(),
+            namespace: "owner".to_string(),
+            workspace: "default".to_string(),
             similarity_score: None,
             path,
             fact_source: FactSource::Extracted,
@@ -511,6 +534,8 @@ impl MemoryFact {
             decay_invalidated_at: None,
             specificity: FactSpecificity::default(),
             temporal_scope: TemporalScope::default(),
+            namespace: "owner".to_string(),
+            workspace: "default".to_string(),
             similarity_score: None,
             path,
             fact_source: FactSource::Extracted,
