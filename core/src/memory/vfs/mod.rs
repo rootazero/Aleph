@@ -27,8 +27,8 @@ pub async fn bootstrap_agent_context(database: &MemoryBackend) -> String {
     let mut sections = Vec::new();
 
     for path in &top_level_paths {
-        // Old: database.get_l1_overview(path) → New: database.get_by_path(path, &NamespaceScope::Owner)
-        if let Ok(Some(l1)) = database.get_by_path(path, &NamespaceScope::Owner).await {
+        // Old: database.get_l1_overview(path) → New: database.get_by_path(path, &NamespaceScope::Owner, "default")
+        if let Ok(Some(l1)) = database.get_by_path(path, &NamespaceScope::Owner, "default").await {
             if l1.fact_source == FactSource::Summary {
                 sections.push(format!("### {}\n{}", path, l1.content));
             }

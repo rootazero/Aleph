@@ -265,6 +265,7 @@ impl GraphStore {
             self.database.as_ref(),
             name,
             None,
+            "default",
         ).await?;
 
         let node_id = if let Some(resolved) = existing.first() {
@@ -272,6 +273,7 @@ impl GraphStore {
             let mut existing_node = StoreGraphStore::get_node(
                 self.database.as_ref(),
                 &resolved.node_id,
+                "default",
             ).await?.unwrap_or_else(|| store::GraphNode {
                 id: resolved.node_id.clone(),
                 name: name.to_string(),
@@ -298,7 +300,7 @@ impl GraphStore {
             existing_node.metadata_json = metadata_json.clone();
             existing_node.updated_at = now;
 
-            StoreGraphStore::upsert_node(self.database.as_ref(), &existing_node).await?;
+            StoreGraphStore::upsert_node(self.database.as_ref(), &existing_node, "default").await?;
 
             GraphNode::from(existing_node)
         } else {
@@ -316,7 +318,7 @@ impl GraphStore {
             workspace: "default".to_string(),
             };
 
-            StoreGraphStore::upsert_node(self.database.as_ref(), &store_node).await?;
+            StoreGraphStore::upsert_node(self.database.as_ref(), &store_node, "default").await?;
 
             GraphNode {
                 id,
@@ -361,7 +363,7 @@ impl GraphStore {
             workspace: "default".to_string(),
         };
 
-        StoreGraphStore::upsert_edge(self.database.as_ref(), &store_edge).await?;
+        StoreGraphStore::upsert_edge(self.database.as_ref(), &store_edge, "default").await?;
 
         Ok(GraphEdge::from(store_edge))
     }
@@ -390,6 +392,7 @@ impl GraphStore {
             self.database.as_ref(),
             name_or_alias,
             context_key,
+            "default",
         ).await?;
 
         Ok(resolved.into_iter().map(|r| {
@@ -424,7 +427,7 @@ impl GraphStore {
             min_score: config.min_score,
         };
 
-        let stats = StoreGraphStore::apply_decay(self.database.as_ref(), &policy).await?;
+        let stats = StoreGraphStore::apply_decay(self.database.as_ref(), &policy, "default").await?;
 
         Ok(GraphDecayReport {
             pruned_nodes: stats.nodes_pruned as u64,

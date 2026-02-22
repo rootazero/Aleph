@@ -109,9 +109,9 @@ async fn scan_edges(
 
 #[async_trait]
 impl GraphStore for LanceMemoryBackend {
-    async fn upsert_node(&self, node: &GraphNode) -> Result<(), AlephError> {
+    async fn upsert_node(&self, node: &GraphNode, workspace: &str) -> Result<(), AlephError> {
         // Delete existing node with same ID if present, then insert.
-        let existing = self.get_node(&node.id).await?;
+        let existing = self.get_node(&node.id, workspace).await?;
         if existing.is_some() {
             self.nodes_table
                 .delete(&format!("id = '{}'", node.id))
@@ -123,15 +123,15 @@ impl GraphStore for LanceMemoryBackend {
         add_batch(&self.nodes_table, batch).await
     }
 
-    async fn get_node(&self, id: &str) -> Result<Option<GraphNode>, AlephError> {
-        let filter = format!("id = '{}'", id);
+    async fn get_node(&self, id: &str, workspace: &str) -> Result<Option<GraphNode>, AlephError> {
+        let filter = format!("id = '{}' AND workspace = '{}'", id, workspace);
         let nodes = scan_nodes(&self.nodes_table, Some(&filter), Some(1)).await?;
         Ok(nodes.into_iter().next())
     }
 
-    async fn upsert_edge(&self, edge: &GraphEdge) -> Result<(), AlephError> {
+    async fn upsert_edge(&self, edge: &GraphEdge, workspace: &str) -> Result<(), AlephError> {
         // Delete existing edge with same ID if present, then insert.
-        let filter = format!("id = '{}'", edge.id);
+        let filter = format!("id = '{}' AND workspace = '{}'", edge.id, workspace);
         let existing = scan_edges(&self.edges_table, Some(&filter), Some(1)).await?;
         if !existing.is_empty() {
             self.edges_table
@@ -148,9 +148,10 @@ impl GraphStore for LanceMemoryBackend {
         &self,
         query: &str,
         context_key: Option<&str>,
+        workspace: &str,
     ) -> Result<Vec<ResolvedEntity>, AlephError> {
         // Try exact match on the name column (FTS index may not exist in tests).
-        let filter = format!("name = '{}'", query);
+        let filter = format!("name = '{}' AND workspace = '{}'", query, workspace);
         let candidates = scan_nodes(&self.nodes_table, Some(&filter), None).await?;
 
         if candidates.is_empty() {
@@ -164,7 +165,7 @@ impl GraphStore for LanceMemoryBackend {
             // If context_key is provided and there are multiple candidates,
             // count edges in that context to compute a relevance score.
             let context_score = if let Some(ctx) = context_key {
-                let count = self.count_edges_in_context(&node.id, ctx).await?;
+                let count = self.count_edges_in_context(&node.id, ctx, workspace).await?;
                 count as f32
             } else {
                 0.0
@@ -194,8 +195,9 @@ impl GraphStore for LanceMemoryBackend {
         &self,
         node_id: &str,
         context_key: Option<&str>,
+        workspace: &str,
     ) -> Result<Vec<GraphEdge>, AlephError> {
-        let base_filter = format!("from_id = '{}' OR to_id = '{}'", node_id, node_id);
+        let base_filter = format!("(from_id = '{}' OR to_id = '{}') AND workspace = '{}'", node_id, node_id, workspace);
         let filter = if let Some(ctx) = context_key {
             format!("({}) AND context_key = '{}'", base_filter, ctx)
         } else {
@@ -209,16 +211,17 @@ impl GraphStore for LanceMemoryBackend {
         &self,
         node_id: &str,
         context_key: &str,
+        workspace: &str,
     ) -> Result<usize, AlephError> {
         let filter = format!(
-            "(from_id = '{}' OR to_id = '{}') AND context_key = '{}'",
-            node_id, node_id, context_key
+            "(from_id = '{}' OR to_id = '{}') AND context_key = '{}' AND workspace = '{}'",
+            node_id, node_id, context_key, workspace
         );
         let edges = scan_edges(&self.edges_table, Some(&filter), None).await?;
         Ok(edges.len())
     }
 
-    async fn apply_decay(&self, policy: &GraphDecayPolicy) -> Result<DecayStats, AlephError> {
+    async fn apply_decay(&self, policy: &GraphDecayPolicy, workspace: &str) -> Result<DecayStats, AlephError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -228,7 +231,8 @@ impl GraphStore for LanceMemoryBackend {
         let mut stats = DecayStats::default();
 
         // --- Decay nodes ---
-        let all_nodes = scan_nodes(&self.nodes_table, None, None).await?;
+        let ws_filter = format!("workspace = '{}'", workspace);
+        let all_nodes = scan_nodes(&self.nodes_table, Some(&ws_filter), None).await?;
         let mut nodes_to_prune: Vec<String> = Vec::new();
         let mut nodes_to_update: Vec<GraphNode> = Vec::new();
 
@@ -267,7 +271,7 @@ impl GraphStore for LanceMemoryBackend {
         }
 
         // --- Decay edges ---
-        let all_edges = scan_edges(&self.edges_table, None, None).await?;
+        let all_edges = scan_edges(&self.edges_table, Some(&ws_filter), None).await?;
         let mut edges_to_prune: Vec<String> = Vec::new();
         let mut edges_to_update: Vec<GraphEdge> = Vec::new();
 
@@ -370,9 +374,9 @@ mod tests {
         let (_tmp, backend) = create_test_backend().await;
         let node = make_test_node("gn-001", "Rust", "language");
 
-        backend.upsert_node(&node).await.unwrap();
+        backend.upsert_node(&node, "default").await.unwrap();
 
-        let retrieved = backend.get_node("gn-001").await.unwrap();
+        let retrieved = backend.get_node("gn-001", "default").await.unwrap();
         assert!(retrieved.is_some());
         let retrieved = retrieved.unwrap();
         assert_eq!(retrieved.name, "Rust");
@@ -383,15 +387,15 @@ mod tests {
     async fn test_upsert_node_updates_existing() {
         let (_tmp, backend) = create_test_backend().await;
         let node = make_test_node("gn-001", "Rust", "language");
-        backend.upsert_node(&node).await.unwrap();
+        backend.upsert_node(&node, "default").await.unwrap();
 
         // Update name
         let mut updated_node = node.clone();
         updated_node.name = "Rust Lang".to_string();
         updated_node.aliases = vec!["rust-lang".to_string()];
-        backend.upsert_node(&updated_node).await.unwrap();
+        backend.upsert_node(&updated_node, "default").await.unwrap();
 
-        let retrieved = backend.get_node("gn-001").await.unwrap().unwrap();
+        let retrieved = backend.get_node("gn-001", "default").await.unwrap().unwrap();
         assert_eq!(retrieved.name, "Rust Lang");
         assert_eq!(retrieved.aliases, vec!["rust-lang".to_string()]);
     }
@@ -401,10 +405,10 @@ mod tests {
         let (_tmp, backend) = create_test_backend().await;
         let edge = make_test_edge("ge-001", "gn-001", "gn-002", "uses", "app:test");
 
-        backend.upsert_edge(&edge).await.unwrap();
+        backend.upsert_edge(&edge, "default").await.unwrap();
 
         let edges = backend
-            .get_edges_for_node("gn-001", None)
+            .get_edges_for_node("gn-001", None, "default")
             .await
             .unwrap();
         assert_eq!(edges.len(), 1);
@@ -421,20 +425,20 @@ mod tests {
         let edge2 = make_test_edge("ge-002", "gn-001", "gn-003", "knows", "ctx-b");
         let edge3 = make_test_edge("ge-003", "gn-004", "gn-005", "works_on", "ctx-a");
 
-        backend.upsert_edge(&edge1).await.unwrap();
-        backend.upsert_edge(&edge2).await.unwrap();
-        backend.upsert_edge(&edge3).await.unwrap();
+        backend.upsert_edge(&edge1, "default").await.unwrap();
+        backend.upsert_edge(&edge2, "default").await.unwrap();
+        backend.upsert_edge(&edge3, "default").await.unwrap();
 
         // Get all edges for gn-001
         let edges = backend
-            .get_edges_for_node("gn-001", None)
+            .get_edges_for_node("gn-001", None, "default")
             .await
             .unwrap();
         assert_eq!(edges.len(), 2);
 
         // Get edges for gn-001 in context ctx-a only
         let edges_ctx = backend
-            .get_edges_for_node("gn-001", Some("ctx-a"))
+            .get_edges_for_node("gn-001", Some("ctx-a"), "default")
             .await
             .unwrap();
         assert_eq!(edges_ctx.len(), 1);
@@ -442,7 +446,7 @@ mod tests {
 
         // Get edges for gn-005 (appears as to_id)
         let edges_to = backend
-            .get_edges_for_node("gn-005", None)
+            .get_edges_for_node("gn-005", None, "default")
             .await
             .unwrap();
         assert_eq!(edges_to.len(), 1);
@@ -457,24 +461,24 @@ mod tests {
         let edge2 = make_test_edge("ge-002", "gn-001", "gn-003", "knows", "ctx-a");
         let edge3 = make_test_edge("ge-003", "gn-001", "gn-004", "works_on", "ctx-b");
 
-        backend.upsert_edge(&edge1).await.unwrap();
-        backend.upsert_edge(&edge2).await.unwrap();
-        backend.upsert_edge(&edge3).await.unwrap();
+        backend.upsert_edge(&edge1, "default").await.unwrap();
+        backend.upsert_edge(&edge2, "default").await.unwrap();
+        backend.upsert_edge(&edge3, "default").await.unwrap();
 
         let count_a = backend
-            .count_edges_in_context("gn-001", "ctx-a")
+            .count_edges_in_context("gn-001", "ctx-a", "default")
             .await
             .unwrap();
         assert_eq!(count_a, 2);
 
         let count_b = backend
-            .count_edges_in_context("gn-001", "ctx-b")
+            .count_edges_in_context("gn-001", "ctx-b", "default")
             .await
             .unwrap();
         assert_eq!(count_b, 1);
 
         let count_none = backend
-            .count_edges_in_context("gn-001", "ctx-nonexistent")
+            .count_edges_in_context("gn-001", "ctx-nonexistent", "default")
             .await
             .unwrap();
         assert_eq!(count_none, 0);
@@ -498,15 +502,15 @@ mod tests {
         recent_node.decay_score = 1.0;
         recent_node.updated_at = now;
 
-        backend.upsert_node(&old_node).await.unwrap();
-        backend.upsert_node(&recent_node).await.unwrap();
+        backend.upsert_node(&old_node, "default").await.unwrap();
+        backend.upsert_node(&recent_node, "default").await.unwrap();
 
         // Create an old edge (should be pruned)
         let mut old_edge = make_test_edge("ge-old", "gn-old", "gn-recent", "mentions", "ctx");
         old_edge.decay_score = 0.15;
         old_edge.updated_at = 1600000000;
 
-        backend.upsert_edge(&old_edge).await.unwrap();
+        backend.upsert_edge(&old_edge, "default").await.unwrap();
 
         let policy = GraphDecayPolicy {
             node_decay_per_day: 0.02,
@@ -514,16 +518,16 @@ mod tests {
             min_score: 0.1,
         };
 
-        let stats = backend.apply_decay(&policy).await.unwrap();
+        let stats = backend.apply_decay(&policy, "default").await.unwrap();
 
         // Old node and edge should have been pruned
         assert!(stats.nodes_pruned >= 1, "expected at least 1 node pruned, got {}", stats.nodes_pruned);
         assert!(stats.edges_pruned >= 1, "expected at least 1 edge pruned, got {}", stats.edges_pruned);
 
         // Old node should be gone
-        assert!(backend.get_node("gn-old").await.unwrap().is_none());
+        assert!(backend.get_node("gn-old", "default").await.unwrap().is_none());
 
         // Recent node should still exist
-        assert!(backend.get_node("gn-recent").await.unwrap().is_some());
+        assert!(backend.get_node("gn-recent", "default").await.unwrap().is_some());
     }
 }
