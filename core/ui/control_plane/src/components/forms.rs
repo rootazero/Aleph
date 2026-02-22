@@ -32,11 +32,11 @@ pub fn SettingsSection(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <div class="bg-slate-900/50 backdrop-blur-sm border border-slate-800 rounded-xl p-6">
+        <div class="bg-surface-raised border border-border rounded-xl p-6">
             <div class="mb-4">
-                <h2 class="text-xl font-semibold text-slate-200">{title}</h2>
+                <h2 class="text-xl font-semibold text-text-primary">{title}</h2>
                 {description.map(|desc| view! {
-                    <p class="text-sm text-slate-400 mt-1">{desc}</p>
+                    <p class="text-sm text-text-secondary mt-1">{desc}</p>
                 })}
             </div>
             <div class="space-y-4">
@@ -72,12 +72,12 @@ pub fn FormField(
 ) -> impl IntoView {
     view! {
         <div class="space-y-2">
-            <label class="block text-sm font-medium text-slate-300">
+            <label class="block text-sm font-medium text-text-secondary">
                 {label}
             </label>
             {children()}
             {help_text.map(|text| view! {
-                <p class="text-xs text-slate-500">{text}</p>
+                <p class="text-xs text-text-tertiary">{text}</p>
             })}
         </div>
     }
@@ -114,7 +114,7 @@ pub fn TextInput(
             on:input=move |ev| on_change(event_target_value(&ev))
             placeholder=placeholder.unwrap_or("")
             class=format!(
-                "w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 {}",
+                "w-full px-3 py-2 bg-surface-raised border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary {}",
                 font_class
             )
         />
@@ -139,7 +139,7 @@ pub fn SelectInput(
         <select
             prop:value=move || value.get()
             on:change=move |ev| on_change(event_target_value(&ev))
-            class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            class="w-full px-3 py-2 bg-surface-raised border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
         >
             {options.into_iter().map(|(val, label)| view! {
                 <option value=val>{label}</option>
@@ -190,7 +190,7 @@ pub fn NumberInput(
                                 on_change(v);
                             }
                         }
-                        class="flex-1 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                        class="flex-1 h-2 bg-border rounded-lg appearance-none cursor-pointer accent-primary"
                     />
                 }.into_any()
             } else {
@@ -208,10 +208,10 @@ pub fn NumberInput(
                             on_change(v);
                         }
                     }
-                    class="w-20 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-slate-200 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    class="w-20 px-2 py-1 bg-surface-raised border border-border rounded text-text-primary text-sm text-right focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                 />
                 {suffix.map(|s| view! {
-                    <span class="text-sm text-slate-400">{s}</span>
+                    <span class="text-sm text-text-secondary">{s}</span>
                 })}
             </div>
         </div>
@@ -242,10 +242,10 @@ pub fn SwitchInput(
                     on:change=move |ev| on_change(event_target_checked(&ev))
                     class="sr-only peer"
                 />
-                <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                <div class="w-11 h-6 bg-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
             </div>
             {label.map(|l| view! {
-                <span class="text-sm text-slate-300">{l}</span>
+                <span class="text-sm text-text-secondary">{l}</span>
             })}
         </label>
     }
@@ -262,7 +262,7 @@ pub fn ErrorMessage(
     message: &'static str,
 ) -> impl IntoView {
     view! {
-        <div class="p-4 bg-red-900/20 border border-red-500/50 rounded-lg text-red-400 text-sm">
+        <div class="p-4 bg-danger-subtle border border-danger/30 rounded-lg text-danger text-sm">
             {message}
         </div>
     }
@@ -276,7 +276,7 @@ pub fn ErrorMessageDynamic(
 ) -> impl IntoView {
     view! {
         {move || error.get().map(|msg| view! {
-            <div class="p-4 bg-red-900/20 border border-red-500/50 rounded-lg text-red-400 text-sm">
+            <div class="p-4 bg-danger-subtle border border-danger/30 rounded-lg text-danger text-sm">
                 {msg}
             </div>
         })}
@@ -294,7 +294,7 @@ pub fn SuccessMessage(
     message: &'static str,
 ) -> impl IntoView {
     view! {
-        <div class="p-4 bg-green-900/20 border border-green-500/50 rounded-lg text-green-400 text-sm">
+        <div class="p-4 bg-success-subtle border border-success/30 rounded-lg text-success text-sm">
             {message}
         </div>
     }
@@ -322,7 +322,7 @@ pub fn SaveButton(
         <button
             on:click=move |_| on_click()
             disabled=move || loading.get()
-            class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            class="px-4 py-2 bg-primary text-text-inverse rounded-lg hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
             {move || if loading.get() {
                 "Saving..."
