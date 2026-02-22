@@ -89,7 +89,9 @@ impl PiiEngine {
     /// Initialize the global PII engine
     pub fn init(config: PrivacyConfig) {
         let engine = Arc::new(RwLock::new(Self::new(config)));
-        let _ = PII_ENGINE.set(engine);
+        if PII_ENGINE.set(engine).is_err() {
+            warn!("PiiEngine already initialized, ignoring duplicate init call");
+        }
     }
 
     /// Get the global PII engine (returns None if not initialized)
