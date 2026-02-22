@@ -108,10 +108,10 @@ impl TraceNode {
     /// Get CSS class for status
     pub fn status_class(&self) -> &'static str {
         match self.status {
-            TraceStatus::Pending => "bg-gray-700",
-            TraceStatus::InProgress => "bg-blue-900/30",
-            TraceStatus::Success => "bg-green-900/30",
-            TraceStatus::Failed => "bg-red-900/30",
+            TraceStatus::Pending => "bg-surface-sunken",
+            TraceStatus::InProgress => "bg-info-subtle",
+            TraceStatus::Success => "bg-success-subtle",
+            TraceStatus::Failed => "bg-danger-subtle",
         }
     }
 
