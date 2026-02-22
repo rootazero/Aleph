@@ -69,10 +69,10 @@ pub fn Home() -> impl IntoView {
 
             // Stats Grid
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 pt-8">
-                <StatCard label="Active Tasks" value=Signal::derive(move || "—".to_string()) color="text-primary">
+                <StatCard label="Active Tasks" value=Signal::derive(move || "—".to_string()) icon_color="text-primary" icon_bg="bg-primary-subtle">
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                 </StatCard>
-                <StatCard label="CPU Usage" value=Signal::derive(move || "—".to_string()) color="text-success">
+                <StatCard label="CPU Usage" value=Signal::derive(move || "—".to_string()) icon_color="text-success" icon_bg="bg-success-subtle">
                     <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
                     <rect x="9" y="9" width="6" height="6" />
                     <line x1="9" y1="1" x2="9" y2="4" />
@@ -82,11 +82,11 @@ pub fn Home() -> impl IntoView {
                     memory_stats.get()
                         .map(|(count, _)| format!("{} facts", count))
                         .unwrap_or_else(|| "Loading...".to_string())
-                }) color="text-primary">
+                }) icon_color="text-info" icon_bg="bg-info-subtle">
                     <ellipse cx="12" cy="5" rx="9" ry="3" />
                     <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
                 </StatCard>
-                <StatCard label="Gateway Latency" value=Signal::derive(move || "—".to_string()) color="text-warning">
+                <StatCard label="Gateway Latency" value=Signal::derive(move || "—".to_string()) icon_color="text-warning" icon_bg="bg-warning-subtle">
                     <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
                 </StatCard>
             </div>
@@ -142,14 +142,15 @@ pub fn Home() -> impl IntoView {
 fn StatCard(
     label: &'static str,
     value: Signal<String>,
-    color: &'static str,
+    icon_color: &'static str,
+    icon_bg: &'static str,
     children: Children,
 ) -> impl IntoView {
     view! {
-        <div class="bg-surface-raised border border-border p-6 rounded-2xl hover:border-border-strong transition-colors group">
+        <div class="bg-surface-raised border border-border p-6 rounded-2xl hover:border-border-strong hover:shadow-sm transition-all duration-200 group">
             <div class="flex items-start justify-between mb-4">
-                <div class=format!("p-2 rounded-lg bg-surface-sunken {}", color)>
-                    <svg width="24" height="24" attr:class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <div class=format!("p-2.5 rounded-xl {} {}", icon_bg, icon_color)>
+                    <svg width="24" height="24" attr:class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         {children()}
                     </svg>
                 </div>

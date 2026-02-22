@@ -68,7 +68,7 @@ pub fn Sidebar() -> impl IntoView {
 
     view! {
         <aside class=move || {
-            let base = "border-r border-border bg-surface-raised flex flex-col transition-all duration-300";
+            let base = "border-r border-border bg-sidebar flex flex-col transition-all duration-300";
             match mode() {
                 SidebarMode::Narrow => format!("{} w-16 items-center", base),
                 SidebarMode::Wide => format!("{} w-64", base),
