@@ -70,7 +70,7 @@ async fn test_full_memory_lifecycle() {
         updated_at: 1700000000,
             workspace: "default".to_string(),
     };
-    backend.upsert_node(&node).await.unwrap();
+    backend.upsert_node(&node, "default").await.unwrap();
 
     // Now build indexes — all tables have data
     backend.ensure_indexes().await.unwrap();
@@ -106,7 +106,7 @@ async fn test_full_memory_lifecycle() {
     // -----------------------------------------------------------------------
     // 5. Graph operations — verify node retrieval
     // -----------------------------------------------------------------------
-    let retrieved = backend.get_node("aleph").await.unwrap();
+    let retrieved = backend.get_node("aleph", "default").await.unwrap();
     assert!(retrieved.is_some(), "node 'aleph' should exist");
     let retrieved_node = retrieved.unwrap();
     assert_eq!(retrieved_node.name, "Aleph");
@@ -181,7 +181,7 @@ async fn test_ensure_indexes_idempotent() {
         updated_at: 0,
             workspace: "default".to_string(),
     };
-    backend.upsert_node(&node).await.unwrap();
+    backend.upsert_node(&node, "default").await.unwrap();
 
     let mem = MemoryEntry::with_embedding(
         "mem-test".to_string(),

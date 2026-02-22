@@ -131,9 +131,9 @@ impl MemoryBrowseTool {
     }
 
     async fn handle_ls(&self, path: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
-        // Old: db.list_path_children(path) → New: db.list_by_path(path, &NamespaceScope::Owner)
+        // Old: db.list_path_children(path) → New: db.list_by_path(path, &NamespaceScope::Owner, "default")
         let children: Vec<StorePathEntry> = self.database
-            .list_by_path(path, &NamespaceScope::Owner)
+            .list_by_path(path, &NamespaceScope::Owner, "default")
             .await
             .map_err(|e| ToolError::Execution(format!("Failed to list path: {}", e)))?;
 
@@ -163,8 +163,8 @@ impl MemoryBrowseTool {
 
     async fn handle_read(&self, path: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
         // First try L1 overview (fact with FactSource::Summary at this path)
-        // Old: db.get_l1_overview(path) → New: db.get_by_path(path, &NamespaceScope::Owner)
-        if let Ok(Some(l1)) = self.database.get_by_path(path, &NamespaceScope::Owner).await {
+        // Old: db.get_l1_overview(path) → New: db.get_by_path(path, &NamespaceScope::Owner, "default")
+        if let Ok(Some(l1)) = self.database.get_by_path(path, &NamespaceScope::Owner, "default").await {
             if l1.fact_source == FactSource::Summary {
                 return Ok(MemoryBrowseOutput {
                     action: "read".to_string(),

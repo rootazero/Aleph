@@ -335,7 +335,7 @@ impl DreamDaemon {
         let since = run_start - DEFAULT_LOOKBACK_HOURS * 3600;
         let memories = self
             .database
-            .get_memories_since(since, &crate::memory::namespace::NamespaceScope::Owner)
+            .get_memories_since(since, &crate::memory::namespace::NamespaceScope::Owner, "default")
             .await?;
         // Limit to max memories
         let memories: Vec<_> = memories.into_iter().take(DEFAULT_MAX_MEMORIES as usize).collect();

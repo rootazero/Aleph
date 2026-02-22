@@ -219,6 +219,7 @@ impl MemorySearchTool {
                 &*self.database,
                 &cluster.path,
                 &crate::memory::NamespaceScope::Owner,
+                "default",
             ).await {
                 if l1.fact_source == crate::memory::FactSource::Summary {
                     cluster.l1_overview = Some(l1.content);

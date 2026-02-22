@@ -229,11 +229,12 @@ impl SessionStore for LanceMemoryBackend {
         &self,
         since_timestamp: i64,
         namespace: &NamespaceScope,
+        workspace: &str,
     ) -> Result<Vec<MemoryEntry>, AlephError> {
         let ns_value = namespace.to_namespace_value();
         let filter = format!(
-            "timestamp >= {} AND namespace = '{}'",
-            since_timestamp, ns_value
+            "timestamp >= {} AND namespace = '{}' AND workspace = '{}'",
+            since_timestamp, ns_value, workspace
         );
 
         let mut entries =
@@ -495,7 +496,7 @@ mod tests {
             updated_at: 1700000000,
             workspace: "default".to_string(),
         };
-        backend.upsert_node(&node).await.unwrap();
+        backend.upsert_node(&node, "default").await.unwrap();
 
         let stats = backend.get_stats().await.unwrap();
         assert_eq!(stats.total_memories, 1);
