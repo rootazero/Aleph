@@ -24,7 +24,7 @@ fn test_memory_config_serialization() {
     let mem_config = MemoryConfig::default();
     let json = serde_json::to_string(&mem_config).unwrap();
     assert!(json.contains("bge-small-zh-v1.5"));
-    assert!(json.contains("sqlite-vec"));
+    assert!(json.contains("lancedb"));
     assert!(json.contains("dreaming"));
 }
 
