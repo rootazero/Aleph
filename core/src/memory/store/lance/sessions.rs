@@ -493,6 +493,7 @@ mod tests {
             decay_score: 1.0,
             created_at: 1700000000,
             updated_at: 1700000000,
+            workspace: "default".to_string(),
         };
         backend.upsert_node(&node).await.unwrap();
 

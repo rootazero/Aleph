@@ -182,6 +182,8 @@ impl ToolIndexCoordinator {
                 content_hash: String::new(),
                 parent_path: String::new(),
                 embedding_model: String::new(),
+            namespace: "owner".to_string(),
+            workspace: "default".to_string(),
             };
 
             self.db.insert_fact(&fact).await?;

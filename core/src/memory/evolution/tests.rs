@@ -40,6 +40,8 @@ fn create_test_fact(id: &str, content: &str, confidence: f32) -> MemoryFact {
         content_hash: String::new(),
         parent_path: String::new(),
         embedding_model: String::new(),
+            namespace: "owner".to_string(),
+            workspace: "default".to_string(),
     }
 }
 

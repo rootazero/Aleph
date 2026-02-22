@@ -40,6 +40,8 @@ impl SubAgentRunFact {
             content_hash: String::new(),
             parent_path: String::new(),
             embedding_model: String::new(),
+            namespace: "owner".to_string(),
+            workspace: "default".to_string(),
         }
     }
 
