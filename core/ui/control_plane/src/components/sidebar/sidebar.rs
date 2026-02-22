@@ -42,7 +42,7 @@ pub fn Sidebar() -> impl IntoView {
 
     view! {
         <aside class=move || {
-            let base = "border-r border-slate-800 bg-slate-900/50 backdrop-blur-xl flex flex-col transition-all duration-300";
+            let base = "border-r border-border bg-surface-raised flex flex-col transition-all duration-300";
             match mode() {
                 SidebarMode::Narrow => format!("{} w-16 items-center", base),
                 SidebarMode::Wide => format!("{} w-64", base),
@@ -80,8 +80,8 @@ pub fn Sidebar() -> impl IntoView {
             </nav>
 
             // Bottom Actions
-            <div class="p-4 border-t border-slate-800">
-                <A href="/settings" attr:class="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-all duration-200">
+            <div class="p-4 border-t border-border">
+                <A href="/settings" attr:class="flex items-center gap-3 px-3 py-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-surface-sunken transition-all duration-200">
                     <svg width="20" height="20" attr:class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="3" />
                         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
@@ -102,8 +102,8 @@ fn LogoSection(mode: impl Fn() -> SidebarMode + 'static + Copy + Send) -> impl I
                 SidebarMode::Narrow => "p-4 flex items-center justify-center",
             }
         }>
-            <div class="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/20">
-                <span class="text-white font-bold text-xl">"A"</span>
+            <div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+                <span class="text-text-inverse font-bold text-xl">"A"</span>
             </div>
             {move || match mode() {
                 SidebarMode::Wide => Some(view! {
