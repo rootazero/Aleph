@@ -472,7 +472,7 @@ func (w *WAClient) extractAndDownloadMedia(v *events.Message) *MediaPayload {
 	}
 
 	// Download the media bytes from WhatsApp servers
-	data, err := w.client.Download(mediaMsg)
+	data, err := w.client.Download(context.Background(), mediaMsg)
 	if err != nil {
 		log.Printf("WARNING: failed to download media (%s): %v", mimeType, err)
 		// Return metadata without data so the Rust side knows media was present
