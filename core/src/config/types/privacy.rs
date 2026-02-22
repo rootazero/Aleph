@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// Action to take when PII of a specific category is detected
 ///
-/// - `Block`: Reject the message entirely (default for most categories)
+/// - `Block`: Replace detected PII with a placeholder before sending to API (default for most categories)
 /// - `Warn`: Allow the message but emit a warning event
 /// - `Off`: No action, PII passes through unfiltered
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

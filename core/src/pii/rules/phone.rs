@@ -49,10 +49,18 @@ impl PhoneRule {
         false
     }
 
-    /// Check if match is in a timestamp context (surrounding 80 chars)
+    /// Check if match is in a timestamp context (surrounding ~80 chars)
     fn is_timestamp_context(text: &str, start: usize) -> bool {
-        let ctx_start = start.saturating_sub(40);
-        let ctx_end = (start + 40).min(text.len());
+        // Snap to valid UTF-8 character boundaries to avoid panicking
+        // on multi-byte characters (e.g. Chinese text).
+        let mut ctx_start = start.saturating_sub(40);
+        while ctx_start > 0 && !text.is_char_boundary(ctx_start) {
+            ctx_start -= 1;
+        }
+        let mut ctx_end = (start + 40).min(text.len());
+        while ctx_end < text.len() && !text.is_char_boundary(ctx_end) {
+            ctx_end += 1;
+        }
         let context = &text[ctx_start..ctx_end];
         timestamp_context_regex().is_match(context)
     }
@@ -192,5 +200,22 @@ mod tests {
         // 10x, 11x, 12x are not valid Chinese mobile prefixes
         let matches = rule().detect("Number: 10812345678");
         assert_eq!(matches.len(), 0);
+    }
+
+    // === UTF-8 safety: Chinese text ===
+
+    #[test]
+    fn test_detect_phone_in_chinese_text() {
+        let matches = rule().detect("请联系 13812345678 了解详情");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].matched_text, "13812345678");
+    }
+
+    #[test]
+    fn test_no_panic_on_chinese_timestamp_context() {
+        // Chinese characters are multi-byte, ensure no UTF-8 slicing panic
+        let matches = rule().detect("时间戳是 13891680001 的记录");
+        // Whether it matches or not, it should NOT panic
+        let _ = matches;
     }
 }
