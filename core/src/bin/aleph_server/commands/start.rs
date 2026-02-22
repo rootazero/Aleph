@@ -46,6 +46,12 @@ use alephcore::gateway::security::{TokenManager, PairingManager};
 use alephcore::gateway::device_store::DeviceStore;
 #[cfg(all(feature = "gateway", target_os = "macos"))]
 use alephcore::gateway::channels::imessage::{IMessageChannel, IMessageConfig};
+#[cfg(all(feature = "gateway", feature = "telegram"))]
+use alephcore::gateway::channels::telegram::{TelegramChannel, TelegramConfig};
+#[cfg(all(feature = "gateway", feature = "discord"))]
+use alephcore::gateway::channels::discord::{DiscordChannel, DiscordConfig};
+#[cfg(all(feature = "gateway", feature = "whatsapp"))]
+use alephcore::gateway::channels::whatsapp::{WhatsAppChannel, WhatsAppConfig};
 #[cfg(feature = "gateway")]
 use alephcore::executor::BuiltinToolRegistry;
 #[cfg(feature = "gateway")]
@@ -573,6 +579,39 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // Register Telegram channel
+    #[cfg(feature = "telegram")]
+    {
+        let telegram_config = TelegramConfig::default(); // Will need actual token in real use
+        let telegram_channel = TelegramChannel::new("telegram", telegram_config);
+        let channel_id = channel_registry.register(Box::new(telegram_channel)).await;
+        if !args.daemon {
+            println!("Registered channel: {} (Telegram)", channel_id);
+        }
+    }
+
+    // Register Discord channel
+    #[cfg(feature = "discord")]
+    {
+        let discord_config = DiscordConfig::default();
+        let discord_channel = DiscordChannel::new("discord", discord_config);
+        let channel_id = channel_registry.register(Box::new(discord_channel)).await;
+        if !args.daemon {
+            println!("Registered channel: {} (Discord)", channel_id);
+        }
+    }
+
+    // Register WhatsApp channel
+    #[cfg(feature = "whatsapp")]
+    {
+        let whatsapp_config = WhatsAppConfig::default();
+        let whatsapp_channel = WhatsAppChannel::new("whatsapp", whatsapp_config);
+        let channel_id = channel_registry.register(Box::new(whatsapp_channel)).await;
+        if !args.daemon {
+            println!("Registered channel: {} (WhatsApp)", channel_id);
+        }
+    }
+
     // Register channel handlers
     register_channel_handlers(&mut server, &channel_registry);
 
@@ -847,6 +886,13 @@ fn register_channel_handlers(
     server.handlers_mut().register("channel.stop", move |req| {
         let cr = cr_stop.clone();
         async move { channel_handlers::handle_stop(req, cr).await }
+    });
+
+    // channel.pairing_data
+    let cr_pairing = channel_registry.clone();
+    server.handlers_mut().register("channel.pairing_data", move |req| {
+        let cr = cr_pairing.clone();
+        async move { channel_handlers::handle_pairing_data(req, cr).await }
     });
 
     // channel.send

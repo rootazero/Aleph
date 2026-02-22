@@ -5,6 +5,7 @@ use crate::views::home::Home;
 use crate::views::system_status::SystemStatus;
 use crate::views::agent_trace::AgentTrace;
 use crate::views::memory::Memory;
+use crate::views::social_connections::SocialConnections;
 use crate::components::sidebar::Sidebar;
 use crate::context::DashboardContext;
 
@@ -28,6 +29,7 @@ pub fn App() -> impl IntoView {
                             <Route path=path!("/status") view=SystemStatus />
                             <Route path=path!("/trace") view=AgentTrace />
                             <Route path=path!("/memory") view=Memory />
+                            <Route path=path!("/social") view=SocialConnections />
                         </Routes>
                     </main>
                 </Router>

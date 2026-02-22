@@ -213,6 +213,47 @@ pub async fn handle_stop(
     }
 }
 
+/// Handle channel.pairing_data RPC request
+///
+/// Returns pairing information (QR code or code) for a channel.
+pub async fn handle_pairing_data(
+    request: JsonRpcRequest,
+    registry: Arc<ChannelRegistry>,
+) -> JsonRpcResponse {
+    let channel_id = match &request.params {
+        Some(Value::Object(map)) => map.get("channel_id").and_then(|v| v.as_str()),
+        _ => None,
+    };
+
+    let channel_id = match channel_id {
+        Some(id) => ChannelId::new(id),
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing channel_id");
+        }
+    };
+
+    debug!("Handling channel.pairing_data for {}", channel_id);
+
+    match registry.get(&channel_id).await {
+        Some(channel_arc) => {
+            let channel = channel_arc.read().await;
+            match channel.get_pairing_data().await {
+                Ok(pairing) => JsonRpcResponse::success(request.id, json!(pairing)),
+                Err(e) => JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to get pairing data: {}", e),
+                ),
+            }
+        }
+        None => JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Channel not found: {}", channel_id),
+        ),
+    }
+}
+
 /// Handle channel.send RPC request
 ///
 /// Sends a message through a specific channel.

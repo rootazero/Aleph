@@ -19,8 +19,10 @@ control-plane = ["gateway", "dep:rust-embed"]
 telegram = ["dep:teloxide", "gateway"]
 # Discord channel support
 discord = ["dep:serenity", "gateway"]
+# WhatsApp channel support
+whatsapp = ["gateway"]
 # All messaging channels
-all-channels = ["telegram", "discord"]
+all-channels = ["telegram", "discord", "whatsapp"]
 # Cron job scheduling
 cron = ["dep:cron", "gateway"]
 # Browser control via CDP
