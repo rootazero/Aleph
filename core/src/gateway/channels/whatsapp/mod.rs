@@ -21,6 +21,7 @@
 //! phone_number = "+1234567890"
 //! ```
 
+pub mod bridge_manager;
 pub mod bridge_protocol;
 pub mod config;
 pub mod pairing;
