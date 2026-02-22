@@ -12,6 +12,7 @@ use lancedb::Table;
 use crate::error::AlephError;
 
 pub mod arrow_convert;
+pub mod facts;
 pub mod schema;
 
 /// LanceDB-backed memory storage backend.
