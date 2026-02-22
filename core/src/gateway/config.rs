@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 use super::agent_instance::AgentInstanceConfig;
+use crate::config::PrivacyConfig;
 use crate::dispatcher::ExecutionPolicy;
 
 /// Root Gateway configuration
@@ -41,6 +42,10 @@ pub struct GatewayConfig {
     /// Tool routing configuration for Server-Client architecture
     #[serde(default)]
     pub tool_routing: ToolRoutingConfig,
+
+    /// Privacy and PII filtering configuration
+    #[serde(default)]
+    pub privacy: PrivacyConfig,
 }
 
 impl Default for GatewayConfig {
@@ -56,6 +61,7 @@ impl Default for GatewayConfig {
             sandbox: SandboxConfig::default(),
             tools: ToolsConfig::default(),
             tool_routing: ToolRoutingConfig::default(),
+            privacy: PrivacyConfig::default(),
         }
     }
 }
