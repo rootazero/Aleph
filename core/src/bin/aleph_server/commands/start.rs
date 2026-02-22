@@ -82,7 +82,7 @@ use crate::server_init::{serve_webchat, handle_run_with_engine};
 pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::server::GatewayConfig as ServerConfig;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-    use tracing::{info, warn};
+    use tracing::{debug, info, warn};
 
     // Handle daemon mode
     if args.daemon {
@@ -542,8 +542,48 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Set guest session manager on server for disconnect cleanup
     server.set_guest_session_manager(guest_session_manager.clone());
 
+    // Load application config (Config) and integrate secret vault
+    let mut app_config_inner = alephcore::Config::load().unwrap_or_default();
+
+    // Secret vault integration: migrate plaintext API keys and resolve secret references
+    {
+        use alephcore::secrets::{SecretVault, resolve_master_key};
+        use alephcore::secrets::migration::{needs_migration, migrate_api_keys, save_migrated_config};
+        use alephcore::secrets::vault::resolve_provider_secrets;
+
+        if let Ok(master_key) = resolve_master_key() {
+            let vault_path = SecretVault::default_path();
+            match SecretVault::open(&vault_path, &master_key) {
+                Ok(mut vault) => {
+                    // Run migration if needed
+                    if needs_migration(&app_config_inner) {
+                        match migrate_api_keys(&mut app_config_inner, &mut vault) {
+                            Ok(result) => {
+                                if result.migrated_count > 0 {
+                                    let _ = save_migrated_config(&app_config_inner);
+                                    info!(
+                                        count = result.migrated_count,
+                                        "Migrated plaintext API keys to vault"
+                                    );
+                                }
+                            }
+                            Err(e) => warn!(error = %e, "Failed to migrate API keys to vault"),
+                        }
+                    }
+                    // Resolve secret references
+                    if let Err(e) = resolve_provider_secrets(&mut app_config_inner, &vault) {
+                        warn!(error = %e, "Failed to resolve provider secrets from vault");
+                    }
+                }
+                Err(e) => warn!(error = %e, "Failed to open secret vault"),
+            }
+        } else {
+            debug!("ALEPH_MASTER_KEY not set, secret vault disabled");
+        }
+    }
+
     // Register config handlers (for ConfigManager SDK)
-    let app_config = Arc::new(tokio::sync::RwLock::new(alephcore::Config::default()));
+    let app_config = Arc::new(tokio::sync::RwLock::new(app_config_inner));
     register_config_handlers(&mut server, app_config, event_bus.clone(), device_store.clone());
 
     if !args.daemon {
