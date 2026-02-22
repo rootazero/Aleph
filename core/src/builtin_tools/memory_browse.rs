@@ -35,6 +35,9 @@ pub struct MemoryBrowseArgs {
     /// Glob pattern (only used with glob action)
     #[serde(default)]
     pub pattern: Option<String>,
+    /// Workspace to browse in (defaults to "default")
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 /// A single directory entry
@@ -102,6 +105,8 @@ impl MemoryBrowseTool {
     ) -> std::result::Result<MemoryBrowseOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
+        let workspace = args.workspace.as_deref().unwrap_or("default");
+
         // Validate path
         if !args.path.starts_with("aleph://") {
             return Err(ToolError::Execution(
@@ -118,11 +123,11 @@ impl MemoryBrowseTool {
         notify_tool_start("memory_browse", &format!("{} {}", action_name, args.path));
 
         let output = match args.action {
-            BrowseAction::Ls => self.handle_ls(&args.path).await?,
-            BrowseAction::Read => self.handle_read(&args.path).await?,
+            BrowseAction::Ls => self.handle_ls(&args.path, workspace).await?,
+            BrowseAction::Read => self.handle_read(&args.path, workspace).await?,
             BrowseAction::Glob => {
                 let pattern = args.pattern.as_deref().unwrap_or("*");
-                self.handle_glob(&args.path, pattern).await?
+                self.handle_glob(&args.path, pattern, workspace).await?
             }
         };
 
@@ -130,10 +135,9 @@ impl MemoryBrowseTool {
         Ok(output)
     }
 
-    async fn handle_ls(&self, path: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
-        // Old: db.list_path_children(path) → New: db.list_by_path(path, &NamespaceScope::Owner, "default")
+    async fn handle_ls(&self, path: &str, workspace: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
         let children: Vec<StorePathEntry> = self.database
-            .list_by_path(path, &NamespaceScope::Owner, "default")
+            .list_by_path(path, &NamespaceScope::Owner, workspace)
             .await
             .map_err(|e| ToolError::Execution(format!("Failed to list path: {}", e)))?;
 
@@ -161,10 +165,9 @@ impl MemoryBrowseTool {
         })
     }
 
-    async fn handle_read(&self, path: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
+    async fn handle_read(&self, path: &str, workspace: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
         // First try L1 overview (fact with FactSource::Summary at this path)
-        // Old: db.get_l1_overview(path) → New: db.get_by_path(path, &NamespaceScope::Owner, "default")
-        if let Ok(Some(l1)) = self.database.get_by_path(path, &NamespaceScope::Owner, "default").await {
+        if let Ok(Some(l1)) = self.database.get_by_path(path, &NamespaceScope::Owner, workspace).await {
             if l1.fact_source == FactSource::Summary {
                 return Ok(MemoryBrowseOutput {
                     action: "read".to_string(),
@@ -190,7 +193,7 @@ impl MemoryBrowseTool {
         let all_facts = self.database.get_all_facts(false).await
             .map_err(|e| ToolError::Execution(format!("Failed to read path: {}", e)))?;
         let facts: Vec<_> = all_facts.into_iter()
-            .filter(|f| f.path.starts_with(path) && f.is_valid)
+            .filter(|f| f.path.starts_with(path) && f.is_valid && f.workspace == workspace)
             .collect();
 
         if facts.is_empty() {
@@ -241,13 +244,13 @@ impl MemoryBrowseTool {
         })
     }
 
-    async fn handle_glob(&self, path: &str, pattern: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
+    async fn handle_glob(&self, path: &str, pattern: &str, workspace: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
         // Old: db.get_facts_by_path_prefix(path) → New: get_all_facts + filter
         // TODO: Add get_facts_by_path_prefix to MemoryStore for efficiency
         let all_facts = self.database.get_all_facts(false).await
             .map_err(|e| ToolError::Execution(format!("Failed to glob: {}", e)))?;
         let path_facts: Vec<_> = all_facts.into_iter()
-            .filter(|f| f.path.starts_with(path) && f.is_valid)
+            .filter(|f| f.path.starts_with(path) && f.is_valid && f.workspace == workspace)
             .collect();
 
         let matches: Vec<GlobMatch> = path_facts.into_iter()
@@ -320,6 +323,7 @@ mod tests {
             action: BrowseAction::Ls,
             path: "aleph://user/".to_string(),
             pattern: None,
+            workspace: None,
         };
         let json = serde_json::to_string(&args).unwrap();
         assert!(json.contains("aleph://user/"));
