@@ -152,12 +152,12 @@ impl MemoryContext {
     // === Integration Test Helpers ===
 
     /// Create and store test database, embedder and config
-    pub fn setup_integration(&mut self, temp_dir: TempDir, _db_path: std::path::PathBuf) {
+    pub async fn setup_integration(&mut self, temp_dir: TempDir, _db_path: std::path::PathBuf) {
         // Create LanceDB backend (unified storage for both ingestion and retrieval)
         let lance_path = temp_dir.path().join("lance_db");
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
         let lance_db: MemoryBackend = Arc::new(
-            rt.block_on(LanceMemoryBackend::open_or_create(&lance_path))
+            LanceMemoryBackend::open_or_create(&lance_path)
+                .await
                 .expect("Failed to create LanceDB backend"),
         );
         self.temp_dir = Some(temp_dir);

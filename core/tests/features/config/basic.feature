@@ -18,7 +18,7 @@ Feature: Basic Configuration
     And the embedding_model should be "bge-small-zh-v1.5"
     And max_context_items should be 5
     And retention_days should be 90
-    And vector_db should be "sqlite-vec"
+    And vector_db should be "lancedb"
     And similarity_threshold should be 0.7
     And dreaming should be enabled
     And dreaming window_start should be "02:00"
