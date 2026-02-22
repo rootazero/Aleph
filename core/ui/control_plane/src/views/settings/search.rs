@@ -47,8 +47,8 @@ pub fn SearchView() -> impl IntoView {
     view! {
         <div class="p-6 space-y-6">
             <div>
-                <h1 class="text-2xl font-bold text-slate-900">"Search Settings"</h1>
-                <p class="mt-1 text-sm text-slate-600">
+                <h1 class="text-2xl font-bold text-text-primary">"Search Settings"</h1>
+                <p class="mt-1 text-sm text-text-tertiary">
                     "Configure search functionality and PII scrubbing"
                 </p>
             </div>
@@ -57,12 +57,12 @@ pub fn SearchView() -> impl IntoView {
                 if loading.get() {
                     view! {
                         <div class="flex items-center justify-center py-12">
-                            <div class="text-slate-500">"Loading..."</div>
+                            <div class="text-text-tertiary">"Loading..."</div>
                         </div>
                     }.into_any()
                 } else if let Some(err) = error.get() {
                     view! {
-                        <div class="p-4 bg-red-50 border border-red-200 rounded text-red-700">
+                        <div class="p-4 bg-danger-subtle border border-danger/20 rounded text-danger">
                             {err}
                         </div>
                     }.into_any()
@@ -122,8 +122,8 @@ fn BasicSettingsSection(config: RwSignal<SearchConfig>) -> impl IntoView {
     });
 
     view! {
-        <div class="bg-white rounded-lg border border-slate-200 p-6">
-            <h2 class="text-lg font-semibold text-slate-900 mb-4">"Basic Settings"</h2>
+        <div class="bg-surface-raised rounded-lg border border-border p-6">
+            <h2 class="text-lg font-semibold text-text-primary mb-4">"Basic Settings"</h2>
 
             <div class="space-y-4">
                 <label class="flex items-center space-x-3 cursor-pointer">
@@ -131,22 +131,22 @@ fn BasicSettingsSection(config: RwSignal<SearchConfig>) -> impl IntoView {
                         type="checkbox"
                         checked=move || enabled.get()
                         on:change=move |ev| enabled.set(event_target_checked(&ev))
-                        class="w-4 h-4 text-indigo-600 focus:ring-indigo-500 rounded"
+                        class="w-4 h-4 text-primary focus:ring-primary/30 rounded"
                     />
                     <div>
-                        <div class="font-medium text-slate-900">"Enable Search"</div>
-                        <div class="text-sm text-slate-500">"Allow AI to search the web"</div>
+                        <div class="font-medium text-text-primary">"Enable Search"</div>
+                        <div class="text-sm text-text-tertiary">"Allow AI to search the web"</div>
                     </div>
                 </label>
 
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Default Provider"
                     </label>
                     <select
                         prop:value=move || default_provider.get()
                         on:change=move |ev| default_provider.set(event_target_value(&ev))
-                        class="w-full px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        class="w-full px-3 py-2 border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary/30"
                     >
                         <option value="tavily">"Tavily"</option>
                         <option value="searxng">"SearXNG"</option>
@@ -159,7 +159,7 @@ fn BasicSettingsSection(config: RwSignal<SearchConfig>) -> impl IntoView {
 
                 <div>
                     <div class="flex items-center justify-between mb-2">
-                        <label class="block text-sm font-medium text-slate-700">
+                        <label class="block text-sm font-medium text-text-secondary">
                             "Max Results: " {move || max_results.get()}
                         </label>
                     </div>
@@ -174,13 +174,13 @@ fn BasicSettingsSection(config: RwSignal<SearchConfig>) -> impl IntoView {
                                 max_results.set(val);
                             }
                         }
-                        class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
                     />
                 </div>
 
                 <div>
                     <div class="flex items-center justify-between mb-2">
-                        <label class="block text-sm font-medium text-slate-700">
+                        <label class="block text-sm font-medium text-text-secondary">
                             "Timeout: " {move || timeout_seconds.get()} " seconds"
                         </label>
                     </div>
@@ -195,12 +195,12 @@ fn BasicSettingsSection(config: RwSignal<SearchConfig>) -> impl IntoView {
                                 timeout_seconds.set(val);
                             }
                         }
-                        class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
                     />
                 </div>
 
                 {move || save_error.get().map(|e| view! {
-                    <div class="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                    <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
                         {e}
                     </div>
                 })}
@@ -208,7 +208,7 @@ fn BasicSettingsSection(config: RwSignal<SearchConfig>) -> impl IntoView {
                 {move || {
                     if save_success.get() {
                         Some(view! {
-                            <div class="p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
                                 "Saved successfully"
                             </div>
                         })
@@ -220,7 +220,7 @@ fn BasicSettingsSection(config: RwSignal<SearchConfig>) -> impl IntoView {
                 <button
                     on:click=move |_| save_config_fn.with_value(|f| f())
                     disabled=move || saving.get()
-                    class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+                    class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
                 >
                     {move || if saving.get() { "Saving..." } else { "Save" }}
                 </button>
@@ -274,9 +274,9 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
     });
 
     view! {
-        <div class="bg-white rounded-lg border border-slate-200 p-6">
-            <h2 class="text-lg font-semibold text-slate-900 mb-4">"PII Scrubbing"</h2>
-            <p class="text-sm text-slate-600 mb-4">
+        <div class="bg-surface-raised rounded-lg border border-border p-6">
+            <h2 class="text-lg font-semibold text-text-primary mb-4">"PII Scrubbing"</h2>
+            <p class="text-sm text-text-tertiary mb-4">
                 "Automatically remove personally identifiable information from search results"
             </p>
 
@@ -286,24 +286,24 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                         type="checkbox"
                         checked=move || pii_enabled.get()
                         on:change=move |ev| pii_enabled.set(event_target_checked(&ev))
-                        class="w-4 h-4 text-indigo-600 focus:ring-indigo-500 rounded"
+                        class="w-4 h-4 text-primary focus:ring-primary/30 rounded"
                     />
                     <div>
-                        <div class="font-medium text-slate-900">"Enable PII Scrubbing"</div>
-                        <div class="text-sm text-slate-500">"Remove sensitive information from results"</div>
+                        <div class="font-medium text-text-primary">"Enable PII Scrubbing"</div>
+                        <div class="text-sm text-text-tertiary">"Remove sensitive information from results"</div>
                     </div>
                 </label>
 
-                <div class="ml-7 space-y-2 border-l-2 border-slate-200 pl-4">
+                <div class="ml-7 space-y-2 border-l-2 border-border pl-4">
                     <label class="flex items-center space-x-2 cursor-pointer">
                         <input
                             type="checkbox"
                             checked=move || scrub_email.get()
                             on:change=move |ev| scrub_email.set(event_target_checked(&ev))
                             disabled=move || !pii_enabled.get()
-                            class="w-4 h-4 text-indigo-600 focus:ring-indigo-500 rounded disabled:opacity-50"
+                            class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
                         />
-                        <span class="text-sm text-slate-700">"Email addresses"</span>
+                        <span class="text-sm text-text-secondary">"Email addresses"</span>
                     </label>
 
                     <label class="flex items-center space-x-2 cursor-pointer">
@@ -312,9 +312,9 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                             checked=move || scrub_phone.get()
                             on:change=move |ev| scrub_phone.set(event_target_checked(&ev))
                             disabled=move || !pii_enabled.get()
-                            class="w-4 h-4 text-indigo-600 focus:ring-indigo-500 rounded disabled:opacity-50"
+                            class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
                         />
-                        <span class="text-sm text-slate-700">"Phone numbers"</span>
+                        <span class="text-sm text-text-secondary">"Phone numbers"</span>
                     </label>
 
                     <label class="flex items-center space-x-2 cursor-pointer">
@@ -323,9 +323,9 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                             checked=move || scrub_ssn.get()
                             on:change=move |ev| scrub_ssn.set(event_target_checked(&ev))
                             disabled=move || !pii_enabled.get()
-                            class="w-4 h-4 text-indigo-600 focus:ring-indigo-500 rounded disabled:opacity-50"
+                            class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
                         />
-                        <span class="text-sm text-slate-700">"Social Security Numbers"</span>
+                        <span class="text-sm text-text-secondary">"Social Security Numbers"</span>
                     </label>
 
                     <label class="flex items-center space-x-2 cursor-pointer">
@@ -334,14 +334,14 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                             checked=move || scrub_credit_card.get()
                             on:change=move |ev| scrub_credit_card.set(event_target_checked(&ev))
                             disabled=move || !pii_enabled.get()
-                            class="w-4 h-4 text-indigo-600 focus:ring-indigo-500 rounded disabled:opacity-50"
+                            class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
                         />
-                        <span class="text-sm text-slate-700">"Credit card numbers"</span>
+                        <span class="text-sm text-text-secondary">"Credit card numbers"</span>
                     </label>
                 </div>
 
                 {move || save_error.get().map(|e| view! {
-                    <div class="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                    <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
                         {e}
                     </div>
                 })}
@@ -349,7 +349,7 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                 {move || {
                     if save_success.get() {
                         Some(view! {
-                            <div class="p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
                                 "Saved successfully"
                             </div>
                         })
@@ -361,7 +361,7 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                 <button
                     on:click=move |_| save_config_fn.with_value(|f| f())
                     disabled=move || saving.get()
-                    class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+                    class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
                 >
                     {move || if saving.get() { "Saving..." } else { "Save" }}
                 </button>

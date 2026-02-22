@@ -60,10 +60,10 @@ pub fn AgentView() -> impl IntoView {
     view! {
         <div class="p-6 max-w-6xl mx-auto">
             <div class="mb-8">
-                <h1 class="text-3xl font-bold mb-2 bg-gradient-to-r from-indigo-400 to-emerald-400 bg-clip-text text-transparent">
+                <h1 class="text-3xl font-bold mb-2 text-text-primary">
                     "Agent Settings"
                 </h1>
-                <p class="text-slate-400">
+                <p class="text-text-secondary">
                     "Configure agent behavior, file operations, and code execution permissions"
                 </p>
             </div>
@@ -72,7 +72,7 @@ pub fn AgentView() -> impl IntoView {
                 if is_loading.get() {
                     view! {
                         <div class="flex items-center justify-center py-12">
-                            <div class="text-slate-400">"Loading configuration..."</div>
+                            <div class="text-text-secondary">"Loading configuration..."</div>
                         </div>
                     }.into_any()
                 } else if let Some(cfg) = config.get() {
@@ -80,13 +80,13 @@ pub fn AgentView() -> impl IntoView {
                         <div class="space-y-6">
                             // Error/Success messages
                             {move || error_message.get().map(|msg| view! {
-                                <div class="p-4 bg-red-900/20 border border-red-500/50 rounded-lg text-red-400">
+                                <div class="p-4 bg-danger-subtle border border-danger/30 rounded-lg text-danger">
                                     {msg}
                                 </div>
                             })}
 
                             {move || success_message.get().map(|msg| view! {
-                                <div class="p-4 bg-green-900/20 border border-green-500/50 rounded-lg text-green-400">
+                                <div class="p-4 bg-success-subtle border border-success/30 rounded-lg text-success">
                                     {msg}
                                 </div>
                             })}
@@ -132,11 +132,11 @@ pub fn AgentView() -> impl IntoView {
                             />
 
                             // Save Button
-                            <div class="flex justify-end pt-4 border-t border-slate-800">
+                            <div class="flex justify-end pt-4 border-t border-border">
                                 <button
                                     on:click=handle_save
                                     disabled=move || is_saving.get()
-                                    class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                    class="px-6 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                 >
                                     {move || if is_saving.get() { "Saving..." } else { "Save Configuration" }}
                                 </button>
@@ -145,7 +145,7 @@ pub fn AgentView() -> impl IntoView {
                     }.into_any()
                 } else {
                     view! {
-                        <div class="text-slate-400">"No configuration available"</div>
+                        <div class="text-text-secondary">"No configuration available"</div>
                     }.into_any()
                 }
             }}
@@ -180,13 +180,13 @@ fn FileOpsSection(
     };
 
     view! {
-        <div class="bg-slate-900/50 backdrop-blur-sm border border-slate-800 rounded-xl p-6">
-            <h2 class="text-xl font-semibold text-slate-200 mb-4">"File Operations"</h2>
+        <div class="bg-surface-raised border border-border rounded-xl p-6">
+            <h2 class="text-xl font-semibold text-text-primary mb-4">"File Operations"</h2>
 
             <div class="space-y-4">
                 // Enable toggle
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-slate-300">"Enable File Operations"</label>
+                    <label class="text-sm font-medium text-text-secondary">"Enable File Operations"</label>
                     <input
                         type="checkbox"
                         checked=move || enabled.get()
@@ -200,7 +200,7 @@ fn FileOpsSection(
 
                 // Max file size
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Maximum File Size (bytes)"
                     </label>
                     <input
@@ -212,16 +212,16 @@ fn FileOpsSection(
                                 update_config();
                             }
                         }
-                        class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-slate-500">
+                    <p class="mt-1 text-xs text-text-tertiary">
                         {move || format!("≈ {} MB", max_file_size.get() / 1024 / 1024)}
                     </p>
                 </div>
 
                 // Confirmation toggles
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-slate-300">"Require Confirmation for Write"</label>
+                    <label class="text-sm font-medium text-text-secondary">"Require Confirmation for Write"</label>
                     <input
                         type="checkbox"
                         checked=move || require_write_confirm.get()
@@ -234,7 +234,7 @@ fn FileOpsSection(
                 </div>
 
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-slate-300">"Require Confirmation for Delete"</label>
+                    <label class="text-sm font-medium text-text-secondary">"Require Confirmation for Delete"</label>
                     <input
                         type="checkbox"
                         checked=move || require_delete_confirm.get()
@@ -248,10 +248,10 @@ fn FileOpsSection(
 
                 // Path lists (simplified for now)
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Allowed Paths"
                     </label>
-                    <p class="text-xs text-slate-500 mb-2">
+                    <p class="text-xs text-text-tertiary mb-2">
                         "Comma-separated list of allowed paths (empty = all paths allowed)"
                     </p>
                     <input
@@ -266,16 +266,16 @@ fn FileOpsSection(
                             set_allowed_paths.set(paths);
                             update_config();
                         }
-                        class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-sm"
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono text-sm"
                         placeholder="~/Documents, ~/Downloads"
                     />
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Denied Paths"
                     </label>
-                    <p class="text-xs text-slate-500 mb-2">
+                    <p class="text-xs text-text-tertiary mb-2">
                         "Comma-separated list of denied paths (takes precedence over allowed)"
                     </p>
                     <input
@@ -290,7 +290,7 @@ fn FileOpsSection(
                             set_denied_paths.set(paths);
                             update_config();
                         }
-                        class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-sm"
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono text-sm"
                         placeholder="~/.ssh, ~/.gnupg"
                     />
                 </div>
@@ -335,16 +335,16 @@ fn CodeExecSection(
     let update_config_5 = update_config.clone();
 
     view! {
-        <div class="bg-slate-900/50 backdrop-blur-sm border border-slate-800 rounded-xl p-6">
-            <h2 class="text-xl font-semibold text-slate-200 mb-4">"Code Execution"</h2>
+        <div class="bg-surface-raised border border-border rounded-xl p-6">
+            <h2 class="text-xl font-semibold text-text-primary mb-4">"Code Execution"</h2>
 
             <div class="space-y-4">
-                <div class="p-3 bg-yellow-900/20 border border-yellow-500/50 rounded-lg text-yellow-400 text-sm">
-                    "⚠️ Warning: Enabling code execution allows the agent to run arbitrary code. Use with caution."
+                <div class="p-3 bg-warning-subtle border border-warning/20 rounded-lg text-warning text-sm">
+                    "Warning: Enabling code execution allows the agent to run arbitrary code. Use with caution."
                 </div>
 
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-slate-300">"Enable Code Execution"</label>
+                    <label class="text-sm font-medium text-text-secondary">"Enable Code Execution"</label>
                     <input
                         type="checkbox"
                         checked=move || enabled.get()
@@ -357,7 +357,7 @@ fn CodeExecSection(
                 </div>
 
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-slate-300">"Sandbox Mode"</label>
+                    <label class="text-sm font-medium text-text-secondary">"Sandbox Mode"</label>
                     <input
                         type="checkbox"
                         checked=move || sandbox_enabled.get()
@@ -370,7 +370,7 @@ fn CodeExecSection(
                 </div>
 
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-slate-300">"Allow Network Access"</label>
+                    <label class="text-sm font-medium text-text-secondary">"Allow Network Access"</label>
                     <input
                         type="checkbox"
                         checked=move || allow_network.get()
@@ -384,7 +384,7 @@ fn CodeExecSection(
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Execution Timeout (seconds)"
                     </label>
                     <input
@@ -396,12 +396,12 @@ fn CodeExecSection(
                                 update_config_4();
                             }
                         }
-                        class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Default Runtime"
                     </label>
                     <select
@@ -410,7 +410,7 @@ fn CodeExecSection(
                             set_default_runtime.set(event_target_value(&ev));
                             update_config_5();
                         }
-                        class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     >
                         <option value="shell">"Shell"</option>
                         <option value="python">"Python"</option>
@@ -434,12 +434,12 @@ fn GeneralSettingsSection(
     on_change: impl Fn(&str, String) + 'static + Copy,
 ) -> impl IntoView {
     view! {
-        <div class="bg-slate-900/50 backdrop-blur-sm border border-slate-800 rounded-xl p-6">
-            <h2 class="text-xl font-semibold text-slate-200 mb-4">"General Settings"</h2>
+        <div class="bg-surface-raised border border-border rounded-xl p-6">
+            <h2 class="text-xl font-semibold text-text-primary mb-4">"General Settings"</h2>
 
             <div class="space-y-4">
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-slate-300">"Web Browsing"</label>
+                    <label class="text-sm font-medium text-text-secondary">"Web Browsing"</label>
                     <input
                         type="checkbox"
                         checked=web_browsing
@@ -451,7 +451,7 @@ fn GeneralSettingsSection(
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Max Iterations"
                     </label>
                     <input
@@ -460,12 +460,12 @@ fn GeneralSettingsSection(
                         on:input=move |ev| {
                             on_change("max_iterations", event_target_value(&ev));
                         }
-                        class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Auto Execute Threshold"
                     </label>
                     <input
@@ -477,15 +477,15 @@ fn GeneralSettingsSection(
                         on:input=move |ev| {
                             on_change("auto_execute_threshold", event_target_value(&ev));
                         }
-                        class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-slate-500">
+                    <p class="mt-1 text-xs text-text-tertiary">
                         "Confidence threshold for auto-execution (0.0 - 1.0)"
                     </p>
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Max Tasks Per Graph"
                     </label>
                     <input
@@ -494,12 +494,12 @@ fn GeneralSettingsSection(
                         on:input=move |ev| {
                             on_change("max_tasks_per_graph", event_target_value(&ev));
                         }
-                        class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
                         "Task Timeout (seconds)"
                     </label>
                     <input
@@ -508,12 +508,12 @@ fn GeneralSettingsSection(
                         on:input=move |ev| {
                             on_change("task_timeout_seconds", event_target_value(&ev));
                         }
-                        class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
 
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-slate-300">"Sandbox Enabled"</label>
+                    <label class="text-sm font-medium text-text-secondary">"Sandbox Enabled"</label>
                     <input
                         type="checkbox"
                         checked=sandbox_enabled

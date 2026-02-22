@@ -24,31 +24,31 @@ pub fn PluginsView() -> impl IntoView {
     });
 
     view! {
-        <div class="flex-1 p-6 overflow-y-auto bg-slate-950">
+        <div class="flex-1 p-6 overflow-y-auto bg-surface">
             <div class="max-w-3xl space-y-6">
                 // Page Header
                 <div class="flex items-center justify-between">
                     <div>
-                        <h1 class="text-2xl font-semibold text-slate-100 mb-1">
+                        <h1 class="text-2xl font-semibold text-text-primary mb-1">
                             "Plugins"
                         </h1>
-                        <p class="text-sm text-slate-400">
+                        <p class="text-sm text-text-secondary">
                             "Extend Aleph with third-party plugins"
                         </p>
                     </div>
                     <div class="flex items-center gap-2">
                         <button
-                            class="px-3 py-1.5 bg-slate-800 text-slate-300 rounded hover:bg-slate-700 text-sm"
+                            class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm"
                             on:click=move |_| {
                                 loading.set(true);
                                 // TODO: Reload plugins
                                 loading.set(false);
                             }
                         >
-                            "↻ Refresh"
+                            "Refresh"
                         </button>
                         <button
-                            class="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm"
+                            class="px-3 py-1.5 bg-primary text-white rounded hover:bg-primary-hover text-sm"
                             on:click=move |_| show_install_dialog.set(true)
                         >
                             "+ Install Plugin"
@@ -58,19 +58,19 @@ pub fn PluginsView() -> impl IntoView {
 
                 // Error Message
                 {move || error.get().map(|err| view! {
-                    <div class="p-3 bg-red-900/20 border border-red-800 rounded text-red-400 text-sm">
+                    <div class="p-3 bg-danger-subtle border border-border rounded text-danger text-sm">
                         {err}
                     </div>
                 })}
 
                 // Settings Section
                 <div class="space-y-4">
-                    <h2 class="text-lg font-medium text-slate-200">"Settings"</h2>
-                    <div class="p-4 bg-slate-900 border border-slate-800 rounded">
+                    <h2 class="text-lg font-medium text-text-primary">"Settings"</h2>
+                    <div class="p-4 bg-surface-raised border border-border rounded">
                         <div class="flex items-center justify-between">
                             <div>
-                                <div class="text-sm font-medium text-slate-200">"Auto Update"</div>
-                                <div class="text-xs text-slate-400 mt-1">
+                                <div class="text-sm font-medium text-text-primary">"Auto Update"</div>
+                                <div class="text-xs text-text-secondary mt-1">
                                     "Automatically update plugins when new versions are available"
                                 </div>
                             </div>
@@ -83,7 +83,7 @@ pub fn PluginsView() -> impl IntoView {
                                         auto_update.set(event_target_checked(&ev));
                                     }
                                 />
-                                <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                                <div class="w-11 h-6 bg-surface-sunken peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
                             </label>
                         </div>
                     </div>
@@ -91,7 +91,7 @@ pub fn PluginsView() -> impl IntoView {
 
                 // Installed Plugins Section
                 <div class="space-y-4">
-                    <h2 class="text-lg font-medium text-slate-200">
+                    <h2 class="text-lg font-medium text-text-primary">
                         {move || format!("Installed Plugins ({})", plugins.get().len())}
                     </h2>
 
@@ -99,15 +99,15 @@ pub fn PluginsView() -> impl IntoView {
                         if loading.get() {
                             view! {
                                 <div class="flex items-center justify-center py-12">
-                                    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
+                                    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
                                 </div>
                             }.into_any()
                         } else if plugins.get().is_empty() {
                             view! {
-                                <div class="text-center py-12 border border-dashed border-slate-700 rounded">
+                                <div class="text-center py-12 border border-dashed border-border rounded">
                                     <div class="text-4xl mb-4">"🔌"</div>
-                                    <p class="text-slate-400">"No plugins installed"</p>
-                                    <p class="text-xs text-slate-500 mt-1">
+                                    <p class="text-text-secondary">"No plugins installed"</p>
+                                    <p class="text-xs text-text-tertiary mt-1">
                                         "Install plugins to extend Aleph's functionality"
                                     </p>
                                 </div>
@@ -131,10 +131,10 @@ pub fn PluginsView() -> impl IntoView {
                 </div>
 
                 // Info Box
-                <div class="p-4 bg-blue-900/20 border border-blue-800 rounded">
+                <div class="p-4 bg-primary-subtle border border-primary/20 rounded">
                     <div class="flex items-start gap-2">
-                        <span class="text-blue-400 text-sm">"ℹ️"</span>
-                        <span class="text-sm text-blue-300">
+                        <span class="text-info text-sm">"ℹ️"</span>
+                        <span class="text-sm text-info">
                             "Plugins can add new tools, integrations, and capabilities to Aleph. Install plugins from Git repositories, ZIP archives, or local folders."
                         </span>
                     </div>
@@ -157,25 +157,25 @@ fn PluginCard(plugin: PluginInfo) -> impl IntoView {
     let toggling = RwSignal::new(false);
 
     view! {
-        <div class="p-4 bg-slate-900 border border-slate-800 rounded">
+        <div class="p-4 bg-surface-raised border border-border rounded">
             <div class="flex items-start justify-between">
                 <div class="flex items-start gap-3">
-                    <div class="w-10 h-10 rounded bg-indigo-900/30 flex items-center justify-center flex-shrink-0">
-                        <span class="text-indigo-400">"🔌"</span>
+                    <div class="w-10 h-10 rounded bg-primary-subtle flex items-center justify-center flex-shrink-0">
+                        <span class="text-primary">"🔌"</span>
                     </div>
                     <div>
                         <div class="flex items-center gap-2">
-                            <span class="text-sm font-medium text-slate-200">
+                            <span class="text-sm font-medium text-text-primary">
                                 {plugin.name}
                             </span>
-                            <span class="text-xs text-slate-500">
+                            <span class="text-xs text-text-tertiary">
                                 {format!("v{}", plugin.version)}
                             </span>
                         </div>
-                        <p class="text-xs text-slate-400 mt-1">
+                        <p class="text-xs text-text-secondary mt-1">
                             {plugin.description.unwrap_or_else(|| "No description".to_string())}
                         </p>
-                        <div class="flex items-center gap-1 mt-2 text-xs text-slate-500">
+                        <div class="flex items-center gap-1 mt-2 text-xs text-text-tertiary">
                             <span>"📦"</span>
                             <span>"Git Repository"</span>
                         </div>
@@ -184,7 +184,7 @@ fn PluginCard(plugin: PluginInfo) -> impl IntoView {
 
                 <div class="flex items-center gap-2 flex-shrink-0 ml-4">
                     <button
-                        class="p-1.5 text-red-400 hover:bg-red-900/20 rounded"
+                        class="p-1.5 text-danger hover:bg-danger-subtle rounded"
                         title="Remove"
                     >
                         "🗑️"
@@ -192,7 +192,7 @@ fn PluginCard(plugin: PluginInfo) -> impl IntoView {
                     {move || {
                         if toggling.get() {
                             view! {
-                                <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-slate-400"></div>
+                                <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-text-secondary"></div>
                             }.into_any()
                         } else {
                             view! {
@@ -208,7 +208,7 @@ fn PluginCard(plugin: PluginInfo) -> impl IntoView {
                                             toggling.set(false);
                                         }
                                     />
-                                    <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                                    <div class="w-11 h-6 bg-surface-sunken peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
                                 </label>
                             }.into_any()
                         }
@@ -239,17 +239,17 @@ fn InstallPluginDialog(on_close: impl Fn() + 'static + Copy) -> impl IntoView {
 
     view! {
         <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div class="bg-slate-900 border border-slate-700 rounded-lg p-6 max-w-md w-full mx-4">
-                <h2 class="text-lg font-semibold text-slate-100 mb-2">"Install Plugin"</h2>
-                <p class="text-sm text-slate-400 mb-4">
+            <div class="bg-surface border border-border rounded-lg p-6 max-w-md w-full mx-4">
+                <h2 class="text-lg font-semibold text-text-primary mb-2">"Install Plugin"</h2>
+                <p class="text-sm text-text-secondary mb-4">
                     "Install a plugin from Git repository, ZIP file, or local folder"
                 </p>
 
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-sm font-medium text-slate-300 mb-2">"Source"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-2">"Source"</label>
                         <select
-                            class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-slate-200 text-sm"
+                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
                             on:change=move |ev| source.set(event_target_value(&ev))
                         >
                             <option value="git">"📦 Git Repository"</option>
@@ -259,7 +259,7 @@ fn InstallPluginDialog(on_close: impl Fn() + 'static + Copy) -> impl IntoView {
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium text-slate-300 mb-2">
+                        <label class="block text-sm font-medium text-text-secondary mb-2">
                             {move || match source.get().as_str() {
                                 "git" => "Repository URL",
                                 "zip" => "ZIP URL or Path",
@@ -268,7 +268,7 @@ fn InstallPluginDialog(on_close: impl Fn() + 'static + Copy) -> impl IntoView {
                         </label>
                         <input
                             type="text"
-                            class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-slate-200 text-sm"
+                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
                             placeholder=move || match source.get().as_str() {
                                 "git" => "https://github.com/user/plugin.git",
                                 "zip" => "https://example.com/plugin.zip",
@@ -280,7 +280,7 @@ fn InstallPluginDialog(on_close: impl Fn() + 'static + Copy) -> impl IntoView {
                     </div>
 
                     {move || error.get().map(|err| view! {
-                        <div class="flex items-center gap-2 text-red-400 text-sm">
+                        <div class="flex items-center gap-2 text-danger text-sm">
                             <span>"⚠️"</span>
                             <span>{err}</span>
                         </div>
@@ -289,13 +289,13 @@ fn InstallPluginDialog(on_close: impl Fn() + 'static + Copy) -> impl IntoView {
 
                 <div class="flex gap-2 mt-6">
                     <button
-                        class="flex-1 px-4 py-2 bg-slate-800 text-slate-300 rounded hover:bg-slate-700 text-sm"
+                        class="flex-1 px-4 py-2 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm"
                         on:click=move |_| on_close()
                     >
                         "Cancel"
                     </button>
                     <button
-                        class="flex-1 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm disabled:opacity-50"
+                        class="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover text-sm disabled:opacity-50"
                         disabled=move || url.get().trim().is_empty() || loading.get()
                         on:click=handle_install
                     >

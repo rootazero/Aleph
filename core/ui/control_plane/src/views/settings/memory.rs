@@ -64,12 +64,12 @@ pub fn MemoryView() -> impl IntoView {
 
                 {move || {
                     if loading.get() {
-                        view! { <div class="text-gray-500">"Loading..."</div> }.into_any()
+                        view! { <div class="text-text-tertiary">"Loading..."</div> }.into_any()
                     } else if let Some(cfg) = config.get() {
                         view! {
                             <div class="space-y-6">
                                 {move || error.get().map(|e| view! {
-                                    <div class="p-3 bg-red-50 dark:bg-red-900 text-red-700 dark:text-red-200 rounded">
+                                    <div class="p-3 bg-danger-subtle text-danger rounded">
                                         {e}
                                     </div>
                                 })}
@@ -78,11 +78,11 @@ pub fn MemoryView() -> impl IntoView {
                                 <AIRetrievalSettings config=config />
                                 <CompressionSettings config=config />
 
-                                <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
+                                <div class="pt-4 border-t border-border">
                                     <button
                                         on:click=save
                                         prop:disabled=move || saving.get()
-                                        class="px-6 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
+                                        class="px-6 py-2 bg-info text-white rounded hover:bg-primary-hover disabled:opacity-50"
                                     >
                                         {move || if saving.get() { "Saving..." } else { "Save Changes" }}
                                     </button>
@@ -90,7 +90,7 @@ pub fn MemoryView() -> impl IntoView {
                             </div>
                         }.into_any()
                     } else {
-                        view! { <div class="text-gray-500">"No configuration loaded"</div> }.into_any()
+                        view! { <div class="text-text-tertiary">"No configuration loaded"</div> }.into_any()
                     }
                 }}
             </div>
@@ -103,7 +103,7 @@ fn BasicSettings(
     config: RwSignal<Option<MemoryConfig>>,
 ) -> impl IntoView {
     view! {
-        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700">
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
             <h2 class="text-lg font-semibold mb-4">"Basic Settings"</h2>
 
             <div class="space-y-4">
@@ -133,7 +133,7 @@ fn BasicSettings(
                                 config.set(Some(cfg));
                             }
                         }
-                        class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
                 </div>
 
@@ -147,7 +147,7 @@ fn BasicSettings(
                                 config.set(Some(cfg));
                             }
                         }
-                        class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     >
                         <option value="sqlite-vec">"sqlite-vec"</option>
                         <option value="lancedb">"lancedb"</option>
@@ -168,7 +168,7 @@ fn BasicSettings(
                                     }
                                 }
                             }
-                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
                     </div>
 
@@ -185,7 +185,7 @@ fn BasicSettings(
                                     }
                                 }
                             }
-                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
                     </div>
                 </div>
@@ -206,7 +206,7 @@ fn BasicSettings(
                                 }
                             }
                         }
-                        class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
                 </div>
             </div>
@@ -219,7 +219,7 @@ fn AIRetrievalSettings(
     config: RwSignal<Option<MemoryConfig>>,
 ) -> impl IntoView {
     view! {
-        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700">
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
             <h2 class="text-lg font-semibold mb-4">"AI-Based Retrieval"</h2>
 
             <div class="space-y-4">
@@ -252,7 +252,7 @@ fn AIRetrievalSettings(
                                     }
                                 }
                             }
-                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
                     </div>
 
@@ -269,7 +269,7 @@ fn AIRetrievalSettings(
                                     }
                                 }
                             }
-                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
                     </div>
                 </div>
@@ -287,7 +287,7 @@ fn AIRetrievalSettings(
                                 }
                             }
                         }
-                        class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
                 </div>
             </div>
@@ -300,7 +300,7 @@ fn CompressionSettings(
     config: RwSignal<Option<MemoryConfig>>,
 ) -> impl IntoView {
     view! {
-        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700">
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
             <h2 class="text-lg font-semibold mb-4">"Memory Compression"</h2>
 
             <div class="space-y-4">
@@ -333,7 +333,7 @@ fn CompressionSettings(
                                     }
                                 }
                             }
-                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
                     </div>
 
@@ -350,7 +350,7 @@ fn CompressionSettings(
                                     }
                                 }
                             }
-                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
                     </div>
                 </div>
@@ -369,7 +369,7 @@ fn CompressionSettings(
                                     }
                                 }
                             }
-                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
                     </div>
 
@@ -386,7 +386,7 @@ fn CompressionSettings(
                                     }
                                 }
                             }
-                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
                     </div>
                 </div>
@@ -408,7 +408,7 @@ fn CompressionSettings(
                                     }
                                 }
                             }
-                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
                     </div>
 
@@ -425,7 +425,7 @@ fn CompressionSettings(
                                     }
                                 }
                             }
-                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
                     </div>
                 </div>
@@ -443,7 +443,7 @@ fn CompressionSettings(
                                 }
                             }
                         }
-                        class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
                 </div>
             </div>

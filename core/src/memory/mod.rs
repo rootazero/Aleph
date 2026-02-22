@@ -123,3 +123,4 @@ pub use vfs::{compute_directory_hash, L1Generator, bootstrap_agent_context, migr
 // LanceDB store types (Phase 3)
 pub use store::lance::LanceMemoryBackend;
 pub use store::types::{SearchFilter, ScoredFact, MemoryFilter};
+pub use store::MemoryBackend;

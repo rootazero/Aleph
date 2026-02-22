@@ -111,6 +111,7 @@ impl LanceMemoryBackend {
     /// LanceDB's `create_index` with `replace(true)` is idempotent —
     /// it replaces the existing index if one already exists.
     /// NativeTable only supports single-column indexes.
+    // TODO: honor LanceDbConfig.fts_tokenizer (e.g. "jieba" for Chinese)
     async fn create_fts_index_if_needed(
         &self,
         table: &Table,

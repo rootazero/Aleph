@@ -77,12 +77,12 @@ pub fn SecurityView() -> impl IntoView {
 
                 {move || {
                     if loading.get() {
-                        view! { <div class="text-gray-500">"Loading..."</div> }.into_any()
+                        view! { <div class="text-text-tertiary">"Loading..."</div> }.into_any()
                     } else {
                         view! {
                             <div class="space-y-6">
                                 {move || error.get().map(|e| view! {
-                                    <div class="p-3 bg-red-50 dark:bg-red-900 text-red-700 dark:text-red-200 rounded">
+                                    <div class="p-3 bg-danger-subtle text-danger rounded">
                                         {e}
                                     </div>
                                 })}
@@ -90,11 +90,11 @@ pub fn SecurityView() -> impl IntoView {
                                 <GatewaySecuritySettings config=config />
                                 <PairedDevices devices=devices state=state />
 
-                                <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
+                                <div class="pt-4 border-t border-border">
                                     <button
                                         on:click=save
                                         prop:disabled=move || saving.get()
-                                        class="px-6 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
+                                        class="px-6 py-2 bg-info text-white rounded hover:bg-primary-hover disabled:opacity-50"
                                     >
                                         {move || if saving.get() { "Saving..." } else { "Save Changes" }}
                                     </button>
@@ -113,7 +113,7 @@ fn GatewaySecuritySettings(
     config: RwSignal<Option<SecurityConfig>>,
 ) -> impl IntoView {
     view! {
-        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700">
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
             <h2 class="text-lg font-semibold mb-4">"Gateway Security"</h2>
 
             <div class="space-y-4">
@@ -131,7 +131,7 @@ fn GatewaySecuritySettings(
                     />
                     <label class="font-medium">"Require Authentication"</label>
                 </div>
-                <p class="text-sm text-gray-500 ml-6">
+                <p class="text-sm text-text-tertiary ml-6">
                     "Require clients to authenticate before connecting to the Gateway"
                 </p>
 
@@ -149,7 +149,7 @@ fn GatewaySecuritySettings(
                     />
                     <label class="font-medium">"Enable Device Pairing"</label>
                 </div>
-                <p class="text-sm text-gray-500 ml-6">
+                <p class="text-sm text-text-tertiary ml-6">
                     "Allow new devices to pair with the Gateway using pairing codes"
                 </p>
 
@@ -167,7 +167,7 @@ fn GatewaySecuritySettings(
                     />
                     <label class="font-medium">"Allow Guest Access"</label>
                 </div>
-                <p class="text-sm text-gray-500 ml-6">
+                <p class="text-sm text-text-tertiary ml-6">
                     "Allow temporary guest sessions without device pairing"
                 </p>
             </div>
@@ -197,7 +197,7 @@ fn PairedDevices(
     };
 
     view! {
-        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700">
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
             <h2 class="text-lg font-semibold mb-4">"Paired Devices"</h2>
 
             <div class="space-y-3">
@@ -205,7 +205,7 @@ fn PairedDevices(
                     let device_list = devices.get();
                     if device_list.is_empty() {
                         view! {
-                            <div class="text-gray-500 text-center py-4">
+                            <div class="text-text-tertiary text-center py-4">
                                 "No devices paired"
                             </div>
                         }.into_any()
@@ -239,19 +239,19 @@ where
     let last_seen_text = device.last_seen.clone().unwrap_or_else(|| "Never".to_string());
 
     view! {
-        <div class="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded border border-gray-200 dark:border-gray-600">
+        <div class="flex items-center justify-between p-4 bg-surface-sunken rounded border border-border">
             <div class="flex-1">
                 <div class="font-medium">{device.device_name}</div>
-                <div class="text-sm text-gray-500">
+                <div class="text-sm text-text-tertiary">
                     {device.device_type} " • " {device.device_id}
                 </div>
-                <div class="text-xs text-gray-400 mt-1">
+                <div class="text-xs text-text-secondary mt-1">
                     "Paired: " {paired_date} " • Last seen: " {last_seen_text}
                 </div>
             </div>
             <button
                 on:click=move |_| on_revoke()
-                class="px-3 py-1 bg-red-500 text-white text-sm rounded hover:bg-red-600"
+                class="px-3 py-1 bg-danger text-white text-sm rounded hover:bg-danger"
             >
                 "Revoke"
             </button>
