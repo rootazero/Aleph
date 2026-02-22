@@ -67,6 +67,7 @@ pub use compression::{
 pub use context::{
     CompressionResult, CompressionSession, ContextAnchor, FactSource, FactSpecificity,
     FactStats, FactType, MemoryEntry, MemoryFact, TemporalScope, compute_parent_path,
+    PRESET_PATHS,
 };
 pub use database::VectorDatabase;
 pub use decay::{DecayConfig, MemoryStrength};
@@ -108,4 +109,5 @@ pub use cortex::{
     DistillationMode, DistillationTask, EnvironmentContext, EvolutionStatus, Experience,
     ExperienceBuilder, ParameterConfig, ParameterMapping, ReplayMatch,
 };
-pub use vfs::{compute_directory_hash, L1Generator};
+pub use database::PathEntry;
+pub use vfs::{compute_directory_hash, L1Generator, bootstrap_agent_context, migrate_existing_facts_to_paths};
