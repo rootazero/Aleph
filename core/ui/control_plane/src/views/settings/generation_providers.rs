@@ -35,6 +35,8 @@ pub fn GenerationProvidersView() -> impl IntoView {
                     }
                 }
             });
+        } else {
+            set_is_loading.set(false);
         }
     });
 

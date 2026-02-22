@@ -8,7 +8,33 @@ pub fn AgentView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
     // State
-    let (config, set_config) = signal(Option::<AgentConfig>::None);
+    let (config, set_config) = signal(Some(AgentConfig {
+        file_ops: FileOpsConfig {
+            enabled: true,
+            allowed_paths: vec![],
+            denied_paths: vec![],
+            max_file_size: 10_485_760,
+            require_confirmation_for_write: false,
+            require_confirmation_for_delete: true,
+        },
+        code_exec: CodeExecConfig {
+            enabled: true,
+            default_runtime: "python".to_string(),
+            timeout_seconds: 30,
+            sandbox_enabled: true,
+            allowed_runtimes: vec!["python".to_string(), "node".to_string()],
+            allow_network: false,
+            working_directory: None,
+            pass_env: vec![],
+            blocked_commands: vec![],
+        },
+        web_browsing: false,
+        max_iterations: 20,
+        auto_execute_threshold: 0.8,
+        max_tasks_per_graph: 10,
+        task_timeout_seconds: 300,
+        sandbox_enabled: true,
+    }));
     let (is_loading, set_is_loading) = signal(true);
     let (is_saving, set_is_saving) = signal(false);
     let (error_message, set_error_message) = signal(Option::<String>::None);
@@ -32,6 +58,8 @@ pub fn AgentView() -> impl IntoView {
                     }
                 }
             });
+        } else {
+            set_is_loading.set(false);
         }
     });
 

@@ -34,6 +34,8 @@ pub fn BehaviorView() -> impl IntoView {
                     }
                 }
             });
+        } else {
+            loading.set(false);
         }
     });
 

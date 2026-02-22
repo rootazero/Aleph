@@ -39,6 +39,8 @@ pub fn ProvidersView() -> impl IntoView {
                 }
                 loading.set(false);
             });
+        } else {
+            loading.set(false);
         }
     });
 

@@ -8,7 +8,11 @@ use crate::api::{GeneralConfig, GeneralConfigApi};
 pub fn GeneralView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
-    let (config, set_config) = signal(Option::<GeneralConfig>::None);
+    let (config, set_config) = signal(Some(GeneralConfig {
+        default_provider: None,
+        language: None,
+        output_dir: None,
+    }));
     let (loading, set_loading) = signal(true);
     let (saving, set_saving) = signal(false);
     let (error, set_error) = signal(Option::<String>::None);
@@ -48,6 +52,8 @@ pub fn GeneralView() -> impl IntoView {
                     }
                 }
             });
+        } else {
+            set_loading.set(false);
         }
     });
 
