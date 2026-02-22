@@ -19,8 +19,8 @@ use uuid::Uuid;
 
 /// Stop words to filter from FTS queries (replicating old SQLite FTS5 logic).
 const FTS_STOP_WORDS: &[&str] = &[
-    "the", "is", "a", "an", "in", "on", "at", "to", "for", "of", "by", "with", "and", "or",
-    "but", "not", "it", "its", "was", "has", "had", "been",
+    "the", "is", "a", "an", "are", "in", "on", "at", "to", "for", "of", "by", "with", "and",
+    "or", "but", "not", "it", "its", "was", "were", "has", "had", "been", "do", "does", "did",
 ];
 
 /// Prepare an FTS-style query string from user input.
@@ -339,9 +339,9 @@ async fn when_hybrid_search_shared_embedding(w: &mut AlephWorld) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
     let db = ctx.memory_backend.as_ref().expect("Database not initialized");
 
-    // Use the common embedding (0.5)
+    // Use the common embedding (0.5) and filter to valid facts only
     let embedding = vec![0.5f32; EMBEDDING_DIM];
-    let filter = SearchFilter::default();
+    let filter = SearchFilter::valid_only(None);
     let scored = db
         .vector_search(&embedding, EMBEDDING_DIM as u32, &filter, 10)
         .await
@@ -498,7 +498,7 @@ async fn given_test_vector_db(w: &mut AlephWorld) {
     let temp_dir = tempdir().expect("Failed to create temp dir");
     let db_path = temp_dir.path().join(format!("test_integration_{}.db", Uuid::new_v4()));
     let ctx = w.memory.get_or_insert_with(MemoryContext::default);
-    ctx.setup_integration(temp_dir, db_path);
+    ctx.setup_integration(temp_dir, db_path).await;
 }
 
 #[given("a smart embedder")]
