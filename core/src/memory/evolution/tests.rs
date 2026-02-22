@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use crate::memory::{FactSource, FactSpecificity, FactType, MemoryFact, TemporalScope, VectorDatabase};
+use crate::memory::{FactSource, FactSpecificity, FactType, MemoryFact, TemporalScope};
+use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::lance::LanceMemoryBackend;
 use crate::Result;
 
 use super::*;
@@ -41,12 +43,11 @@ fn create_test_fact(id: &str, content: &str, confidence: f32) -> MemoryFact {
     }
 }
 
-/// Helper to create test database
-async fn create_test_database() -> Result<(Arc<VectorDatabase>, tempfile::TempDir)> {
+/// Helper to create test database (LanceDB-backed)
+async fn create_test_database() -> Result<(MemoryBackend, tempfile::TempDir)> {
     let temp_dir = tempfile::tempdir()?;
-    let db_path = temp_dir.path().join("test.db");
-    let db = VectorDatabase::new(db_path)?;
-    Ok((Arc::new(db), temp_dir))
+    let backend = LanceMemoryBackend::open_or_create(temp_dir.path()).await?;
+    Ok((Arc::new(backend), temp_dir))
 }
 
 #[test]
@@ -151,7 +152,7 @@ async fn test_contradiction_detector_with_similar_facts() -> Result<()> {
 
     // Store an existing fact
     let existing_fact = create_test_fact("fact1", "User likes coffee", 0.9);
-    db.insert_fact(existing_fact.clone()).await?;
+    db.insert_fact(&existing_fact).await?;
 
     let detector = ContradictionDetector::new(db, None).with_threshold(0.5);
 
@@ -177,7 +178,7 @@ async fn test_evolution_resolver_prefer_newer() -> Result<()> {
     let new_fact = create_test_fact("fact2", "User prefers tea", 0.95);
 
     // Store old fact
-    db.insert_fact(old_fact.clone()).await?;
+    db.insert_fact(&old_fact).await?;
 
     // Resolve with PreferNewer strategy
     let evolution = resolver
@@ -208,7 +209,7 @@ async fn test_evolution_resolver_prefer_higher_confidence() -> Result<()> {
     let high_confidence = create_test_fact("fact2", "User prefers tea", 0.95);
 
     // Store low confidence fact
-    db.insert_fact(low_confidence.clone()).await?;
+    db.insert_fact(&low_confidence).await?;
 
     // Resolve with PreferHigherConfidence strategy
     let evolution = resolver
@@ -239,7 +240,7 @@ async fn test_evolution_resolver_create_evolution() -> Result<()> {
     let new_fact = create_test_fact("fact2", "User prefers tea", 0.95);
 
     // Store old fact
-    db.insert_fact(old_fact.clone()).await?;
+    db.insert_fact(&old_fact).await?;
 
     // Resolve with CreateEvolution strategy
     let evolution = resolver
@@ -271,8 +272,8 @@ async fn test_evolution_resolver_multiple() -> Result<()> {
     let old_fact2 = create_test_fact("fact2", "User prefers tea", 0.9);
 
     // Store old facts
-    db.insert_fact(old_fact1.clone()).await?;
-    db.insert_fact(old_fact2.clone()).await?;
+    db.insert_fact(&old_fact1).await?;
+    db.insert_fact(&old_fact2).await?;
 
     let contradictions = vec![
         (old_fact1, "Contradicts coffee preference".to_string()),

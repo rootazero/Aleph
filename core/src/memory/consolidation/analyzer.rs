@@ -1,11 +1,12 @@
 //! Consolidation analyzer for identifying frequent facts
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use crate::memory::{FactType, MemoryFact, VectorDatabase};
+use crate::memory::context::{FactType, MemoryFact};
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::providers::AiProvider;
 use crate::Result;
+use std::sync::Arc;
 
 use super::profile::{ConsolidatedFact, ProfileCategory, UserProfile};
 
@@ -21,7 +22,7 @@ pub struct FrequentFact {
 
 /// Analyzes facts to identify consolidation opportunities
 pub struct ConsolidationAnalyzer {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     provider: Option<Arc<dyn AiProvider>>,
 }
 
@@ -55,7 +56,7 @@ impl Default for ConsolidationConfig {
 impl ConsolidationAnalyzer {
     /// Create a new consolidation analyzer
     pub fn new(
-        database: Arc<VectorDatabase>,
+        database: MemoryBackend,
         provider: Option<Arc<dyn AiProvider>>,
     ) -> Self {
         Self { database, provider }
@@ -63,7 +64,7 @@ impl ConsolidationAnalyzer {
 
     /// Analyze facts and generate a user profile
     pub async fn generate_profile(&self, config: ConsolidationConfig) -> Result<UserProfile> {
-        // Get all valid facts
+        // Get all valid facts (include_invalid = false)
         let all_facts = self.database.get_all_facts(false).await?;
 
         // Calculate frequency scores

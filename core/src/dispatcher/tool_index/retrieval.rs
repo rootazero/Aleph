@@ -7,7 +7,7 @@
 
 use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryFact};
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use super::config::ToolRetrievalConfig;
 use std::sync::Arc;
 
@@ -91,18 +91,18 @@ impl HydratedTool {
 
 /// Retrieves tools using semantic search with dual-threshold logic
 pub struct ToolRetrieval {
-    db: Arc<VectorDatabase>,
+    db: MemoryBackend,
     config: ToolRetrievalConfig,
 }
 
 impl ToolRetrieval {
     /// Create a new ToolRetrieval with custom config
-    pub fn new(db: Arc<VectorDatabase>, config: ToolRetrievalConfig) -> Self {
+    pub fn new(db: MemoryBackend, config: ToolRetrievalConfig) -> Self {
         Self { db, config }
     }
 
     /// Create with default config
-    pub fn with_defaults(db: Arc<VectorDatabase>) -> Self {
+    pub fn with_defaults(db: MemoryBackend) -> Self {
         Self::new(db, ToolRetrievalConfig::default())
     }
 
@@ -117,12 +117,20 @@ impl ToolRetrieval {
         // Search for facts using vector similarity
         // We fetch more than max_tools to allow for filtering by type
         let candidate_limit = self.config.max_tools * 3;
-        let facts: Vec<MemoryFact> = self.db.search_facts(
+        let filter = crate::memory::store::types::SearchFilter::valid_only(
+            Some(crate::memory::NamespaceScope::Owner),
+        );
+        let scored = self.db.vector_search(
             query_embedding,
-            crate::memory::NamespaceScope::Owner, // TODO: Pass from context
-            candidate_limit as u32,
-            false, // only valid facts
+            crate::memory::EMBEDDING_DIM as u32,
+            &filter,
+            candidate_limit,
         ).await?;
+        let facts: Vec<MemoryFact> = scored.into_iter().map(|sf| {
+            let mut fact = sf.fact;
+            fact.similarity_score = Some(sf.score);
+            fact
+        }).collect();
 
         // Filter to only tool facts and apply hard threshold
         let mut tools: Vec<HydratedTool> = facts
@@ -150,15 +158,23 @@ impl ToolRetrieval {
         query_text: &str,
     ) -> Result<Vec<HydratedTool>, AlephError> {
         // Use hybrid search from VectorDatabase
-        let facts: Vec<MemoryFact> = self.db.hybrid_search_facts(
+        let filter = crate::memory::store::types::SearchFilter::valid_only(
+            Some(crate::memory::NamespaceScope::Owner),
+        );
+        let scored = self.db.hybrid_search(
             query_embedding,
+            crate::memory::EMBEDDING_DIM as u32,
             query_text,
             0.7, // vector weight
             0.3, // text weight
-            self.config.hard_threshold,
-            self.config.max_tools * 2, // get more candidates
-            self.config.max_tools * 3, // result limit before filtering
+            &filter,
+            self.config.max_tools * 3,
         ).await?;
+        let facts: Vec<MemoryFact> = scored.into_iter().map(|sf| {
+            let mut fact = sf.fact;
+            fact.similarity_score = Some(sf.score);
+            fact
+        }).collect();
 
         let mut tools: Vec<HydratedTool> = facts
             .into_iter()

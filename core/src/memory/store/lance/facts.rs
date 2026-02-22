@@ -14,10 +14,11 @@ use lance_index::scalar::FullTextSearchQuery;
 use lancedb::query::{ExecutableQuery, QueryBase, Select};
 
 use crate::error::AlephError;
-use crate::memory::context::{FactType, MemoryFact};
+use crate::memory::audit::AuditEntry;
+use crate::memory::context::{FactStats, FactType, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::types::{ScoredFact, SearchFilter};
-use crate::memory::store::{MemoryStore, PathEntry};
+use crate::memory::store::{AuditStore, MemoryStore, PathEntry};
 
 use super::arrow_convert::{facts_to_record_batch, record_batch_to_facts};
 use super::LanceMemoryBackend;
@@ -446,6 +447,94 @@ impl MemoryStore for LanceMemoryBackend {
 
         Ok(filtered)
     }
+
+    async fn apply_fact_decay(
+        &self,
+        decay_factor: f32,
+        min_score: f32,
+    ) -> Result<usize, AlephError> {
+        // Fetch all valid facts.
+        let facts = scan_facts(&self.facts_table, Some("is_valid = true"), None).await?;
+        let mut affected = 0usize;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        for fact in &facts {
+            // Read the current decay_score from the stored fact.
+            // Since MemoryFact doesn't track decay_score directly, we
+            // compute a new effective score: confidence * decay_factor.
+            let new_confidence = fact.confidence * decay_factor;
+
+            if new_confidence < min_score {
+                // Invalidate the fact due to decay.
+                let mut invalidated = fact.clone();
+                invalidated.is_valid = false;
+                invalidated.invalidation_reason = Some("decay_prune".to_string());
+                invalidated.decay_invalidated_at = Some(now);
+                invalidated.confidence = new_confidence;
+                invalidated.updated_at = now;
+                self.update_fact(&invalidated).await?;
+                affected += 1;
+            } else if (new_confidence - fact.confidence).abs() > f32::EPSILON {
+                // Update confidence with decayed value.
+                let mut updated = fact.clone();
+                updated.confidence = new_confidence;
+                updated.updated_at = now;
+                self.update_fact(&updated).await?;
+                affected += 1;
+            }
+        }
+
+        Ok(affected)
+    }
+
+    async fn get_fact_stats(&self) -> Result<FactStats, AlephError> {
+        let all_facts = scan_facts(&self.facts_table, None, None).await?;
+
+        let total_facts = all_facts.len() as u64;
+        let mut valid_facts = 0u64;
+        let mut facts_by_type: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
+        let mut oldest: Option<i64> = None;
+        let mut newest: Option<i64> = None;
+
+        for fact in &all_facts {
+            if fact.is_valid {
+                valid_facts += 1;
+            }
+
+            *facts_by_type
+                .entry(fact.fact_type.as_str().to_string())
+                .or_insert(0) += 1;
+
+            match oldest {
+                Some(ts) if fact.created_at < ts => oldest = Some(fact.created_at),
+                None => oldest = Some(fact.created_at),
+                _ => {}
+            }
+            match newest {
+                Some(ts) if fact.created_at > ts => newest = Some(fact.created_at),
+                None => newest = Some(fact.created_at),
+                _ => {}
+            }
+        }
+
+        Ok(FactStats {
+            total_facts,
+            valid_facts,
+            facts_by_type,
+            oldest_fact_timestamp: oldest,
+            newest_fact_timestamp: newest,
+        })
+    }
+
+    async fn soft_delete_fact(&self, id: &str, reason: &str) -> Result<(), AlephError> {
+        // Delegate to invalidate_fact — they are semantically identical.
+        self.invalidate_fact(id, reason).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -503,6 +592,38 @@ impl LanceMemoryBackend {
         results.truncate(limit);
 
         Ok(results)
+    }
+}
+
+// ============================================================================
+// AuditStore implementation
+// ============================================================================
+
+#[async_trait]
+impl AuditStore for LanceMemoryBackend {
+    async fn insert_audit_entry(&self, _entry: &AuditEntry) -> Result<(), AlephError> {
+        // TODO: Store audit entries in a dedicated LanceDB table.
+        // The audit schema needs to be designed to serialize AuditAction/AuditActor
+        // as strings plus a JSON details column. For now, this is a no-op.
+        Ok(())
+    }
+
+    async fn get_audit_entries_for_fact(
+        &self,
+        _fact_id: &str,
+    ) -> Result<Vec<AuditEntry>, AlephError> {
+        // TODO: Query audit entries from a dedicated table filtered by fact_id.
+        // For now, return an empty list.
+        Ok(Vec::new())
+    }
+
+    async fn get_recent_audit_entries(
+        &self,
+        _limit: usize,
+    ) -> Result<Vec<AuditEntry>, AlephError> {
+        // TODO: Query the most recent audit entries ordered by created_at DESC.
+        // For now, return an empty list.
+        Ok(Vec::new())
     }
 }
 

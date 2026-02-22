@@ -11,11 +11,13 @@ pub use hash::compute_directory_hash;
 pub use l1_generator::L1Generator;
 pub use migration::migrate_existing_facts_to_paths;
 
-use crate::memory::VectorDatabase;
+use crate::memory::namespace::NamespaceScope;
+use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::FactSource;
 
 /// Load top-level L1 Overviews for Agent bootstrapping.
 /// Returns Markdown text suitable for injection into system prompt.
-pub async fn bootstrap_agent_context(database: &VectorDatabase) -> String {
+pub async fn bootstrap_agent_context(database: &MemoryBackend) -> String {
     let top_level_paths = [
         "aleph://user/",
         "aleph://knowledge/",
@@ -25,8 +27,11 @@ pub async fn bootstrap_agent_context(database: &VectorDatabase) -> String {
     let mut sections = Vec::new();
 
     for path in &top_level_paths {
-        if let Ok(Some(l1)) = database.get_l1_overview(path).await {
-            sections.push(format!("### {}\n{}", path, l1.content));
+        // Old: database.get_l1_overview(path) → New: database.get_by_path(path, &NamespaceScope::Owner)
+        if let Ok(Some(l1)) = database.get_by_path(path, &NamespaceScope::Owner).await {
+            if l1.fact_source == FactSource::Summary {
+                sections.push(format!("### {}\n{}", path, l1.content));
+            }
         }
     }
 

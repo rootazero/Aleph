@@ -21,8 +21,10 @@ use async_trait::async_trait;
 
 use crate::config::types::memory::GraphDecayPolicy;
 use crate::error::AlephError;
-use crate::memory::context::{FactType, MemoryEntry, MemoryFact};
+use crate::memory::context::{CompressionSession, FactStats, FactType, MemoryEntry, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
+use crate::memory::audit::AuditEntry;
+use crate::memory::dreaming::{DailyInsight, DreamStatus};
 
 use types::{MemoryFilter, ScoredFact, SearchFilter};
 
@@ -244,6 +246,24 @@ pub trait MemoryStore: Send + Sync {
         threshold: f32,
         limit: usize,
     ) -> Result<Vec<ScoredFact>, AlephError>;
+
+    /// Apply decay to all valid facts by multiplying their decay score.
+    ///
+    /// Facts whose score falls below `min_score` are invalidated.
+    /// Returns the number of facts that were updated or invalidated.
+    async fn apply_fact_decay(
+        &self,
+        decay_factor: f32,
+        min_score: f32,
+    ) -> Result<usize, AlephError>;
+
+    /// Get aggregate statistics about stored facts.
+    async fn get_fact_stats(&self) -> Result<FactStats, AlephError>;
+
+    /// Soft-delete a fact with a given reason (alias for `invalidate_fact`).
+    ///
+    /// Used by the lazy decay engine.
+    async fn soft_delete_fact(&self, id: &str, reason: &str) -> Result<(), AlephError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +352,115 @@ pub trait SessionStore: Send + Sync {
 
     /// Get aggregate statistics across all storage layers.
     async fn get_stats(&self) -> Result<StoreStats, AlephError>;
+
+    /// Get memories created at or after the given timestamp within a namespace.
+    ///
+    /// Used by the DreamDaemon for daily consolidation.
+    async fn get_memories_since(
+        &self,
+        since_timestamp: i64,
+        namespace: &NamespaceScope,
+    ) -> Result<Vec<MemoryEntry>, AlephError>;
+
+    /// Delete memory entries older than the given cutoff timestamp.
+    ///
+    /// Returns the number of deleted entries. Used by cleanup services.
+    async fn delete_older_than(
+        &self,
+        cutoff_timestamp: i64,
+    ) -> Result<u64, AlephError>;
+
+    /// Clear memories with optional app/window filters.
+    ///
+    /// When both filters are `None`, clears all memories.
+    /// Returns the number of deleted entries.
+    async fn clear_memories(
+        &self,
+        app_filter: Option<&str>,
+        window_filter: Option<&str>,
+    ) -> Result<u64, AlephError>;
+
+    /// Get uncompressed memories since a timestamp, up to a limit.
+    ///
+    /// Used by the compression service to find raw memories that
+    /// have not yet been distilled into facts.
+    async fn get_uncompressed_memories(
+        &self,
+        since_timestamp: i64,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>, AlephError>;
+}
+
+// ---------------------------------------------------------------------------
+// DreamStore -- Dream daemon persistence trait
+// ---------------------------------------------------------------------------
+
+/// Abstraction over dream daemon state persistence.
+///
+/// Provides storage for dream run status and daily insight summaries
+/// generated during idle-time memory consolidation.
+#[async_trait]
+pub trait DreamStore: Send + Sync {
+    /// Get the current dream daemon status.
+    async fn get_dream_status(&self) -> Result<DreamStatus, AlephError>;
+
+    /// Update the dream daemon status.
+    async fn set_dream_status(&self, status: DreamStatus) -> Result<(), AlephError>;
+
+    /// Insert or update a daily insight for the given date.
+    async fn upsert_daily_insight(&self, insight: DailyInsight) -> Result<(), AlephError>;
+
+    /// Get the daily insight for a specific date (YYYY-MM-DD format).
+    async fn get_daily_insight(&self, date: &str) -> Result<Option<DailyInsight>, AlephError>;
+}
+
+// ---------------------------------------------------------------------------
+// AuditStore -- Fact audit log persistence trait
+// ---------------------------------------------------------------------------
+
+/// Abstraction over fact audit log storage.
+///
+/// Records all mutations (creation, update, invalidation, deletion) that
+/// happen to facts, providing a complete audit trail.
+#[async_trait]
+pub trait AuditStore: Send + Sync {
+    /// Insert a new audit entry.
+    async fn insert_audit_entry(&self, entry: &AuditEntry) -> Result<(), AlephError>;
+
+    /// Get all audit entries for a specific fact.
+    async fn get_audit_entries_for_fact(
+        &self,
+        fact_id: &str,
+    ) -> Result<Vec<AuditEntry>, AlephError>;
+
+    /// Get the most recent audit entries across all facts.
+    async fn get_recent_audit_entries(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<AuditEntry>, AlephError>;
+}
+
+// ---------------------------------------------------------------------------
+// CompressionStore -- Compression session persistence trait
+// ---------------------------------------------------------------------------
+
+/// Abstraction over compression session metadata storage.
+///
+/// Tracks when compression was last run and stores session records
+/// for auditing the memory compression pipeline.
+#[async_trait]
+pub trait CompressionStore: Send + Sync {
+    /// Set the timestamp of the last successful compression run.
+    async fn set_last_compression_timestamp(&self, timestamp: i64) -> Result<(), AlephError>;
+
+    /// Get the timestamp of the last successful compression run.
+    async fn get_last_compression_timestamp(&self) -> Result<Option<i64>, AlephError>;
+
+    /// Record a completed compression session for auditing.
+    async fn record_compression_session(
+        &self,
+        session: &CompressionSession,
+    ) -> Result<(), AlephError>;
 }
 
 // ---------------------------------------------------------------------------

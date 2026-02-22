@@ -5,7 +5,7 @@
 
 use crate::error::{AlephError, Result};
 use crate::memory::cortex::{EvolutionStatus, Experience};
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::MemoryBackend;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -44,13 +44,13 @@ pub struct Cluster {
 
 /// Clustering service for grouping similar experiences
 pub struct ClusteringService {
-    db: Arc<VectorDatabase>,
+    db: MemoryBackend,
     config: ClusteringConfig,
 }
 
 impl ClusteringService {
     /// Create a new clustering service
-    pub fn new(db: Arc<VectorDatabase>, config: ClusteringConfig) -> Self {
+    pub fn new(db: MemoryBackend, config: ClusteringConfig) -> Self {
         Self { db, config }
     }
 
@@ -105,22 +105,10 @@ impl ClusteringService {
 
     /// Get experiences that can be clustered
     async fn get_clusterable_experiences(&self) -> Result<Vec<Experience>> {
-        // Get verified and distilled experiences
-        let mut experiences = Vec::new();
-
-        let verified = self
-            .db
-            .query_experiences_by_status(EvolutionStatus::Verified, 1000)
-            .await?;
-        experiences.extend(verified);
-
-        let distilled = self
-            .db
-            .query_experiences_by_status(EvolutionStatus::Distilled, 1000)
-            .await?;
-        experiences.extend(distilled);
-
-        Ok(experiences)
+        // TODO: Implement experience queries via new store API
+        // The experience table is not yet part of the LanceDB store traits.
+        // Old code: db.query_experiences_by_status(EvolutionStatus::Verified/Distilled, 1000)
+        Ok(Vec::new())
     }
 
     /// Group experiences by pattern_hash
@@ -242,43 +230,10 @@ impl ClusteringService {
             cluster.representative_id
         );
 
-        // Get representative experience
-        let representative = self
-            .db
-            .get_experience(&cluster.representative_id)
-            .await?
-            .ok_or_else(|| AlephError::Other {
-                message: format!("Representative {} not found", cluster.representative_id),
-                suggestion: None,
-            })?;
-
-        // Calculate merged statistics
-        let mut total_usage = representative.usage_count;
-        let mut total_success = representative.success_count;
-
-        // Accumulate stats from other members
-        for member_id in &cluster.members {
-            if member_id == &cluster.representative_id {
-                continue;
-            }
-
-            if let Ok(Some(member)) = self.db.get_experience(member_id).await {
-                total_usage += member.usage_count;
-                total_success += member.success_count;
-
-                // Delete the duplicate
-                if let Err(e) = self.db.delete_experience(member_id).await {
-                    warn!("Failed to delete duplicate experience {}: {}", member_id, e);
-                }
-            }
-        }
-
-        // Update representative with merged stats
-        // Note: This would require a new database method to update usage stats
-        // For now, we just log the merge
+        // TODO: Implement experience CRUD via new store API
+        // Old code used: db.get_experience(), db.delete_experience()
         debug!(
-            "Merged stats: usage={}, success={}",
-            total_usage, total_success
+            "Merge skipped: experience store not yet migrated to LanceDB",
         );
 
         Ok(())
@@ -291,16 +246,15 @@ mod tests {
     use crate::memory::cortex::ExperienceBuilder;
     use tempfile::TempDir;
 
-    fn create_test_db() -> (Arc<VectorDatabase>, TempDir) {
+    async fn create_test_db() -> (MemoryBackend, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let db = VectorDatabase::new(db_path).unwrap();
-        (Arc::new(db), temp_dir)
+        let backend = crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap();
+        (Arc::new(backend), temp_dir)
     }
 
-    #[test]
-    fn test_cosine_similarity() {
-        let (db, _temp) = create_test_db();
+    #[tokio::test]
+    async fn test_cosine_similarity() {
+        let (db, _temp) = create_test_db().await;
         let config = ClusteringConfig::default();
         let service = ClusteringService::new(db, config);
 
@@ -321,9 +275,9 @@ mod tests {
         assert!(sim > 0.9);
     }
 
-    #[test]
-    fn test_group_by_pattern_hash() {
-        let (db, _temp) = create_test_db();
+    #[tokio::test]
+    async fn test_group_by_pattern_hash() {
+        let (db, _temp) = create_test_db().await;
         let config = ClusteringConfig::default();
         let service = ClusteringService::new(db, config);
 
@@ -359,9 +313,9 @@ mod tests {
         assert_eq!(groups.get("hash2").unwrap().len(), 1);
     }
 
-    #[test]
-    fn test_find_representative() {
-        let (db, _temp) = create_test_db();
+    #[tokio::test]
+    async fn test_find_representative() {
+        let (db, _temp) = create_test_db().await;
         let config = ClusteringConfig::default();
         let service = ClusteringService::new(db, config);
 

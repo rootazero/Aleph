@@ -5,7 +5,7 @@
 
 use crate::error::{AlephError, Result};
 use crate::memory::cortex::{DistillationMode, DistillationTask};
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::MemoryBackend;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -56,7 +56,7 @@ impl Default for DistillationConfig {
 /// Distillation service for processing experiences
 pub struct DistillationService {
     /// Database handle
-    db: Arc<VectorDatabase>,
+    db: MemoryBackend,
     /// Configuration
     config: DistillationConfig,
     /// Task sender
@@ -67,7 +67,7 @@ pub struct DistillationService {
 
 impl DistillationService {
     /// Create a new distillation service
-    pub fn new(db: Arc<VectorDatabase>, config: DistillationConfig) -> (Self, mpsc::Receiver<PrioritizedTask>) {
+    pub fn new(db: MemoryBackend, config: DistillationConfig) -> (Self, mpsc::Receiver<PrioritizedTask>) {
         let (task_tx, task_rx) = mpsc::channel(config.queue_capacity);
 
         let service = Self {
@@ -145,7 +145,7 @@ impl DistillationService {
 
     /// Worker loop that processes distillation tasks
     async fn worker_loop(
-        db: Arc<VectorDatabase>,
+        db: MemoryBackend,
         _config: DistillationConfig,
         mut task_rx: mpsc::Receiver<PrioritizedTask>,
     ) {
@@ -174,7 +174,7 @@ impl DistillationService {
     }
 
     /// Process a single distillation task
-    async fn process_task(_db: &VectorDatabase, task: &DistillationTask) -> Result<()> {
+    async fn process_task(_db: &crate::memory::store::lance::LanceMemoryBackend, task: &DistillationTask) -> Result<()> {
         // Placeholder implementation
         // Will be replaced with actual pattern extraction in Task #7
         debug!("Processing task: {:?}", task);
@@ -187,16 +187,15 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn create_test_db() -> (Arc<VectorDatabase>, TempDir) {
+    async fn create_test_db() -> (MemoryBackend, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let db = VectorDatabase::new(db_path).unwrap();
-        (Arc::new(db), temp_dir)
+        let backend = crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap();
+        (Arc::new(backend), temp_dir)
     }
 
     #[tokio::test]
     async fn test_service_lifecycle() {
-        let (db, _temp) = create_test_db();
+        let (db, _temp) = create_test_db().await;
         let config = DistillationConfig::default();
 
         let (mut service, task_rx) = DistillationService::new(db, config);
@@ -212,7 +211,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_enqueue_task() {
-        let (db, _temp) = create_test_db();
+        let (db, _temp) = create_test_db().await;
         let config = DistillationConfig::default();
 
         let (mut service, task_rx) = DistillationService::new(db, config);
@@ -233,7 +232,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_mode() {
-        let (db, _temp) = create_test_db();
+        let (db, _temp) = create_test_db().await;
         let config = DistillationConfig {
             enable_realtime: false,
             ..Default::default()

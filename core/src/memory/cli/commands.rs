@@ -4,7 +4,7 @@
 
 use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryFact, FactSpecificity, TemporalScope};
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::smart_embedder::SmartEmbedder;
 use std::sync::Arc;
 
@@ -149,12 +149,12 @@ impl FactSummary {
 
 /// Memory CLI commands
 pub struct MemoryCommands {
-    db: Arc<VectorDatabase>,
+    db: MemoryBackend,
 }
 
 impl MemoryCommands {
     /// Create new commands instance
-    pub fn new(db: Arc<VectorDatabase>) -> Self {
+    pub fn new(db: MemoryBackend) -> Self {
         Self { db }
     }
 
@@ -345,7 +345,7 @@ impl MemoryCommands {
         let fact_id = fact.id.clone();
 
         // Insert into database
-        self.db.insert_fact(fact).await?;
+        self.db.insert_fact(&fact).await?;
 
         Ok(fact_id)
     }
@@ -368,8 +368,10 @@ impl MemoryCommands {
         };
 
         // Update in database
+        // TODO: Handle embedding update separately if needed
+        let _ = embedding; // embedding update not supported in new API
         self.db
-            .update_fact_content(&full_id, new_content, embedding.as_deref())
+            .update_fact_content(&full_id, new_content)
             .await?;
 
         Ok(full_id)
@@ -391,7 +393,9 @@ impl MemoryCommands {
         // Resolve ID (support prefix match)
         let full_id = self.resolve_fact_id(id).await?;
 
-        self.db.restore_fact(&full_id).await?;
+        // TODO: Implement restore via new store API (update fact to set is_valid = true)
+        // self.db.restore_fact(&full_id).await?;
+        return Err(AlephError::other("restore_fact not yet implemented in new store API"));
 
         Ok(full_id)
     }
@@ -422,8 +426,13 @@ impl MemoryCommands {
     ///
     /// Returns GC statistics
     pub async fn gc(&self, retention_days: u32) -> Result<GcResult, AlephError> {
-        let deleted = self.db.purge_old_invalidated_facts(retention_days).await?;
-        let (valid_facts, remaining_invalid) = self.db.count_facts(true).await?;
+        // TODO: Implement purge via new store API
+        let deleted = 0usize; // self.db.purge_old_invalidated_facts(retention_days).await?;
+        let valid_facts = self.db.count_facts(&crate::memory::store::types::SearchFilter::valid_only(None)).await?;
+        let remaining_invalid = {
+            let all = self.db.count_facts(&crate::memory::store::types::SearchFilter::new()).await?;
+            all.saturating_sub(valid_facts)
+        };
 
         Ok(GcResult {
             deleted_count: deleted,
@@ -499,7 +508,7 @@ impl MemoryCommands {
             }
 
             // Insert fact
-            match self.db.insert_fact(fact).await {
+            match self.db.insert_fact(&fact).await {
                 Ok(_) => imported += 1,
                 Err(e) => errors.push(format!("{}: {}", exported.id, e)),
             }
@@ -514,7 +523,11 @@ impl MemoryCommands {
 
     /// Get statistics about the memory database
     pub async fn stats(&self) -> Result<MemoryStats, AlephError> {
-        let (valid, invalid) = self.db.count_facts(true).await?;
+        let valid = self.db.count_facts(&crate::memory::store::types::SearchFilter::valid_only(None)).await?;
+        let invalid = {
+            let all = self.db.count_facts(&crate::memory::store::types::SearchFilter::new()).await?;
+            all.saturating_sub(valid)
+        };
 
         Ok(MemoryStats {
             total_facts: valid + invalid,

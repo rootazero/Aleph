@@ -5,11 +5,12 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use super::error::ToolError;
 use crate::error::Result;
-use crate::memory::VectorDatabase;
+use crate::memory::namespace::NamespaceScope;
+use crate::memory::store::{MemoryBackend, MemoryStore, PathEntry as StorePathEntry};
+use crate::memory::FactSource;
 use crate::tools::AlephTool;
 
 /// Browse action type
@@ -87,11 +88,11 @@ pub struct GlobMatch {
 
 /// Memory browse tool
 pub struct MemoryBrowseTool {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
 }
 
 impl MemoryBrowseTool {
-    pub fn new(database: Arc<VectorDatabase>) -> Self {
+    pub fn new(database: MemoryBackend) -> Self {
         Self { database }
     }
 
@@ -130,16 +131,21 @@ impl MemoryBrowseTool {
     }
 
     async fn handle_ls(&self, path: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
-        let children = self.database.list_path_children(path).await
+        // Old: db.list_path_children(path) → New: db.list_by_path(path, &NamespaceScope::Owner)
+        let children: Vec<StorePathEntry> = self.database
+            .list_by_path(path, &NamespaceScope::Owner)
+            .await
             .map_err(|e| ToolError::Execution(format!("Failed to list path: {}", e)))?;
 
         let entries: Vec<BrowseLsEntry> = children.into_iter().map(|c| BrowseLsEntry {
-            name: c.name,
-            path: c.full_path,
-            is_directory: c.is_directory,
-            fact_count: c.fact_count,
-            l1_available: c.has_l1,
-            abstract_line: c.abstract_line,
+            // The new PathEntry has: path, is_leaf, child_count
+            // We adapt to the old BrowseLsEntry fields
+            name: c.path.trim_start_matches(path).to_string(),
+            path: c.path.clone(),
+            is_directory: !c.is_leaf,
+            fact_count: c.child_count,
+            l1_available: false, // TODO: Check if L1 exists for this path
+            abstract_line: String::new(), // TODO: Extract from L1 if available
         }).collect();
 
         let summary = format!("{} - {} entries", path, entries.len());
@@ -156,28 +162,36 @@ impl MemoryBrowseTool {
     }
 
     async fn handle_read(&self, path: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
-        // First try L1 overview
-        if let Ok(Some(l1)) = self.database.get_l1_overview(path).await {
-            return Ok(MemoryBrowseOutput {
-                action: "read".to_string(),
-                path: path.to_string(),
-                entries: None,
-                content: Some(l1.content.clone()),
-                metadata: Some(ReadMetadata {
-                    fact_type: l1.fact_type.to_string(),
-                    fact_source: l1.fact_source.to_string(),
-                    created_at: l1.created_at,
-                    updated_at: l1.updated_at,
-                    confidence: l1.confidence,
-                }),
-                matches: None,
-                summary: format!("{} - L1 Overview", path),
-            });
+        // First try L1 overview (fact with FactSource::Summary at this path)
+        // Old: db.get_l1_overview(path) → New: db.get_by_path(path, &NamespaceScope::Owner)
+        if let Ok(Some(l1)) = self.database.get_by_path(path, &NamespaceScope::Owner).await {
+            if l1.fact_source == FactSource::Summary {
+                return Ok(MemoryBrowseOutput {
+                    action: "read".to_string(),
+                    path: path.to_string(),
+                    entries: None,
+                    content: Some(l1.content.clone()),
+                    metadata: Some(ReadMetadata {
+                        fact_type: l1.fact_type.to_string(),
+                        fact_source: l1.fact_source.to_string(),
+                        created_at: l1.created_at,
+                        updated_at: l1.updated_at,
+                        confidence: l1.confidence,
+                    }),
+                    matches: None,
+                    summary: format!("{} - L1 Overview", path),
+                });
+            }
         }
 
         // Otherwise return all facts at this path
-        let facts = self.database.get_facts_by_path_prefix(path).await
+        // Old: db.get_facts_by_path_prefix(path) → New: get_all_facts + filter by path prefix
+        // TODO: Add get_facts_by_path_prefix to MemoryStore for efficiency
+        let all_facts = self.database.get_all_facts(false).await
             .map_err(|e| ToolError::Execution(format!("Failed to read path: {}", e)))?;
+        let facts: Vec<_> = all_facts.into_iter()
+            .filter(|f| f.path.starts_with(path) && f.is_valid)
+            .collect();
 
         if facts.is_empty() {
             return Ok(MemoryBrowseOutput {
@@ -228,10 +242,15 @@ impl MemoryBrowseTool {
     }
 
     async fn handle_glob(&self, path: &str, pattern: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
-        let all_facts = self.database.get_facts_by_path_prefix(path).await
+        // Old: db.get_facts_by_path_prefix(path) → New: get_all_facts + filter
+        // TODO: Add get_facts_by_path_prefix to MemoryStore for efficiency
+        let all_facts = self.database.get_all_facts(false).await
             .map_err(|e| ToolError::Execution(format!("Failed to glob: {}", e)))?;
+        let path_facts: Vec<_> = all_facts.into_iter()
+            .filter(|f| f.path.starts_with(path) && f.is_valid)
+            .collect();
 
-        let matches: Vec<GlobMatch> = all_facts.into_iter()
+        let matches: Vec<GlobMatch> = path_facts.into_iter()
             .filter(|f| {
                 let relative = f.path.strip_prefix(path).unwrap_or(&f.path);
                 if pattern == "*" {

@@ -141,6 +141,11 @@ impl MemoryContext {
             specificity: FactSpecificity::default(),
             temporal_scope: TemporalScope::default(),
             similarity_score: None,
+            path: String::new(),
+            fact_source: alephcore::memory::context::FactSource::Extracted,
+            content_hash: String::new(),
+            parent_path: String::new(),
+            embedding_model: String::new(),
         }
     }
 
@@ -209,7 +214,7 @@ impl MemoryContext {
         let config = self.config.clone().expect("Config not initialized");
 
         self.ingestion = Some(MemoryIngestion::new(
-            db,
+            memory_backend.clone(),
             embedder.clone(),
             config.clone(),
         ));

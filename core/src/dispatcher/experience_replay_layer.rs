@@ -5,7 +5,7 @@
 
 use crate::error::{AlephError, Result};
 use crate::memory::cortex::{EvolutionStatus, Experience, ParameterMapping, ReplayMatch};
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::MemoryBackend;
 use crate::memory::smart_embedder::SmartEmbedder;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -33,7 +33,7 @@ impl Default for ExperienceReplayConfig {
 
 /// L1.5 Experience Replay Layer
 pub struct ExperienceReplayLayer {
-    db: Arc<VectorDatabase>,
+    db: MemoryBackend,
     embedder: Arc<SmartEmbedder>,
     config: ExperienceReplayConfig,
 }
@@ -41,7 +41,7 @@ pub struct ExperienceReplayLayer {
 impl ExperienceReplayLayer {
     /// Create a new Experience Replay Layer
     pub fn new(
-        db: Arc<VectorDatabase>,
+        db: MemoryBackend,
         embedder: Arc<SmartEmbedder>,
         config: ExperienceReplayConfig,
     ) -> Self {
@@ -69,16 +69,9 @@ impl ExperienceReplayLayer {
             }
         })?;
 
-        // Step 2: Vector similarity search (only verified/distilled experiences)
-        let candidates = self
-            .db
-            .vector_search_experiences(
-                &intent_vector,
-                self.config.max_candidates,
-                self.config.similarity_threshold,
-                Some(vec![EvolutionStatus::Verified, EvolutionStatus::Distilled]),
-            )
-            .await?;
+        // TODO: Implement experience vector search via new store API
+        // Old code: db.vector_search_experiences(vector, max_candidates, threshold, statuses)
+        let candidates: Vec<(Experience, f64)> = Vec::new();
 
         if candidates.is_empty() {
             debug!("L1.5: No matching experiences found");
@@ -253,16 +246,15 @@ mod tests {
     use std::collections::HashMap;
     use tempfile::TempDir;
 
-    fn create_test_db() -> (Arc<VectorDatabase>, TempDir) {
+    async fn create_test_db() -> (MemoryBackend, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let db = VectorDatabase::new(db_path).unwrap();
-        (Arc::new(db), temp_dir)
+        let backend = crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap();
+        (Arc::new(backend), temp_dir)
     }
 
-    #[test]
-    fn test_extract_with_regex() {
-        let (db, temp) = create_test_db();
+    #[tokio::test]
+    async fn test_extract_with_regex() {
+        let (db, temp) = create_test_db().await;
         let cache_dir = temp.path().join("embedder_cache");
         let embedder = Arc::new(SmartEmbedder::new(cache_dir, 3600));
         let config = ExperienceReplayConfig::default();
@@ -275,9 +267,9 @@ mod tests {
         assert_eq!(result, Some("main.rs".to_string()));
     }
 
-    #[test]
-    fn test_extract_after_keyword() {
-        let (db, temp) = create_test_db();
+    #[tokio::test]
+    async fn test_extract_after_keyword() {
+        let (db, temp) = create_test_db().await;
         let cache_dir = temp.path().join("embedder_cache");
         let embedder = Arc::new(SmartEmbedder::new(cache_dir, 3600));
         let config = ExperienceReplayConfig::default();

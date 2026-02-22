@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -78,18 +78,18 @@ impl Default for ConflictConfig {
 
 /// Detects and resolves conflicting facts
 pub struct ConflictDetector {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     config: ConflictConfig,
 }
 
 impl ConflictDetector {
     /// Create a new conflict detector
-    pub fn new(database: Arc<VectorDatabase>, config: ConflictConfig) -> Self {
+    pub fn new(database: MemoryBackend, config: ConflictConfig) -> Self {
         Self { database, config }
     }
 
     /// Create with default configuration
-    pub fn with_defaults(database: Arc<VectorDatabase>) -> Self {
+    pub fn with_defaults(database: MemoryBackend) -> Self {
         Self::new(database, ConflictConfig::default())
     }
 
@@ -106,13 +106,17 @@ impl ConflictDetector {
         })?;
 
         // Find similar existing facts
+        let filter = crate::memory::store::types::SearchFilter::valid_only(
+            Some(crate::memory::NamespaceScope::Owner),
+        );
         let similar_facts = self
             .database
             .find_similar_facts(
                 embedding,
-                crate::memory::NamespaceScope::Owner, // TODO: Pass from context
+                crate::memory::EMBEDDING_DIM as u32,
+                &filter,
                 self.config.similarity_threshold,
-                Some(&new_fact.id),
+                20, // reasonable limit
             )
             .await?;
 
@@ -124,19 +128,20 @@ impl ConflictDetector {
         // New facts always win (user-confirmed design decision)
         let resolutions: Vec<ConflictResolution> = similar_facts
             .into_iter()
-            .map(|old_fact| {
-                let similarity = old_fact.similarity_score.unwrap_or(0.0);
+            .filter(|sf| sf.fact.id != new_fact.id) // exclude self
+            .map(|scored_fact| {
+                let similarity = scored_fact.score;
 
                 tracing::info!(
-                    old_fact_id = %old_fact.id,
-                    old_content = %old_fact.content,
+                    old_fact_id = %scored_fact.fact.id,
+                    old_content = %scored_fact.fact.content,
                     new_content = %new_fact.content,
                     similarity = similarity,
                     "Detected conflicting fact, will override old"
                 );
 
                 ConflictResolution::Override {
-                    invalidated_id: old_fact.id.clone(),
+                    invalidated_id: scored_fact.fact.id.clone(),
                     reason: format!(
                         "Superseded by newer fact (similarity: {:.2}): {}",
                         similarity,
@@ -211,8 +216,8 @@ mod tests {
 
     async fn create_test_detector() -> ConflictDetector {
         let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("test_conflict.db");
-        let database = Arc::new(VectorDatabase::new(db_path).unwrap());
+        let database: MemoryBackend =
+            Arc::new(crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap());
         ConflictDetector::with_defaults(database)
     }
 
@@ -236,8 +241,8 @@ mod tests {
     #[tokio::test]
     async fn test_conflict_detection_with_similar_fact() {
         let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("test_conflict2.db");
-        let database = Arc::new(VectorDatabase::new(db_path).unwrap());
+        let database: MemoryBackend =
+            Arc::new(crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap());
 
         // Insert an existing fact
         let old_fact = MemoryFact::new(
@@ -247,7 +252,7 @@ mod tests {
         )
         .with_embedding(vec![0.5; crate::memory::EMBEDDING_DIM]);
 
-        database.insert_fact(old_fact.clone()).await.unwrap();
+        database.insert_fact(&old_fact).await.unwrap();
 
         let detector = ConflictDetector::with_defaults(database);
 
