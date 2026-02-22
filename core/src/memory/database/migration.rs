@@ -241,6 +241,52 @@ pub fn migrate_add_vfs_paths(conn: &Connection) -> Result<(), AlephError> {
     Ok(())
 }
 
+/// Migrate memory_facts table to include embedding_model column
+///
+/// Records which embedding model generated each fact's vector.
+/// Enables lazy re-embedding when the configured model changes.
+pub fn migrate_add_embedding_model(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch("SAVEPOINT migration_embedding_model")
+        .map_err(|e| AlephError::config(format!("Failed to begin embedding_model migration: {}", e)))?;
+
+    let has_column: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('memory_facts') WHERE name='embedding_model'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_embedding_model");
+            AlephError::config(format!("Failed to check embedding_model column: {}", e))
+        })?;
+
+    if has_column == 0 {
+        conn.execute(
+            "ALTER TABLE memory_facts ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_embedding_model");
+            AlephError::config(format!("Failed to add embedding_model column: {}", e))
+        })?;
+
+        tracing::info!("Added embedding_model column to memory_facts table");
+    }
+
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_facts_embedding_model ON memory_facts(embedding_model);",
+    )
+    .map_err(|e| {
+        let _ = conn.execute_batch("ROLLBACK TO migration_embedding_model");
+        AlephError::config(format!("Failed to create embedding_model index: {}", e))
+    })?;
+
+    conn.execute_batch("RELEASE migration_embedding_model")
+        .map_err(|e| AlephError::config(format!("Failed to commit embedding_model migration: {}", e)))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,4 +652,48 @@ mod tests {
             .unwrap();
         assert_eq!(fact_source, "extracted");
     }
+
+    #[test]
+    fn test_migrate_add_embedding_model_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        conn.execute_batch(
+            "CREATE TABLE memory_facts (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                is_valid INTEGER NOT NULL DEFAULT 1,
+                namespace TEXT NOT NULL DEFAULT 'owner',
+                path TEXT NOT NULL DEFAULT '',
+                fact_source TEXT NOT NULL DEFAULT 'extracted',
+                content_hash TEXT NOT NULL DEFAULT '',
+                parent_path TEXT NOT NULL DEFAULT ''
+            )",
+        )
+        .unwrap();
+
+        // First migration should add column
+        migrate_add_embedding_model(&conn).unwrap();
+
+        let has_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('memory_facts') WHERE name='embedding_model'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_col, 1);
+
+        // Second migration should be no-op
+        migrate_add_embedding_model(&conn).unwrap();
+
+        let has_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('memory_facts') WHERE name='embedding_model'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_col, 1);
+    }
+
 }
