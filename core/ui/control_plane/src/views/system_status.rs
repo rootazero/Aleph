@@ -97,8 +97,8 @@ pub fn SystemStatus() -> impl IntoView {
         <div class="p-8 max-w-7xl mx-auto space-y-12">
             <header class="flex items-center justify-between">
                 <div>
-                    <h2 class="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3 text-slate-100">
-                        <svg width="32" height="32" attr:class="w-8 h-8 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <h2 class="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3 text-text-primary">
+                        <svg width="32" height="32" attr:class="w-8 h-8 text-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
                             <rect x="9" y="9" width="6" height="6" />
                             <line x1="9" y1="1" x2="9" y2="4" />
@@ -112,7 +112,7 @@ pub fn SystemStatus() -> impl IntoView {
                         </svg>
                         "System Health"
                     </h2>
-                    <p class="text-slate-400">"Real-time monitoring of Aleph Core and Infrastructure."</p>
+                    <p class="text-text-secondary">"Real-time monitoring of Aleph Core and Infrastructure."</p>
                 </div>
 
                 <div class="flex gap-3">
@@ -170,7 +170,7 @@ pub fn SystemStatus() -> impl IntoView {
             {move || {
                 if let Some(error) = state.connection_error.get() {
                     view! {
-                        <div class="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
+                        <div class="bg-danger-subtle border border-danger/20 rounded-xl p-4 text-sm text-danger">
                             <strong>"Connection Error: "</strong> {error}
                         </div>
                     }.into_any()
@@ -182,7 +182,7 @@ pub fn SystemStatus() -> impl IntoView {
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 // Core Services
                 <div class="space-y-6">
-                    <h3 class="text-xl font-semibold px-1 text-slate-300">"Core Services"</h3>
+                    <h3 class="text-xl font-semibold px-1 text-text-secondary">"Core Services"</h3>
                     <div class="space-y-4">
                         <ServiceCard
                             name="Gateway Engine"
@@ -213,22 +213,22 @@ pub fn SystemStatus() -> impl IntoView {
 
                 // Resource Usage
                 <div class="space-y-6">
-                    <h3 class="text-xl font-semibold px-1 text-slate-300">"Resource Utilization"</h3>
+                    <h3 class="text-xl font-semibold px-1 text-text-secondary">"Resource Utilization"</h3>
                     <Card class="p-8 space-y-8">
-                        <ResourceMetric label="CPU Clusters" value="24%" sub="16 Cores Active" color="bg-emerald-500" progress=24>
+                        <ResourceMetric label="CPU Clusters" value="24%" sub="16 Cores Active" color="bg-success" progress=24>
                             <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
                             <rect x="9" y="9" width="6" height="6" />
                             <line x1="9" y1="1" x2="9" y2="4" />
                             <line x1="15" y1="1" x2="15" y2="4" />
                         </ResourceMetric>
-                        <ResourceMetric label="Neural Memory" value="4.2 GB" sub="Total 16 GB Allocated" color="bg-indigo-500" progress=26>
+                        <ResourceMetric label="Neural Memory" value="4.2 GB" sub="Total 16 GB Allocated" color="bg-primary" progress=26>
                              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
                         </ResourceMetric>
-                        <ResourceMetric label="Encrypted Storage" value="128 GB" sub="842 GB Remaining" color="bg-purple-500" progress=15>
+                        <ResourceMetric label="Encrypted Storage" value="128 GB" sub="842 GB Remaining" color="bg-primary" progress=15>
                              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
                              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
                         </ResourceMetric>
-                        <ResourceMetric label="Security Layer" value="Enabled" sub="All Guards Active" color="bg-blue-500" progress=100>
+                        <ResourceMetric label="Security Layer" value="Enabled" sub="All Guards Active" color="bg-info" progress=100>
                              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                         </ResourceMetric>
                     </Card>
@@ -252,24 +252,24 @@ fn ServiceCard(
     };
 
     view! {
-        <div class="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl flex items-center justify-between group hover:border-slate-700 transition-all hover:bg-slate-800/20 shadow-sm hover:shadow-indigo-500/5">
+        <div class="bg-surface-raised border border-border p-5 rounded-2xl flex items-center justify-between group hover:border-border-strong transition-all">
             <div class="flex items-center gap-4">
-                <div class=move || format!("w-2.5 h-2.5 rounded-full transition-all duration-500 shadow-[0_0_12px] {}", 
-                    if status.get() == "Healthy" { "bg-emerald-500 shadow-emerald-500/60" } 
-                    else if status.get() == "Degraded" { "bg-amber-500 shadow-amber-500/60" }
-                    else { "bg-red-500 shadow-red-500/60" }
+                <div class=move || format!("w-2.5 h-2.5 rounded-full transition-all duration-500 {}",
+                    if status.get() == "Healthy" { "bg-success" }
+                    else if status.get() == "Degraded" { "bg-warning" }
+                    else { "bg-danger" }
                 )></div>
                 <div>
-                    <div class="font-medium text-slate-200 text-sm">{name}</div>
-                    <div class="text-[10px] text-slate-500 font-mono uppercase tracking-tight">{uptime} " uptime"</div>
+                    <div class="font-medium text-text-primary text-sm">{name}</div>
+                    <div class="text-[10px] text-text-tertiary font-mono uppercase tracking-tight">{uptime} " uptime"</div>
                 </div>
             </div>
             <div class="flex items-center gap-6">
                 <div class="text-right">
-                    <div class="text-[9px] text-slate-500 uppercase font-bold tracking-widest mb-0.5">"Latency"</div>
-                    <div class="font-mono text-xs text-slate-300">{latency}</div>
+                    <div class="text-[9px] text-text-tertiary uppercase font-bold tracking-widest mb-0.5">"Latency"</div>
+                    <div class="font-mono text-xs text-text-secondary">{latency}</div>
                 </div>
-                <div class="w-px h-8 bg-slate-800"></div>
+                <div class="w-px h-8 bg-border"></div>
                 <div class="w-24 text-right">
                     <Badge variant=badge_variant()>
                         {move || status.get()}
@@ -291,20 +291,20 @@ fn ResourceMetric(
 ) -> impl IntoView {
     view! {
         <div class="flex items-center gap-6 group">
-            <div class=format!("p-2.5 rounded-xl bg-slate-800/50 text-white transition-transform group-hover:scale-110 {}", color)>
+            <div class=format!("p-2.5 rounded-xl bg-surface-sunken text-white transition-transform group-hover:scale-110 {}", color)>
                 <svg width="20" height="20" attr:class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     {children()}
                 </svg>
             </div>
             <div class="flex-1">
                 <div class="flex items-center justify-between mb-1.5">
-                    <span class="text-xs font-medium text-slate-400 group-hover:text-slate-200 transition-colors">{label}</span>
+                    <span class="text-xs font-medium text-text-secondary group-hover:text-text-primary transition-colors">{label}</span>
                     <span class="text-base font-bold font-mono">{value}</span>
                 </div>
-                <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div class="w-full h-1.5 bg-border rounded-full overflow-hidden">
                     <div class=format!("h-full rounded-full transition-all duration-1000 ease-out {}", color) style=format!("width: {}%", progress)></div>
                 </div>
-                <div class="mt-1.5 text-[9px] text-slate-500 font-medium uppercase tracking-wider">{sub}</div>
+                <div class="mt-1.5 text-[9px] text-text-tertiary font-medium uppercase tracking-wider">{sub}</div>
             </div>
         </div>
     }
