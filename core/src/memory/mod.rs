@@ -108,4 +108,4 @@ pub use cortex::{
     DistillationMode, DistillationTask, EnvironmentContext, EvolutionStatus, Experience,
     ExperienceBuilder, ParameterConfig, ParameterMapping, ReplayMatch,
 };
-pub use vfs::compute_directory_hash;
+pub use vfs::{compute_directory_hash, L1Generator};
