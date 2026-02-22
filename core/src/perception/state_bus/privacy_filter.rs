@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn test_filter_credit_card() {
         let filter = PrivacyFilter::default();
-        let mut element = create_test_element("textfield", Some("4532-1488-0343-6467"));
+        let mut element = create_test_element("textfield", Some("4111-1111-1111-1111"));
 
         filter.filter_element(&mut element);
 
@@ -255,8 +255,9 @@ mod tests {
 
     #[test]
     fn test_luhn_check_valid() {
-        // Valid Visa test card
-        assert!(PrivacyFilter::luhn_check("4532148803436467"));
+        // Valid Visa test cards (Stripe)
+        assert!(PrivacyFilter::luhn_check("4111111111111111"));
+        assert!(PrivacyFilter::luhn_check("4242424242424242"));
     }
 
     #[test]

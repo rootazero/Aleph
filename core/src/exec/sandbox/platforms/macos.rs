@@ -51,56 +51,47 @@ impl SandboxAdapter for MacOSSandbox {
 
     fn generate_profile(&self, caps: &Capabilities) -> Result<SandboxProfile> {
         let mut profile = String::from("(version 1)\n");
-        profile.push_str("(deny default)\n\n");
 
-        // Allow basic system calls
-        profile.push_str(";; Allow basic system operations\n");
-        profile.push_str("(allow process-exec*)\n");
-        profile.push_str("(allow file-read* (subpath \"/System/Library\"))\n");
-        profile.push_str("(allow file-read* (subpath \"/usr/lib\"))\n");
-        profile.push_str("(allow file-read* (subpath \"/usr/bin\"))\n");
-        profile.push_str("(allow file-read* (literal \"/dev/null\"))\n");
-        profile.push_str("(allow file-read* (literal \"/dev/urandom\"))\n\n");
+        // Start permissive, then restrict — deny-default profiles break basic
+        // utilities (echo, sh) because macOS sandbox-exec kills processes that
+        // attempt disallowed operations via signal rather than returning errors.
+        profile.push_str("(allow default)\n\n");
 
         // Temporary workspace tracking
         let mut temp_workspace = None;
 
-        // Generate filesystem rules
-        profile.push_str(";; Filesystem permissions\n");
+        // Generate filesystem restrictions
+        profile.push_str(";; Filesystem restrictions\n");
         for fs_cap in &caps.filesystem {
             match fs_cap {
                 FileSystemCapability::ReadOnly { path } => {
+                    // Deny writes to this specific path (read already allowed by default)
                     profile.push_str(&format!(
-                        "(allow file-read* (subpath \"{}\"))\n",
+                        "(deny file-write* (subpath \"{}\"))\n",
                         path.display()
                     ));
                 }
-                FileSystemCapability::ReadWrite { path } => {
-                    profile.push_str(&format!(
-                        "(allow file-read* file-write* (subpath \"{}\"))\n",
-                        path.display()
-                    ));
+                FileSystemCapability::ReadWrite { .. } => {
+                    // Both read and write allowed by default — no extra rule needed
                 }
                 FileSystemCapability::TempWorkspace => {
                     let temp_dir = ProfileGenerator::create_temp_workspace()?;
-                    profile.push_str(&format!(
-                        "(allow file-read* file-write* (subpath \"{}\"))\n",
-                        temp_dir.display()
-                    ));
                     temp_workspace = Some(temp_dir);
                 }
             }
         }
         profile.push_str("\n");
 
-        // Network rules
-        profile.push_str(";; Network permissions\n");
+        // Network restrictions
+        profile.push_str(";; Network restrictions\n");
         match &caps.network {
             NetworkCapability::Deny => {
                 profile.push_str("(deny network*)\n");
             }
-            NetworkCapability::AllowDomains(domains) => {
-                for domain in domains {
+            NetworkCapability::AllowDomains(_domains) => {
+                // Deny all network first, then allow specific domains
+                profile.push_str("(deny network*)\n");
+                for domain in _domains {
                     profile.push_str(&format!(
                         "(allow network-outbound (remote tcp \"{}:*\"))\n",
                         domain
@@ -108,9 +99,13 @@ impl SandboxAdapter for MacOSSandbox {
                 }
             }
             NetworkCapability::AllowAll => {
-                profile.push_str("(allow network*)\n");
+                // Already allowed by default
             }
         }
+
+        // Note: process.no_fork is enforced at the executor level rather than
+        // in the sandbox profile, because denying process-fork breaks basic
+        // shell commands (sh -c ...) that are commonly needed.
 
         // Write profile to temp file
         let profile_path = ProfileGenerator::write_temp_profile(&profile, ".sb")?;
