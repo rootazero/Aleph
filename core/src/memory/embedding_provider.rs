@@ -46,6 +46,52 @@ pub fn truncate_and_normalize(embedding: Vec<f32>, target_dim: usize) -> Vec<f32
     }
 }
 
+use crate::memory::smart_embedder::SmartEmbedder;
+
+/// Local embedding provider wrapping SmartEmbedder (fastembed)
+///
+/// This is the default provider that uses a local multilingual-e5-small model.
+/// It supports TTL-based lazy loading and background cleanup.
+#[derive(Clone)]
+pub struct LocalEmbeddingProvider {
+    embedder: SmartEmbedder,
+}
+
+impl LocalEmbeddingProvider {
+    /// Create a new local provider from an existing SmartEmbedder
+    pub fn new(embedder: SmartEmbedder) -> Self {
+        Self { embedder }
+    }
+
+    /// Get a reference to the underlying SmartEmbedder
+    pub fn inner(&self) -> &SmartEmbedder {
+        &self.embedder
+    }
+}
+
+#[async_trait::async_trait]
+impl EmbeddingProvider for LocalEmbeddingProvider {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, AlephError> {
+        self.embedder.embed(text).await
+    }
+
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+        self.embedder.embed_batch(texts).await
+    }
+
+    fn dimensions(&self) -> usize {
+        self.embedder.dimensions()
+    }
+
+    fn model_name(&self) -> &str {
+        self.embedder.model_name()
+    }
+
+    fn provider_type(&self) -> &str {
+        "local"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +124,18 @@ mod tests {
         let embedding = vec![0.0, 0.0, 0.0, 0.0];
         let result = truncate_and_normalize(embedding, 2);
         assert_eq!(result, vec![0.0, 0.0]);
+    }
+
+    #[tokio::test]
+    async fn test_local_provider_creation() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let embedder = SmartEmbedder::new(temp_dir.path().to_path_buf(), 60);
+        let provider = LocalEmbeddingProvider::new(embedder);
+
+        assert_eq!(provider.dimensions(), 384);
+        assert_eq!(provider.model_name(), "multilingual-e5-small");
+        assert_eq!(provider.provider_type(), "local");
+
+        provider.inner().shutdown();
     }
 }
