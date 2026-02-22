@@ -15,7 +15,9 @@ use crate::memory::context::{CompressionResult, CompressionSession};
 use crate::memory::database::VectorDatabase;
 use crate::memory::graph::GraphStore;
 use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::vfs::L1Generator;
 use crate::providers::AiProvider;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
@@ -55,6 +57,7 @@ pub struct CompressionService {
     provider_name: String,
     signal_detector: SignalDetector,
     graph_store: GraphStore,
+    l1_generator: Option<Arc<L1Generator>>,
 }
 
 impl CompressionService {
@@ -66,6 +69,13 @@ impl CompressionService {
         config: CompressionConfig,
     ) -> Self {
         let provider_name = provider.name().to_string();
+
+        // Clone for L1Generator before extractor consumes them
+        let l1_generator = Some(Arc::new(L1Generator::new(
+            Arc::clone(&database),
+            Arc::clone(&provider),
+            embedder.clone(),
+        )));
 
         let extractor = Arc::new(FactExtractor::new(provider, embedder));
 
@@ -87,6 +97,7 @@ impl CompressionService {
             provider_name,
             signal_detector: SignalDetector::new(),
             graph_store,
+            l1_generator,
         }
     }
 
@@ -135,6 +146,7 @@ impl CompressionService {
         // 4. Process each fact (conflict detection and storage)
         let mut stored_fact_ids = Vec::new();
         let mut total_invalidated = 0u32;
+        let mut stored_paths: HashMap<String, String> = HashMap::new();
 
         for fact in extracted_facts {
             // Detect conflicts
@@ -151,6 +163,7 @@ impl CompressionService {
             match self.database.insert_fact(fact.clone()).await {
                 Ok(_) => {
                     stored_fact_ids.push(fact.id.clone());
+                    stored_paths.insert(fact.id.clone(), fact.path.clone());
                     tracing::debug!(
                         fact_id = %fact.id,
                         content = %fact.content,
@@ -166,6 +179,26 @@ impl CompressionService {
                         error = %e,
                         "Failed to store fact"
                     );
+                }
+            }
+        }
+
+        // 4b. Generate/update L1 Overviews for affected paths
+        let affected_paths: HashSet<String> = stored_paths.values().cloned().collect();
+
+        if !affected_paths.is_empty() {
+            if let Some(ref l1_gen) = self.l1_generator {
+                tracing::info!(
+                    paths = affected_paths.len(),
+                    "Generating L1 Overviews for affected paths"
+                );
+                match l1_gen.generate_for_affected_paths(&affected_paths).await {
+                    Ok(updated) => {
+                        tracing::info!(updated = updated, "L1 Overview generation completed");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "L1 Overview generation failed (non-fatal)");
+                    }
                 }
             }
         }
