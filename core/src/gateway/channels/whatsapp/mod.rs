@@ -24,7 +24,9 @@
 pub mod bridge_manager;
 pub mod bridge_protocol;
 pub mod config;
+pub mod message;
 pub mod pairing;
+pub mod rpc_client;
 
 pub use config::WhatsAppConfig;
 
