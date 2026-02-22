@@ -66,27 +66,27 @@ pub fn Memory() -> impl IntoView {
         <div class="p-8 max-w-7xl mx-auto space-y-8">
             <header class="flex items-center justify-between">
                 <div>
-                    <h2 class="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3 text-slate-100">
-                        <svg width="32" height="32" attr:class="w-8 h-8 text-purple-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <h2 class="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3 text-text-primary">
+                        <svg width="32" height="32" attr:class="w-8 h-8 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <ellipse cx="12" cy="5" rx="9" ry="3" />
                             <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
                             <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
                         </svg>
                         "Memory Vault"
                     </h2>
-                    <p class="text-slate-400">"Browse and manage Agent's long-term memory and facts."</p>
+                    <p class="text-text-secondary">"Browse and manage Agent's long-term memory and facts."</p>
                 </div>
 
                 <div class="flex items-center gap-3">
                     <div class="relative group">
-                        <svg width="16" height="16" attr:class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-indigo-400 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <svg width="16" height="16" attr:class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary group-focus-within:text-primary transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <circle cx="11" cy="11" r="8" />
                             <line x1="21" y1="21" x2="16.65" y2="16.65" />
                         </svg>
                         <input
                             type="text"
                             placeholder="Search facts..."
-                            class="pl-10 pr-4 py-2 bg-slate-900/40 border border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 w-64 transition-all text-sm text-slate-200 placeholder:text-slate-600 shadow-sm"
+                            class="pl-10 pr-4 py-2 bg-surface-raised border border-border rounded-xl focus:outline-none focus:border-primary/50 focus:ring-4 focus:ring-primary/10 w-64 transition-all text-sm text-text-primary placeholder:text-text-tertiary"
                             disabled=is_disabled
                             on:input=move |ev| {
                                 search_query.set(event_target_value(&ev));
@@ -99,7 +99,7 @@ pub fn Memory() -> impl IntoView {
                         />
                     </div>
                     <Button variant=ButtonVariant::Secondary size=ButtonSize::Sm class="p-2 h-auto rounded-xl".to_string() disabled=is_disabled>
-                        <svg width="20" height="20" attr:class="w-5 h-5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <svg width="20" height="20" attr:class="w-5 h-5 text-text-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
                         </svg>
                     </Button>
@@ -110,15 +110,15 @@ pub fn Memory() -> impl IntoView {
             {move || {
                 if !state.is_connected.get() {
                     view! {
-                        <div class="bg-amber-500/10 border border-amber-500/20 rounded-xl p-6 flex items-start gap-4">
-                            <svg width="24" height="24" attr:class="w-6 h-6 text-amber-500 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <div class="bg-warning-subtle border border-warning/20 rounded-xl p-6 flex items-start gap-4">
+                            <svg width="24" height="24" attr:class="w-6 h-6 text-warning flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
                                 <line x1="12" y1="9" x2="12" y2="13" />
                                 <line x1="12" y1="17" x2="12.01" y2="17" />
                             </svg>
                             <div>
-                                <h3 class="text-amber-400 font-semibold mb-1">"Gateway Connection Required"</h3>
-                                <p class="text-sm text-amber-300/80">"Please connect to the Aleph Gateway from the System Status page to access memory data."</p>
+                                <h3 class="text-warning font-semibold mb-1">"Gateway Connection Required"</h3>
+                                <p class="text-sm text-text-secondary">"Please connect to the Aleph Gateway from the System Status page to access memory data."</p>
                             </div>
                         </div>
                     }.into_any()
@@ -129,8 +129,8 @@ pub fn Memory() -> impl IntoView {
 
             // Memory Stats
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                 <Card class="bg-indigo-500/5 border-indigo-500/10 p-6 flex flex-col items-start".to_string()>
-                    <span class="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1.5">"Total Facts"</span>
+                 <Card class="bg-primary-subtle border-primary/10 p-6 flex flex-col items-start".to_string()>
+                    <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1.5">"Total Facts"</span>
                     <span class="text-3xl font-bold font-mono">
                         {move || {
                             stats.get()
@@ -139,8 +139,8 @@ pub fn Memory() -> impl IntoView {
                         }}
                     </span>
                  </Card>
-                 <Card class="bg-emerald-500/5 border-emerald-500/10 p-6 flex flex-col items-start".to_string()>
-                    <span class="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-1.5">"Vector Size"</span>
+                 <Card class="bg-success-subtle border-success/10 p-6 flex flex-col items-start".to_string()>
+                    <span class="text-[10px] font-bold text-success uppercase tracking-widest mb-1.5">"Vector Size"</span>
                     <span class="text-3xl font-bold font-mono">
                         {move || {
                             stats.get()
@@ -149,8 +149,8 @@ pub fn Memory() -> impl IntoView {
                         }}
                     </span>
                  </Card>
-                 <Card class="bg-purple-500/5 border-purple-500/10 p-6 flex flex-col items-start".to_string()>
-                    <span class="text-[10px] font-bold text-purple-400 uppercase tracking-widest mb-1.5">"Active Sources"</span>
+                 <Card class="bg-primary-subtle border-primary/10 p-6 flex flex-col items-start".to_string()>
+                    <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1.5">"Active Sources"</span>
                     <span class="text-3xl font-bold font-mono">"—"</span>
                  </Card>
             </div>
@@ -159,19 +159,19 @@ pub fn Memory() -> impl IntoView {
             <Card class="overflow-hidden".to_string()>
                 <table class="w-full text-left border-collapse">
                     <thead>
-                        <tr class="bg-slate-800/20 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                        <tr class="bg-surface-sunken text-[10px] font-bold text-text-tertiary uppercase tracking-widest">
                             <th class="p-4 pl-8">"Fact Content"</th>
                             <th class="p-4">"Source"</th>
                             <th class="p-4">"Date"</th>
                             <th class="p-4 pr-8 text-right">"Actions"</th>
                         </tr>
                     </thead>
-                    <tbody class="divide-y divide-slate-800/50">
+                    <tbody class="divide-y divide-border-subtle">
                         {move || {
                             if !state.is_connected.get() {
                                 view! {
                                     <tr>
-                                        <td colspan="4" class="p-8 text-center text-slate-500">
+                                        <td colspan="4" class="p-8 text-center text-text-tertiary">
                                             "Connect to Gateway to view memory facts"
                                         </td>
                                     </tr>
@@ -179,7 +179,7 @@ pub fn Memory() -> impl IntoView {
                             } else if is_searching.get() {
                                 view! {
                                     <tr>
-                                        <td colspan="4" class="p-8 text-center text-slate-500">
+                                        <td colspan="4" class="p-8 text-center text-text-tertiary">
                                             "Searching..."
                                         </td>
                                     </tr>
@@ -187,7 +187,7 @@ pub fn Memory() -> impl IntoView {
                             } else if search_results.get().is_empty() {
                                 view! {
                                     <tr>
-                                        <td colspan="4" class="p-8 text-center text-slate-500">
+                                        <td colspan="4" class="p-8 text-center text-text-tertiary">
                                             "No facts found. Try searching for something."
                                         </td>
                                     </tr>
@@ -225,9 +225,9 @@ fn MemoryRow(
     date: String,
 ) -> impl IntoView {
     view! {
-        <tr class="group hover:bg-slate-800/20 transition-colors">
+        <tr class="group hover:bg-surface-sunken transition-colors">
             <td class="p-4 pl-8">
-                <div class="text-sm font-medium text-slate-200 line-clamp-1 group-hover:line-clamp-none transition-all">{content}</div>
+                <div class="text-sm font-medium text-text-primary line-clamp-1 group-hover:line-clamp-none transition-all">{content}</div>
             </td>
             <td class="p-4">
                 <Badge variant=BadgeVariant::Slate>
@@ -235,7 +235,7 @@ fn MemoryRow(
                 </Badge>
             </td>
             <td class="p-4">
-                <div class="flex items-center gap-2 text-xs text-slate-500 font-mono">
+                <div class="flex items-center gap-2 text-xs text-text-tertiary font-mono">
                     <svg width="12" height="12" attr:class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
                         <line x1="16" y1="2" x2="16" y2="6" />
