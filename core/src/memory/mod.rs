@@ -1,20 +1,19 @@
 //! Memory module for context-aware local RAG
 //!
 //! This module provides functionality for storing and retrieving interaction memories
-//! with context anchors (app_bundle_id + window_title). Uses sqlite-vec extension for
-//! efficient KNN vector similarity search.
+//! with context anchors (app_bundle_id + window_title).
 //!
-//! ## Dual-Layer Architecture
+//! ## Architecture
 //!
-//! - **Layer 1 (Raw Logs)**: Original conversation pairs in `memories` table
-//! - **Layer 2 (Compressed Facts)**: LLM-extracted facts in `memory_facts` table
+//! - **Primary Storage**: LanceDB via `store::lance::LanceMemoryBackend`
+//! - **Legacy Storage**: SQLite (retained for resilience state management only)
 //!
-//! ## Vector Search
+//! ## Storage Traits
 //!
-//! Vector similarity search is powered by sqlite-vec extension:
-//! - `memories_vec`: vec0 virtual table for memory embeddings
-//! - `facts_vec`: vec0 virtual table for fact embeddings
-//! - Uses L2 distance converted to similarity score: 1/(1+distance)
+//! - `MemoryStore`: Fact CRUD, vector search, path operations
+//! - `SessionStore`: Session memory management, compression tracking
+//! - `GraphStore`: Entity relationship graph operations
+//! - `DreamStore`, `AuditStore`, `CompressionStore`: Specialized operations
 
 // Public submodules
 pub mod ai_retrieval;
@@ -117,7 +116,7 @@ pub use cortex::{
     DistillationMode, DistillationTask, EnvironmentContext, EvolutionStatus, Experience,
     ExperienceBuilder, ParameterConfig, ParameterMapping, ReplayMatch,
 };
-pub use database::PathEntry;
+pub use store::PathEntry;
 pub use vfs::{compute_directory_hash, L1Generator, bootstrap_agent_context, migrate_existing_facts_to_paths};
 
 // LanceDB store types (Phase 3)

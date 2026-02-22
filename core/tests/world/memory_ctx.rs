@@ -152,9 +152,8 @@ impl MemoryContext {
     // === Integration Test Helpers ===
 
     /// Create and store test database, embedder and config
-    pub fn setup_integration(&mut self, temp_dir: TempDir, db_path: std::path::PathBuf) {
-        let db = Arc::new(VectorDatabase::new(db_path).expect("Failed to create VectorDatabase"));
-        // Create LanceDB backend for MemoryRetrieval (Phase 4 migration)
+    pub fn setup_integration(&mut self, temp_dir: TempDir, _db_path: std::path::PathBuf) {
+        // Create LanceDB backend (unified storage for both ingestion and retrieval)
         let lance_path = temp_dir.path().join("lance_db");
         let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
         let lance_db: MemoryBackend = Arc::new(
@@ -162,7 +161,6 @@ impl MemoryContext {
                 .expect("Failed to create LanceDB backend"),
         );
         self.temp_dir = Some(temp_dir);
-        self.db = Some(db);
         self.memory_backend = Some(lance_db);
     }
 
@@ -203,12 +201,9 @@ impl MemoryContext {
 
     /// Initialize ingestion and retrieval services
     ///
-    /// NOTE: MemoryIngestion still uses VectorDatabase (will be migrated in Phase 5).
-    /// MemoryRetrieval now uses MemoryBackend (LanceDB). During the transition period,
-    /// integration tests that store via ingestion and retrieve via retrieval won't
-    /// share data across backends.
+    /// Both MemoryIngestion and MemoryRetrieval use MemoryBackend (LanceDB)
+    /// as the unified storage layer.
     pub fn init_services(&mut self) {
-        let db = self.db.clone().expect("Database not initialized");
         let memory_backend = self.memory_backend.clone().expect("MemoryBackend not initialized");
         let embedder = self.embedder.clone().expect("Embedder not initialized");
         let config = self.config.clone().expect("Config not initialized");
