@@ -143,12 +143,12 @@ const SETTINGS_GROUPS: &[SettingsGroup] = &[
 #[component]
 pub fn SettingsSidebar() -> impl IntoView {
     view! {
-        <nav class="w-64 bg-slate-900/30 border-r border-slate-800 p-4 space-y-6 overflow-y-auto">
+        <nav class="w-64 bg-surface-raised border-r border-border p-4 space-y-6 overflow-y-auto">
             <div class="mb-6">
-                <h2 class="text-xl font-bold bg-gradient-to-r from-indigo-400 to-emerald-400 bg-clip-text text-transparent">
+                <h2 class="text-xl font-bold text-text-primary">
                     "Settings"
                 </h2>
-                <p class="text-xs text-slate-500 mt-1">
+                <p class="text-xs text-text-tertiary mt-1">
                     "Configure Aleph Gateway"
                 </p>
             </div>
@@ -156,7 +156,7 @@ pub fn SettingsSidebar() -> impl IntoView {
             {SETTINGS_GROUPS.iter().map(|group| {
                 view! {
                     <div class="space-y-1">
-                        <h3 class="px-3 py-1 text-xs font-medium text-slate-500 uppercase tracking-wider">
+                        <h3 class="px-3 py-1 text-xs font-medium text-text-tertiary uppercase tracking-wider">
                             {group.label}
                         </h3>
                         <div class="space-y-0.5">
@@ -183,7 +183,7 @@ fn SettingsSidebarItem(tab: SettingsTab) -> impl IntoView {
     view! {
         <A
             href=path
-            attr:class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-slate-800/50 group text-slate-300 hover:text-slate-100"
+            attr:class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-surface-sunken group text-text-secondary hover:text-text-primary"
             exact=true
         >
             <svg
@@ -195,7 +195,7 @@ fn SettingsSidebarItem(tab: SettingsTab) -> impl IntoView {
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round"
-                class="text-slate-400 group-hover:text-slate-300"
+                class="text-text-tertiary group-hover:text-text-secondary"
                 inner_html=icon_svg
             />
             <span>

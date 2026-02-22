@@ -30,7 +30,7 @@ pub fn SidebarItem(
     });
 
     view! {
-        <A href=href attr:class="relative group flex items-center gap-3 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/50 transition-all duration-200">
+        <A href=href attr:class="relative group flex items-center gap-3 px-3 py-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-surface-sunken transition-all duration-200">
             // Icon container (relative for badge positioning)
             <div class="relative flex-shrink-0">
                 <svg
