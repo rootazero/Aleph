@@ -111,7 +111,11 @@ impl VectorDatabase {
                 specificity TEXT NOT NULL DEFAULT 'pattern',
                 temporal_scope TEXT NOT NULL DEFAULT 'contextual',
                 decay_invalidated_at INTEGER,
-                namespace TEXT NOT NULL DEFAULT 'owner'
+                namespace TEXT NOT NULL DEFAULT 'owner',
+                path TEXT NOT NULL DEFAULT '',
+                fact_source TEXT NOT NULL DEFAULT 'extracted',
+                content_hash TEXT NOT NULL DEFAULT '',
+                parent_path TEXT NOT NULL DEFAULT ''
             );
 
             -- Index for fact type queries
@@ -137,6 +141,11 @@ impl VectorDatabase {
             CREATE INDEX IF NOT EXISTS idx_facts_namespace_valid
                 ON memory_facts(namespace, is_valid);
 
+
+            -- VFS path indexes for hierarchical memory navigation
+            CREATE INDEX IF NOT EXISTS idx_facts_path ON memory_facts(path);
+            CREATE INDEX IF NOT EXISTS idx_facts_parent_path ON memory_facts(parent_path);
+            CREATE INDEX IF NOT EXISTS idx_facts_source ON memory_facts(fact_source);
             -- Compression session audit table
             CREATE TABLE IF NOT EXISTS compression_sessions (
                 id TEXT PRIMARY KEY,
@@ -460,6 +469,9 @@ impl VectorDatabase {
 
         // Migrate to add experience_replays table for Cortex evolution system (idempotent)
         migration::migrate_add_experience_replays(&conn)?;
+
+        // Migrate to add VFS path columns for hierarchical memory (idempotent)
+        migration::migrate_add_vfs_paths(&conn)?;
 
         // Migrate existing data to vec0 tables (for upgrades from old schema)
         Self::migrate_to_vec0(&conn)?;

@@ -34,6 +34,7 @@ impl VectorDatabase {
                 f.id, f.content, f.fact_type, f.embedding, f.source_memory_ids,
                 f.created_at, f.updated_at, f.confidence, f.is_valid, f.invalidation_reason,
                 f.specificity, f.temporal_scope,
+                f.path, f.fact_source, f.content_hash, f.parent_path,
                 1.0 / (1.0 + vm.distance) as score
             FROM memory_facts f
             INNER JOIN vec_matches vm ON f.rowid = vm.rowid
@@ -56,6 +57,7 @@ impl VectorDatabase {
                 f.id, f.content, f.fact_type, f.embedding, f.source_memory_ids,
                 f.created_at, f.updated_at, f.confidence, f.is_valid, f.invalidation_reason,
                 f.specificity, f.temporal_scope,
+                f.path, f.fact_source, f.content_hash, f.parent_path,
                 1.0 / (1.0 + vm.distance) as score
             FROM memory_facts f
             INNER JOIN vec_matches vm ON f.rowid = vm.rowid
@@ -94,7 +96,11 @@ impl VectorDatabase {
                 let invalidation_reason: Option<String> = row.get(9)?;
                 let specificity_str: String = row.get(10)?;
                 let temporal_scope_str: String = row.get(11)?;
-                let score: f64 = row.get(12)?;
+                let path: String = row.get(12)?;
+                let fact_source_str: String = row.get(13)?;
+                let content_hash: String = row.get(14)?;
+                let parent_path: String = row.get(15)?;
+                let score: f64 = row.get(16)?;
 
                 let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
                 let source_memory_ids: Vec<String> =
@@ -115,10 +121,10 @@ impl VectorDatabase {
                     specificity: FactSpecificity::from_str_or_default(&specificity_str),
                     temporal_scope: TemporalScope::from_str_or_default(&temporal_scope_str),
                     similarity_score: Some(score as f32),
-                    path: String::new(),
-                    fact_source: FactSource::Extracted,
-                    content_hash: String::new(),
-                    parent_path: String::new(),
+                    path,
+                    fact_source: FactSource::from_str_or_default(&fact_source_str),
+                    content_hash,
+                    parent_path,
                 })
             })
             .map_err(|e| AlephError::config(format!("Failed to query facts: {}", e)))?
@@ -154,7 +160,8 @@ impl VectorDatabase {
             r#"
                 SELECT id, content, fact_type, embedding, source_memory_ids,
                        created_at, updated_at, confidence, is_valid, invalidation_reason,
-                       specificity, temporal_scope
+                       specificity, temporal_scope,
+                       path, fact_source, content_hash, parent_path
                 FROM memory_facts
                 WHERE {}
                 ORDER BY updated_at DESC
@@ -191,6 +198,10 @@ impl VectorDatabase {
                 let invalidation_reason: Option<String> = row.get(9)?;
                 let specificity_str: String = row.get(10)?;
                 let temporal_scope_str: String = row.get(11)?;
+                let path: String = row.get(12)?;
+                let fact_source_str: String = row.get(13)?;
+                let content_hash: String = row.get(14)?;
+                let parent_path: String = row.get(15)?;
 
                 let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
                 let source_memory_ids: Vec<String> =
@@ -211,10 +222,10 @@ impl VectorDatabase {
                     specificity: FactSpecificity::from_str_or_default(&specificity_str),
                     temporal_scope: TemporalScope::from_str_or_default(&temporal_scope_str),
                     similarity_score: None,
-                    path: String::new(),
-                    fact_source: FactSource::Extracted,
-                    content_hash: String::new(),
-                    parent_path: String::new(),
+                    path,
+                    fact_source: FactSource::from_str_or_default(&fact_source_str),
+                    content_hash,
+                    parent_path,
                 })
             })
             .map_err(|e| AlephError::config(format!("Failed to query facts: {}", e)))?
@@ -254,6 +265,7 @@ impl VectorDatabase {
                     f.id, f.content, f.fact_type, f.embedding, f.source_memory_ids,
                     f.created_at, f.updated_at, f.confidence, f.is_valid, f.invalidation_reason,
                     f.specificity, f.temporal_scope,
+                    f.path, f.fact_source, f.content_hash, f.parent_path,
                     1.0 / (1.0 + vm.distance) as score
                 FROM memory_facts f
                 INNER JOIN vec_matches vm ON f.rowid = vm.rowid
@@ -291,7 +303,11 @@ impl VectorDatabase {
                 let invalidation_reason: Option<String> = row.get(9)?;
                 let specificity_str: String = row.get(10)?;
                 let temporal_scope_str: String = row.get(11)?;
-                let score: f64 = row.get(12)?;
+                let path: String = row.get(12)?;
+                let fact_source_str: String = row.get(13)?;
+                let content_hash: String = row.get(14)?;
+                let parent_path: String = row.get(15)?;
+                let score: f64 = row.get(16)?;
 
                 let embedding = embedding_bytes.map(|b| Self::deserialize_embedding(&b));
                 let source_memory_ids: Vec<String> =
@@ -312,10 +328,10 @@ impl VectorDatabase {
                     specificity: FactSpecificity::from_str_or_default(&specificity_str),
                     temporal_scope: TemporalScope::from_str_or_default(&temporal_scope_str),
                     similarity_score: Some(score as f32),
-                    path: String::new(),
-                    fact_source: FactSource::Extracted,
-                    content_hash: String::new(),
-                    parent_path: String::new(),
+                    path,
+                    fact_source: FactSource::from_str_or_default(&fact_source_str),
+                    content_hash,
+                    parent_path,
                 })
             })
             .map_err(|e| AlephError::config(format!("Failed to query similar facts: {}", e)))?

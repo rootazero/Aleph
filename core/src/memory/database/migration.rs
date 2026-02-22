@@ -177,6 +177,70 @@ pub fn migrate_add_experience_replays(conn: &Connection) -> Result<(), AlephErro
     Ok(())
 }
 
+/// Migrate memory_facts table to include VFS path columns
+///
+/// Adds path, fact_source, content_hash, and parent_path columns
+/// for hierarchical memory organization (aleph:// VFS).
+///
+/// # Safety
+/// - Idempotent: checks for column existence before adding
+/// - Uses savepoint for atomic migration
+pub fn migrate_add_vfs_paths(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch("SAVEPOINT migration_vfs_paths")
+        .map_err(|e| AlephError::config(format!("Failed to begin VFS migration: {}", e)))?;
+
+    let columns = [
+        ("path", "TEXT NOT NULL DEFAULT ''"),
+        ("fact_source", "TEXT NOT NULL DEFAULT 'extracted'"),
+        ("content_hash", "TEXT NOT NULL DEFAULT ''"),
+        ("parent_path", "TEXT NOT NULL DEFAULT ''"),
+    ];
+
+    for (name, def) in &columns {
+        let exists: i64 = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM pragma_table_info('memory_facts') WHERE name='{}'",
+                    name
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                let _ = conn.execute_batch("ROLLBACK TO migration_vfs_paths");
+                AlephError::config(format!("Failed to check {} column: {}", name, e))
+            })?;
+
+        if exists == 0 {
+            conn.execute(
+                &format!("ALTER TABLE memory_facts ADD COLUMN {} {}", name, def),
+                [],
+            )
+            .map_err(|e| {
+                let _ = conn.execute_batch("ROLLBACK TO migration_vfs_paths");
+                AlephError::config(format!("Failed to add {} column: {}", name, e))
+            })?;
+            tracing::info!("Added {} column to memory_facts table", name);
+        }
+    }
+
+    // Create indexes for path operations
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_facts_path ON memory_facts(path);
+         CREATE INDEX IF NOT EXISTS idx_facts_parent_path ON memory_facts(parent_path);
+         CREATE INDEX IF NOT EXISTS idx_facts_source ON memory_facts(fact_source);",
+    )
+    .map_err(|e| {
+        let _ = conn.execute_batch("ROLLBACK TO migration_vfs_paths");
+        AlephError::config(format!("Failed to create VFS indexes: {}", e))
+    })?;
+
+    conn.execute_batch("RELEASE migration_vfs_paths")
+        .map_err(|e| AlephError::config(format!("Failed to commit VFS migration: {}", e)))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,5 +537,73 @@ mod tests {
 
         // Cleanup
         std::fs::remove_file(db_path).ok();
+    }
+
+    #[test]
+    fn test_migrate_add_vfs_paths_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        conn.execute_batch(
+            "CREATE TABLE memory_facts (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                is_valid INTEGER NOT NULL DEFAULT 1,
+                namespace TEXT NOT NULL DEFAULT 'owner'
+            )",
+        )
+        .unwrap();
+
+        // First migration should add columns
+        migrate_add_vfs_paths(&conn).unwrap();
+
+        // Verify all 4 columns exist
+        for col in &["path", "fact_source", "content_hash", "parent_path"] {
+            let has_col: i64 = conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM pragma_table_info('memory_facts') WHERE name='{}'", col),
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(has_col, 1, "Column {} should exist", col);
+        }
+
+        // Second migration should be no-op
+        migrate_add_vfs_paths(&conn).unwrap();
+    }
+
+    #[test]
+    fn test_migrate_vfs_paths_default_values() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        conn.execute_batch(
+            "CREATE TABLE memory_facts (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                is_valid INTEGER NOT NULL DEFAULT 1,
+                namespace TEXT NOT NULL DEFAULT 'owner'
+            )",
+        )
+        .unwrap();
+
+        // Insert a fact before migration
+        conn.execute(
+            "INSERT INTO memory_facts (id, content) VALUES ('test-1', 'test content')",
+            [],
+        )
+        .unwrap();
+
+        migrate_add_vfs_paths(&conn).unwrap();
+
+        // Verify defaults
+        let path: String = conn
+            .query_row("SELECT path FROM memory_facts WHERE id = 'test-1'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(path, "");
+
+        let fact_source: String = conn
+            .query_row("SELECT fact_source FROM memory_facts WHERE id = 'test-1'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(fact_source, "extracted");
     }
 }
