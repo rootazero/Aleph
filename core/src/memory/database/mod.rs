@@ -24,6 +24,7 @@ mod retention;
 
 // Re-export main types
 pub use core::{MemoryStats, VectorDatabase, CURRENT_EMBEDDING_DIM};
+pub use facts::PathEntry;
 pub use resilience::{
     AgentEvent, AgentTask, CoordinatorConfig, DivergenceStatus, EmitterConfig, EventClassifier,
     EventEmitter, EventTier, EventType, GapFillResult, GovernorConfig, GovernorStats,
