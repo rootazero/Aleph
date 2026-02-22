@@ -1,32 +1,24 @@
 // core/ui/control_plane/src/components/sidebar/sidebar_item.rs
 //
 // SidebarItem component with real-time alert display.
-//
-// Alert Integration:
-// - Subscribes to DashboardState.alerts via Signal::derive()
-// - Reactively displays StatusBadge when alert exists
-// - Shows Tooltip with alert details in narrow mode
-// - Alert state is updated by WebSocket events from Gateway
+// Always renders in wide mode (icon + label).
 //
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_location;
 use crate::context::DashboardState;
-use crate::components::sidebar::SidebarMode;
-use crate::components::ui::{Tooltip, StatusBadge};
+use crate::components::ui::StatusBadge;
 
 #[component]
 pub fn SidebarItem(
     href: &'static str,
     label: &'static str,
     children: Children,
-    mode: impl Fn() -> SidebarMode + 'static + Copy + Send,
     #[prop(optional)] alert_key: Option<&'static str>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let location = use_location();
 
-    // Detect active state
     let is_active = move || {
         let path = location.pathname.get();
         if href == "/" {
@@ -36,7 +28,6 @@ pub fn SidebarItem(
         }
     };
 
-    // Subscribe to alert state as a signal
     let alert = Signal::derive(move || {
         alert_key.and_then(|key| state.get_alert(key))
     });
@@ -76,15 +67,8 @@ pub fn SidebarItem(
                 })}
             </div>
 
-            // Text label (wide mode) or Tooltip (narrow mode)
-            {move || match mode() {
-                SidebarMode::Wide => view! {
-                    <span class="text-sm font-medium">{label}</span>
-                }.into_any(),
-                SidebarMode::Narrow => view! {
-                    <Tooltip text=label alert=alert position="right" />
-                }.into_any(),
-            }}
+            // Text label (always wide mode)
+            <span class="text-sm font-medium">{label}</span>
         </A>
     }
 }

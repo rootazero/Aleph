@@ -1,6 +1,6 @@
 // core/ui/control_plane/src/components/sidebar/sidebar.rs
 //
-// Sidebar component with real-time alert integration.
+// Unified flat sidebar: Dashboard (expandable) + Settings groups.
 //
 // Alert Flow:
 // 1. Gateway emits alert events (e.g., "alerts.system.health")
@@ -9,16 +9,11 @@
 // 4. SidebarItem subscribes to alerts via Signal::derive()
 // 5. StatusBadge/Tooltip display alert state reactively
 //
-// Initial State Loading:
-// - DashboardState.load_initial_alerts() fetches current alert states on mount
-// - Ensures existing alerts are displayed even if no new events arrive
-//
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_location;
 use super::sidebar_item::SidebarItem;
-use crate::context::DashboardState;
-use crate::components::sidebar::SidebarMode;
+use crate::components::settings_sidebar::{SETTINGS_GROUPS, SettingsTab};
 
 /// Theme mode: System, Light, or Dark
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,83 +44,193 @@ impl ThemeMode {
 #[component]
 pub fn Sidebar() -> impl IntoView {
     let location = use_location();
-    let state = expect_context::<DashboardState>();
+    let dashboard_expanded = RwSignal::new(true);
 
-    // 默认：根据路由自动判断
-    let auto_mode = move || {
-        if location.pathname.get().starts_with("/settings") {
-            SidebarMode::Narrow
-        } else {
-            SidebarMode::Wide
+    // Auto-expand Dashboard when navigating to dashboard sub-routes
+    Effect::new(move || {
+        let path = location.pathname.get();
+        if path == "/" || path == "/trace" || path == "/status" || path == "/memory" {
+            dashboard_expanded.set(true);
         }
-    };
-
-    // 最终模式：用户覆盖 > 自动判断
-    let mode = move || {
-        state.sidebar_mode_override.get()
-            .unwrap_or_else(|| auto_mode())
-    };
+    });
 
     view! {
-        <aside class=move || {
-            let base = "border-r border-border bg-sidebar flex flex-col transition-all duration-300";
-            match mode() {
-                SidebarMode::Narrow => format!("{} w-16 items-center", base),
-                SidebarMode::Wide => format!("{} w-64", base),
-            }
-        }>
-            // Logo 区域（窄模式下只显示图标）
-            <LogoSection mode=mode />
+        <aside class="w-64 border-r border-border bg-sidebar flex flex-col transition-all duration-300">
+            // Logo
+            <LogoSection />
 
-            // Navigation
-            <nav class="flex-1 px-4 py-4 space-y-2">
-                <SidebarItem href="/" label="Dashboard" mode=mode>
-                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                    <polyline points="9 22 9 12 15 12 15 22" />
-                </SidebarItem>
-                <SidebarItem href="/trace" label="Agent Trace" mode=mode alert_key="agent.trace">
-                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-                </SidebarItem>
-                <SidebarItem href="/status" label="System Health" mode=mode alert_key="system.health">
-                    <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
-                    <rect x="9" y="9" width="6" height="6" />
-                    <line x1="9" y1="1" x2="9" y2="4" />
-                    <line x1="15" y1="1" x2="15" y2="4" />
-                    <line x1="9" y1="20" x2="9" y2="23" />
-                    <line x1="15" y1="20" x2="15" y2="23" />
-                    <line x1="20" y1="9" x2="23" y2="9" />
-                    <line x1="20" y1="15" x2="23" y2="15" />
-                    <line x1="1" y1="9" x2="4" y2="9" />
-                    <line x1="1" y1="15" x2="4" y2="15" />
-                </SidebarItem>
-                <SidebarItem href="/memory" label="Memory Vault" mode=mode alert_key="memory.status">
-                    <ellipse cx="12" cy="5" rx="9" ry="3" />
-                    <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
-                    <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-                </SidebarItem>
+            // Scrollable navigation area
+            <nav class="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+                // Dashboard section (expandable)
+                <DashboardSection expanded=dashboard_expanded />
+
+                // Settings groups
+                {SETTINGS_GROUPS.iter().map(|group| {
+                    view! {
+                        <SettingsGroupSection label=group.label tabs=group.tabs />
+                    }
+                }).collect_view()}
             </nav>
 
-            // Bottom Actions
+            // Bottom: Theme toggle
             <div class="p-4 border-t border-border space-y-1">
-                <ThemeToggle mode=mode />
-                <A href="/settings" attr:class="flex items-center gap-3 px-3 py-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-surface-sunken transition-all duration-200">
-                    <svg width="20" height="20" attr:class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="3" />
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                    </svg>
-                    {move || match mode() {
-                        SidebarMode::Wide => Some(view! { <span class="text-sm font-medium">"Settings"</span> }),
-                        SidebarMode::Narrow => None,
-                    }}
-                </A>
+                <ThemeToggle />
             </div>
         </aside>
     }
 }
 
+/// Dashboard section with expandable sub-items
 #[component]
-fn ThemeToggle(mode: impl Fn() -> SidebarMode + 'static + Copy + Send) -> impl IntoView {
-    // Read initial theme from localStorage
+fn DashboardSection(expanded: RwSignal<bool>) -> impl IntoView {
+    let location = use_location();
+    let dashboard_expanded = expanded;
+
+    let is_dashboard_active = move || {
+        let path = location.pathname.get();
+        path == "/" || path == "/trace" || path == "/status" || path == "/memory"
+    };
+
+    let toggle = move |_| {
+        dashboard_expanded.update(|v| *v = !*v);
+    };
+
+    view! {
+        <div class="space-y-0.5">
+            // Dashboard header row (clickable to expand/collapse)
+            <button
+                on:click=toggle
+                class=move || {
+                    let base = "flex items-center gap-3 px-3 py-2 rounded-lg w-full text-left transition-all duration-200";
+                    if is_dashboard_active() {
+                        format!("{} text-sidebar-accent bg-sidebar-active font-medium", base)
+                    } else {
+                        format!("{} text-text-secondary hover:text-text-primary hover:bg-sidebar-active/50", base)
+                    }
+                }
+            >
+                // Expand/collapse chevron
+                <svg
+                    width="16"
+                    height="16"
+                    attr:class=move || {
+                        let base = "w-4 h-4 transition-transform duration-200 flex-shrink-0";
+                        if dashboard_expanded.get() {
+                            format!("{} rotate-90", base)
+                        } else {
+                            base.to_string()
+                        }
+                    }
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                >
+                    <polyline points="9 18 15 12 9 6" />
+                </svg>
+
+                // Home icon
+                <svg width="20" height="20" attr:class="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                    <polyline points="9 22 9 12 15 12 15 22" />
+                </svg>
+
+                <span class="text-sm font-medium">"Dashboard"</span>
+            </button>
+
+            // Sub-items (visible when expanded)
+            <Show when=move || dashboard_expanded.get()>
+                <div class="ml-6 space-y-0.5">
+                    <SidebarItem href="/" label="Overview">
+                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                        <polyline points="9 22 9 12 15 12 15 22" />
+                    </SidebarItem>
+                    <SidebarItem href="/trace" label="Agent Trace" alert_key="agent.trace">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                    </SidebarItem>
+                    <SidebarItem href="/status" label="System Health" alert_key="system.health">
+                        <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
+                        <rect x="9" y="9" width="6" height="6" />
+                        <line x1="9" y1="1" x2="9" y2="4" />
+                        <line x1="15" y1="1" x2="15" y2="4" />
+                        <line x1="9" y1="20" x2="9" y2="23" />
+                        <line x1="15" y1="20" x2="15" y2="23" />
+                        <line x1="20" y1="9" x2="23" y2="9" />
+                        <line x1="20" y1="15" x2="23" y2="15" />
+                        <line x1="1" y1="9" x2="4" y2="9" />
+                        <line x1="1" y1="15" x2="4" y2="15" />
+                    </SidebarItem>
+                    <SidebarItem href="/memory" label="Memory Vault" alert_key="memory.status">
+                        <ellipse cx="12" cy="5" rx="9" ry="3" />
+                        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+                        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+                    </SidebarItem>
+                </div>
+            </Show>
+        </div>
+    }
+}
+
+/// A settings group section with a label header and tab items
+#[component]
+fn SettingsGroupSection(
+    label: &'static str,
+    tabs: &'static [SettingsTab],
+) -> impl IntoView {
+    let location = use_location();
+
+    view! {
+        <div class="space-y-0.5">
+            <h3 class="px-3 py-1 text-xs font-medium text-text-tertiary uppercase tracking-wider">
+                {label}
+            </h3>
+            {tabs.iter().map(|tab| {
+                let path = tab.path();
+                let tab_label = tab.label();
+                let icon_svg = tab.icon_svg();
+                let is_active = move || location.pathname.get() == path;
+
+                view! {
+                    <A
+                        href=path
+                        attr:class=move || {
+                            if is_active() {
+                                "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 bg-sidebar-active text-sidebar-accent font-medium group"
+                            } else {
+                                "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 hover:bg-sidebar-active/50 group text-text-secondary hover:text-text-primary"
+                            }
+                        }
+                    >
+                        <svg
+                            width="18"
+                            height="18"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class=move || {
+                                if is_active() {
+                                    "text-sidebar-accent flex-shrink-0"
+                                } else {
+                                    "text-text-tertiary group-hover:text-text-secondary flex-shrink-0"
+                                }
+                            }
+                            inner_html=icon_svg
+                        />
+                        <span>{tab_label}</span>
+                    </A>
+                }
+            }).collect_view()}
+        </div>
+    }
+}
+
+#[component]
+fn ThemeToggle() -> impl IntoView {
     let initial = {
         let window = web_sys::window().unwrap();
         let storage: Option<web_sys::Storage> = window.local_storage().ok().flatten();
@@ -146,10 +251,8 @@ fn ThemeToggle(mode: impl Fn() -> SidebarMode + 'static + Copy + Send) -> impl I
         let html = document.document_element().unwrap();
         let class_list = html.class_list();
 
-        // Remove both classes first
         let _ = class_list.remove_2("dark", "light");
 
-        // Apply new class and persist
         let storage: Option<web_sys::Storage> = window.local_storage().ok().flatten();
         match next {
             ThemeMode::Light => {
@@ -166,7 +269,6 @@ fn ThemeToggle(mode: impl Fn() -> SidebarMode + 'static + Copy + Send) -> impl I
         }
     };
 
-    // SVG icon changes based on current theme (use .into_any() for type erasure)
     let icon = move || match theme.get() {
         ThemeMode::System => view! {
             <svg width="20" height="20" attr:class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -202,34 +304,19 @@ fn ThemeToggle(mode: impl Fn() -> SidebarMode + 'static + Copy + Send) -> impl I
             title=move || format!("Theme: {}", theme.get().label())
         >
             {icon}
-            {move || match mode() {
-                SidebarMode::Wide => Some(view! {
-                    <span class="text-sm font-medium">{move || theme.get().label()}</span>
-                }),
-                SidebarMode::Narrow => None,
-            }}
+            <span class="text-sm font-medium">{move || theme.get().label()}</span>
         </button>
     }
 }
 
 #[component]
-fn LogoSection(mode: impl Fn() -> SidebarMode + 'static + Copy + Send) -> impl IntoView {
+fn LogoSection() -> impl IntoView {
     view! {
-        <div class=move || {
-            match mode() {
-                SidebarMode::Wide => "p-6 flex items-center gap-3",
-                SidebarMode::Narrow => "p-4 flex items-center justify-center",
-            }
-        }>
+        <div class="p-6 flex items-center gap-3">
             <div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
                 <span class="text-text-inverse font-bold text-xl">"A"</span>
             </div>
-            {move || match mode() {
-                SidebarMode::Wide => Some(view! {
-                    <h1 class="text-xl font-semibold tracking-tight">"Aleph Hub"</h1>
-                }),
-                SidebarMode::Narrow => None,
-            }}
+            <h1 class="text-xl font-semibold tracking-tight">"Aleph Hub"</h1>
         </div>
     }
 }

@@ -1,11 +1,7 @@
-//! Settings sidebar component with grouped navigation
+//! Settings tab definitions and group constants
 //!
-//! This module provides a sidebar navigation for settings pages,
-//! organized into logical groups similar to macOS System Settings.
-
-use leptos::prelude::*;
-use leptos_router::components::A;
-use leptos_router::hooks::use_location;
+//! Provides `SettingsTab` enum and `SETTINGS_GROUPS` for sidebar navigation.
+//! The sidebar component renders these directly (no separate SettingsSidebar component).
 
 /// Settings tab identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,12 +107,12 @@ impl SettingsTab {
 }
 
 /// Settings group definition
-struct SettingsGroup {
-    label: &'static str,
-    tabs: &'static [SettingsTab],
+pub struct SettingsGroup {
+    pub label: &'static str,
+    pub tabs: &'static [SettingsTab],
 }
 
-const SETTINGS_GROUPS: &[SettingsGroup] = &[
+pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
     SettingsGroup {
         label: "Basic",
         tabs: &[
@@ -161,84 +157,3 @@ const SETTINGS_GROUPS: &[SettingsGroup] = &[
         ],
     },
 ];
-
-/// Settings sidebar component
-#[component]
-pub fn SettingsSidebar() -> impl IntoView {
-    view! {
-        <nav class="w-64 bg-sidebar border-r border-border p-4 space-y-6 overflow-y-auto">
-            <div class="mb-6">
-                <h2 class="text-xl font-bold text-text-primary">
-                    "Settings"
-                </h2>
-                <p class="text-xs text-text-tertiary mt-1">
-                    "Configure Aleph Gateway"
-                </p>
-            </div>
-
-            {SETTINGS_GROUPS.iter().map(|group| {
-                view! {
-                    <div class="space-y-1">
-                        <h3 class="px-3 py-1 text-xs font-medium text-text-tertiary uppercase tracking-wider">
-                            {group.label}
-                        </h3>
-                        <div class="space-y-0.5">
-                            {group.tabs.iter().map(|tab| {
-                                view! {
-                                    <SettingsSidebarItem tab=*tab />
-                                }
-                            }).collect_view()}
-                        </div>
-                    </div>
-                }
-            }).collect_view()}
-        </nav>
-    }
-}
-
-/// Individual sidebar item
-#[component]
-fn SettingsSidebarItem(tab: SettingsTab) -> impl IntoView {
-    let path = tab.path();
-    let label = tab.label();
-    let icon_svg = tab.icon_svg();
-    let location = use_location();
-
-    let is_active = move || location.pathname.get() == path;
-
-    view! {
-        <A
-            href=path
-            attr:class=move || {
-                if is_active() {
-                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 bg-sidebar-active text-sidebar-accent font-medium group"
-                } else {
-                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 hover:bg-sidebar-active/50 group text-text-secondary hover:text-text-primary"
-                }
-            }
-            exact=true
-        >
-            <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                class=move || {
-                    if is_active() {
-                        "text-sidebar-accent"
-                    } else {
-                        "text-text-tertiary group-hover:text-text-secondary"
-                    }
-                }
-                inner_html=icon_svg
-            />
-            <span>
-                {label}
-            </span>
-        </A>
-    }
-}
