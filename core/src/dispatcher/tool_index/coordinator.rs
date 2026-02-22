@@ -182,6 +182,8 @@ impl ToolIndexCoordinator {
                 content_hash: String::new(),
                 parent_path: String::new(),
                 embedding_model: String::new(),
+            namespace: "owner".to_string(),
+            workspace: "default".to_string(),
             };
 
             self.db.insert_fact(&fact).await?;
@@ -276,7 +278,7 @@ impl ToolIndexCoordinator {
         use crate::memory::NamespaceScope;
         // Use a large limit to get all tools (typical systems have <100 tools)
         // Tool facts are system-level, so use Owner namespace
-        self.db.get_facts_by_type(FactType::Tool, &NamespaceScope::Owner, 1000).await
+        self.db.get_facts_by_type(FactType::Tool, &NamespaceScope::Owner, "default", 1000).await
     }
 
     /// Get a specific tool fact by name

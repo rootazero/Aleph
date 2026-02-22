@@ -96,6 +96,8 @@ pub struct GraphNode {
     pub created_at: i64,
     /// Last update timestamp (Unix seconds).
     pub updated_at: i64,
+    /// Domain isolation workspace ID.
+    pub workspace: String,
 }
 
 /// A knowledge-graph edge.
@@ -123,6 +125,8 @@ pub struct GraphEdge {
     pub updated_at: i64,
     /// Timestamp of most recent reference (Unix seconds).
     pub last_seen_at: i64,
+    /// Domain isolation workspace ID.
+    pub workspace: String,
 }
 
 /// A VFS path entry returned by directory listing operations.
@@ -201,6 +205,7 @@ pub trait MemoryStore: Send + Sync {
         &self,
         parent_path: &str,
         ns: &NamespaceScope,
+        workspace: &str,
     ) -> Result<Vec<PathEntry>, AlephError>;
 
     /// Get a single fact by its exact VFS path within a namespace.
@@ -208,6 +213,7 @@ pub trait MemoryStore: Send + Sync {
         &self,
         path: &str,
         ns: &NamespaceScope,
+        workspace: &str,
     ) -> Result<Option<MemoryFact>, AlephError>;
 
     // -- Statistics & bulk --------------------------------------------------
@@ -220,6 +226,7 @@ pub trait MemoryStore: Send + Sync {
         &self,
         fact_type: FactType,
         ns: &NamespaceScope,
+        workspace: &str,
         limit: usize,
     ) -> Result<Vec<MemoryFact>, AlephError>;
 
@@ -276,13 +283,13 @@ pub trait MemoryStore: Send + Sync {
 #[async_trait]
 pub trait GraphStore: Send + Sync {
     /// Insert or update a graph node (upsert by ID).
-    async fn upsert_node(&self, node: &GraphNode) -> Result<(), AlephError>;
+    async fn upsert_node(&self, node: &GraphNode, workspace: &str) -> Result<(), AlephError>;
 
     /// Retrieve a node by ID, or `None` if not found.
-    async fn get_node(&self, id: &str) -> Result<Option<GraphNode>, AlephError>;
+    async fn get_node(&self, id: &str, workspace: &str) -> Result<Option<GraphNode>, AlephError>;
 
     /// Insert or update a graph edge (upsert by ID).
-    async fn upsert_edge(&self, edge: &GraphEdge) -> Result<(), AlephError>;
+    async fn upsert_edge(&self, edge: &GraphEdge, workspace: &str) -> Result<(), AlephError>;
 
     /// Resolve an entity mention to candidate graph nodes.
     ///
@@ -291,6 +298,7 @@ pub trait GraphStore: Send + Sync {
         &self,
         query: &str,
         context_key: Option<&str>,
+        workspace: &str,
     ) -> Result<Vec<ResolvedEntity>, AlephError>;
 
     /// Get all edges connected to a node, optionally filtered by context key.
@@ -298,6 +306,7 @@ pub trait GraphStore: Send + Sync {
         &self,
         node_id: &str,
         context_key: Option<&str>,
+        workspace: &str,
     ) -> Result<Vec<GraphEdge>, AlephError>;
 
     /// Count edges for a node within a specific context.
@@ -305,11 +314,12 @@ pub trait GraphStore: Send + Sync {
         &self,
         node_id: &str,
         context_key: &str,
+        workspace: &str,
     ) -> Result<usize, AlephError>;
 
     /// Apply temporal decay to all nodes and edges, pruning those below
     /// the minimum score threshold.
-    async fn apply_decay(&self, policy: &GraphDecayPolicy) -> Result<DecayStats, AlephError>;
+    async fn apply_decay(&self, policy: &GraphDecayPolicy, workspace: &str) -> Result<DecayStats, AlephError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -360,6 +370,7 @@ pub trait SessionStore: Send + Sync {
         &self,
         since_timestamp: i64,
         namespace: &NamespaceScope,
+        workspace: &str,
     ) -> Result<Vec<MemoryEntry>, AlephError>;
 
     /// Delete memory entries older than the given cutoff timestamp.
