@@ -346,6 +346,18 @@ pub struct ChannelInfo {
     pub capabilities: ChannelCapabilities,
 }
 
+/// Pairing data for a channel
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum PairingData {
+    /// No pairing data available
+    None,
+    /// Alphanumeric pairing code
+    Code(String),
+    /// QR code (usually base64 encoded image or URL)
+    QrCode(String),
+}
+
 /// The main Channel trait - all channel implementations must implement this
 #[async_trait]
 pub trait Channel: Send + Sync {
@@ -370,6 +382,11 @@ pub trait Channel: Send + Sync {
     /// Get capabilities
     fn capabilities(&self) -> &ChannelCapabilities {
         &self.info().capabilities
+    }
+
+    /// Get pairing data (e.g., QR code for WhatsApp or pairing code for iMessage)
+    async fn get_pairing_data(&self) -> ChannelResult<PairingData> {
+        Ok(PairingData::None)
     }
 
     /// Start the channel (connect, authenticate, etc.)

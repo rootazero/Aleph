@@ -20,6 +20,9 @@ pub mod telegram;
 #[cfg(feature = "discord")]
 pub mod discord;
 
+#[cfg(feature = "whatsapp")]
+pub mod whatsapp;
+
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
 #[cfg(target_os = "macos")]
@@ -30,3 +33,6 @@ pub use telegram::{TelegramChannel, TelegramChannelFactory, TelegramConfig};
 
 #[cfg(feature = "discord")]
 pub use discord::{DiscordChannel, DiscordChannelFactory, DiscordConfig};
+
+#[cfg(feature = "whatsapp")]
+pub use whatsapp::{WhatsAppChannel, WhatsAppChannelFactory, WhatsAppConfig};

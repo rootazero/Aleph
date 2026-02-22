@@ -39,6 +39,14 @@ pub fn Sidebar() -> impl IntoView {
                     <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
                     <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
                 </SidebarItem>
+                <SidebarItem href="/social" label="Social Connect">
+                    <path d="M18 8a3 3 0 0 0-3-3H5a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V8Z" />
+                    <path d="M10 12h.01" />
+                    <path d="M16 16h.01" />
+                    <path d="M6 8h.01" />
+                    <circle cx="18" cy="8" r="3" />
+                    <circle cx="18" cy="16" r="3" />
+                </SidebarItem>
             </nav>
 
             // Bottom Actions
