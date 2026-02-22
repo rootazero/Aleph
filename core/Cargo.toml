@@ -94,6 +94,11 @@ anyhow = "1.0"
 futures = "0.3"
 # For local embedding inference (bge-small-zh-v1.5)
 fastembed = "4"
+# LanceDB vector database (replacing sqlite-vec)
+lancedb = "0.26"
+arrow-array = "57"
+arrow-schema = "57"
+arrow-cast = "57"
 # For stable get_or_try_init support
 once_cell = "1.19"
 # For SKILL.md YAML frontmatter parsing
