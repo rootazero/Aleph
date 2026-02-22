@@ -1,7 +1,7 @@
 //! Hybrid search operations combining vector similarity and FTS5
 
 use crate::error::AlephError;
-use crate::memory::context::{FactSpecificity, FactType, MemoryFact, TemporalScope};
+use crate::memory::context::{FactSource, FactSpecificity, FactType, MemoryFact, TemporalScope};
 use crate::memory::database::core::VectorDatabase;
 use rusqlite::params;
 
@@ -132,6 +132,10 @@ impl VectorDatabase {
                         specificity: FactSpecificity::from_str_or_default(&specificity_str),
                         temporal_scope: TemporalScope::from_str_or_default(&temporal_scope_str),
                         similarity_score: None, // Will be set after fusion
+                        path: String::new(),
+                        fact_source: FactSource::Extracted,
+                        content_hash: String::new(),
+                        parent_path: String::new(),
                     }, vec_score as f32))
                 },
             )
@@ -256,6 +260,10 @@ impl VectorDatabase {
                         specificity: FactSpecificity::from_str_or_default(&specificity_str),
                         temporal_scope: TemporalScope::from_str_or_default(&temporal_scope_str),
                         similarity_score: Some(score as f32),
+                        path: String::new(),
+                        fact_source: FactSource::Extracted,
+                        content_hash: String::new(),
+                        parent_path: String::new(),
                     })
                 },
             )

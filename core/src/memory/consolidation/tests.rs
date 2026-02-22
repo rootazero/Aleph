@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::memory::{FactSpecificity, FactType, MemoryFact, TemporalScope, VectorDatabase};
+use crate::memory::{FactSource, FactSpecificity, FactType, MemoryFact, TemporalScope, VectorDatabase};
 use crate::Result;
 
 use super::*;
@@ -41,6 +41,10 @@ fn create_test_fact(
         specificity: FactSpecificity::Pattern,
         temporal_scope: TemporalScope::Permanent,
         similarity_score: None,
+        path: String::new(),
+        fact_source: FactSource::Extracted,
+        content_hash: String::new(),
+        parent_path: String::new(),
     }
 }
 
