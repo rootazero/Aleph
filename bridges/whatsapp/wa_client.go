@@ -21,13 +21,14 @@ import (
 
 // WAClient wraps a whatsmeow client for the JSON-RPC bridge.
 type WAClient struct {
-	client    *whatsmeow.Client
-	container *sqlstore.Container
-	eventCh   chan map[string]interface{} // events pushed to Rust via JSON-RPC notifications
-	mu        sync.Mutex
-	connected bool
-	device    string // device name from PairSuccess
-	phone     string // phone number from PairSuccess
+	client      *whatsmeow.Client
+	container   *sqlstore.Container
+	eventCh     chan map[string]interface{} // events pushed to Rust via JSON-RPC notifications
+	mu          sync.Mutex
+	connected   bool
+	device      string // device name from PairSuccess
+	phone       string // phone number from PairSuccess
+	pairedViaQR bool   // true if QR pairing was used in this session
 }
 
 // NewWAClient creates a new WhatsApp client backed by SQLite session storage.
@@ -216,15 +217,23 @@ func (w *WAClient) handleEvent(evt interface{}) {
 	case *events.Connected:
 		w.mu.Lock()
 		w.connected = true
-		w.mu.Unlock()
-
-		// Try to get device info from store
+		pairedViaQR := w.pairedViaQR
 		deviceName := w.device
 		phoneNumber := w.phone
+		w.mu.Unlock()
+
+		// On reconnection (existing session, no QR flow), get info from store
 		if w.client.Store.ID != nil {
 			if phoneNumber == "" {
 				phoneNumber = w.client.Store.ID.User
 			}
+			if deviceName == "" {
+				deviceName = "WhatsApp" // fallback for reconnection
+			}
+		}
+
+		if !pairedViaQR {
+			log.Printf("Reconnected to WhatsApp (existing session, phone=%s)", phoneNumber)
 		}
 
 		w.pushEvent(map[string]interface{}{
@@ -241,6 +250,7 @@ func (w *WAClient) handleEvent(evt interface{}) {
 	case *events.Disconnected:
 		w.mu.Lock()
 		w.connected = false
+		w.pairedViaQR = false
 		w.mu.Unlock()
 
 		w.pushEvent(map[string]interface{}{
@@ -262,6 +272,7 @@ func (w *WAClient) handleEvent(evt interface{}) {
 		w.mu.Lock()
 		w.device = v.Platform
 		w.phone = v.ID.User
+		w.pairedViaQR = true
 		w.mu.Unlock()
 
 		log.Printf("Pair success: platform=%s, phone=%s", v.Platform, v.ID.User)
