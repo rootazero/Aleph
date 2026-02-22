@@ -78,6 +78,27 @@ pub struct MemorySearchItem {
     pub timestamp: f64,
 }
 
+/// Channel info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelInfo {
+    pub id: String,
+    pub name: String,
+    pub channel_type: String,
+    pub status: String,
+}
+
+/// Pairing data for a channel
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum PairingData {
+    /// No pairing data available
+    None,
+    /// Alphanumeric pairing code
+    Code(String),
+    /// QR code (usually base64 encoded image or URL)
+    QrCode(String),
+}
+
 /// Tool metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolMetrics {
