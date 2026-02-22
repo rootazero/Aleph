@@ -64,8 +64,8 @@ pub use compression::{
     CompressionTrigger, DetectionResult, FactExtractor, SignalDetector, SignalKeywords,
 };
 pub use context::{
-    CompressionResult, CompressionSession, ContextAnchor, FactSpecificity, FactStats, FactType,
-    MemoryEntry, MemoryFact, TemporalScope,
+    CompressionResult, CompressionSession, ContextAnchor, FactSource, FactSpecificity,
+    FactStats, FactType, MemoryEntry, MemoryFact, TemporalScope, compute_parent_path,
 };
 pub use database::VectorDatabase;
 pub use decay::{DecayConfig, MemoryStrength};

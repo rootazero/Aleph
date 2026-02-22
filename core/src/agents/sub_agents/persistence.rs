@@ -4,7 +4,7 @@
 //! for storage in the FactsDB memory system.
 
 use crate::error::{AlephError, Result};
-use crate::memory::context::{FactSpecificity, FactType, MemoryFact, TemporalScope};
+use crate::memory::context::{FactSource, FactSpecificity, FactType, MemoryFact, TemporalScope};
 
 use super::run::SubAgentRun;
 
@@ -35,6 +35,10 @@ impl SubAgentRunFact {
             specificity: FactSpecificity::Instance,
             temporal_scope: TemporalScope::Ephemeral,
             similarity_score: None,
+            path: String::new(),
+            fact_source: FactSource::Extracted,
+            content_hash: String::new(),
+            parent_path: String::new(),
         }
     }
 

@@ -380,6 +380,19 @@ impl std::fmt::Display for TemporalScope {
     }
 }
 
+
+/// Compute parent path from a VFS path
+/// "aleph://user/preferences/coding/" -> "aleph://user/preferences/"
+/// "aleph://user/preferences/" -> "aleph://user/"
+/// "aleph://user/" -> "aleph://"
+pub fn compute_parent_path(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    match trimmed.rfind('/') {
+        Some(pos) => format!("{}/", &trimmed[..pos]),
+        None => String::new(),
+    }
+}
+
 /// A compressed memory fact extracted from conversations by LLM
 ///
 /// Facts are third-person statements about the user, such as:
@@ -418,6 +431,14 @@ pub struct MemoryFact {
     /// Similarity score (when retrieved from search)
     #[serde(skip)]
     pub similarity_score: Option<f32>,
+    /// VFS path for hierarchical organization (e.g., "aleph://user/preferences/coding")
+    pub path: String,
+    /// Fact origin/type
+    pub fact_source: FactSource,
+    /// Content hash for L1 staleness detection
+    pub content_hash: String,
+    /// Parent path for ls operations
+    pub parent_path: String,
 }
 
 impl Entity for MemoryFact {
@@ -438,6 +459,9 @@ impl MemoryFact {
             .unwrap()
             .as_secs() as i64;
 
+        let path = fact_type.default_path().to_string();
+        let parent_path = compute_parent_path(&path);
+
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             content,
@@ -453,6 +477,10 @@ impl MemoryFact {
             specificity: FactSpecificity::default(),
             temporal_scope: TemporalScope::default(),
             similarity_score: None,
+            path,
+            fact_source: FactSource::Extracted,
+            content_hash: String::new(),
+            parent_path,
         }
     }
 
@@ -462,6 +490,9 @@ impl MemoryFact {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
+
+        let path = fact_type.default_path().to_string();
+        let parent_path = compute_parent_path(&path);
 
         Self {
             id,
@@ -478,6 +509,10 @@ impl MemoryFact {
             specificity: FactSpecificity::default(),
             temporal_scope: TemporalScope::default(),
             similarity_score: None,
+            path,
+            fact_source: FactSource::Extracted,
+            content_hash: String::new(),
+            parent_path,
         }
     }
 
@@ -508,6 +543,19 @@ impl MemoryFact {
     /// Set temporal scope
     pub fn with_temporal_scope(mut self, scope: TemporalScope) -> Self {
         self.temporal_scope = scope;
+        self
+    }
+
+    /// Set VFS path
+    pub fn with_path(mut self, path: String) -> Self {
+        self.parent_path = compute_parent_path(&path);
+        self.path = path;
+        self
+    }
+
+    /// Set fact source
+    pub fn with_fact_source(mut self, source: FactSource) -> Self {
+        self.fact_source = source;
         self
     }
 
@@ -791,5 +839,38 @@ mod tests {
         assert_eq!(FactType::Tool.default_path(), "aleph://agent/tools/");
         assert_eq!(FactType::Other.default_path(), "aleph://knowledge/");
         assert_eq!(FactType::SubagentRun.default_path(), "aleph://agent/experiences/");
+    }
+
+    #[test]
+    fn test_memory_fact_new_has_path_fields() {
+        let fact = MemoryFact::new(
+            "User prefers Rust".to_string(),
+            FactType::Preference,
+            vec!["src-1".to_string()],
+        );
+        assert_eq!(fact.path, "aleph://user/preferences/");
+        assert_eq!(fact.parent_path, "aleph://user/");
+        assert_eq!(fact.fact_source, FactSource::Extracted);
+        assert!(fact.content_hash.is_empty());
+    }
+
+    #[test]
+    fn test_memory_fact_with_path() {
+        let fact = MemoryFact::new(
+            "Learning WebAssembly".to_string(),
+            FactType::Learning,
+            vec![],
+        )
+        .with_path("aleph://knowledge/learning/wasm/".to_string());
+        assert_eq!(fact.path, "aleph://knowledge/learning/wasm/");
+        assert_eq!(fact.parent_path, "aleph://knowledge/learning/");
+    }
+
+    #[test]
+    fn test_compute_parent_path() {
+        assert_eq!(compute_parent_path("aleph://user/preferences/coding/"), "aleph://user/preferences/");
+        assert_eq!(compute_parent_path("aleph://user/preferences/"), "aleph://user/");
+        assert_eq!(compute_parent_path("aleph://user/"), "aleph://");
+        assert_eq!(compute_parent_path(""), "");
     }
 }

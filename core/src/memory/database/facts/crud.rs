@@ -37,7 +37,7 @@
 //! - Phase 4.4: Add sharing/ACL logic for 'shared' namespace
 
 use crate::error::AlephError;
-use crate::memory::context::{FactSpecificity, FactType, MemoryFact, TemporalScope};
+use crate::memory::context::{FactSource, FactSpecificity, FactType, MemoryFact, TemporalScope};
 use crate::memory::database::core::VectorDatabase;
 use crate::memory::NamespaceScope;
 use rusqlite::params;
@@ -90,6 +90,10 @@ impl VectorDatabase {
                     specificity: FactSpecificity::from_str_or_default(&specificity_str),
                     temporal_scope: TemporalScope::from_str_or_default(&temporal_scope_str),
                     similarity_score: None,
+                    path: String::new(),
+                    fact_source: FactSource::Extracted,
+                    content_hash: String::new(),
+                    parent_path: String::new(),
                 })
             },
         );
@@ -163,6 +167,10 @@ impl VectorDatabase {
                     specificity: FactSpecificity::from_str_or_default(&specificity_str),
                     temporal_scope: TemporalScope::from_str_or_default(&temporal_scope_str),
                     similarity_score: None,
+                    path: String::new(),
+                    fact_source: FactSource::Extracted,
+                    content_hash: String::new(),
+                    parent_path: String::new(),
                 })
             })
             .map_err(|e| AlephError::config(format!("Failed to query facts: {}", e)))?
