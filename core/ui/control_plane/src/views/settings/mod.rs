@@ -30,57 +30,51 @@ pub use plugins::PluginsView;
 pub use skills::SkillsView;
 pub use policies::PoliciesView;
 
-// Re-export Settings view with new sidebar layout
+// Settings default view (sidebar is provided by SettingsLayout)
 use leptos::prelude::*;
-use crate::components::SettingsSidebar;
 
 #[component]
 pub fn Settings() -> impl IntoView {
     view! {
-        <div class="flex h-screen bg-surface">
-            <SettingsSidebar />
-            <div class="flex-1 overflow-y-auto">
-                <div class="p-8 max-w-5xl mx-auto">
-                    <div class="mb-8">
-                        <h1 class="text-3xl font-bold mb-2 text-text-primary">
-                            "Welcome to Settings"
-                        </h1>
-                        <p class="text-text-secondary">
-                            "Select a category from the sidebar to configure Aleph Gateway"
-                        </p>
-                    </div>
+        <div class="p-8 max-w-5xl mx-auto">
+            <div class="mb-8">
+                <h1 class="text-3xl font-bold mb-2 text-text-primary">
+                    "Welcome to Settings"
+                </h1>
+                <p class="text-text-secondary">
+                    "Select a category from the sidebar to configure Aleph Gateway"
+                </p>
+            </div>
 
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div class="p-6 bg-surface-raised border border-border rounded-xl">
-                            <h3 class="text-lg font-semibold text-text-primary mb-2">
-                                "Quick Start"
-                            </h3>
-                            <p class="text-sm text-text-secondary mb-4">
-                                "Configure the essential settings to get started with Aleph"
-                            </p>
-                            <ul class="space-y-2 text-sm text-text-secondary">
-                                <li>"• Set up AI providers and API keys"</li>
-                                <li>"• Configure keyboard shortcuts"</li>
-                                <li>"• Customize agent behavior"</li>
-                                <li>"• Enable memory and knowledge base"</li>
-                            </ul>
-                        </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="p-6 bg-surface-raised border border-border rounded-xl">
+                    <h3 class="text-lg font-semibold text-text-primary mb-2">
+                        "Quick Start"
+                    </h3>
+                    <p class="text-sm text-text-secondary mb-4">
+                        "Configure the essential settings to get started with Aleph"
+                    </p>
+                    <ul class="space-y-2 text-sm text-text-secondary">
+                        <li>"• Set up AI providers and API keys"</li>
+                        <li>"• Configure keyboard shortcuts"</li>
+                        <li>"• Customize agent behavior"</li>
+                        <li>"• Enable memory and knowledge base"</li>
+                    </ul>
+                </div>
 
-                        <div class="p-6 bg-surface-raised border border-border rounded-xl">
-                            <h3 class="text-lg font-semibold text-text-primary mb-2">
-                                "Need Help?"
-                            </h3>
-                            <p class="text-sm text-text-secondary mb-4">
-                                "Learn more about Aleph's features and configuration options"
-                            </p>
-                            <ul class="space-y-2 text-sm text-text-secondary">
-                                <li>"• Check the documentation"</li>
-                                <li>"• Join the community"</li>
-                                <li>"• Report issues on GitHub"</li>
-                                <li>"• Contact support"</li>
-                            </ul>
-                        </div>
-                    </div>
+                <div class="p-6 bg-surface-raised border border-border rounded-xl">
+                    <h3 class="text-lg font-semibold text-text-primary mb-2">
+                        "Need Help?"
+                    </h3>
+                    <p class="text-sm text-text-secondary mb-4">
+                        "Learn more about Aleph's features and configuration options"
+                    </p>
+                    <ul class="space-y-2 text-sm text-text-secondary">
+                        <li>"• Check the documentation"</li>
+                        <li>"• Join the community"</li>
+                        <li>"• Report issues on GitHub"</li>
+                        <li>"• Contact support"</li>
+                    </ul>
                 </div>
             </div>
         </div>
