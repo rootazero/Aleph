@@ -87,6 +87,7 @@ pub mod identity;
 pub mod debug;
 pub mod guests;
 pub mod state_bus;
+pub mod discord_panel;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
 pub use identity::SharedIdentityResolver;
