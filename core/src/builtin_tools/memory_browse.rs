@@ -196,19 +196,32 @@ impl MemoryBrowseTool {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let first = &facts[0];
+        // When multiple facts, aggregate metadata
+        let metadata = if facts.len() == 1 {
+            let f = &facts[0];
+            ReadMetadata {
+                fact_type: f.fact_type.to_string(),
+                fact_source: f.fact_source.to_string(),
+                created_at: f.created_at,
+                updated_at: f.updated_at,
+                confidence: f.confidence,
+            }
+        } else {
+            ReadMetadata {
+                fact_type: "Mixed".to_string(),
+                fact_source: "Multiple".to_string(),
+                created_at: facts.iter().map(|f| f.created_at).min().unwrap_or(0),
+                updated_at: facts.iter().map(|f| f.updated_at).max().unwrap_or(0),
+                confidence: facts.iter().map(|f| f.confidence).sum::<f32>() / facts.len() as f32,
+            }
+        };
+
         Ok(MemoryBrowseOutput {
             action: "read".to_string(),
             path: path.to_string(),
             entries: None,
             content: Some(combined_content),
-            metadata: Some(ReadMetadata {
-                fact_type: first.fact_type.to_string(),
-                fact_source: first.fact_source.to_string(),
-                created_at: first.created_at,
-                updated_at: first.updated_at,
-                confidence: first.confidence,
-            }),
+            metadata: Some(metadata),
             matches: None,
             summary: format!("{} - {} facts", path, facts.len()),
         })
