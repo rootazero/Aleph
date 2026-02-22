@@ -23,7 +23,6 @@ pub fn SettingsLayout() -> impl IntoView {
                     <Route path=path!("/settings/general") view=GeneralView />
                     <Route path=path!("/settings/shortcuts") view=ShortcutsView />
                     <Route path=path!("/settings/behavior") view=BehaviorView />
-                    <Route path=path!("/settings/generation") view=GenerationView />
                     <Route path=path!("/settings/search") view=SearchView />
                     <Route path=path!("/settings/providers") view=ProvidersView />
                     <Route path=path!("/settings/generation-providers") view=GenerationProvidersView />
