@@ -26,6 +26,9 @@ pub struct MemorySearchArgs {
     /// Max results to return (default 10)
     #[serde(default = "default_max_results")]
     pub max_results: usize,
+    /// Workspace to search in (defaults to "default")
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 fn default_max_results() -> usize {
@@ -155,11 +158,13 @@ impl MemorySearchTool {
     ) -> std::result::Result<MemorySearchOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
+        let workspace = args.workspace.as_deref().unwrap_or("default");
+
         // Notify tool start
         let args_summary = format!("记忆搜索: {}", &args.query);
         notify_tool_start(Self::NAME, &args_summary);
 
-        info!(query = %args.query, max_results = args.max_results, "Executing memory search");
+        info!(query = %args.query, max_results = args.max_results, workspace = workspace, "Executing memory search");
 
         // Step 1: Fact-first retrieval
         debug!("Performing fact-first retrieval");
@@ -219,7 +224,7 @@ impl MemorySearchTool {
                 &*self.database,
                 &cluster.path,
                 &crate::memory::NamespaceScope::Owner,
-                "default",
+                workspace,
             ).await {
                 if l1.fact_source == crate::memory::FactSource::Summary {
                     cluster.l1_overview = Some(l1.content);
@@ -290,6 +295,7 @@ mod tests {
         let args = MemorySearchArgs {
             query: "test query".to_string(),
             max_results: 5,
+            workspace: None,
         };
 
         let json = serde_json::to_string(&args).unwrap();

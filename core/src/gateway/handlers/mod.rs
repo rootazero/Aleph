@@ -38,6 +38,7 @@
 //! | browser | Browser/CDP (feature-gated) |
 //! | poe | POE (Principle-Operation-Evaluation) task execution |
 //! | identity | Identity/soul management |
+//! | workspace | Workspace isolation management |
 //! | guests | Guest invitation management |
 
 pub mod health;
@@ -86,6 +87,7 @@ pub mod poe;
 pub mod identity;
 pub mod debug;
 pub mod guests;
+pub mod workspace;
 pub mod state_bus;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
@@ -334,6 +336,43 @@ impl HandlerRegistry {
             )
         });
 
+        // Workspace handlers (placeholders - actual handlers wired with MemoryBackend)
+        registry.register("workspace.create", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "workspace.create requires MemoryBackend - wire Gateway runtime first".to_string(),
+            )
+        });
+        registry.register("workspace.list", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "workspace.list requires MemoryBackend - wire Gateway runtime first".to_string(),
+            )
+        });
+        registry.register("workspace.get", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "workspace.get requires MemoryBackend - wire Gateway runtime first".to_string(),
+            )
+        });
+        registry.register("workspace.update", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "workspace.update requires MemoryBackend - wire Gateway runtime first".to_string(),
+            )
+        });
+        registry.register("workspace.archive", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "workspace.archive requires MemoryBackend - wire Gateway runtime first".to_string(),
+            )
+        });
+
         registry
     }
 
@@ -568,5 +607,15 @@ mod tests {
         assert!(registry.has_method("identity.set"));
         assert!(registry.has_method("identity.clear"));
         assert!(registry.has_method("identity.list"));
+    }
+
+    #[test]
+    fn test_workspace_handlers_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(registry.has_method("workspace.create"));
+        assert!(registry.has_method("workspace.list"));
+        assert!(registry.has_method("workspace.get"));
+        assert!(registry.has_method("workspace.update"));
+        assert!(registry.has_method("workspace.archive"));
     }
 }
