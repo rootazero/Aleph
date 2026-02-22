@@ -103,6 +103,17 @@ impl LanceMemoryBackend {
         // FTS on memories.ai_output
         self.create_fts_index_if_needed(&self.memories_table, "ai_output")
             .await?;
+
+        // Scalar BTree indexes on workspace column for efficient filtering
+        self.create_scalar_index_if_needed(&self.facts_table, "workspace")
+            .await?;
+        self.create_scalar_index_if_needed(&self.nodes_table, "workspace")
+            .await?;
+        self.create_scalar_index_if_needed(&self.edges_table, "workspace")
+            .await?;
+        self.create_scalar_index_if_needed(&self.memories_table, "workspace")
+            .await?;
+
         Ok(())
     }
 
@@ -126,6 +137,29 @@ impl LanceMemoryBackend {
             .await
             .map_err(|e| {
                 AlephError::config(format!("FTS index on '{}': {}", column, e))
+            })?;
+        Ok(())
+    }
+
+    /// Create a scalar BTree index on a column if needed (idempotent).
+    ///
+    /// BTree indexes accelerate equality and range filters on scalar columns
+    /// such as `workspace`, `namespace`, etc.
+    async fn create_scalar_index_if_needed(
+        &self,
+        table: &Table,
+        column: &str,
+    ) -> Result<(), AlephError> {
+        use lancedb::index::Index;
+        use lancedb::index::scalar::BTreeIndexBuilder;
+
+        table
+            .create_index(&[column], Index::BTree(BTreeIndexBuilder::default()))
+            .replace(true)
+            .execute()
+            .await
+            .map_err(|e| {
+                AlephError::config(format!("BTree index on '{}': {}", column, e))
             })?;
         Ok(())
     }
