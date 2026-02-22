@@ -19,22 +19,22 @@ pub fn SettingsLayout() -> impl IntoView {
             // 第三栏：内容区（通过嵌套路由渲染）
             <div class="flex-1 overflow-y-auto">
                 <Routes fallback=|| view! { <div class="p-8">"Settings page not found"</div> }>
-                    <Route path=path!("") view=Settings />
-                    <Route path=path!("general") view=GeneralView />
-                    <Route path=path!("shortcuts") view=ShortcutsView />
-                    <Route path=path!("behavior") view=BehaviorView />
-                    <Route path=path!("generation") view=GenerationView />
-                    <Route path=path!("search") view=SearchView />
-                    <Route path=path!("providers") view=ProvidersView />
-                    <Route path=path!("generation-providers") view=GenerationProvidersView />
-                    <Route path=path!("agent") view=AgentView />
-                    <Route path=path!("routing") view=RoutingRulesView />
-                    <Route path=path!("mcp") view=McpView />
-                    <Route path=path!("plugins") view=PluginsView />
-                    <Route path=path!("skills") view=SkillsView />
-                    <Route path=path!("memory") view=MemoryView />
-                    <Route path=path!("security") view=SecurityView />
-                    <Route path=path!("policies") view=PoliciesView />
+                    <Route path=path!("/settings") view=Settings />
+                    <Route path=path!("/settings/general") view=GeneralView />
+                    <Route path=path!("/settings/shortcuts") view=ShortcutsView />
+                    <Route path=path!("/settings/behavior") view=BehaviorView />
+                    <Route path=path!("/settings/generation") view=GenerationView />
+                    <Route path=path!("/settings/search") view=SearchView />
+                    <Route path=path!("/settings/providers") view=ProvidersView />
+                    <Route path=path!("/settings/generation-providers") view=GenerationProvidersView />
+                    <Route path=path!("/settings/agent") view=AgentView />
+                    <Route path=path!("/settings/routing") view=RoutingRulesView />
+                    <Route path=path!("/settings/mcp") view=McpView />
+                    <Route path=path!("/settings/plugins") view=PluginsView />
+                    <Route path=path!("/settings/skills") view=SkillsView />
+                    <Route path=path!("/settings/memory") view=MemoryView />
+                    <Route path=path!("/settings/security") view=SecurityView />
+                    <Route path=path!("/settings/policies") view=PoliciesView />
                 </Routes>
             </div>
         </div>
