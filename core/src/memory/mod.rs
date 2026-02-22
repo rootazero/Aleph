@@ -49,6 +49,7 @@ pub mod evolution;
 pub mod consolidation;
 pub mod performance_monitor;
 pub mod cortex;
+pub mod store;
 pub mod vfs;
 
 #[cfg(test)]
