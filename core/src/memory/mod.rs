@@ -5,8 +5,7 @@
 //!
 //! ## Architecture
 //!
-//! - **Primary Storage**: LanceDB via `store::lance::LanceMemoryBackend`
-//! - **Legacy Storage**: SQLite (retained for resilience state management only)
+//! - **Storage**: LanceDB via `store::lance::LanceMemoryBackend`
 //!
 //! ## Storage Traits
 //!
@@ -22,7 +21,6 @@ pub mod augmentation;
 pub mod cleanup;
 pub mod compression;
 pub mod context;
-pub mod database;
 pub mod decay;
 pub mod dreaming;
 pub mod lazy_decay;
@@ -71,7 +69,6 @@ pub use context::{
     FactStats, FactType, MemoryEntry, MemoryFact, TemporalScope, compute_parent_path,
     PRESET_PATHS,
 };
-pub use database::{StateDatabase, DEFAULT_EMBEDDING_DIM};
 pub use decay::{DecayConfig, MemoryStrength};
 pub use dreaming::{DailyInsight, DreamStatus, MemoryDecayReport, ensure_dream_daemon, record_activity};
 pub use lazy_decay::{LazyDecayEngine, DecayEvaluation};

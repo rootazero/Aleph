@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use super::super::types::SessionStatus;
-use crate::memory::database::StateDatabase;
+use crate::resilience::database::StateDatabase;
 use std::sync::Arc;
 use tracing::{debug, info};
 

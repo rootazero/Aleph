@@ -4,7 +4,7 @@
 
 use crate::error::AlephError;
 use crate::resilience::{AgentTask, Lane, RiskLevel, TaskStatus};
-use crate::memory::database::StateDatabase;
+use super::StateDatabase;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 

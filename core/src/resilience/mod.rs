@@ -9,11 +9,10 @@
 //! - Perception: Event classification, emission, and observation
 //! - Collaboration: Session handles, swapping, and coordination
 //! - Governance: Resource governor, quotas, and recursion limiting
-//!
-//! Note: Database CRUD operations for agent_events, agent_tasks, task_traces,
-//! and subagent_sessions remain in `crate::memory::database` as `impl StateDatabase` blocks.
+//! - Database: SQLite state storage (StateDatabase) and CRUD operations
 
 pub mod collaboration;
+pub mod database;
 pub mod governance;
 pub mod perception;
 pub mod recovery;
@@ -46,3 +45,5 @@ pub use governance::{
     QuotaViolation, RecursionLimitExceeded, RecursiveSentry, RemainingCapacity, ResourceGovernor,
     ResourcePermit,
 };
+
+pub use database::{MemoryStats, StateDatabase, DEFAULT_EMBEDDING_DIM};

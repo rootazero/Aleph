@@ -4,7 +4,7 @@
 //! to prevent infinite task spawning loops.
 
 use crate::error::AlephError;
-use crate::memory::database::StateDatabase;
+use crate::resilience::database::StateDatabase;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
