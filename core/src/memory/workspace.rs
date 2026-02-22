@@ -143,11 +143,11 @@ impl WorkspaceFilter {
     /// Convert the filter to a SQL WHERE clause fragment.
     ///
     /// Returns a string suitable for use in a SQL `WHERE` clause that filters
-    /// on a `workspace_id` column.
+    /// on the `workspace` column.
     pub fn to_sql_filter(&self) -> String {
         match self {
             WorkspaceFilter::Single(id) => {
-                format!("workspace_id = '{}'", id.replace('\'', "''"))
+                format!("workspace = '{}'", id.replace('\'', "''"))
             }
             WorkspaceFilter::Multiple(ids) => {
                 if ids.is_empty() {
@@ -157,7 +157,7 @@ impl WorkspaceFilter {
                     .iter()
                     .map(|id| format!("'{}'", id.replace('\'', "''")))
                     .collect();
-                format!("workspace_id IN ({})", escaped.join(", "))
+                format!("workspace IN ({})", escaped.join(", "))
             }
             WorkspaceFilter::All => "1=1".to_string(),
         }
@@ -207,11 +207,11 @@ mod tests {
     fn test_workspace_filter_sql() {
         // Single filter
         let f = WorkspaceFilter::Single("work".to_string());
-        assert_eq!(f.to_sql_filter(), "workspace_id = 'work'");
+        assert_eq!(f.to_sql_filter(), "workspace = 'work'");
 
         // Multiple filter
         let f = WorkspaceFilter::Multiple(vec!["a".to_string(), "b".to_string()]);
-        assert_eq!(f.to_sql_filter(), "workspace_id IN ('a', 'b')");
+        assert_eq!(f.to_sql_filter(), "workspace IN ('a', 'b')");
 
         // Empty multiple produces match-nothing
         let f = WorkspaceFilter::Multiple(vec![]);
@@ -225,10 +225,10 @@ mod tests {
     #[test]
     fn test_workspace_filter_sql_injection_escape() {
         let f = WorkspaceFilter::Single("it's".to_string());
-        assert_eq!(f.to_sql_filter(), "workspace_id = 'it''s'");
+        assert_eq!(f.to_sql_filter(), "workspace = 'it''s'");
 
         let f = WorkspaceFilter::Multiple(vec!["o'reilly".to_string()]);
-        assert_eq!(f.to_sql_filter(), "workspace_id IN ('o''reilly')");
+        assert_eq!(f.to_sql_filter(), "workspace IN ('o''reilly')");
     }
 
     #[test]
