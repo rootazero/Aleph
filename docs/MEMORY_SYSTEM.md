@@ -75,8 +75,8 @@ Aleph's memory system provides:
 **Location**: `core/src/memory/store/` (LanceDB backend)
 
 > **Migration Note**: The storage layer was migrated from SQLite + sqlite-vec to LanceDB in Feb 2026.
-> The old SQLite implementation remains at `core/src/memory/database/` for resilience CRUD operations
-> but all memory storage now uses LanceDB via the `MemoryBackend` type alias.
+> All memory operations (facts, sessions, graph, search) now use LanceDB via the `MemoryBackend` type alias.
+> SQLite (`StateDatabase`) is retained only for resilience state management at `core/src/resilience/database/`.
 
 ### Storage Architecture
 
@@ -410,13 +410,11 @@ pub struct RetentionPolicy {
 
 The memory graph maintains lightweight entity nodes and relations used for disambiguation and
 graph-assisted filtering. Entities are extracted from compressed facts and DreamDaemon summaries,
-then stored in the shared `memory.db` alongside memories.
+then stored in LanceDB via the `GraphStore` trait.
 
-Key tables:
-- `graph_nodes` (entities)
-- `graph_edges` (relations)
-- `graph_aliases` (name/alias lookup)
-- `memory_entities` (memory to entity links)
+LanceDB tables:
+- `graph_nodes` (entity nodes with decay scores)
+- `graph_edges` (weighted relations between entities)
 
 ---
 
