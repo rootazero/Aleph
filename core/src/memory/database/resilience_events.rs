@@ -5,11 +5,11 @@
 
 use crate::error::AlephError;
 use crate::resilience::AgentEvent;
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 
-impl VectorDatabase {
+impl StateDatabase {
     // =========================================================================
     // Agent Events CRUD
     // =========================================================================

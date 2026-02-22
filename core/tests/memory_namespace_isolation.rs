@@ -3,7 +3,7 @@
 //! Verifies that Owner and Guest namespaces are properly isolated at database layer.
 //!
 //! NOTE: These tests are currently ignored because namespace isolation needs to be
-//! re-implemented in the LanceDB backend. The old SQLite-based VectorDatabase had
+//! re-implemented in the LanceDB backend. The old SQLite-based StateDatabase had
 //! built-in namespace filtering; the new LanceMemoryBackend stores namespace as a
 //! field but the trait-level search filters need namespace support to be wired up.
 

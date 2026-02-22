@@ -1,6 +1,6 @@
 //! Memory test context for Facts Vector DB and Integration operations
 
-use alephcore::memory::database::VectorDatabase;
+use alephcore::memory::database::StateDatabase;
 use alephcore::memory::store::{LanceMemoryBackend, MemoryBackend};
 use alephcore::memory::{
     ContextAnchor, FactSpecificity, FactType, MemoryEntry, MemoryFact, MemoryIngestion,
@@ -15,8 +15,8 @@ pub struct MemoryContext {
     // === Facts Vector DB Testing ===
     /// Temporary directory for test database isolation
     pub temp_dir: Option<TempDir>,
-    /// Vector database instance (VectorDatabase doesn't impl Debug)
-    pub db: Option<Arc<VectorDatabase>>,
+    /// Vector database instance (StateDatabase doesn't impl Debug)
+    pub db: Option<Arc<StateDatabase>>,
     /// LanceDB memory backend for retrieval (Phase 4 migration)
     pub memory_backend: Option<MemoryBackend>,
     /// Facts created during test

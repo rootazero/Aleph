@@ -18,7 +18,7 @@ mod resilience_tasks;
 mod resilience_traces;
 
 // Re-export main types
-pub use core::{MemoryStats, VectorDatabase, DEFAULT_EMBEDDING_DIM};
+pub use core::{MemoryStats, StateDatabase, DEFAULT_EMBEDDING_DIM};
 
 // Re-export resilience types for backward compatibility
 // (types now live in crate::resilience, CRUD impl blocks are in resilience_*.rs above)

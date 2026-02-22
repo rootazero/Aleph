@@ -5,11 +5,11 @@
 
 use crate::error::AlephError;
 use crate::resilience::{TaskTrace, TraceRole};
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 
-impl VectorDatabase {
+impl StateDatabase {
     // =========================================================================
     // Task Traces CRUD
     // =========================================================================

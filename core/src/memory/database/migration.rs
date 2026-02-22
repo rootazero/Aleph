@@ -532,15 +532,15 @@ mod tests {
 
     #[test]
     fn test_migration_integration_with_vector_database() {
-        use super::super::core::VectorDatabase;
+        use super::super::core::StateDatabase;
 
-        // Create a test database through VectorDatabase::new()
+        // Create a test database through StateDatabase::new()
         let temp_dir = std::env::temp_dir();
         let db_path = temp_dir.join(format!("test_migration_{}.db", uuid::Uuid::new_v4()));
 
         // First initialization - should create schema and run migration
         {
-            let db = VectorDatabase::new(db_path.clone()).unwrap();
+            let db = StateDatabase::new(db_path.clone()).unwrap();
             let conn = db.conn.lock().unwrap();
 
             // Verify namespace column exists
@@ -567,7 +567,7 @@ mod tests {
 
         // Second initialization - should be idempotent (no errors)
         {
-            let db = VectorDatabase::new(db_path.clone()).unwrap();
+            let db = StateDatabase::new(db_path.clone()).unwrap();
             let conn = db.conn.lock().unwrap();
 
             // Verify still correct

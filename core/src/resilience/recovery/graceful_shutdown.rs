@@ -4,7 +4,7 @@
 //! of running tasks before shutdown.
 
 use crate::error::AlephError;
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
@@ -22,13 +22,13 @@ pub enum ShutdownSignal {
 
 /// Graceful shutdown handler for task checkpoint
 pub struct GracefulShutdown {
-    db: Arc<VectorDatabase>,
+    db: Arc<StateDatabase>,
     shutdown_tx: broadcast::Sender<ShutdownSignal>,
 }
 
 impl GracefulShutdown {
     /// Create a new graceful shutdown handler
-    pub fn new(db: Arc<VectorDatabase>) -> Self {
+    pub fn new(db: Arc<StateDatabase>) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
         Self { db, shutdown_tx }
     }

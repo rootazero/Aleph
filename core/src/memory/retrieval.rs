@@ -313,7 +313,7 @@ mod tests {
         assert!(memories.is_empty());
     }
 
-    // NOTE: Tests that require MemoryIngestion (which still uses VectorDatabase)
+    // NOTE: Tests that require MemoryIngestion (which still uses StateDatabase)
     // have been temporarily removed. They will be restored when MemoryIngestion
     // is migrated to MemoryBackend in Phase 5.
 

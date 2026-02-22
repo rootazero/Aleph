@@ -7,7 +7,7 @@
 use crate::agent_loop::message_builder::{Message, ToolCall};
 use crate::error::AlephError;
 use crate::resilience::{TaskTrace, TraceRole};
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -72,20 +72,20 @@ struct SerializedToolCall {
 
 /// Shadow Replay Engine for deterministic task recovery
 pub struct ShadowReplayEngine {
-    db: Arc<VectorDatabase>,
+    db: Arc<StateDatabase>,
 }
 
 impl std::fmt::Debug for ShadowReplayEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ShadowReplayEngine")
-            .field("db", &"<VectorDatabase>")
+            .field("db", &"<StateDatabase>")
             .finish()
     }
 }
 
 impl ShadowReplayEngine {
     /// Create a new Shadow Replay Engine
-    pub fn new(db: Arc<VectorDatabase>) -> Self {
+    pub fn new(db: Arc<StateDatabase>) -> Self {
         Self { db }
     }
 

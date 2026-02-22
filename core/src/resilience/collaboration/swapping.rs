@@ -6,7 +6,7 @@
 use crate::error::AlephError;
 use crate::resilience::recovery::ShadowReplayEngine;
 use crate::resilience::{SessionStatus, SubagentSession};
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -75,7 +75,7 @@ pub struct SwapResult {
 ///
 /// Manages the swapping of idle agents to disk to optimize memory usage.
 pub struct SwapManager {
-    db: Arc<VectorDatabase>,
+    db: Arc<StateDatabase>,
     replay_engine: Arc<ShadowReplayEngine>,
     config: SwapConfig,
 
@@ -85,14 +85,14 @@ pub struct SwapManager {
 
 impl SwapManager {
     /// Create a new Swap Manager
-    pub fn new(db: Arc<VectorDatabase>) -> Self {
+    pub fn new(db: Arc<StateDatabase>) -> Self {
         let replay_engine = Arc::new(ShadowReplayEngine::new(db.clone()));
         Self::with_config(db, replay_engine, SwapConfig::default())
     }
 
     /// Create a Swap Manager with custom config
     pub fn with_config(
-        db: Arc<VectorDatabase>,
+        db: Arc<StateDatabase>,
         replay_engine: Arc<ShadowReplayEngine>,
         config: SwapConfig,
     ) -> Self {

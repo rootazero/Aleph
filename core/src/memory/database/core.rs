@@ -1,4 +1,4 @@
-/// Core VectorDatabase struct and initialization
+/// Core StateDatabase struct and initialization
 ///
 /// Contains the database connection, schema setup, and migration logic.
 use crate::error::AlephError;
@@ -11,13 +11,13 @@ use std::sync::{Arc, Mutex};
 /// Default embedding dimension (multilingual-e5-small)
 pub const DEFAULT_EMBEDDING_DIM: u32 = 384;
 
-/// Vector database for storing and searching memory embeddings
-pub struct VectorDatabase {
+/// State database for resilience state management (agent events, tasks, traces, sessions)
+pub struct StateDatabase {
     pub(crate) conn: Arc<Mutex<Connection>>,
     pub(crate) db_path: PathBuf,
 }
 
-impl VectorDatabase {
+impl StateDatabase {
     /// Register sqlite-vec extension for all connections
     fn register_sqlite_vec_extension() {
         // Register sqlite-vec extension before opening any connection
@@ -744,7 +744,7 @@ mod tests {
     fn test_sqlite_vec_extension_loaded() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("test.db");
-        let db = VectorDatabase::new(db_path).unwrap();
+        let db = StateDatabase::new(db_path).unwrap();
 
         let conn = db.conn.lock().unwrap();
         // vec_version() returns the sqlite-vec version if loaded
@@ -763,7 +763,7 @@ mod tests {
     fn test_vec0_tables_created() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("test.db");
-        let db = VectorDatabase::new(db_path).unwrap();
+        let db = StateDatabase::new(db_path).unwrap();
 
         let conn = db.conn.lock().unwrap();
 
@@ -796,7 +796,7 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
 
         // Create database - migration should be a no-op for new DBs
-        let db = VectorDatabase::new(db_path.clone()).unwrap();
+        let db = StateDatabase::new(db_path.clone()).unwrap();
 
         // Verify both tables are empty initially
         let conn = db.conn.lock().unwrap();
@@ -815,7 +815,7 @@ mod tests {
     fn test_fts5_tables_created() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("test.db");
-        let db = VectorDatabase::new(db_path).unwrap();
+        let db = StateDatabase::new(db_path).unwrap();
 
         let conn = db.conn.lock().unwrap();
 
@@ -844,7 +844,7 @@ mod tests {
     fn test_fts5_sync_triggers_exist() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("test.db");
-        let db = VectorDatabase::new(db_path).unwrap();
+        let db = StateDatabase::new(db_path).unwrap();
 
         let conn = db.conn.lock().unwrap();
 
@@ -872,7 +872,7 @@ mod tests {
     #[test]
     fn test_in_memory_database() {
         // Create an in-memory database
-        let db = VectorDatabase::in_memory().unwrap();
+        let db = StateDatabase::in_memory().unwrap();
 
         // Verify db_path is :memory:
         assert_eq!(db.db_path.to_str().unwrap(), ":memory:");
@@ -942,7 +942,7 @@ mod tests {
     fn test_new_with_dim_default() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("test.db");
-        let db = VectorDatabase::new_with_dim(db_path, 384).unwrap();
+        let db = StateDatabase::new_with_dim(db_path, 384).unwrap();
 
         let conn = db.conn.lock().unwrap();
         let dim: String = conn

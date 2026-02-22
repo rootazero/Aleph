@@ -4,7 +4,7 @@
 //! to prevent infinite task spawning loops.
 
 use crate::error::AlephError;
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
@@ -41,13 +41,13 @@ impl std::error::Error for RecursionLimitExceeded {}
 /// Tracks task spawning depth and enforces limits to prevent
 /// runaway recursive task creation.
 pub struct RecursiveSentry {
-    db: Arc<VectorDatabase>,
+    db: Arc<StateDatabase>,
     max_depth: u32,
 }
 
 impl RecursiveSentry {
     /// Create a new Recursive Sentry
-    pub fn new(db: Arc<VectorDatabase>, max_depth: u32) -> Self {
+    pub fn new(db: Arc<StateDatabase>, max_depth: u32) -> Self {
         Self { db, max_depth }
     }
 
@@ -218,7 +218,7 @@ mod tests {
     fn test_check_depth() {
         let temp_dir = std::env::temp_dir();
         let db_path = temp_dir.join(format!("test_sentry_{}.db", uuid::Uuid::new_v4()));
-        let db = Arc::new(VectorDatabase::new(db_path).unwrap());
+        let db = Arc::new(StateDatabase::new(db_path).unwrap());
 
         let sentry = RecursiveSentry::new(db, 3);
 
@@ -231,7 +231,7 @@ mod tests {
     fn test_remaining_depth() {
         let temp_dir = std::env::temp_dir();
         let db_path = temp_dir.join(format!("test_sentry2_{}.db", uuid::Uuid::new_v4()));
-        let db = Arc::new(VectorDatabase::new(db_path).unwrap());
+        let db = Arc::new(StateDatabase::new(db_path).unwrap());
 
         let sentry = RecursiveSentry::new(db, 3);
 
@@ -245,7 +245,7 @@ mod tests {
     fn test_is_near_limit() {
         let temp_dir = std::env::temp_dir();
         let db_path = temp_dir.join(format!("test_sentry3_{}.db", uuid::Uuid::new_v4()));
-        let db = Arc::new(VectorDatabase::new(db_path).unwrap());
+        let db = Arc::new(StateDatabase::new(db_path).unwrap());
 
         let sentry = RecursiveSentry::new(db, 3);
 

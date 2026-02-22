@@ -25,7 +25,7 @@ const FTS_STOP_WORDS: &[&str] = &[
 
 /// Prepare an FTS-style query string from user input.
 ///
-/// Replicates the logic that was previously in `VectorDatabase::prepare_fts_query`:
+/// Replicates the logic that was previously in `StateDatabase::prepare_fts_query`:
 /// - Strip quote characters from input
 /// - Tokenize on whitespace
 /// - Filter stop words and single-character tokens
