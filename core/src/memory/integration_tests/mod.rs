@@ -7,6 +7,8 @@
 //!
 //! Run with: cargo test --lib memory::integration_tests -- --ignored
 
+pub mod workspace_isolation;
+
 #[cfg(test)]
 mod integration_tests {
     use crate::memory::{
