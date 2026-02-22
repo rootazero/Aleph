@@ -8,7 +8,7 @@ use super::types::{AnchorScope, AnchorSource, BehavioralAnchor};
 use super::AnchorStore;
 use crate::error::AlephError;
 use crate::memory::cortex::types::Experience;
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::MemoryBackend;
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
@@ -113,7 +113,7 @@ impl Default for LLMConfig {
 /// confidence (0.6) compared to reactive anchors.
 pub struct CriticAgent {
     #[allow(dead_code)]
-    db: Arc<VectorDatabase>,
+    db: MemoryBackend,
     #[allow(dead_code)]
     anchor_store: Arc<RwLock<AnchorStore>>,
     #[allow(dead_code)]
@@ -128,35 +128,13 @@ impl CriticAgent {
     ///
     /// # Arguments
     ///
-    /// * `db` - Vector database for querying experiences
+    /// * `db` - Memory backend for querying experiences
     /// * `anchor_store` - Store for persisting behavioral anchors
     /// * `scan_config` - Configuration for scanning behavior
     /// * `llm_config` - LLM configuration for analysis
     /// * `provider` - AI provider for LLM calls
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use std::sync::{Arc, RwLock};
-    /// use alephcore::memory::database::VectorDatabase;
-    /// use alephcore::memory::cortex::meta_cognition::{AnchorStore, critic::{CriticAgent, CriticScanConfig, LLMConfig}};
-    /// use alephcore::providers::create_mock_provider;
-    /// use rusqlite::Connection;
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let db = Arc::new(VectorDatabase::open_in_memory().await?);
-    /// let conn = Arc::new(Connection::open_in_memory()?);
-    /// let anchor_store = Arc::new(RwLock::new(AnchorStore::new(conn)));
-    /// let scan_config = CriticScanConfig::default();
-    /// let llm_config = LLMConfig::default();
-    /// let provider = create_mock_provider();
-    ///
-    /// let critic = CriticAgent::new(db, anchor_store, scan_config, llm_config, provider);
-    /// # Ok(())
-    /// # }
-    /// ```
     pub fn new(
-        db: Arc<VectorDatabase>,
+        db: MemoryBackend,
         anchor_store: Arc<RwLock<AnchorStore>>,
         scan_config: CriticScanConfig,
         llm_config: LLMConfig,
@@ -179,28 +157,6 @@ impl CriticAgent {
     /// # Returns
     ///
     /// * `Result<Vec<CriticReport>>` - List of critic reports with suggestions
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use std::sync::{Arc, RwLock};
-    /// # use alephcore::memory::database::VectorDatabase;
-    /// # use alephcore::memory::cortex::meta_cognition::{AnchorStore, critic::{CriticAgent, CriticScanConfig, LLMConfig}};
-    /// # use alephcore::providers::create_mock_provider;
-    /// # use rusqlite::Connection;
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let db = Arc::new(VectorDatabase::open_in_memory().await?);
-    /// # let conn = Arc::new(Connection::open_in_memory()?);
-    /// # let anchor_store = Arc::new(RwLock::new(AnchorStore::new(conn)));
-    /// # let provider = create_mock_provider();
-    /// # let critic = CriticAgent::new(db, anchor_store, CriticScanConfig::default(), LLMConfig::default(), provider);
-    /// let reports = critic.scan_for_improvements()?;
-    /// for report in reports {
-    ///     println!("Optimization suggestion: {}", report.suggested_anchor.rule_text);
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
     pub fn scan_for_improvements(&self) -> Result<Vec<CriticReport>, AlephError> {
         // TODO: Query database for successful but mediocre experiences
         // For now, return empty list as this requires database integration
@@ -500,6 +456,7 @@ mod tests {
     use super::*;
     use crate::memory::cortex::meta_cognition::schema::initialize_schema;
     use crate::memory::cortex::types::ExperienceBuilder;
+    use crate::memory::store::LanceMemoryBackend;
     use crate::providers::MockProvider;
     use rusqlite::Connection;
     use tempfile::TempDir;
@@ -510,10 +467,11 @@ mod tests {
         initialize_schema(&conn).unwrap();
         let anchor_store = Arc::new(RwLock::new(AnchorStore::new(conn)));
 
-        // Create temporary directory for vector database
+        // Create temporary directory for memory backend
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let db = Arc::new(VectorDatabase::new(db_path).unwrap());
+        let db_path = temp_dir.path().join("lance_db");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let db: MemoryBackend = Arc::new(rt.block_on(LanceMemoryBackend::open_or_create(&db_path)).unwrap());
 
         // Create mock provider that returns properly formatted JSON
         let mock_response = r#"{

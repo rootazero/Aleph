@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::memory::cortex::types::{Experience, EvolutionStatus};
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::{LanceMemoryBackend, MemoryBackend};
 use crate::memory::smart_embedder::SmartEmbedder;
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -19,10 +19,13 @@ use uuid::Uuid;
 // ============================================================================
 
 /// Create a test database for testing
-fn create_test_db() -> (Arc<VectorDatabase>, TempDir) {
+fn create_test_db() -> (MemoryBackend, TempDir) {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let db_path = temp_dir.path().join("test.db");
-    let db = Arc::new(VectorDatabase::new(db_path).expect("Failed to create test database"));
+    let db_path = temp_dir.path().join("lance_db");
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+    let db: MemoryBackend = Arc::new(rt
+        .block_on(LanceMemoryBackend::open_or_create(&db_path))
+        .expect("Failed to create test database"));
     (db, temp_dir)
 }
 

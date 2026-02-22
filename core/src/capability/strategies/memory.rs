@@ -8,7 +8,8 @@ use crate::capability::strategy::CapabilityStrategy;
 use crate::config::MemoryConfig;
 use crate::error::{AlephError, Result};
 use crate::memory::{ai_retrieval::AiMemoryRetriever, ContextAnchor as MemoryContextAnchor};
-use crate::memory::{MemoryRetrieval, SmartEmbedder, VectorDatabase, DEFAULT_MODEL_TTL_SECS};
+use crate::memory::store::{MemoryBackend, SessionStore};
+use crate::memory::{MemoryRetrieval, SmartEmbedder, DEFAULT_MODEL_TTL_SECS};
 use crate::payload::{AgentPayload, Capability};
 use crate::providers::AiProvider;
 use async_trait::async_trait;
@@ -22,7 +23,7 @@ use tracing::{debug, info, warn};
 /// optionally with AI-based selection for improved relevance.
 pub struct MemoryStrategy {
     /// Vector database for memory storage
-    memory_db: Option<Arc<VectorDatabase>>,
+    memory_db: Option<MemoryBackend>,
     /// Memory configuration
     memory_config: Option<Arc<MemoryConfig>>,
     /// AI provider for AI-based retrieval (optional)
@@ -42,7 +43,7 @@ pub struct MemoryStrategy {
 impl MemoryStrategy {
     /// Create a new memory strategy
     pub fn new(
-        memory_db: Option<Arc<VectorDatabase>>,
+        memory_db: Option<MemoryBackend>,
         memory_config: Option<Arc<MemoryConfig>>,
     ) -> Self {
         Self {
@@ -223,7 +224,7 @@ impl MemoryStrategy {
     /// Execute AI-based memory retrieval
     async fn execute_ai_retrieval(
         &self,
-        db: &Arc<VectorDatabase>,
+        db: &MemoryBackend,
         config: &Arc<MemoryConfig>,
         embedder: &Arc<SmartEmbedder>,
         anchor: &MemoryContextAnchor,
@@ -277,7 +278,7 @@ impl MemoryStrategy {
     /// Execute embedding-based memory retrieval
     async fn execute_embedding_retrieval(
         &self,
-        db: &Arc<VectorDatabase>,
+        db: &MemoryBackend,
         config: &Arc<MemoryConfig>,
         embedder: &Arc<SmartEmbedder>,
         anchor: &MemoryContextAnchor,

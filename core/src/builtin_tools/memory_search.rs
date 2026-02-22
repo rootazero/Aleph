@@ -11,9 +11,10 @@ use tracing::{debug, info};
 
 use super::error::ToolError;
 use crate::error::Result;
+use crate::memory::store::MemoryBackend;
 use crate::memory::{
     ComptrollerConfig, ContextComptroller, FactRetrieval, FactRetrievalConfig, TokenBudget,
-    TranscriptIndexer, VectorDatabase, SmartEmbedder,
+    TranscriptIndexer, SmartEmbedder,
 };
 use crate::tools::AlephTool;
 
@@ -98,7 +99,7 @@ fn cluster_facts_by_path(facts: &[FactResult], threshold: usize) -> Vec<PathClus
 
 /// Memory search tool with hybrid retrieval
 pub struct MemorySearchTool {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     fact_retrieval: Arc<FactRetrieval>,
     comptroller: Arc<ContextComptroller>,
     _indexer: Arc<TranscriptIndexer>,
@@ -113,7 +114,7 @@ impl MemorySearchTool {
         Returns both compressed facts and raw transcripts with redundancy elimination.";
 
     /// Create a new MemorySearchTool instance
-    pub fn new(database: Arc<VectorDatabase>) -> Self {
+    pub fn new(database: MemoryBackend) -> Self {
         // Create embedder with default cache dir and TTL
         let cache_dir = std::env::var("ALEPH_MODEL_CACHE")
             .map(PathBuf::from)
@@ -213,8 +214,15 @@ impl MemorySearchTool {
         // Step 3b: Compute path clusters
         let mut path_clusters = cluster_facts_by_path(&facts, 3);
         for cluster in &mut path_clusters {
-            if let Ok(Some(l1)) = self.database.get_l1_overview(&cluster.path).await {
-                cluster.l1_overview = Some(l1.content);
+            // Try to load L1 overview from store via get_by_path
+            if let Ok(Some(l1)) = crate::memory::store::MemoryStore::get_by_path(
+                &*self.database,
+                &cluster.path,
+                &crate::memory::NamespaceScope::Owner,
+            ).await {
+                if l1.fact_source == crate::memory::FactSource::Summary {
+                    cluster.l1_overview = Some(l1.content);
+                }
             }
         }
 

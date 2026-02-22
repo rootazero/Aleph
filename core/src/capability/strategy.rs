@@ -36,7 +36,7 @@ use std::sync::Arc;
 ///
 /// ```ignore
 /// pub struct MemoryStrategy {
-///     memory_db: Option<Arc<VectorDatabase>>,
+///     memory_db: Option<MemoryBackend>,
 ///     // ...
 /// }
 ///

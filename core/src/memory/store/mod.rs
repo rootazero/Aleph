@@ -15,6 +15,8 @@
 pub mod lance;
 pub mod types;
 
+pub use lance::LanceMemoryBackend;
+
 use async_trait::async_trait;
 
 use crate::config::types::memory::GraphDecayPolicy;

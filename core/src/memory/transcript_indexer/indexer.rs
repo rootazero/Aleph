@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::MemoryBackend;
 use crate::memory::smart_embedder::SmartEmbedder;
 use std::sync::Arc;
 
@@ -8,7 +8,7 @@ use super::config::TranscriptIndexerConfig;
 /// Near-realtime transcript indexer
 pub struct TranscriptIndexer {
     #[allow(dead_code)]
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     #[allow(dead_code)]
     embedder: Arc<SmartEmbedder>,
     config: TranscriptIndexerConfig,
@@ -17,7 +17,7 @@ pub struct TranscriptIndexer {
 impl TranscriptIndexer {
     /// Create new indexer with default config
     pub fn new(
-        database: Arc<VectorDatabase>,
+        database: MemoryBackend,
         embedder: Arc<SmartEmbedder>,
     ) -> Self {
         Self {
@@ -29,7 +29,7 @@ impl TranscriptIndexer {
 
     /// Create with custom config
     pub fn with_config(
-        database: Arc<VectorDatabase>,
+        database: MemoryBackend,
         embedder: Arc<SmartEmbedder>,
         config: TranscriptIndexerConfig,
     ) -> Self {

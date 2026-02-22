@@ -4,7 +4,7 @@
 //! including result storage, dependency resolution, and task enrichment.
 
 use crate::dispatcher::agent_types::{Task, TaskResult, TaskType};
-use crate::memory::VectorDatabase;
+use crate::memory::store::MemoryBackend;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -217,7 +217,7 @@ pub struct TaskContextManager {
     results: Arc<RwLock<HashMap<String, StoredTaskResult>>>,
 
     /// Optional vector database for persistence
-    database: Option<Arc<VectorDatabase>>,
+    database: Option<MemoryBackend>,
 
     /// Maximum context size for enrichment (in characters)
     max_context_size: usize,
@@ -235,7 +235,7 @@ impl TaskContextManager {
     }
 
     /// Set the vector database for persistence
-    pub fn with_database(mut self, database: Arc<VectorDatabase>) -> Self {
+    pub fn with_database(mut self, database: MemoryBackend) -> Self {
         self.database = Some(database);
         self
     }

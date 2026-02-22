@@ -39,7 +39,8 @@ pub use system::{
 use crate::config::{McpConfig, MemoryConfig, SkillsConfig};
 use crate::error::Result;
 use crate::mcp::McpClient;
-use crate::memory::{FactRetrieval, FactRetrievalConfig, SmartEmbedder, VectorDatabase};
+use crate::memory::store::MemoryBackend;
+use crate::memory::{FactRetrieval, FactRetrievalConfig, SmartEmbedder};
 use crate::payload::{AgentPayload, Capability};
 use crate::skills::SkillsRegistry;
 use std::sync::Arc;
@@ -50,7 +51,7 @@ use tracing::{debug, info, warn};
 /// Executes capabilities in priority order: Memory → Mcp → Skills
 pub struct CapabilityExecutor {
     /// Optional memory database for vector retrieval
-    memory_db: Option<Arc<VectorDatabase>>,
+    memory_db: Option<MemoryBackend>,
     /// Memory configuration
     memory_config: Option<Arc<MemoryConfig>>,
     /// Skills registry for Skills capability
@@ -85,7 +86,7 @@ impl CapabilityExecutor {
     /// * `memory_db` - Optional memory database for Memory capability
     /// * `memory_config` - Optional memory configuration
     pub fn new(
-        memory_db: Option<Arc<VectorDatabase>>,
+        memory_db: Option<MemoryBackend>,
         memory_config: Option<Arc<MemoryConfig>>,
     ) -> Self {
         Self {
