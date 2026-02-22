@@ -27,7 +27,7 @@ mod tests {
         Arc::new(rt.block_on(LanceMemoryBackend::open_or_create(&db_path)).unwrap())
     }
 
-    // NOTE: test_index_turn_basic removed - requires VectorDatabase-specific
+    // NOTE: test_index_turn_basic removed - requires StateDatabase-specific
     // insert_memory and search_memories. Will be restored in Phase 5.
 
     #[test]

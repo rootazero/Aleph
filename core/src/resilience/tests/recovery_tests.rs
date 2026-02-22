@@ -7,15 +7,15 @@
 //! - Risk-aware recovery decisions
 
 use crate::resilience::*;
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Test helper to create a temporary database
-fn create_test_db() -> (TempDir, Arc<VectorDatabase>) {
+fn create_test_db() -> (TempDir, Arc<StateDatabase>) {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let db_path = temp_dir.path().join("test.db");
-    let db = Arc::new(VectorDatabase::new(db_path).expect("Failed to create database"));
+    let db = Arc::new(StateDatabase::new(db_path).expect("Failed to create database"));
     (temp_dir, db)
 }
 

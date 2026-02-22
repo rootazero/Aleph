@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use crate::resilience::AgentEvent;
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -40,7 +40,7 @@ struct TaskState {
 
 /// Task Observer for real-time event monitoring with gap-fill
 pub struct TaskObserver {
-    db: Arc<VectorDatabase>,
+    db: Arc<StateDatabase>,
 
     /// Task states indexed by task_id
     states: RwLock<HashMap<String, TaskState>>,
@@ -51,7 +51,7 @@ pub struct TaskObserver {
 
 impl TaskObserver {
     /// Create a new Task Observer
-    pub fn new(db: Arc<VectorDatabase>) -> Self {
+    pub fn new(db: Arc<StateDatabase>) -> Self {
         Self {
             db,
             states: RwLock::new(HashMap::new()),
@@ -60,7 +60,7 @@ impl TaskObserver {
     }
 
     /// Create observer with custom gap threshold
-    pub fn with_threshold(db: Arc<VectorDatabase>, gap_threshold: u64) -> Self {
+    pub fn with_threshold(db: Arc<StateDatabase>, gap_threshold: u64) -> Self {
         Self {
             db,
             states: RwLock::new(HashMap::new()),

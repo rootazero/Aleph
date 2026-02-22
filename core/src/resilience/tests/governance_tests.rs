@@ -7,15 +7,15 @@
 //! - Resource permits
 
 use crate::resilience::*;
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Test helper to create a temporary database
-fn create_test_db() -> (TempDir, Arc<VectorDatabase>) {
+fn create_test_db() -> (TempDir, Arc<StateDatabase>) {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let db_path = temp_dir.path().join("test.db");
-    let db = Arc::new(VectorDatabase::new(db_path).expect("Failed to create database"));
+    let db = Arc::new(StateDatabase::new(db_path).expect("Failed to create database"));
     (temp_dir, db)
 }
 
@@ -166,7 +166,7 @@ fn test_governor_stats() {
 fn test_sentry_check_depth() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let db_path = temp_dir.path().join("test.db");
-    let db = Arc::new(VectorDatabase::new(db_path).expect("Failed to create database"));
+    let db = Arc::new(StateDatabase::new(db_path).expect("Failed to create database"));
 
     let sentry = RecursiveSentry::new(db, 3);
 
@@ -185,7 +185,7 @@ fn test_sentry_check_depth() {
 fn test_sentry_remaining_depth() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let db_path = temp_dir.path().join("test.db");
-    let db = Arc::new(VectorDatabase::new(db_path).expect("Failed to create database"));
+    let db = Arc::new(StateDatabase::new(db_path).expect("Failed to create database"));
 
     let sentry = RecursiveSentry::new(db, 3);
 
@@ -200,7 +200,7 @@ fn test_sentry_remaining_depth() {
 fn test_sentry_is_near_limit() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let db_path = temp_dir.path().join("test.db");
-    let db = Arc::new(VectorDatabase::new(db_path).expect("Failed to create database"));
+    let db = Arc::new(StateDatabase::new(db_path).expect("Failed to create database"));
 
     let sentry = RecursiveSentry::new(db, 3);
 
@@ -272,7 +272,7 @@ async fn test_sentry_validate_spawn() {
 fn test_quota_check_tokens() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let db_path = temp_dir.path().join("test.db");
-    let db = Arc::new(VectorDatabase::new(db_path).expect("Failed to create database"));
+    let db = Arc::new(StateDatabase::new(db_path).expect("Failed to create database"));
 
     let config = QuotaConfig {
         token_budget: 1000,
@@ -290,7 +290,7 @@ fn test_quota_check_tokens() {
 fn test_quota_check_tool_calls() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let db_path = temp_dir.path().join("test.db");
-    let db = Arc::new(VectorDatabase::new(db_path).expect("Failed to create database"));
+    let db = Arc::new(StateDatabase::new(db_path).expect("Failed to create database"));
 
     let config = QuotaConfig {
         max_tool_calls_per_task: 10,

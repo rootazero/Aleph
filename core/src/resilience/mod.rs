@@ -11,7 +11,7 @@
 //! - Governance: Resource governor, quotas, and recursion limiting
 //!
 //! Note: Database CRUD operations for agent_events, agent_tasks, task_traces,
-//! and subagent_sessions remain in `crate::memory::database` as `impl VectorDatabase` blocks.
+//! and subagent_sessions remain in `crate::memory::database` as `impl StateDatabase` blocks.
 
 pub mod collaboration;
 pub mod governance;

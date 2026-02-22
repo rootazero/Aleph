@@ -164,8 +164,8 @@ impl CleanupService {
 mod tests {
     use super::*;
 
-    // TODO: Tests need to be rewritten to use LanceMemoryBackend instead of VectorDatabase.
-    // The old tests created VectorDatabase from a file path; the new MemoryBackend
+    // TODO: Tests need to be rewritten to use LanceMemoryBackend instead of StateDatabase.
+    // The old tests created StateDatabase from a file path; the new MemoryBackend
     // requires LanceMemoryBackend::open_or_create(path).await wrapped in Arc.
     // For now, tests are placeholders.
 

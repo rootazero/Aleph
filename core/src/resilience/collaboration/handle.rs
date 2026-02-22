@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use crate::resilience::{SessionStatus, SubagentSession};
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio::sync::RwLock;
@@ -89,7 +89,7 @@ pub struct SessionHandle {
     session_id: String,
 
     /// Database reference
-    db: Arc<VectorDatabase>,
+    db: Arc<StateDatabase>,
 
     /// Current handle state
     state: RwLock<HandleState>,
@@ -101,7 +101,7 @@ pub struct SessionHandle {
 
 impl SessionHandle {
     /// Create a new session handle
-    pub fn new(session_id: String, db: Arc<VectorDatabase>) -> Self {
+    pub fn new(session_id: String, db: Arc<StateDatabase>) -> Self {
         Self {
             session_id,
             db,

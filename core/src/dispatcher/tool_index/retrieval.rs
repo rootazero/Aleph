@@ -157,7 +157,7 @@ impl ToolRetrieval {
         query_embedding: &[f32],
         query_text: &str,
     ) -> Result<Vec<HydratedTool>, AlephError> {
-        // Use hybrid search from VectorDatabase
+        // Use hybrid search from StateDatabase
         let filter = crate::memory::store::types::SearchFilter::valid_only(
             Some(crate::memory::NamespaceScope::Owner),
         );

@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use super::super::types::SessionStatus;
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use std::sync::Arc;
 use tracing::{debug, info};
 
@@ -115,18 +115,18 @@ pub struct QuotaUsage {
 
 /// Quota Manager for enforcing resource limits
 pub struct QuotaManager {
-    db: Arc<VectorDatabase>,
+    db: Arc<StateDatabase>,
     config: QuotaConfig,
 }
 
 impl QuotaManager {
     /// Create a new Quota Manager
-    pub fn new(db: Arc<VectorDatabase>) -> Self {
+    pub fn new(db: Arc<StateDatabase>) -> Self {
         Self::with_config(db, QuotaConfig::default())
     }
 
     /// Create a Quota Manager with custom config
-    pub fn with_config(db: Arc<VectorDatabase>, config: QuotaConfig) -> Self {
+    pub fn with_config(db: Arc<StateDatabase>, config: QuotaConfig) -> Self {
         info!(
             max_running = config.max_running,
             max_idle = config.max_idle,
@@ -323,7 +323,7 @@ mod tests {
     fn test_check_tokens() {
         let temp_dir = std::env::temp_dir();
         let db_path = temp_dir.join(format!("test_quota_{}.db", uuid::Uuid::new_v4()));
-        let db = Arc::new(VectorDatabase::new(db_path).unwrap());
+        let db = Arc::new(StateDatabase::new(db_path).unwrap());
 
         let manager = QuotaManager::new(db);
 

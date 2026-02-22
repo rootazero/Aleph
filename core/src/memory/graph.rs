@@ -498,5 +498,5 @@ mod tests {
     use super::*;
 
     // TODO: Tests need to be rewritten to use LanceMemoryBackend
-    // The old tests used VectorDatabase with SQLite
+    // The old tests used StateDatabase with SQLite
 }

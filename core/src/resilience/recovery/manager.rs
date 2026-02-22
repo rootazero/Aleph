@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use crate::resilience::{AgentTask, RiskLevel, TaskStatus};
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -45,13 +45,13 @@ pub struct RecoverySummary {
 
 /// Recovery Manager for handling interrupted tasks on startup
 pub struct RecoveryManager {
-    db: Arc<VectorDatabase>,
+    db: Arc<StateDatabase>,
     replay_engine: Arc<ShadowReplayEngine>,
 }
 
 impl RecoveryManager {
     /// Create a new Recovery Manager
-    pub fn new(db: Arc<VectorDatabase>) -> Self {
+    pub fn new(db: Arc<StateDatabase>) -> Self {
         let replay_engine = Arc::new(ShadowReplayEngine::new(db.clone()));
         Self { db, replay_engine }
     }

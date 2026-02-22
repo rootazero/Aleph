@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use super::super::types::Lane;
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -82,7 +82,7 @@ impl LaneResources {
 /// - Recursion depth tracking
 /// - Token budget enforcement
 pub struct ResourceGovernor {
-    db: Arc<VectorDatabase>,
+    db: Arc<StateDatabase>,
     config: GovernorConfig,
 
     /// Resources per lane
@@ -95,12 +95,12 @@ pub struct ResourceGovernor {
 
 impl ResourceGovernor {
     /// Create a new Resource Governor
-    pub fn new(db: Arc<VectorDatabase>) -> Self {
+    pub fn new(db: Arc<StateDatabase>) -> Self {
         Self::with_config(db, GovernorConfig::default())
     }
 
     /// Create a Resource Governor with custom config
-    pub fn with_config(db: Arc<VectorDatabase>, config: GovernorConfig) -> Self {
+    pub fn with_config(db: Arc<StateDatabase>, config: GovernorConfig) -> Self {
         // Calculate lane capacities based on reserve percentage
         let total_capacity = config.max_running_subagents + 2; // +2 for main lane minimum
         let main_capacity =
@@ -264,7 +264,7 @@ impl ResourceGovernor {
     }
 
     /// Get database reference
-    pub fn database(&self) -> &Arc<VectorDatabase> {
+    pub fn database(&self) -> &Arc<StateDatabase> {
         &self.db
     }
 }

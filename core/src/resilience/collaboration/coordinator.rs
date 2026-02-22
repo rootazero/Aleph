@@ -8,7 +8,7 @@
 
 use crate::error::AlephError;
 use crate::resilience::{SessionStatus, SubagentSession};
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -52,7 +52,7 @@ impl Default for CoordinatorConfig {
 /// - Managing session state transitions
 /// - Automatic resource optimization (swapping)
 pub struct SessionCoordinator {
-    db: Arc<VectorDatabase>,
+    db: Arc<StateDatabase>,
     config: CoordinatorConfig,
     swap_manager: Arc<SwapManager>,
 
@@ -62,12 +62,12 @@ pub struct SessionCoordinator {
 
 impl SessionCoordinator {
     /// Create a new Session Coordinator
-    pub fn new(db: Arc<VectorDatabase>) -> Self {
+    pub fn new(db: Arc<StateDatabase>) -> Self {
         Self::with_config(db, CoordinatorConfig::default())
     }
 
     /// Create a Session Coordinator with custom config
-    pub fn with_config(db: Arc<VectorDatabase>, config: CoordinatorConfig) -> Self {
+    pub fn with_config(db: Arc<StateDatabase>, config: CoordinatorConfig) -> Self {
         let swap_manager = Arc::new(SwapManager::with_config(
             db.clone(),
             Arc::new(crate::resilience::recovery::ShadowReplayEngine::new(

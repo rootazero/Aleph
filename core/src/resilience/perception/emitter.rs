@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use crate::resilience::AgentEvent;
-use crate::memory::database::VectorDatabase;
+use crate::memory::database::StateDatabase;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,7 +51,7 @@ impl Default for EmitterConfig {
 /// Ensures events are persisted to database before broadcast.
 /// Handles backpressure and retries for reliable delivery.
 pub struct EventEmitter {
-    db: Arc<VectorDatabase>,
+    db: Arc<StateDatabase>,
     config: EmitterConfig,
 
     /// Broadcast channel for real-time subscribers
@@ -66,12 +66,12 @@ pub struct EventEmitter {
 
 impl EventEmitter {
     /// Create a new event emitter
-    pub fn new(db: Arc<VectorDatabase>) -> Self {
+    pub fn new(db: Arc<StateDatabase>) -> Self {
         Self::with_config(db, EmitterConfig::default())
     }
 
     /// Create an event emitter with custom config
-    pub fn with_config(db: Arc<VectorDatabase>, config: EmitterConfig) -> Self {
+    pub fn with_config(db: Arc<StateDatabase>, config: EmitterConfig) -> Self {
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
 
         Self {
