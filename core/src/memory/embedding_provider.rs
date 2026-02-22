@@ -245,6 +245,32 @@ impl EmbeddingProvider for RemoteEmbeddingProvider {
     }
 }
 
+
+use std::sync::Arc;
+
+/// Create an EmbeddingProvider from configuration
+///
+/// Returns a trait object that can be used for embedding operations.
+pub fn create_embedding_provider(
+    config: &crate::config::types::memory::EmbeddingConfig,
+) -> Result<Arc<dyn EmbeddingProvider>, AlephError> {
+    match config.provider.as_str() {
+        "local" => {
+            let cache_dir = SmartEmbedder::default_cache_dir()?;
+            let embedder = SmartEmbedder::new(cache_dir, crate::memory::DEFAULT_MODEL_TTL_SECS);
+            Ok(Arc::new(LocalEmbeddingProvider::new(embedder)))
+        }
+        "openai" | "custom" => {
+            let provider = RemoteEmbeddingProvider::from_config(config)?;
+            Ok(Arc::new(provider))
+        }
+        other => Err(AlephError::config(format!(
+            "Unknown embedding provider: '{}'. Supported: local, openai, custom",
+            other
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,4 +317,21 @@ mod tests {
 
         provider.inner().shutdown();
     }
+    #[test]
+    fn test_create_local_provider_config() {
+        let config = crate::config::types::memory::EmbeddingConfig::default();
+        assert_eq!(config.provider, "local");
+        assert_eq!(config.dimension, 384);
+    }
+
+    #[test]
+    fn test_unknown_provider_fails() {
+        let mut config = crate::config::types::memory::EmbeddingConfig::default();
+        config.provider = "unknown".to_string();
+        let result = create_embedding_provider(&config);
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(err.to_string().contains("Unknown embedding provider"));
+    }
+
 }

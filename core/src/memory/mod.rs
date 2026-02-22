@@ -88,7 +88,10 @@ pub use reranker::{NoOpReranker, Reranker, RerankResult};
 pub use retrieval::MemoryRetrieval;
 pub use scratchpad::{ScratchpadManager, ScratchpadConfig, SessionHistory};
 pub use smart_embedder::{SmartEmbedder, DEFAULT_MODEL_TTL_SECS, EMBEDDING_DIM};
-pub use embedding_provider::{EmbeddingProvider, LocalEmbeddingProvider, RemoteEmbeddingProvider, truncate_and_normalize};
+pub use embedding_provider::{
+    EmbeddingProvider, LocalEmbeddingProvider, RemoteEmbeddingProvider,
+    create_embedding_provider, truncate_and_normalize,
+};
 pub use cli::{LockError, LockMode, MemoryLock};
 pub use transcript_indexer::{
     SemanticChunkConfig, SemanticChunker, TranscriptIndexer, TranscriptIndexerConfig,
