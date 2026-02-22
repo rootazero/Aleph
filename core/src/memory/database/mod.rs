@@ -23,7 +23,7 @@ pub mod resilience;
 mod retention;
 
 // Re-export main types
-pub use core::{MemoryStats, VectorDatabase, CURRENT_EMBEDDING_DIM};
+pub use core::{MemoryStats, VectorDatabase, DEFAULT_EMBEDDING_DIM};
 pub use facts::PathEntry;
 pub use resilience::{
     AgentEvent, AgentTask, CoordinatorConfig, DivergenceStatus, EmitterConfig, EventClassifier,
@@ -51,7 +51,7 @@ mod tests {
     /// to the provided values and the rest to 0.0.
     /// This ensures embeddings match the vec0 table's expected dimension.
     fn make_test_embedding(values: &[f32]) -> Vec<f32> {
-        let mut embedding = vec![0.0f32; CURRENT_EMBEDDING_DIM as usize];
+        let mut embedding = vec![0.0f32; DEFAULT_EMBEDDING_DIM as usize];
         for (i, &v) in values.iter().enumerate() {
             if i < embedding.len() {
                 embedding[i] = v;
@@ -367,7 +367,7 @@ mod tests {
     #[tokio::test]
     async fn test_embedding_serialization_large_vectors() {
         // Test with 384-dimensional vector (multilingual-e5-small embedding size)
-        let embedding: Vec<f32> = (0..CURRENT_EMBEDDING_DIM).map(|i| (i as f32) * 0.001).collect();
+        let embedding: Vec<f32> = (0..DEFAULT_EMBEDDING_DIM).map(|i| (i as f32) * 0.001).collect();
         let bytes = VectorDatabase::serialize_embedding(&embedding);
         let deserialized = VectorDatabase::deserialize_embedding(&bytes);
 
