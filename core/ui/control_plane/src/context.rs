@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use futures::{StreamExt, FutureExt};
 use futures::channel::{oneshot, mpsc};
 use serde_json::Value;
-use crate::components::sidebar::{SidebarMode, SystemAlert};
+use crate::components::sidebar::SystemAlert;
 
 // RPC request sent to the message loop
 struct RpcRequest {
@@ -50,9 +50,6 @@ pub struct DashboardState {
     /// System alert state bus
     pub alerts: RwSignal<HashMap<String, SystemAlert>>,
 
-    /// Sidebar mode override (user manual setting)
-    pub sidebar_mode_override: RwSignal<Option<SidebarMode>>,
-
     /// Alert subscription ID for cleanup
     alert_subscription_id: StoredValue<Option<usize>>,
 }
@@ -70,7 +67,6 @@ impl DashboardState {
             event_handlers: StoredValue::new(Arc::new(Mutex::new(Vec::new()))),
             disconnect_tx: StoredValue::new(None),
             alerts: RwSignal::new(HashMap::new()),
-            sidebar_mode_override: RwSignal::new(None),
             alert_subscription_id: StoredValue::new(None),
         }
     }

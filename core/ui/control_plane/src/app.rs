@@ -6,8 +6,8 @@ use crate::views::home::Home;
 use crate::views::system_status::SystemStatus;
 use crate::views::agent_trace::AgentTrace;
 use crate::views::memory::Memory;
+use crate::views::settings::*;
 use crate::components::Sidebar;
-use crate::components::SettingsLayout;
 use crate::context::{DashboardContext, DashboardState};
 
 #[component]
@@ -53,17 +53,38 @@ fn AppContent() -> impl IntoView {
     view! {
         <div class="flex h-screen bg-surface text-text-primary font-sans selection:bg-primary/30">
             <Router>
-                // Left Sidebar
+                // Left Sidebar (unified flat navigation)
                 <Sidebar />
 
                 // Main Content
                 <main class="flex-1 overflow-y-auto relative">
                     <Routes fallback=|| view! { <div class="p-8">"404 - Not Found"</div> }>
+                        // Dashboard routes
                         <Route path=path!("/") view=Home />
                         <Route path=path!("/status") view=SystemStatus />
                         <Route path=path!("/trace") view=AgentTrace />
                         <Route path=path!("/memory") view=Memory />
-                        <Route path=path!("/settings/*any") view=SettingsLayout />
+
+                        // Settings routes (promoted to top-level)
+                        <Route path=path!("/settings") view=Settings />
+                        <Route path=path!("/settings/general") view=GeneralView />
+                        <Route path=path!("/settings/shortcuts") view=ShortcutsView />
+                        <Route path=path!("/settings/behavior") view=BehaviorView />
+                        <Route path=path!("/settings/search") view=SearchView />
+                        <Route path=path!("/settings/providers") view=ProvidersView />
+                        <Route path=path!("/settings/generation-providers") view=GenerationProvidersView />
+                        <Route path=path!("/settings/agent") view=AgentView />
+                        <Route path=path!("/settings/routing") view=RoutingRulesView />
+                        <Route path=path!("/settings/mcp") view=McpView />
+                        <Route path=path!("/settings/plugins") view=PluginsView />
+                        <Route path=path!("/settings/skills") view=SkillsView />
+                        <Route path=path!("/settings/memory") view=MemoryView />
+                        <Route path=path!("/settings/security") view=SecurityView />
+                        <Route path=path!("/settings/policies") view=PoliciesView />
+                        <Route path=path!("/settings/channels/telegram") view=TelegramChannelView />
+                        <Route path=path!("/settings/channels/discord") view=DiscordChannelView />
+                        <Route path=path!("/settings/channels/whatsapp") view=WhatsAppChannelView />
+                        <Route path=path!("/settings/channels/imessage") view=IMessageChannelView />
                     </Routes>
                 </main>
             </Router>
