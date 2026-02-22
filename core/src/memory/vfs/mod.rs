@@ -5,9 +5,11 @@
 
 pub mod hash;
 pub mod l1_generator;
+pub mod migration;
 
 pub use hash::compute_directory_hash;
 pub use l1_generator::L1Generator;
+pub use migration::migrate_existing_facts_to_paths;
 
 use crate::memory::VectorDatabase;
 
