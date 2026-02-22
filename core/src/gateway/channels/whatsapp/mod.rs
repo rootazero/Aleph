@@ -137,10 +137,34 @@ impl WhatsAppChannel {
     }
 }
 
+/// Validates and applies a pairing state transition.
+///
+/// If the transition is valid per the state machine, it is applied silently.
+/// If invalid, a warning is logged but the transition is still applied,
+/// since bridge events reflect the actual WhatsApp connection state and
+/// take priority over the local state machine model.
+async fn transition_state(
+    pairing_state: &RwLock<PairingState>,
+    new_state: PairingState,
+    channel_id: &ChannelId,
+) {
+    let mut guard = pairing_state.write().await;
+    if let Err(err) = pairing::validate_transition(&guard, &new_state) {
+        tracing::warn!(
+            channel = %channel_id,
+            from = pairing::state_tag(&guard),
+            to = pairing::state_tag(&new_state),
+            "{}; applying anyway (bridge event reflects actual state)",
+            err
+        );
+    }
+    *guard = new_state;
+}
+
 /// Background event loop that processes BridgeEvents.
 ///
-/// Updates pairing state and forwards inbound messages to the channel's
-/// inbound_tx sender.
+/// Updates pairing state (with transition validation) and forwards inbound
+/// messages to the channel's inbound_tx sender.
 async fn event_loop(
     mut event_rx: mpsc::Receiver<BridgeEvent>,
     pairing_state: Arc<RwLock<PairingState>>,
@@ -161,26 +185,53 @@ async fn event_loop(
                             expires_in_secs,
                             "QR code received for pairing"
                         );
-                        *pairing_state.write().await = PairingState::WaitingQr {
-                            qr_data,
-                            expires_at: Utc::now() + chrono::Duration::seconds(expires_in_secs as i64),
-                        };
+                        transition_state(
+                            &pairing_state,
+                            PairingState::WaitingQr {
+                                qr_data,
+                                expires_at: Utc::now() + chrono::Duration::seconds(expires_in_secs as i64),
+                            },
+                            &channel_id,
+                        ).await;
                     }
                     BridgeEvent::QrExpired => {
                         tracing::info!(channel = %channel_id, "QR code expired");
-                        *pairing_state.write().await = PairingState::QrExpired;
+                        transition_state(
+                            &pairing_state,
+                            PairingState::QrExpired,
+                            &channel_id,
+                        ).await;
                     }
                     BridgeEvent::Scanned => {
                         tracing::info!(channel = %channel_id, "QR code scanned");
-                        *pairing_state.write().await = PairingState::Scanned;
+                        transition_state(
+                            &pairing_state,
+                            PairingState::Scanned,
+                            &channel_id,
+                        ).await;
                     }
                     BridgeEvent::Syncing { progress } => {
-                        tracing::debug!(
-                            channel = %channel_id,
-                            progress,
-                            "Syncing in progress"
-                        );
-                        *pairing_state.write().await = PairingState::Syncing { progress };
+                        // HistorySync events can arrive after Connected in whatsmeow;
+                        // don't regress from Connected back to Syncing.
+                        let is_connected = pairing_state.read().await.is_connected();
+                        if is_connected {
+                            tracing::debug!(
+                                channel = %channel_id,
+                                progress,
+                                "Ignoring syncing event (already connected)"
+                            );
+                        } else {
+                            tracing::debug!(
+                                channel = %channel_id,
+                                progress,
+                                "Syncing in progress"
+                            );
+                            transition_state(
+                                &pairing_state,
+                                PairingState::Syncing { progress },
+                                &channel_id,
+                            ).await;
+                        }
                     }
                     BridgeEvent::Connected { device_name, phone_number } => {
                         tracing::info!(
@@ -189,10 +240,14 @@ async fn event_loop(
                             phone_number = %phone_number,
                             "WhatsApp connected"
                         );
-                        *pairing_state.write().await = PairingState::Connected {
-                            device_name,
-                            phone_number,
-                        };
+                        transition_state(
+                            &pairing_state,
+                            PairingState::Connected {
+                                device_name,
+                                phone_number,
+                            },
+                            &channel_id,
+                        ).await;
                     }
                     BridgeEvent::Disconnected { reason } => {
                         tracing::warn!(
@@ -200,7 +255,11 @@ async fn event_loop(
                             reason = %reason,
                             "WhatsApp disconnected"
                         );
-                        *pairing_state.write().await = PairingState::Disconnected { reason };
+                        transition_state(
+                            &pairing_state,
+                            PairingState::Disconnected { reason },
+                            &channel_id,
+                        ).await;
                     }
                     BridgeEvent::Error { message: msg } => {
                         tracing::error!(
@@ -208,7 +267,11 @@ async fn event_loop(
                             error = %msg,
                             "WhatsApp bridge error"
                         );
-                        *pairing_state.write().await = PairingState::Failed { error: msg };
+                        transition_state(
+                            &pairing_state,
+                            PairingState::Failed { error: msg },
+                            &channel_id,
+                        ).await;
                     }
                     BridgeEvent::Message { .. } => {
                         if let Some(msg) = message::bridge_message_to_inbound(&event, &channel_id) {

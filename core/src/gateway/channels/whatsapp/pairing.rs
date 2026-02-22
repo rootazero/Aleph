@@ -126,7 +126,7 @@ impl PairingState {
 }
 
 /// Returns a short tag for the state variant (for transition error messages).
-fn state_tag(state: &PairingState) -> &'static str {
+pub(crate) fn state_tag(state: &PairingState) -> &'static str {
     match state {
         PairingState::Idle => "Idle",
         PairingState::Initializing => "Initializing",
@@ -144,23 +144,28 @@ fn state_tag(state: &PairingState) -> &'static str {
 ///
 /// # Valid transitions
 ///
-/// | From           | Allowed targets                           |
-/// |----------------|-------------------------------------------|
-/// | Idle           | Initializing                              |
-/// | Initializing   | WaitingQr, Failed                         |
-/// | WaitingQr      | Scanned, QrExpired, Failed                |
-/// | QrExpired      | WaitingQr, Failed                         |
-/// | Scanned        | Syncing, Failed                           |
-/// | Syncing        | Syncing (progress update), Connected, Failed |
-/// | Connected      | Disconnected                              |
-/// | Disconnected   | Initializing, Idle                        |
-/// | Failed         | Idle                                      |
+/// | From           | Allowed targets                                    |
+/// |----------------|----------------------------------------------------|
+/// | Idle           | Initializing                                       |
+/// | Initializing   | WaitingQr, Connected (reconnect), Failed            |
+/// | WaitingQr      | Scanned, QrExpired, Failed                         |
+/// | QrExpired      | WaitingQr, Failed                                  |
+/// | Scanned        | Syncing, Connected (before HistorySync), Failed    |
+/// | Syncing        | Syncing (progress update), Connected, Failed       |
+/// | Connected      | Disconnected                                       |
+/// | Disconnected   | Initializing, Connected (auto-reconnect), Idle     |
+/// | Failed         | Idle                                               |
 pub fn validate_transition(from: &PairingState, to: &PairingState) -> Result<(), String> {
     let valid = match from {
         PairingState::Idle => matches!(to, PairingState::Initializing),
 
         PairingState::Initializing => {
-            matches!(to, PairingState::WaitingQr { .. } | PairingState::Failed { .. })
+            matches!(
+                to,
+                PairingState::WaitingQr { .. }
+                    | PairingState::Connected { .. } // Direct reconnection (existing session)
+                    | PairingState::Failed { .. }
+            )
         }
 
         PairingState::WaitingQr { .. } => matches!(
@@ -173,7 +178,12 @@ pub fn validate_transition(from: &PairingState, to: &PairingState) -> Result<(),
         }
 
         PairingState::Scanned => {
-            matches!(to, PairingState::Syncing { .. } | PairingState::Failed { .. })
+            matches!(
+                to,
+                PairingState::Syncing { .. }
+                    | PairingState::Connected { .. } // Connected may fire before HistorySync
+                    | PairingState::Failed { .. }
+            )
         }
 
         PairingState::Syncing { .. } => matches!(
@@ -184,7 +194,12 @@ pub fn validate_transition(from: &PairingState, to: &PairingState) -> Result<(),
         PairingState::Connected { .. } => matches!(to, PairingState::Disconnected { .. }),
 
         PairingState::Disconnected { .. } => {
-            matches!(to, PairingState::Initializing | PairingState::Idle)
+            matches!(
+                to,
+                PairingState::Initializing
+                    | PairingState::Connected { .. } // whatsmeow auto-reconnect
+                    | PairingState::Idle
+            )
         }
 
         PairingState::Failed { .. } => matches!(to, PairingState::Idle),
@@ -456,9 +471,9 @@ mod tests {
     }
 
     #[test]
-    fn test_scanned_cannot_go_to_connected() {
-        // Must go through Syncing first
-        assert!(validate_transition(&PairingState::Scanned, &connected()).is_err());
+    fn test_scanned_can_go_to_connected() {
+        // Connected may fire before HistorySync in whatsmeow
+        assert!(validate_transition(&PairingState::Scanned, &connected()).is_ok());
     }
 
     #[test]
@@ -490,6 +505,20 @@ mod tests {
         assert!(err.contains("Invalid state transition"));
         assert!(err.contains("Idle"));
         assert!(err.contains("Connected"));
+    }
+
+    // ── Reconnection and auto-reconnect paths ────────────────────
+
+    #[test]
+    fn test_direct_reconnection() {
+        // Initializing -> Connected (existing session, no QR needed)
+        assert!(validate_transition(&PairingState::Initializing, &connected()).is_ok());
+    }
+
+    #[test]
+    fn test_auto_reconnection() {
+        // Disconnected -> Connected (whatsmeow auto-reconnect)
+        assert!(validate_transition(&disconnected(), &connected()).is_ok());
     }
 
     // ── Syncing progress updates ────────────────────────────────
