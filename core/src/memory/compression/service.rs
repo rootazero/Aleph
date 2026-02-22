@@ -17,7 +17,7 @@ use crate::memory::graph::GraphStore;
 use crate::memory::smart_embedder::SmartEmbedder;
 use crate::memory::vfs::L1Generator;
 use crate::providers::AiProvider;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
@@ -146,7 +146,7 @@ impl CompressionService {
         // 4. Process each fact (conflict detection and storage)
         let mut stored_fact_ids = Vec::new();
         let mut total_invalidated = 0u32;
-        let mut stored_paths: HashMap<String, String> = HashMap::new();
+        let mut affected_paths: HashSet<String> = HashSet::new();
 
         for fact in extracted_facts {
             // Detect conflicts
@@ -163,7 +163,7 @@ impl CompressionService {
             match self.database.insert_fact(fact.clone()).await {
                 Ok(_) => {
                     stored_fact_ids.push(fact.id.clone());
-                    stored_paths.insert(fact.id.clone(), fact.path.clone());
+                    affected_paths.insert(fact.path.clone());
                     tracing::debug!(
                         fact_id = %fact.id,
                         content = %fact.content,
@@ -184,8 +184,6 @@ impl CompressionService {
         }
 
         // 4b. Generate/update L1 Overviews for affected paths
-        let affected_paths: HashSet<String> = stored_paths.values().cloned().collect();
-
         if !affected_paths.is_empty() {
             if let Some(ref l1_gen) = self.l1_generator {
                 tracing::info!(
