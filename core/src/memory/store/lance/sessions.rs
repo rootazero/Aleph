@@ -10,9 +10,11 @@ use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase, Select};
 
 use crate::error::AlephError;
-use crate::memory::context::MemoryEntry;
+use crate::memory::context::{CompressionSession, MemoryEntry};
+use crate::memory::dreaming::{DailyInsight, DreamStatus};
+use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::types::MemoryFilter;
-use crate::memory::store::{SessionStore, StoreStats};
+use crate::memory::store::{CompressionStore, DreamStore, SessionStore, StoreStats};
 
 use super::arrow_convert::{memories_to_record_batch, record_batch_to_memories};
 use super::LanceMemoryBackend;
@@ -221,6 +223,148 @@ impl SessionStore for LanceMemoryBackend {
             total_graph_nodes,
             total_graph_edges,
         })
+    }
+
+    async fn get_memories_since(
+        &self,
+        since_timestamp: i64,
+        namespace: &NamespaceScope,
+    ) -> Result<Vec<MemoryEntry>, AlephError> {
+        let ns_value = namespace.to_namespace_value();
+        let filter = format!(
+            "timestamp >= {} AND namespace = '{}'",
+            since_timestamp, ns_value
+        );
+
+        let mut entries =
+            scan_memories(&self.memories_table, Some(&filter), None).await?;
+
+        // Sort by timestamp descending (most recent first).
+        entries.sort_by(|a, b| b.context.timestamp.cmp(&a.context.timestamp));
+        Ok(entries)
+    }
+
+    async fn delete_older_than(
+        &self,
+        cutoff_timestamp: i64,
+    ) -> Result<u64, AlephError> {
+        // Count rows that will be deleted.
+        let filter = format!("timestamp < {}", cutoff_timestamp);
+        let count = count_rows_with_filter(&self.memories_table, &filter).await? as u64;
+
+        if count > 0 {
+            self.memories_table
+                .delete(&filter)
+                .await
+                .map_err(|e| lance_err(e))?;
+        }
+
+        Ok(count)
+    }
+
+    async fn clear_memories(
+        &self,
+        app_filter: Option<&str>,
+        window_filter: Option<&str>,
+    ) -> Result<u64, AlephError> {
+        let filter = match (app_filter, window_filter) {
+            (Some(app), Some(win)) => {
+                format!("app_bundle_id = '{}' AND window_title = '{}'", app, win)
+            }
+            (Some(app), None) => format!("app_bundle_id = '{}'", app),
+            (None, Some(win)) => format!("window_title = '{}'", win),
+            (None, None) => "true".to_string(),
+        };
+
+        let count =
+            count_rows_with_filter(&self.memories_table, &filter).await? as u64;
+
+        if count > 0 {
+            self.memories_table
+                .delete(&filter)
+                .await
+                .map_err(|e| lance_err(e))?;
+        }
+
+        Ok(count)
+    }
+
+    async fn get_uncompressed_memories(
+        &self,
+        since_timestamp: i64,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>, AlephError> {
+        // In LanceDB, all memories are "uncompressed" raw entries.
+        // The compression pipeline tracks which memories have been processed
+        // externally. We return memories since the given timestamp.
+        let filter = format!("timestamp >= {}", since_timestamp);
+
+        let mut entries =
+            scan_memories(&self.memories_table, Some(&filter), None).await?;
+
+        // Sort by timestamp ascending so oldest are processed first.
+        entries.sort_by(|a, b| a.context.timestamp.cmp(&b.context.timestamp));
+        entries.truncate(limit);
+        Ok(entries)
+    }
+}
+
+// ============================================================================
+// DreamStore implementation
+// ============================================================================
+
+#[async_trait]
+impl DreamStore for LanceMemoryBackend {
+    async fn get_dream_status(&self) -> Result<DreamStatus, AlephError> {
+        // TODO: Store dream status in a dedicated metadata table or KV store.
+        // For now, return a default (no previous run).
+        Ok(DreamStatus::default())
+    }
+
+    async fn set_dream_status(&self, _status: DreamStatus) -> Result<(), AlephError> {
+        // TODO: Persist dream status to a dedicated metadata table or KV store.
+        // For now, this is a no-op; the status is ephemeral.
+        Ok(())
+    }
+
+    async fn upsert_daily_insight(&self, _insight: DailyInsight) -> Result<(), AlephError> {
+        // TODO: Store daily insights in a dedicated LanceDB table or metadata store.
+        // For now, this is a no-op.
+        Ok(())
+    }
+
+    async fn get_daily_insight(&self, _date: &str) -> Result<Option<DailyInsight>, AlephError> {
+        // TODO: Query daily insights from a dedicated table.
+        // For now, return None (no insight found).
+        Ok(None)
+    }
+}
+
+// ============================================================================
+// CompressionStore implementation
+// ============================================================================
+
+#[async_trait]
+impl CompressionStore for LanceMemoryBackend {
+    async fn set_last_compression_timestamp(&self, _timestamp: i64) -> Result<(), AlephError> {
+        // TODO: Persist compression timestamp to a metadata table or KV store.
+        // For now, this is a no-op.
+        Ok(())
+    }
+
+    async fn get_last_compression_timestamp(&self) -> Result<Option<i64>, AlephError> {
+        // TODO: Query compression timestamp from a metadata table or KV store.
+        // For now, return None (no previous compression).
+        Ok(None)
+    }
+
+    async fn record_compression_session(
+        &self,
+        _session: &CompressionSession,
+    ) -> Result<(), AlephError> {
+        // TODO: Store compression session records in a dedicated table.
+        // For now, this is a no-op.
+        Ok(())
     }
 }
 

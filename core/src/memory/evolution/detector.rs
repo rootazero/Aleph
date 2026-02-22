@@ -2,13 +2,16 @@
 
 use std::sync::Arc;
 
-use crate::memory::{MemoryFact, VectorDatabase};
+use crate::memory::context::MemoryFact;
+use crate::memory::namespace::NamespaceScope;
+use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::types::SearchFilter;
 use crate::providers::AiProvider;
 use crate::Result;
 
 /// Detects contradictions between facts
 pub struct ContradictionDetector {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     provider: Option<Arc<dyn AiProvider>>,
     similarity_threshold: f32,
 }
@@ -16,7 +19,7 @@ pub struct ContradictionDetector {
 impl ContradictionDetector {
     /// Create a new contradiction detector
     pub fn new(
-        database: Arc<VectorDatabase>,
+        database: MemoryBackend,
         provider: Option<Arc<dyn AiProvider>>,
     ) -> Self {
         Self {
@@ -60,21 +63,21 @@ impl ContradictionDetector {
             return Ok(Vec::new());
         };
 
-        // Search for similar facts
-        let similar = self
+        // Search for similar facts using vector_search
+        let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner));
+        let dim_hint = embedding.len() as u32;
+        let scored_facts = self
             .database
-            .search_facts(embedding, crate::memory::NamespaceScope::Owner, 10, false)
+            .vector_search(embedding, dim_hint, &filter, 10)
             .await?;
 
         // Filter by similarity threshold and exclude the fact itself
-        Ok(similar
+        Ok(scored_facts
             .into_iter()
-            .filter(|f| {
-                f.id != new_fact.id
-                    && f.similarity_score
-                        .map(|s| s >= self.similarity_threshold)
-                        .unwrap_or(false)
+            .filter(|sf| {
+                sf.fact.id != new_fact.id && sf.score >= self.similarity_threshold
             })
+            .map(|sf| sf.fact)
             .collect())
     }
 

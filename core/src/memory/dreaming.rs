@@ -3,7 +3,7 @@
 use crate::config::{DreamingConfig as ConfigDreamingConfig, GraphDecayPolicy, MemoryConfig, MemoryDecayPolicy};
 use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryEntry};
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::{DreamStore, MemoryBackend, MemoryStore, SessionStore};
 use crate::memory::decay::DecayConfig;
 use crate::memory::graph::{GraphDecayConfig, GraphDecayReport, GraphStore};
 use chrono::{Local, NaiveTime, TimeZone};
@@ -46,7 +46,7 @@ fn idle_seconds() -> i64 {
 }
 
 /// Ensure DreamDaemon is running (once) when memory is enabled.
-pub fn ensure_dream_daemon(database: Arc<VectorDatabase>, config: Arc<MemoryConfig>) {
+pub fn ensure_dream_daemon(database: MemoryBackend, config: Arc<MemoryConfig>) {
     if cfg!(test) {
         return;
     }
@@ -148,7 +148,7 @@ struct DreamCluster {
 
 /// DreamDaemon orchestrates idle-time consolidation and decay.
 pub struct DreamDaemon {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     graph_store: GraphStore,
     config: ConfigDreamingConfig,
     graph_decay: GraphDecayConfig,
@@ -160,7 +160,7 @@ pub struct DreamDaemon {
 
 impl DreamDaemon {
     pub fn from_config(
-        database: Arc<VectorDatabase>,
+        database: MemoryBackend,
         config: &MemoryConfig,
     ) -> Result<Self, AlephError> {
         let (window_start, window_end) = parse_window(&config.dreaming)?;
@@ -168,7 +168,7 @@ impl DreamDaemon {
         let memory_decay = decay_config_from_policy(&config.memory_decay);
 
         Ok(Self {
-            graph_store: GraphStore::new(Arc::clone(&database)),
+            graph_store: GraphStore::new(database.clone()),
             database,
             config: config.dreaming.clone(),
             graph_decay,
@@ -335,8 +335,10 @@ impl DreamDaemon {
         let since = run_start - DEFAULT_LOOKBACK_HOURS * 3600;
         let memories = self
             .database
-            .get_memories_since(since, DEFAULT_MAX_MEMORIES)
+            .get_memories_since(since, &crate::memory::namespace::NamespaceScope::Owner)
             .await?;
+        // Limit to max memories
+        let memories: Vec<_> = memories.into_iter().take(DEFAULT_MAX_MEMORIES as usize).collect();
 
         let mut report = DreamRunReport {
             status: DreamRunStatus::Success,
@@ -409,7 +411,14 @@ impl DreamDaemon {
         }
 
         report.graph_decay = self.graph_store.apply_decay(&self.graph_decay).await?;
-        report.memory_decay = self.database.apply_fact_decay(&self.memory_decay).await?;
+        let decayed_count = self.database.apply_fact_decay(
+            self.memory_decay.half_life_days as f32,
+            self.memory_decay.min_strength,
+        ).await?;
+        report.memory_decay = MemoryDecayReport {
+            updated_facts: decayed_count as u64,
+            pruned_facts: 0, // Not tracked separately in new API
+        };
 
         if activity_detected(activity_snapshot) {
             report.status = DreamRunStatus::Cancelled;

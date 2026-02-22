@@ -1,22 +1,24 @@
 //! RippleTask implementation for knowledge graph exploration
 
 use std::collections::HashSet;
-use std::sync::Arc;
 
-use crate::memory::{MemoryFact, VectorDatabase};
+use crate::memory::context::MemoryFact;
+use crate::memory::namespace::NamespaceScope;
+use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::types::SearchFilter;
 use crate::Result;
 
 use super::config::{RippleConfig, RippleResult};
 
 /// RippleTask explores related facts using vector similarity
 pub struct RippleTask {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     config: RippleConfig,
 }
 
 impl RippleTask {
     /// Create a new RippleTask
-    pub fn new(database: Arc<VectorDatabase>, config: RippleConfig) -> Self {
+    pub fn new(database: MemoryBackend, config: RippleConfig) -> Self {
         Self { database, config }
     }
 
@@ -44,16 +46,28 @@ impl RippleTask {
                     continue;
                 };
 
-                // Search for similar facts in the database
-                let similar_facts = self
+                // Search for similar facts using vector_search
+                let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner)); // TODO: Pass from context
+                let dim_hint = embedding.len() as u32;
+                let scored_facts = self
                     .database
-                    .search_facts(
+                    .vector_search(
                         embedding,
-                        crate::memory::NamespaceScope::Owner, // TODO: Pass from context
-                        self.config.max_facts_per_hop as u32,
-                        false,
+                        dim_hint,
+                        &filter,
+                        self.config.max_facts_per_hop,
                     )
                     .await?;
+
+                // Convert ScoredFact to MemoryFact, attaching similarity_score
+                let similar_facts: Vec<MemoryFact> = scored_facts
+                    .into_iter()
+                    .map(|sf| {
+                        let mut f = sf.fact;
+                        f.similarity_score = Some(sf.score);
+                        f
+                    })
+                    .collect();
 
                 for similar_fact in similar_facts {
                     // Skip if already visited

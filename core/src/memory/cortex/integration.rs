@@ -8,7 +8,7 @@ use crate::memory::cortex::{
     ClusteringConfig, ClusteringService, CortexDreamingConfig, CortexDreamingService,
     DistillationConfig, DistillationService, PatternExtractor, PatternExtractorConfig,
 };
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::MemoryBackend;
 use crate::memory::smart_embedder::SmartEmbedder;
 use crate::memory::value_estimator::cortex::CortexValueEstimator;
 use std::path::PathBuf;
@@ -52,7 +52,7 @@ impl Default for CortexConfig {
 /// Cortex Integration - Main orchestrator for all Cortex components
 pub struct CortexIntegration {
     config: CortexConfig,
-    db: Arc<VectorDatabase>,
+    db: MemoryBackend,
     embedder: Arc<SmartEmbedder>,
     distillation_service: Arc<RwLock<DistillationService>>,
     pattern_extractor: Arc<PatternExtractor>,
@@ -63,7 +63,7 @@ pub struct CortexIntegration {
 
 impl CortexIntegration {
     /// Create a new Cortex integration
-    pub fn new(config: CortexConfig, db: Arc<VectorDatabase>) -> Self {
+    pub fn new(config: CortexConfig, db: MemoryBackend) -> Self {
         info!("Initializing Cortex Integration");
 
         // Create embedder
@@ -170,7 +170,7 @@ impl CortexIntegration {
     }
 
     /// Get reference to database
-    pub fn database(&self) -> Arc<VectorDatabase> {
+    pub fn database(&self) -> MemoryBackend {
         self.db.clone()
     }
 
@@ -191,16 +191,15 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn create_test_db() -> (Arc<VectorDatabase>, TempDir) {
+    async fn create_test_db() -> (MemoryBackend, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let db = VectorDatabase::new(db_path).unwrap();
-        (Arc::new(db), temp_dir)
+        let backend = crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap();
+        (Arc::new(backend), temp_dir)
     }
 
     #[tokio::test]
     async fn test_cortex_integration_lifecycle() {
-        let (db, temp) = create_test_db();
+        let (db, temp) = create_test_db().await;
         let mut config = CortexConfig::default();
         config.embedder_cache_dir = temp.path().join("embedder");
 
@@ -220,7 +219,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cortex_integration_disabled() {
-        let (db, temp) = create_test_db();
+        let (db, temp) = create_test_db().await;
         let mut config = CortexConfig::default();
         config.enabled = false;
         config.embedder_cache_dir = temp.path().join("embedder");

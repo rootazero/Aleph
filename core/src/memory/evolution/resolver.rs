@@ -1,14 +1,14 @@
 //! Evolution resolver for handling contradictions
 
-use crate::memory::{MemoryFact, VectorDatabase};
+use crate::memory::context::MemoryFact;
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::Result;
-use std::sync::Arc;
 
 use super::chain::{EvolutionChain, FactEvolution};
 
 /// Resolves contradictions by creating evolution chains
 pub struct EvolutionResolver {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
 }
 
 /// Resolution strategy for handling contradictions
@@ -29,7 +29,7 @@ pub enum ResolutionStrategy {
 
 impl EvolutionResolver {
     /// Create a new evolution resolver
-    pub fn new(database: Arc<VectorDatabase>) -> Self {
+    pub fn new(database: MemoryBackend) -> Self {
         Self { database }
     }
 

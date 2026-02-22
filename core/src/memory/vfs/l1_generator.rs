@@ -7,9 +7,11 @@
 
 use crate::error::AlephError;
 use crate::memory::context::{compute_parent_path, FactSpecificity, FactType, TemporalScope};
+use crate::memory::namespace::NamespaceScope;
 use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::vfs::compute_directory_hash;
-use crate::memory::{FactSource, MemoryFact, VectorDatabase};
+use crate::memory::{FactSource, MemoryFact};
 use crate::providers::AiProvider;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -21,7 +23,7 @@ use std::sync::Arc;
 /// uses content hashing to detect when an existing L1 is stale
 /// and needs regeneration.
 pub struct L1Generator {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     provider: Arc<dyn AiProvider>,
     embedder: SmartEmbedder,
 }
@@ -29,7 +31,7 @@ pub struct L1Generator {
 impl L1Generator {
     /// Create a new L1 generator
     pub fn new(
-        database: Arc<VectorDatabase>,
+        database: MemoryBackend,
         provider: Arc<dyn AiProvider>,
         embedder: SmartEmbedder,
     ) -> Self {
@@ -56,8 +58,10 @@ impl L1Generator {
         let new_hash = compute_directory_hash(&facts);
 
         // 3. Check existing L1 — skip if hash matches
-        if let Some(existing_l1) = self.database.get_l1_overview(path).await? {
-            if existing_l1.content_hash == new_hash {
+        // Old: db.get_l1_overview(path)
+        // New: db.get_by_path(path, &NamespaceScope::Owner)
+        if let Some(existing_l1) = self.database.get_by_path(path, &NamespaceScope::Owner).await? {
+            if existing_l1.fact_source == FactSource::Summary && existing_l1.content_hash == new_hash {
                 tracing::debug!(path = path, "L1 Overview is current, skipping");
                 return Ok(false);
             }
@@ -86,12 +90,15 @@ impl L1Generator {
         l1_fact.parent_path = parent_path;
 
         // Upsert: invalidate old L1 if exists, then insert new
-        if let Some(old_l1) = self.database.get_l1_overview(path).await? {
-            self.database
-                .invalidate_fact(&old_l1.id, "Superseded by updated L1 Overview")
-                .await?;
+        // Old: db.get_l1_overview(path) → New: db.get_by_path(path, &NamespaceScope::Owner)
+        if let Some(old_l1) = self.database.get_by_path(path, &NamespaceScope::Owner).await? {
+            if old_l1.fact_source == FactSource::Summary {
+                self.database
+                    .invalidate_fact(&old_l1.id, "Superseded by updated L1 Overview")
+                    .await?;
+            }
         }
-        self.database.insert_fact(l1_fact).await?;
+        self.database.insert_fact(&l1_fact).await?;
 
         tracing::info!(path = path, "Generated L1 Overview");
         Ok(true)
@@ -118,11 +125,16 @@ impl L1Generator {
     }
 
     /// Retrieve L2 facts under `path`, excluding summaries and invalid facts.
+    ///
+    /// Uses `get_all_facts` with path-prefix filtering since the new trait
+    /// does not have a direct `get_facts_by_path_prefix` method.
     async fn get_l2_facts(&self, path: &str) -> Result<Vec<MemoryFact>, AlephError> {
-        let all_facts = self.database.get_facts_by_path_prefix(path).await?;
+        // TODO: Consider adding a dedicated `get_facts_by_path_prefix` method
+        // to MemoryStore for efficiency. For now, we use get_all_facts + filter in memory.
+        let all_facts = self.database.get_all_facts(false).await?;
         Ok(all_facts
             .into_iter()
-            .filter(|f| f.fact_source != FactSource::Summary && f.is_valid)
+            .filter(|f| f.path.starts_with(path) && f.fact_source != FactSource::Summary && f.is_valid)
             .collect())
     }
 

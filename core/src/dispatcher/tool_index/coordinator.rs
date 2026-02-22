@@ -9,7 +9,7 @@
 use crate::error::AlephError;
 use crate::mcp::manager::{McpManagerEvent, McpManagerHandle};
 use crate::memory::context::{FactSource, FactSpecificity, FactType, MemoryFact, TemporalScope};
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::skills::{SkillRegistryEvent, SkillsRegistry};
 use super::inference::SemanticPurposeInferrer;
 use std::sync::Arc;
@@ -72,13 +72,13 @@ impl ToolMeta {
 /// Stores tools as MemoryFacts with FactType::Tool for semantic retrieval.
 /// Uses SemanticPurposeInferrer to generate rich content descriptions.
 pub struct ToolIndexCoordinator {
-    db: Arc<VectorDatabase>,
+    db: MemoryBackend,
     inferrer: Arc<SemanticPurposeInferrer>,
 }
 
 impl ToolIndexCoordinator {
     /// Create a new coordinator with a database reference
-    pub fn new(db: Arc<VectorDatabase>) -> Self {
+    pub fn new(db: MemoryBackend) -> Self {
         Self {
             db,
             inferrer: Arc::new(SemanticPurposeInferrer::new()),
@@ -86,7 +86,7 @@ impl ToolIndexCoordinator {
     }
 
     /// Create a new coordinator with LLM support for L2 optimization
-    pub fn with_llm(db: Arc<VectorDatabase>, llm_provider: Arc<dyn crate::providers::AiProvider>) -> Self {
+    pub fn with_llm(db: MemoryBackend, llm_provider: Arc<dyn crate::providers::AiProvider>) -> Self {
         Self {
             db,
             inferrer: Arc::new(SemanticPurposeInferrer::with_llm(llm_provider)),
@@ -157,7 +157,9 @@ impl ToolIndexCoordinator {
 
         if existing.is_some() {
             // Update existing fact
-            self.db.update_fact_content(&fact_id, &content, embedding.as_deref()).await?;
+            // TODO: Handle embedding update separately
+            let _ = &embedding;
+            self.db.update_fact_content(&fact_id, &content).await?;
         } else {
             // Create new fact
             let fact = MemoryFact {
@@ -182,7 +184,7 @@ impl ToolIndexCoordinator {
                 embedding_model: String::new(),
             };
 
-            self.db.insert_fact(fact).await?;
+            self.db.insert_fact(&fact).await?;
         }
 
         // Schedule L2 optimization if needed (async, non-blocking)
@@ -216,7 +218,7 @@ impl ToolIndexCoordinator {
                         );
 
                         // Update fact with L2-enhanced content
-                        if let Err(e) = db.update_fact_content(&tool_id, &l2_result.description, None).await {
+                        if let Err(e) = db.update_fact_content(&tool_id, &l2_result.description).await {
                             tracing::warn!(
                                 tool_name = %tool_name,
                                 error = %e,
@@ -274,7 +276,7 @@ impl ToolIndexCoordinator {
         use crate::memory::NamespaceScope;
         // Use a large limit to get all tools (typical systems have <100 tools)
         // Tool facts are system-level, so use Owner namespace
-        self.db.get_facts_by_type(FactType::Tool, NamespaceScope::Owner, 1000).await
+        self.db.get_facts_by_type(FactType::Tool, &NamespaceScope::Owner, 1000).await
     }
 
     /// Get a specific tool fact by name

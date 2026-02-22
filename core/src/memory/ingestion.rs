@@ -5,7 +5,7 @@
 use crate::config::MemoryConfig;
 use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::{MemoryBackend, SessionStore, StoreStats};
 use crate::memory::dreaming::{ensure_dream_daemon, record_activity};
 use crate::memory::smart_embedder::SmartEmbedder;
 use crate::utils::pii::scrub_pii;
@@ -16,7 +16,7 @@ use uuid::Uuid;
 /// Memory ingestion service for storing new interactions
 #[derive(Clone)]
 pub struct MemoryIngestion {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     embedder: Arc<SmartEmbedder>,
     config: Arc<MemoryConfig>,
 }
@@ -24,11 +24,11 @@ pub struct MemoryIngestion {
 impl MemoryIngestion {
     /// Create new ingestion service
     pub fn new(
-        database: Arc<VectorDatabase>,
+        database: MemoryBackend,
         embedder: Arc<SmartEmbedder>,
         config: Arc<MemoryConfig>,
     ) -> Self {
-        ensure_dream_daemon(Arc::clone(&database), Arc::clone(&config));
+        ensure_dream_daemon(database.clone(), Arc::clone(&config));
         Self {
             database,
             embedder,
@@ -125,7 +125,7 @@ impl MemoryIngestion {
 
         // 6. Insert into database
         self.database
-            .insert_memory(memory)
+            .insert_memory(&memory)
             .await
             .map_err(|e| AlephError::config(format!("Failed to store memory: {}", e)))?;
 
@@ -146,10 +146,9 @@ mod tests {
     use super::*;
 
     // Helper to create test database
-    fn create_test_db() -> Arc<VectorDatabase> {
-        let temp_dir = std::env::temp_dir();
-        let db_path = temp_dir.join(format!("test_ingestion_{}.db", Uuid::new_v4()));
-        Arc::new(VectorDatabase::new(db_path).unwrap())
+    fn create_test_db() -> MemoryBackend {
+        // TODO: Create LanceMemoryBackend for tests
+        unimplemented!("Migrate test to use LanceMemoryBackend")
     }
 
     // Helper to create test embedding model
@@ -193,7 +192,7 @@ mod tests {
 
         // Verify memory was stored in database
         let stats = db.get_stats().await.unwrap();
-        assert_eq!(stats.total_memories, 1);
+        assert_eq!(stats.total_memories, 1); // StoreStats field
     }
 
     #[tokio::test]
@@ -215,11 +214,14 @@ mod tests {
 
         // Retrieve and verify PII was scrubbed
         let embedding = vec![0.0; crate::memory::EMBEDDING_DIM]; // Dummy query embedding
-        let memories = db
-            .search_memories(
+        let filter = crate::memory::store::types::MemoryFilter::for_context(
                 &context.app_bundle_id,
                 &context.window_title,
+            );
+        let memories = db
+            .search_memories(
                 &embedding,
+                &filter,
                 10,
             )
             .await
@@ -288,11 +290,14 @@ mod tests {
 
         // Retrieve memory and verify embedding exists
         let query_embedding = vec![0.0; crate::memory::EMBEDDING_DIM];
-        let memories = db
-            .search_memories(
+        let filter = crate::memory::store::types::MemoryFilter::for_context(
                 &context.app_bundle_id,
                 &context.window_title,
+            );
+        let memories = db
+            .search_memories(
                 &query_embedding,
+                &filter,
                 10,
             )
             .await
@@ -326,6 +331,6 @@ mod tests {
 
         // Verify all were stored
         let stats = db.get_stats().await.unwrap();
-        assert_eq!(stats.total_memories, 5);
+        assert_eq!(stats.total_memories, 5); // StoreStats field
     }
 }

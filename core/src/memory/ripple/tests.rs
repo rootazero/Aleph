@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use crate::memory::{FactSource, FactSpecificity, FactType, MemoryFact, TemporalScope, VectorDatabase};
+use crate::memory::{FactSource, FactSpecificity, FactType, MemoryFact, TemporalScope};
+use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::lance::LanceMemoryBackend;
 use crate::Result;
 
 use super::*;
@@ -40,18 +42,22 @@ fn create_test_fact(id: &str, content: &str, embedding: Vec<f32>) -> MemoryFact 
     }
 }
 
-/// Helper to create a test database with facts
-async fn create_test_database_with_facts(facts: Vec<MemoryFact>) -> Result<Arc<VectorDatabase>> {
+/// Helper to create a test database with facts (LanceDB-backed)
+async fn create_test_database_with_facts(facts: Vec<MemoryFact>) -> Result<MemoryBackend> {
     let temp_dir = tempfile::tempdir()?;
-    let db_path = temp_dir.path().join("test.db");
-    let db = VectorDatabase::new(db_path)?;
+    let backend = LanceMemoryBackend::open_or_create(temp_dir.path()).await?;
+    let db: MemoryBackend = Arc::new(backend);
 
     // Store all facts
-    for fact in facts {
+    for fact in &facts {
         db.insert_fact(fact).await?;
     }
 
-    Ok(Arc::new(db))
+    // NOTE: temp_dir is dropped here, but LanceDB keeps the files open.
+    // For proper test isolation, we leak the tempdir to prevent premature cleanup.
+    std::mem::forget(temp_dir);
+
+    Ok(db)
 }
 
 #[tokio::test]

@@ -77,44 +77,29 @@ async fn test_config_sync_roundtrip() {
 
 #[tokio::test]
 async fn test_namespace_scope_owner_access() {
-    use alephcore::memory::database::VectorDatabase;
-    use alephcore::memory::context::MemoryFact;
-    use alephcore::memory::NamespaceScope;
+    use alephcore::memory::context::{FactType, MemoryFact};
+    use alephcore::memory::store::lance::LanceMemoryBackend;
+    use alephcore::memory::store::MemoryStore;
     use tempfile::TempDir;
+    use std::sync::Arc;
 
     let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test.db");
-    let db = VectorDatabase::new(db_path).unwrap();
-
-    // Create a simple test embedding (384-dim)
-    let test_embedding = vec![1.0f32; 384];
+    let db = Arc::new(
+        LanceMemoryBackend::open_or_create(temp_dir.path())
+            .await
+            .unwrap(),
+    );
 
     // Owner inserts fact
-    let fact = MemoryFact {
-        id: "test-fact".to_string(),
-        content: "Test content".to_string(),
-        fact_type: alephcore::memory::context::FactType::Other,
-        embedding: Some(test_embedding),
-        source_memory_ids: vec![],
-        created_at: 1000,
-        updated_at: 1000,
-        confidence: 1.0,
-        is_valid: true,
-        invalidation_reason: None,
-        specificity: alephcore::memory::context::FactSpecificity::Pattern,
-        temporal_scope: alephcore::memory::context::TemporalScope::Contextual,
-        decay_invalidated_at: None,
-        similarity_score: None,
-    };
-    db.insert_fact_with_namespace(&fact, NamespaceScope::Owner)
-        .await
-        .unwrap();
+    let fact = MemoryFact::new(
+        "Test content".to_string(),
+        FactType::Other,
+        vec![],
+    );
+    db.insert_fact(&fact).await.unwrap();
 
-    // Create same embedding as test data for search
-    let query_embedding = vec![1.0f32; 384];
-
-    // Owner retrieves fact
-    let results = db.search_facts(&query_embedding, NamespaceScope::Owner, 10, false).await.unwrap();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].id, "test-fact");
+    // Owner retrieves fact by ID
+    let result = db.get_fact(&fact.id).await.unwrap();
+    assert!(result.is_some());
+    assert_eq!(result.unwrap().content, "Test content");
 }

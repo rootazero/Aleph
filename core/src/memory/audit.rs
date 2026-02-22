@@ -182,17 +182,16 @@ impl AuditEntry {
 }
 
 use crate::error::AlephError;
-use crate::memory::database::VectorDatabase;
-use std::sync::Arc;
+use crate::memory::store::{AuditStore, MemoryBackend, MemoryStore};
 
 /// Logger for memory audit events
 pub struct AuditLogger {
-    db: Arc<VectorDatabase>,
+    db: MemoryBackend,
 }
 
 impl AuditLogger {
     /// Create a new audit logger
-    pub fn new(db: Arc<VectorDatabase>) -> Self {
+    pub fn new(db: MemoryBackend) -> Self {
         Self { db }
     }
 

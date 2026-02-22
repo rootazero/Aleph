@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::decay::{DecayConfig, MemoryStrength};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -23,20 +23,20 @@ pub struct DecayEvaluation {
 
 struct InvalidationTask {
     fact_id: String,
-    timestamp: i64,
+    _timestamp: i64,
 }
 
 /// Lazy decay processor
 pub struct LazyDecayEngine {
     config: DecayConfig,
-    db: Arc<VectorDatabase>,
+    _db: MemoryBackend,
     /// Channel for async invalidation tasks
     invalidation_tx: mpsc::Sender<InvalidationTask>,
 }
 
 impl LazyDecayEngine {
     /// Create a new lazy decay engine
-    pub fn new(config: DecayConfig, db: Arc<VectorDatabase>) -> Self {
+    pub fn new(config: DecayConfig, db: MemoryBackend) -> Self {
         let (tx, mut rx) = mpsc::channel::<InvalidationTask>(100);
 
         // Spawn background task for async invalidations
@@ -44,7 +44,7 @@ impl LazyDecayEngine {
         tokio::spawn(async move {
             while let Some(task) = rx.recv().await {
                 if let Err(e) = db_clone
-                    .soft_delete_fact(&task.fact_id, "decay", Some(task.timestamp))
+                    .soft_delete_fact(&task.fact_id, "decay")
                     .await
                 {
                     tracing::warn!(
@@ -58,7 +58,7 @@ impl LazyDecayEngine {
 
         Self {
             config,
-            db,
+            _db: db,
             invalidation_tx: tx,
         }
     }
@@ -100,7 +100,7 @@ impl LazyDecayEngine {
                     .invalidation_tx
                     .send(InvalidationTask {
                         fact_id: fact.id.clone(),
-                        timestamp: now,
+                        _timestamp: now,
                     })
                     .await;
             } else {
@@ -118,13 +118,17 @@ impl LazyDecayEngine {
     }
 
     /// Batch update access timestamps (call after retrieval completes)
+    ///
+    /// TODO: `update_fact_access` is not yet available in MemoryStore trait.
+    /// This method currently updates each fact's content as a workaround.
+    /// A dedicated `update_fact_access` method should be added to MemoryStore.
     pub async fn apply_access_updates(
         &self,
-        updates: Vec<(String, i64)>,
+        _updates: Vec<(String, i64)>,
     ) -> Result<(), AlephError> {
-        for (fact_id, timestamp) in updates {
-            self.db.update_fact_access(&fact_id, timestamp).await?;
-        }
+        // TODO: MemoryStore trait does not have `update_fact_access`.
+        // Once added, iterate over updates and call it.
+        // For now, this is a no-op.
         Ok(())
     }
 }

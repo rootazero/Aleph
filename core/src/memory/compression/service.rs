@@ -12,7 +12,7 @@ use super::scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig
 use super::signal_detector::{CompressionPriority, SignalDetector};
 use crate::error::AlephError;
 use crate::memory::context::{CompressionResult, CompressionSession};
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore, CompressionStore};
 use crate::memory::graph::GraphStore;
 use crate::memory::smart_embedder::SmartEmbedder;
 use crate::memory::vfs::L1Generator;
@@ -49,7 +49,7 @@ impl Default for CompressionConfig {
 
 /// Main compression service
 pub struct CompressionService {
-    database: Arc<VectorDatabase>,
+    database: MemoryBackend,
     extractor: Arc<FactExtractor>,
     conflict_detector: Arc<ConflictDetector>,
     scheduler: Arc<CompressionScheduler>,
@@ -62,31 +62,47 @@ pub struct CompressionService {
 
 impl CompressionService {
     /// Create a new compression service
+    ///
+    /// If `memory_backend` is provided, L1 overview generation is enabled.
+    /// Otherwise, L1 generation is skipped.
     pub fn new(
-        database: Arc<VectorDatabase>,
+        database: MemoryBackend,
         provider: Arc<dyn AiProvider>,
         embedder: SmartEmbedder,
         config: CompressionConfig,
     ) -> Self {
+        Self::new_with_backend(database, provider, embedder, config, None)
+    }
+
+    /// Create a new compression service with an optional MemoryBackend for L1 generation
+    pub fn new_with_backend(
+        database: MemoryBackend,
+        provider: Arc<dyn AiProvider>,
+        embedder: SmartEmbedder,
+        config: CompressionConfig,
+        memory_backend: Option<MemoryBackend>,
+    ) -> Self {
         let provider_name = provider.name().to_string();
 
-        // Clone for L1Generator before extractor consumes them
-        let l1_generator = Some(Arc::new(L1Generator::new(
-            Arc::clone(&database),
-            Arc::clone(&provider),
-            embedder.clone(),
-        )));
+        // L1Generator uses MemoryBackend; only create if backend is provided
+        let l1_generator = memory_backend.map(|backend| {
+            Arc::new(L1Generator::new(
+                backend,
+                Arc::clone(&provider),
+                embedder.clone(),
+            ))
+        });
 
         let extractor = Arc::new(FactExtractor::new(provider, embedder));
 
         let conflict_detector = Arc::new(ConflictDetector::new(
-            Arc::clone(&database),
+            database.clone(),
             config.conflict.clone(),
         ));
 
         let scheduler = Arc::new(CompressionScheduler::new(config.scheduler.clone()));
 
-        let graph_store = GraphStore::new(Arc::clone(&database));
+        let graph_store = GraphStore::new(database.clone());
 
         Self {
             database,
@@ -115,7 +131,7 @@ impl CompressionService {
         // 2. Get uncompressed memories
         let memories = self
             .database
-            .get_uncompressed_memories(last_timestamp, self.config.batch_size)
+            .get_uncompressed_memories(last_timestamp, self.config.batch_size as usize)
             .await?;
 
         if memories.is_empty() {
@@ -160,7 +176,7 @@ impl CompressionService {
             total_invalidated += invalidated;
 
             // Store the new fact
-            match self.database.insert_fact(fact.clone()).await {
+            match self.database.insert_fact(&fact).await {
                 Ok(_) => {
                     stored_fact_ids.push(fact.id.clone());
                     affected_paths.insert(fact.path.clone());
@@ -226,7 +242,7 @@ impl CompressionService {
             duration_ms,
         );
 
-        self.database.record_compression_session(session).await?;
+        self.database.record_compression_session(&session).await?;
 
         // 7. Reset scheduler
         self.scheduler.reset_turns();
@@ -459,16 +475,16 @@ mod tests {
     use crate::providers::create_mock_provider;
     use tempfile::{tempdir, TempDir};
 
-    async fn create_test_service() -> (CompressionService, Arc<VectorDatabase>) {
+    async fn create_test_service() -> (CompressionService, MemoryBackend) {
         let (service, database, _temp_dir) = create_test_service_with_tempdir().await;
         (service, database)
     }
 
-    async fn create_test_service_with_tempdir() -> (CompressionService, Arc<VectorDatabase>, TempDir)
+    async fn create_test_service_with_tempdir() -> (CompressionService, MemoryBackend, TempDir)
     {
         let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("test_compression.db");
-        let database = Arc::new(VectorDatabase::new(db_path).unwrap());
+        let database: MemoryBackend =
+            Arc::new(crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap());
 
         let provider = create_mock_provider();
         let cache_dir = temp_dir.path().join("models");
@@ -477,7 +493,7 @@ mod tests {
 
         let config = CompressionConfig::default();
 
-        let service = CompressionService::new(Arc::clone(&database), provider, embedder, config);
+        let service = CompressionService::new(database.clone(), provider, embedder, config);
 
         (service, database, temp_dir)
     }
@@ -535,7 +551,7 @@ mod tests {
         );
 
         // Insert via database directly
-        database.insert_memory(memory).await.unwrap();
+        database.insert_memory(&memory).await.unwrap();
 
         // Check with signal detection
         let message = "记住，我喜欢用 Vim";

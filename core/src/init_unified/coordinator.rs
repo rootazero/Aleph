@@ -318,13 +318,14 @@ impl InitializationCoordinator {
     // =========================================================================
 
     async fn initialize_database(&self) -> Result<(), InitError> {
-        use crate::memory::database::VectorDatabase;
+        use crate::memory::store::lance::LanceMemoryBackend;
 
-        let db_path = self.config_dir.join("memory.db");
+        let db_path = self.config_dir.clone();
 
-        info!(path = ?db_path, "Initializing memory database");
+        info!(path = ?db_path, "Initializing memory database (LanceDB)");
 
-        let _db = VectorDatabase::new(db_path.clone())
+        let _db = LanceMemoryBackend::open_or_create(&db_path)
+            .await
             .map_err(|e| InitError::new("database", format!("Failed to create database: {}", e)))?;
 
         info!("Memory database initialized");

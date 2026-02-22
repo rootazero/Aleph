@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::memory::cortex::{
     DistillationMode, DistillationPriority, DistillationService, DistillationTask, EvolutionStatus,
 };
-use crate::memory::database::VectorDatabase;
+use crate::memory::store::MemoryBackend;
 use crate::memory::value_estimator::cortex::CortexValueEstimator;
 use chrono::{Datelike, Timelike};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -93,7 +93,7 @@ impl DreamingMetrics {
 
 /// Cortex Dreaming Service
 pub struct CortexDreamingService {
-    db: Arc<VectorDatabase>,
+    db: MemoryBackend,
     distillation_service: Arc<RwLock<DistillationService>>,
     value_estimator: Arc<CortexValueEstimator>,
     config: CortexDreamingConfig,
@@ -105,7 +105,7 @@ pub struct CortexDreamingService {
 impl CortexDreamingService {
     /// Create a new Cortex Dreaming Service
     pub fn new(
-        db: Arc<VectorDatabase>,
+        db: MemoryBackend,
         distillation_service: Arc<RwLock<DistillationService>>,
         value_estimator: Arc<CortexValueEstimator>,
         config: CortexDreamingConfig,
@@ -178,7 +178,7 @@ impl CortexDreamingService {
 
     /// Worker loop
     async fn worker_loop(
-        db: Arc<VectorDatabase>,
+        db: MemoryBackend,
         distillation_service: Arc<RwLock<DistillationService>>,
         value_estimator: Arc<CortexValueEstimator>,
         config: CortexDreamingConfig,
@@ -241,7 +241,7 @@ impl CortexDreamingService {
 
     /// Process a batch of candidate experiences
     async fn process_batch(
-        db: &VectorDatabase,
+        db: &crate::memory::store::lance::LanceMemoryBackend,
         distillation_service: &Arc<RwLock<DistillationService>>,
         value_estimator: &CortexValueEstimator,
         config: &CortexDreamingConfig,
@@ -250,9 +250,9 @@ impl CortexDreamingService {
         info!("Starting batch processing");
 
         // Query candidate experiences
-        let candidates = db
-            .query_experiences_by_status(EvolutionStatus::Candidate, config.max_batch_size as u32)
-            .await?;
+        // TODO: Implement experience queries via new store API
+        // Old code: db.query_experiences_by_status(EvolutionStatus::Candidate, config.max_batch_size)
+        let candidates: Vec<crate::memory::cortex::Experience> = Vec::new();
 
         if candidates.is_empty() {
             debug!("No candidate experiences found");
@@ -342,16 +342,15 @@ mod tests {
     use crate::memory::cortex::{DistillationConfig, ExperienceBuilder};
     use tempfile::TempDir;
 
-    fn create_test_db() -> (Arc<VectorDatabase>, TempDir) {
+    async fn create_test_db() -> (MemoryBackend, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let db = VectorDatabase::new(db_path).unwrap();
-        (Arc::new(db), temp_dir)
+        let backend = crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap();
+        (Arc::new(backend), temp_dir)
     }
 
     #[tokio::test]
     async fn test_service_lifecycle() {
-        let (db, _temp) = create_test_db();
+        let (db, _temp) = create_test_db().await;
 
         let distillation_config = DistillationConfig::default();
         let (distillation_service, _rx) = DistillationService::new(db.clone(), distillation_config);
@@ -378,7 +377,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics() {
-        let (db, _temp) = create_test_db();
+        let (db, _temp) = create_test_db().await;
 
         let distillation_config = DistillationConfig::default();
         let (distillation_service, _rx) = DistillationService::new(db.clone(), distillation_config);

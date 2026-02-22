@@ -12,12 +12,15 @@ mod tests {
         ToolRetrieval, ToolRetrievalConfig,
     };
     use crate::memory::context::{FactType, MemoryFact};
-    use crate::memory::database::VectorDatabase;
+    use crate::memory::store::MemoryBackend;
+    use crate::memory::store::lance::LanceMemoryBackend;
     use std::sync::Arc;
 
-    /// Create a test database using in-memory mode for isolation
-    fn setup_test_db() -> Arc<VectorDatabase> {
-        Arc::new(VectorDatabase::in_memory().expect("Failed to create in-memory database"))
+    /// Create a test database using a temp directory for isolation
+    async fn setup_test_db() -> (MemoryBackend, tempfile::TempDir) {
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let backend = LanceMemoryBackend::open_or_create(temp_dir.path()).await.expect("Failed to create LanceDB backend");
+        (Arc::new(backend), temp_dir)
     }
 
     /// Generate a simple test embedding (384 dimensions)
@@ -36,7 +39,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_sync_single_tool() {
-        let db = setup_test_db();
+        let (db, _temp) = setup_test_db().await;
         let coordinator = ToolIndexCoordinator::new(db.clone());
 
         let fact_id = coordinator
@@ -64,7 +67,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_sync_tool_with_structured_meta() {
-        let db = setup_test_db();
+        let (db, _temp) = setup_test_db().await;
         let coordinator = ToolIndexCoordinator::new(db.clone());
 
         let fact_id = coordinator
@@ -94,7 +97,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_sync_all() {
-        let db = setup_test_db();
+        let (db, _temp) = setup_test_db().await;
         let coordinator = ToolIndexCoordinator::new(db.clone());
 
         let tools = vec![
@@ -131,7 +134,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_remove_tool() {
-        let db = setup_test_db();
+        let (db, _temp) = setup_test_db().await;
         let coordinator = ToolIndexCoordinator::new(db.clone());
 
         // Add a tool
@@ -171,7 +174,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_update_existing_tool() {
-        let db = setup_test_db();
+        let (db, _temp) = setup_test_db().await;
         let coordinator = ToolIndexCoordinator::new(db.clone());
 
         // Add a tool
@@ -302,7 +305,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_retrieval_empty_database() {
-        let db = setup_test_db();
+        let (db, _temp) = setup_test_db().await;
         let retrieval = ToolRetrieval::with_defaults(db.clone());
 
         let tools = retrieval
@@ -315,7 +318,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_retrieval_finds_similar_tools() {
-        let db = setup_test_db();
+        let (db, _temp) = setup_test_db().await;
         let coordinator = ToolIndexCoordinator::new(db.clone());
 
         // Sync some tools with distinct embeddings
@@ -361,7 +364,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_retrieval_hydration_levels() {
-        let db = setup_test_db();
+        let (db, _temp) = setup_test_db().await;
         let coordinator = ToolIndexCoordinator::new(db.clone());
 
         // Sync a tool
@@ -394,7 +397,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_retrieval_respects_max_tools() {
-        let db = setup_test_db();
+        let (db, _temp) = setup_test_db().await;
         let coordinator = ToolIndexCoordinator::new(db.clone());
 
         // Sync many tools
@@ -485,7 +488,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_full_pipeline_sync_and_retrieve() {
-        let db = setup_test_db();
+        let (db, _temp) = setup_test_db().await;
         let coordinator = ToolIndexCoordinator::new(db.clone());
 
         // Phase 1: Sync tools with embeddings
@@ -558,7 +561,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pipeline_tool_lifecycle() {
-        let db = setup_test_db();
+        let (db, _temp) = setup_test_db().await;
         let coordinator = ToolIndexCoordinator::new(db.clone());
         let retrieval = ToolRetrieval::with_defaults(db.clone());
 
@@ -599,7 +602,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pipeline_category_based_retrieval() {
-        let db = setup_test_db();
+        let (db, _temp) = setup_test_db().await;
         let coordinator = ToolIndexCoordinator::new(db.clone());
 
         // Create tools in different categories with slightly different embeddings
