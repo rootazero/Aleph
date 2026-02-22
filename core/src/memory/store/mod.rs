@@ -336,4 +336,11 @@ pub trait SessionStore: Send + Sync {
 // MemoryBackend type alias
 // ---------------------------------------------------------------------------
 
-// pub type MemoryBackend = Arc<lance::LanceMemoryBackend>; // TODO: uncomment after Task 6
+use std::sync::Arc;
+
+/// Unified memory backend — provides MemoryStore + GraphStore + SessionStore.
+///
+/// This is the single entry point for all memory storage operations.
+/// Wraps `LanceMemoryBackend` in an `Arc` for shared ownership across
+/// the agent loop, thinker, and other subsystems.
+pub type MemoryBackend = Arc<lance::LanceMemoryBackend>;

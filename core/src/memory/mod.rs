@@ -119,3 +119,7 @@ pub use cortex::{
 };
 pub use database::PathEntry;
 pub use vfs::{compute_directory_hash, L1Generator, bootstrap_agent_context, migrate_existing_facts_to_paths};
+
+// LanceDB store types (Phase 3)
+pub use store::lance::LanceMemoryBackend;
+pub use store::types::{SearchFilter, ScoredFact, MemoryFilter};
