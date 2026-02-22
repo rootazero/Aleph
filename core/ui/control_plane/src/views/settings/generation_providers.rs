@@ -3,6 +3,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use std::rc::Rc;
 use crate::api::{GenerationProvidersApi, GenerationProviderConfig, GenerationProviderEntry};
+use crate::api::{GenerationConfig, GenerationConfigApi};
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
 use crate::preset_providers::{PresetProvider, PresetProviders};
@@ -52,7 +53,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
 
     view! {
         <div class="flex h-full">
-            // Left panel - Provider list
+            // Left panel - Provider list + Generation settings
             <div class="flex flex-col w-2/3 border-r border-border">
                 // Header
                 <div class="px-6 py-4 border-b border-border">
@@ -60,7 +61,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                         "Generation Providers"
                     </h1>
                     <p class="mt-1 text-sm text-text-secondary">
-                        "Configure image, video, and audio generation providers"
+                        "Configure media generation providers and settings"
                     </p>
                 </div>
 
@@ -87,45 +88,54 @@ pub fn GenerationProvidersView() -> impl IntoView {
 
                 // Content
                 <div class="flex-1 overflow-auto">
-                {move || {
-                    if is_loading.get() {
-                        view! {
-                            <div class="flex items-center justify-center h-full">
-                                <div class="text-text-tertiary">"Loading..."</div>
-                            </div>
-                        }.into_any()
-                    } else if let Some(error) = error_message.get() {
-                        view! {
-                            <div class="flex items-center justify-center h-full">
-                                <div class="text-danger">{error}</div>
-                            </div>
-                        }.into_any()
-                    } else {
-                        let presets = current_presets();
-                        view! {
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-6">
-                                {presets.into_iter().map(|preset| {
-                                    let preset_id = preset.id.clone();
-                                    let configured = is_configured(&preset_id);
-                                    let entry = get_provider_entry(&preset_id);
-                                    let is_selected = selected_provider_id.get() == Some(preset_id.clone());
+                    // Provider cards (loading/error/list)
+                    {move || {
+                        if is_loading.get() {
+                            view! {
+                                <div class="flex items-center justify-center py-12">
+                                    <div class="text-text-tertiary">"Loading providers..."</div>
+                                </div>
+                            }.into_any()
+                        } else if let Some(error) = error_message.get() {
+                            view! {
+                                <div class="p-6">
+                                    <div class="p-4 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">{error}</div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            let presets = current_presets();
+                            view! {
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-6">
+                                    {presets.into_iter().map(|preset| {
+                                        let preset_id = preset.id.clone();
+                                        let configured = is_configured(&preset_id);
+                                        let entry = get_provider_entry(&preset_id);
+                                        let is_selected = selected_provider_id.get() == Some(preset_id.clone());
 
-                                    view! {
-                                        <ProviderCard
-                                            preset=preset
-                                            is_configured=configured
-                                            entry=entry
-                                            is_selected=is_selected
-                                            on_click=move |_| {
-                                                set_selected_provider_id.set(Some(preset_id.clone()));
-                                            }
-                                        />
-                                    }
-                                }).collect_view()}
-                            </div>
-                        }.into_any()
-                    }
-                }}
+                                        view! {
+                                            <ProviderCard
+                                                preset=preset
+                                                is_configured=configured
+                                                entry=entry
+                                                is_selected=is_selected
+                                                on_click=move |_| {
+                                                    set_selected_provider_id.set(Some(preset_id.clone()));
+                                                }
+                                            />
+                                        }
+                                    }).collect_view()}
+                                </div>
+                            }.into_any()
+                        }
+                    }}
+
+                    // Generation Settings (always visible, independent of provider loading)
+                    <div class="px-6 pb-6 space-y-4">
+                        <h2 class="text-lg font-semibold text-text-primary border-t border-border pt-6">
+                            "Generation Settings"
+                        </h2>
+                        <GenerationSettingsPanel />
+                    </div>
                 </div>
             </div>
 
@@ -535,5 +545,189 @@ fn DetailField(label: &'static str, value: String) -> impl IntoView {
                 {value}
             </div>
         </div>
+    }
+}
+
+// ============================================================================
+// Generation Settings Panel (merged from Generation view)
+// ============================================================================
+
+#[component]
+fn GenerationSettingsPanel() -> impl IntoView {
+    let state = expect_context::<DashboardState>();
+
+    let config = RwSignal::new(GenerationConfig {
+        default_image_provider: None,
+        default_video_provider: None,
+        default_audio_provider: None,
+        default_speech_provider: None,
+        output_dir: String::new(),
+        auto_paste_threshold_mb: 5,
+        background_task_threshold_seconds: 30,
+        smart_routing_enabled: true,
+    });
+    let loading = RwSignal::new(true);
+    let saving = RwSignal::new(false);
+    let save_error = RwSignal::new(Option::<String>::None);
+    let save_success = RwSignal::new(false);
+
+    Effect::new(move || {
+        if state.is_connected.get() {
+            spawn_local(async move {
+                match GenerationConfigApi::get(&state).await {
+                    Ok(cfg) => {
+                        config.set(cfg);
+                        loading.set(false);
+                    }
+                    Err(_) => {
+                        loading.set(false);
+                    }
+                }
+            });
+        }
+    });
+
+    let output_dir = RwSignal::new(String::new());
+    let auto_paste = RwSignal::new(5u32);
+    let bg_threshold = RwSignal::new(30u32);
+    let smart_routing = RwSignal::new(true);
+
+    // Sync local signals when config loads
+    Effect::new(move || {
+        if !loading.get() {
+            let cfg = config.get();
+            output_dir.set(cfg.output_dir);
+            auto_paste.set(cfg.auto_paste_threshold_mb);
+            bg_threshold.set(cfg.background_task_threshold_seconds);
+            smart_routing.set(cfg.smart_routing_enabled);
+        }
+    });
+
+    let save = move |_| {
+        saving.set(true);
+        save_error.set(None);
+        save_success.set(false);
+
+        let mut cfg = config.get();
+        cfg.output_dir = output_dir.get();
+        cfg.auto_paste_threshold_mb = auto_paste.get();
+        cfg.background_task_threshold_seconds = bg_threshold.get();
+        cfg.smart_routing_enabled = smart_routing.get();
+
+        spawn_local(async move {
+            match GenerationConfigApi::update(&state, cfg).await {
+                Ok(_) => {
+                    saving.set(false);
+                    save_success.set(true);
+                    set_timeout(move || save_success.set(false), std::time::Duration::from_secs(2));
+                }
+                Err(e) => {
+                    saving.set(false);
+                    save_error.set(Some(e));
+                }
+            }
+        });
+    };
+
+    view! {
+        {move || {
+            if loading.get() {
+                view! {
+                    <div class="text-text-tertiary text-sm">"Loading settings..."</div>
+                }.into_any()
+            } else {
+                view! {
+                    <div class="space-y-4">
+                        // Output Directory
+                        <div class="bg-surface-raised rounded-lg border border-border p-4">
+                            <label class="block text-sm font-medium text-text-secondary mb-2">
+                                "Output Directory"
+                            </label>
+                            <input
+                                type="text"
+                                value=move || output_dir.get()
+                                on:input=move |ev| output_dir.set(event_target_value(&ev))
+                                placeholder="~/Downloads/aleph-gen"
+                                class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            />
+                            <p class="mt-1 text-xs text-text-tertiary">
+                                "Where generated files (images, videos, audio) will be saved"
+                            </p>
+                        </div>
+
+                        // Thresholds
+                        <div class="bg-surface-raised rounded-lg border border-border p-4 space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-text-secondary mb-1">
+                                    "Auto-paste threshold: " {move || auto_paste.get()} " MB"
+                                </label>
+                                <input
+                                    type="range" min="1" max="100" step="1"
+                                    value=move || auto_paste.get()
+                                    on:input=move |ev| {
+                                        if let Ok(v) = event_target_value(&ev).parse::<u32>() { auto_paste.set(v); }
+                                    }
+                                    class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
+                                />
+                                <p class="mt-1 text-xs text-text-tertiary">
+                                    "Files smaller than this will be auto-pasted to clipboard"
+                                </p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-text-secondary mb-1">
+                                    "Background task threshold: " {move || bg_threshold.get()} "s"
+                                </label>
+                                <input
+                                    type="range" min="1" max="300" step="5"
+                                    value=move || bg_threshold.get()
+                                    on:input=move |ev| {
+                                        if let Ok(v) = event_target_value(&ev).parse::<u32>() { bg_threshold.set(v); }
+                                    }
+                                    class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
+                                />
+                                <p class="mt-1 text-xs text-text-tertiary">
+                                    "Tasks longer than this will run in background"
+                                </p>
+                            </div>
+                        </div>
+
+                        // Smart Routing
+                        <div class="bg-surface-raised rounded-lg border border-border p-4">
+                            <label class="flex items-center gap-3 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked=move || smart_routing.get()
+                                    on:change=move |ev| smart_routing.set(event_target_checked(&ev))
+                                    class="w-4 h-4 text-primary focus:ring-primary/30 rounded"
+                                />
+                                <div>
+                                    <div class="text-sm font-medium text-text-primary">"Smart Routing"</div>
+                                    <div class="text-xs text-text-tertiary">
+                                        "Auto-route requests to the most suitable provider"
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+
+                        // Save feedback
+                        {move || save_error.get().map(|e| view! {
+                            <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">{e}</div>
+                        })}
+                        {move || save_success.get().then(|| view! {
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">"Saved"</div>
+                        })}
+
+                        // Save button
+                        <button
+                            on:click=save
+                            disabled=move || saving.get()
+                            class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
+                        >
+                            {move || if saving.get() { "Saving..." } else { "Save Settings" }}
+                        </button>
+                    </div>
+                }.into_any()
+            }
+        }}
     }
 }
