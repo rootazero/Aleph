@@ -12,12 +12,12 @@ use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::exec::{
-    analyze_shell_command, ApprovalDecision, ApprovalRequest, ExecApprovalManager,
+    analyze_shell_command, ApprovalDecision, ExecApprovalManager,
     ExecContext, RiskLevel, SecretMasker, SecurityKernel, decide_exec_approval,
 };
 use crate::exec::config::{ExecAsk, ExecSecurity, ResolvedExecConfig};
 use crate::exec::manager::DEFAULT_APPROVAL_TIMEOUT_MS;
-use crate::exec::sandbox::{FallbackPolicy, SandboxManager};
+use crate::exec::sandbox::SandboxManager;
 use crate::exec::socket::ApprovalDecisionType;
 
 /// Decision from pre-execution gate
