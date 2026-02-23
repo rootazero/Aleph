@@ -15,12 +15,11 @@ pub mod profile;
 #[cfg(test)]
 mod tests;
 
-// Re-exports will be enabled as types are implemented
-// pub use adapter::{SandboxAdapter, SandboxCommand, SandboxProfile};
-// pub use audit::{ExecutionStatus, SandboxAuditLog, SandboxViolation};
-// pub use capabilities::{
-//     Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability,
-//     ProcessCapability,
-// };
-// pub use executor::{FallbackPolicy, SandboxManager};
-// pub use profile::ProfileGenerator;
+pub use adapter::{SandboxAdapter, SandboxCommand, SandboxProfile};
+pub use audit::{ExecutionStatus, SandboxAuditLog, SandboxViolation};
+pub use capabilities::{
+    Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability,
+    ProcessCapability,
+};
+pub use executor::{FallbackPolicy, SandboxManager};
+pub use profile::ProfileGenerator;
