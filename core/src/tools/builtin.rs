@@ -94,17 +94,6 @@ impl AlephToolServer {
         self.tool(PdfGenerateTool::new())
     }
 
-    /// Register the snapshot capture tool
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let server = AlephToolServer::new()
-    ///     .with_snapshot_capture();
-    /// ```
-    pub fn with_snapshot_capture(self) -> Self {
-        self.tool(SnapshotCaptureTool)
-    }
-
     // Advanced tools with dependencies - these require parameters
 
     /// Register the atomic operations tool
