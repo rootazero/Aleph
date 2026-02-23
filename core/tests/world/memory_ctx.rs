@@ -4,8 +4,8 @@ use alephcore::resilience::database::StateDatabase;
 use alephcore::memory::store::{LanceMemoryBackend, MemoryBackend};
 use alephcore::memory::{
     ContextAnchor, FactSpecificity, FactType, MemoryCategory, MemoryEntry, MemoryFact,
-    MemoryIngestion, MemoryLayer, MemoryRetrieval, PromptAugmenter, SmartEmbedder, TemporalScope,
-    EMBEDDING_DIM,
+    MemoryIngestion, MemoryLayer, MemoryRetrieval, MemoryScope, MemoryTier, PromptAugmenter,
+    SmartEmbedder, TemporalScope, EMBEDDING_DIM,
 };
 use alephcore::{MemoryConfig, MemoryStats};
 use std::sync::Arc;
@@ -153,6 +153,12 @@ impl MemoryContext {
             embedding_model: String::new(),
             namespace: "owner".to_string(),
             workspace: "default".to_string(),
+            tier: MemoryTier::ShortTerm,
+            scope: MemoryScope::Global,
+            persona_id: None,
+            strength: 1.0,
+            access_count: 0,
+            last_accessed_at: None,
         }
     }
 
