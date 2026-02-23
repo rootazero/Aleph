@@ -3,7 +3,7 @@
 //! Main client type that coordinates transport, RPC, and authentication.
 
 use crate::{ClientError, Result, Transport, RpcClient, WsWriter, WsReader, ConfigStore, AuthToken};
-use aleph_protocol::{JsonRpcRequest, JsonRpcResponse, StreamEvent, ClientManifest, ClientCapabilities, ClientEnvironment, ExecutionConstraints};
+use aleph_protocol::{JsonRpcRequest, JsonRpcResponse, StreamEvent};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -210,7 +210,7 @@ impl GatewayClient {
                 warn!(
                     method = %request.method,
                     "Received request from server, but no handler registered. \
-                    Consider implementing a request handler or using LocalExecutor."
+                    Consider implementing a request handler."
                 );
 
                 // Send method not found error
@@ -382,8 +382,8 @@ impl GatewayClient {
         &self,
         config: &C,
         client_type: &str,
-        tool_categories: Vec<String>,
-        specific_tools: Option<Vec<String>>,
+        _tool_categories: Vec<String>,
+        _specific_tools: Option<Vec<String>>,
     ) -> Result<AuthToken> {
         #[cfg(feature = "tracing")]
         info!("Authenticating with gateway");
@@ -394,29 +394,11 @@ impl GatewayClient {
         // Get device ID
         let device_id = config.get_or_create_device_id().await;
 
-        // Build client manifest
-        let manifest = ClientManifest {
-            client_type: client_type.to_string(),
-            client_version: env!("CARGO_PKG_VERSION").to_string(),
-            capabilities: ClientCapabilities {
-                tool_categories,
-                specific_tools: specific_tools.unwrap_or_default(),
-                excluded_tools: Vec::new(),
-                constraints: ExecutionConstraints::default(),
-                granted_scopes: None,
-            },
-            environment: ClientEnvironment {
-                os: std::env::consts::OS.to_string(),
-                arch: std::env::consts::ARCH.to_string(),
-                sandbox: false,
-            },
-        };
-
         #[derive(Serialize)]
         struct ConnectParams {
             device_id: String,
             device_name: String,
-            manifest: ClientManifest,
+            device_type: String,
             #[serde(skip_serializing_if = "Option::is_none")]
             token: Option<String>,
         }
@@ -424,14 +406,12 @@ impl GatewayClient {
         #[derive(Deserialize)]
         struct ConnectResult {
             token: String,
-            #[allow(dead_code)]
-            manifest_accepted: bool,
         }
 
         let params = ConnectParams {
             device_id: device_id.clone(),
             device_name: device_id, // Use device_id as default name
-            manifest,
+            device_type: client_type.to_string(),
             token: existing_token,
         };
 
