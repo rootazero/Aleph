@@ -11,8 +11,14 @@ use std::sync::Arc;
 use serde_json::Value;
 use tracing::{info, warn};
 
-use crate::exec::{ExecApprovalManager, RiskLevel, SecretMasker, SecurityKernel};
+use crate::exec::{
+    analyze_shell_command, ApprovalDecision, ApprovalRequest, ExecApprovalManager,
+    ExecContext, RiskLevel, SecretMasker, SecurityKernel, decide_exec_approval,
+};
+use crate::exec::config::{ExecAsk, ExecSecurity, ResolvedExecConfig};
+use crate::exec::manager::DEFAULT_APPROVAL_TIMEOUT_MS;
 use crate::exec::sandbox::{FallbackPolicy, SandboxManager};
+use crate::exec::socket::ApprovalDecisionType;
 
 /// Decision from pre-execution gate
 #[derive(Debug)]
@@ -73,14 +79,13 @@ impl ExecSecurityGate {
         }
     }
 
-    /// Pre-execution gate: assess risk, block or allow.
-    ///
-    /// Danger tier will be handled in Task 4 (currently falls through to Allow).
-    pub async fn pre_execute(
+    /// Pre-execution gate with configurable approval timeout (for testing).
+    pub async fn pre_execute_with_timeout(
         &self,
         tool_name: &str,
         args: &Value,
-        _identity: &aleph_protocol::IdentityContext,
+        identity: &aleph_protocol::IdentityContext,
+        approval_timeout_ms: u64,
     ) -> PreExecDecision {
         // If we can't extract a command, allow through (e.g., Python/JS)
         let Some(cmd) = Self::extract_command(tool_name, args) else {
@@ -102,9 +107,8 @@ impl ExecSecurityGate {
             }
 
             RiskLevel::Danger => {
-                // Handled in Task 4 — approval flow
-                info!(cmd = %cmd, "Danger-tier command — approval pending (Task 4)");
-                PreExecDecision::Allow { use_sandbox: false }
+                info!(cmd = %cmd, "Danger-tier command — requesting human approval");
+                self.request_approval(&cmd, identity, approval_timeout_ms).await
             }
 
             RiskLevel::Caution | RiskLevel::Safe => {
@@ -113,6 +117,112 @@ impl ExecSecurityGate {
                     .unwrap_or(false);
                 info!(cmd = %cmd, risk = ?risk, use_sandbox, "Shell command allowed");
                 PreExecDecision::Allow { use_sandbox }
+            }
+        }
+    }
+
+    /// Pre-execute with default 2-minute approval timeout.
+    pub async fn pre_execute(
+        &self,
+        tool_name: &str,
+        args: &Value,
+        identity: &aleph_protocol::IdentityContext,
+    ) -> PreExecDecision {
+        self.pre_execute_with_timeout(
+            tool_name,
+            args,
+            identity,
+            DEFAULT_APPROVAL_TIMEOUT_MS,
+        ).await
+    }
+
+    /// Request human approval for a Danger-tier command.
+    ///
+    /// Builds an ApprovalRequest, registers it with the manager, waits for a decision
+    /// (or timeout), and maps the result to PreExecDecision.
+    async fn request_approval(
+        &self,
+        cmd: &str,
+        identity: &aleph_protocol::IdentityContext,
+        timeout_ms: u64,
+    ) -> PreExecDecision {
+        // Analyze the command to populate the ApprovalRequest
+        let analysis = analyze_shell_command(cmd, None, None);
+
+        // Build a minimal ResolvedExecConfig that triggers NeedApproval for unknown commands
+        let config = ResolvedExecConfig {
+            security: ExecSecurity::Allowlist,
+            ask: ExecAsk::OnMiss,
+            ask_fallback: ExecSecurity::Deny,
+            auto_allow_skills: false,
+            allowlist: vec![],
+            skill_allowlist: vec![],
+        };
+
+        // Build the exec context from identity fields
+        let context = ExecContext {
+            // Use identity_id as agent_id (Owner = "owner", Guest = guest UUID)
+            agent_id: identity.identity_id.clone(),
+            session_key: identity.session_key.clone(),
+            cwd: None,
+            command: cmd.to_string(),
+            from_skill: false,
+            skill_id: None,
+            skill_name: None,
+        };
+
+        // Ask decide_exec_approval; for Danger commands not in allowlist,
+        // this returns NeedApproval. Respect Allow/Deny if returned directly.
+        let approval_decision = decide_exec_approval(&config, &analysis, &context);
+
+        let request = match approval_decision {
+            ApprovalDecision::Allow => {
+                info!(cmd = %cmd, "Danger command approved by allowlist policy");
+                return PreExecDecision::Allow { use_sandbox: false };
+            }
+            ApprovalDecision::Deny { reason } => {
+                warn!(cmd = %cmd, reason = %reason, "Danger command denied by policy");
+                return PreExecDecision::Block { reason };
+            }
+            ApprovalDecision::NeedApproval { request } => request,
+        };
+
+        // Create the approval record (does not yet register for waiting — just builds the record)
+        let record = self.approval_manager.create(&request, timeout_ms);
+        let record_id = record.id.clone();
+
+        info!(
+            cmd = %cmd,
+            id = %record_id,
+            timeout_ms,
+            "Waiting for human approval"
+        );
+
+        // Wait for decision or timeout
+        let decision = self.approval_manager.wait_for_decision(record).await;
+
+        match decision {
+            Some(ApprovalDecisionType::AllowOnce) => {
+                info!(cmd = %cmd, id = %record_id, "Danger command approved (once)");
+                PreExecDecision::Allow { use_sandbox: false }
+            }
+            Some(ApprovalDecisionType::AllowAlways) => {
+                info!(cmd = %cmd, id = %record_id, "Danger command approved (always)");
+                // Optionally add to allowlist here in a future enhancement
+                PreExecDecision::Allow { use_sandbox: false }
+            }
+            Some(ApprovalDecisionType::Deny) => {
+                warn!(cmd = %cmd, id = %record_id, "Danger command denied by user");
+                PreExecDecision::Block {
+                    reason: format!("Denied by user: {}", cmd),
+                }
+            }
+            None => {
+                // Timeout — block by default (fail-safe)
+                warn!(cmd = %cmd, id = %record_id, "Approval timed out — blocking command");
+                PreExecDecision::Block {
+                    reason: format!("Approval timed out: {}", cmd),
+                }
             }
         }
     }
@@ -219,5 +329,49 @@ mod tests {
 
         let decision = gate.pre_execute("code_exec", &args, &identity).await;
         assert!(matches!(decision, PreExecDecision::Allow { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_pre_execute_danger_denied_on_timeout() {
+        // With a zero-timeout, no approval is received, so Danger should block
+        let manager = Arc::new(ExecApprovalManager::new());
+        let gate = ExecSecurityGate::new(manager, None);
+        let identity = make_identity();
+        // rm -rf ./old_backups is a Danger-tier command (matches ^rm\s+)
+        let args = serde_json::json!({"cmd": "rm -rf ./old_backups"});
+
+        // Use 0ms timeout — will immediately timeout → Block
+        let decision = gate.pre_execute_with_timeout("bash", &args, &identity, 0).await;
+        assert!(
+            matches!(decision, PreExecDecision::Block { .. }),
+            "Expected Block on timeout, got {:?}", decision
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pre_execute_danger_approved_allow_once() {
+        // Simulate a human approving the request
+        let manager = Arc::new(ExecApprovalManager::new());
+        let gate = ExecSecurityGate::new(manager.clone(), None);
+        let identity = make_identity();
+        let args = json!({"cmd": "rm -rf ./old_backups"});
+
+        // Spawn a task that approves the first pending request after a short delay
+        let manager_clone = manager.clone();
+        tokio::spawn(async move {
+            // Give the gate time to register the pending request
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            let pending = manager_clone.list_pending();
+            if let Some(p) = pending.first() {
+                manager_clone.resolve(&p.record.id, ApprovalDecisionType::AllowOnce, None);
+            }
+        });
+
+        // Use 5s timeout — the spawned task will approve before it expires
+        let decision = gate.pre_execute_with_timeout("bash", &args, &identity, 5000).await;
+        assert!(
+            matches!(decision, PreExecDecision::Allow { .. }),
+            "Expected Allow after approval, got {:?}", decision
+        );
     }
 }
