@@ -9,6 +9,7 @@ use crate::core::MediaAttachment;
 use crate::error::Result;
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::AiProvider;
+use crate::secrets::leak_detector::{LeakDecision, LeakDetector};
 use futures::stream::BoxStream;
 use std::future::Future;
 use std::pin::Pin;
@@ -87,6 +88,20 @@ impl HttpProvider {
             payload
         };
 
+        // Secret leak detection: scan outbound content
+        let detector = LeakDetector::new();
+        if let LeakDecision::Block { reason, .. } = detector.scan_outbound(final_payload.input) {
+            tracing::warn!(
+                provider = %self.name,
+                reason = %reason,
+                "Blocked outbound request: secret leak detected"
+            );
+            return Err(crate::error::AlephError::PermissionDenied {
+                message: format!("Secret leak blocked: {}", reason),
+                suggestion: Some("Remove secret values from the input before sending.".into()),
+            });
+        }
+
         let request = self
             .adapter
             .build_request(&final_payload, &self.config, false)?;
@@ -99,7 +114,23 @@ impl HttpProvider {
                 crate::error::AlephError::network(format!("Network error: {}", e))
             }
         })?;
-        self.adapter.parse_response(response).await
+
+        let response_text = self.adapter.parse_response(response).await?;
+
+        // Secret leak detection: scan inbound response
+        if let LeakDecision::Block { reason, .. } = detector.scan_inbound(&response_text) {
+            tracing::warn!(
+                provider = %self.name,
+                reason = %reason,
+                "Blocked inbound response: secret leak detected"
+            );
+            return Err(crate::error::AlephError::PermissionDenied {
+                message: format!("Secret leak in response blocked: {}", reason),
+                suggestion: Some("The AI provider response contained a secret value.".into()),
+            });
+        }
+
+        Ok(response_text)
     }
 
     /// Execute a streaming request
@@ -137,6 +168,20 @@ impl HttpProvider {
             // PII engine not initialized — pass through
             payload
         };
+
+        // Secret leak detection: scan outbound content
+        let detector = LeakDetector::new();
+        if let LeakDecision::Block { reason, .. } = detector.scan_outbound(final_payload.input) {
+            tracing::warn!(
+                provider = %self.name,
+                reason = %reason,
+                "Blocked outbound streaming request: secret leak detected"
+            );
+            return Err(crate::error::AlephError::PermissionDenied {
+                message: format!("Secret leak blocked: {}", reason),
+                suggestion: Some("Remove secret values from the input before sending.".into()),
+            });
+        }
 
         let request = self
             .adapter
