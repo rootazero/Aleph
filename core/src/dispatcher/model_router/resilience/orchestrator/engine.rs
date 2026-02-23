@@ -28,7 +28,6 @@ use tokio::sync::RwLock;
 // =============================================================================
 
 /// Type alias for async executor function
-#[allow(dead_code)]
 pub type ExecutorFn<T> = Box<
     dyn Fn(String, ExecutionRequest) -> Pin<Box<dyn Future<Output = Result<T, CallOutcome>> + Send>>
         + Send

@@ -55,9 +55,6 @@ pub struct SmartEmbedder {
     state: Arc<Mutex<InnerState>>,
     /// Cancellation token for background cleaner
     cancel_token: CancellationToken,
-    /// Time-to-live for loaded model
-    #[allow(dead_code)]
-    ttl: Duration,
     /// Directory for model cache
     cache_dir: PathBuf,
 }
@@ -88,7 +85,6 @@ impl SmartEmbedder {
         let embedder = Self {
             state: Arc::clone(&state),
             cancel_token: cancel_token.clone(),
-            ttl,
             cache_dir,
         };
 

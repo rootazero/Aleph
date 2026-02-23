@@ -25,8 +25,7 @@ pub mod sessions;
 /// - `graph_edges` — knowledge graph relationships
 /// - `memories`    — raw conversation memory entries
 pub struct LanceMemoryBackend {
-    #[allow(dead_code)] // Connection must be kept alive for table handles
-    pub(crate) db: Connection,
+    pub(crate) _db: Connection, // Connection must be kept alive for table handles
     pub(crate) facts_table: Table,
     pub(crate) nodes_table: Table,
     pub(crate) edges_table: Table,
@@ -55,7 +54,7 @@ impl LanceMemoryBackend {
             Self::ensure_table(&db, "memories", schema::memories_schema()).await?;
 
         Ok(Self {
-            db,
+            _db: db,
             facts_table,
             nodes_table,
             edges_table,
@@ -185,7 +184,7 @@ mod tests {
             .unwrap();
 
         // Verify all tables were created
-        let tables = backend.db.table_names().execute().await.unwrap();
+        let tables = backend._db.table_names().execute().await.unwrap();
         assert!(tables.contains(&"facts".to_string()));
         assert!(tables.contains(&"graph_nodes".to_string()));
         assert!(tables.contains(&"graph_edges".to_string()));
@@ -206,7 +205,7 @@ mod tests {
         let backend2 = LanceMemoryBackend::open_or_create(tmp.path())
             .await
             .unwrap();
-        let tables = backend2.db.table_names().execute().await.unwrap();
+        let tables = backend2._db.table_names().execute().await.unwrap();
         assert_eq!(tables.len(), 4);
     }
 }

@@ -13,8 +13,6 @@ use std::path::PathBuf;
 /// The model is lazily loaded on first use.
 pub struct EmbeddingModel {
     model: OnceCell<TextEmbedding>,
-    #[allow(dead_code)]
-    model_path: PathBuf,
 }
 
 impl EmbeddingModel {
@@ -24,14 +22,13 @@ impl EmbeddingModel {
     /// Create new embedding model with lazy loading
     ///
     /// # Arguments
-    /// * `model_dir` - Directory for model files (kept for API compatibility)
+    /// * `_model_dir` - Directory for model files (reserved for API compatibility)
     ///
     /// # Returns
     /// * `Result<Self>` - New EmbeddingModel instance
-    pub fn new(model_dir: PathBuf) -> Result<Self, AlephError> {
+    pub fn new(_model_dir: PathBuf) -> Result<Self, AlephError> {
         Ok(Self {
             model: OnceCell::new(),
-            model_path: model_dir,
         })
     }
 
