@@ -799,6 +799,7 @@ Example: `gateway: add WebSocket server foundation`
 |------|------|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 完整系统架构、模块依赖、数据流 |
 | [DESIGN_PATTERNS.md](docs/DESIGN_PATTERNS.md) | 设计模式：Context、Newtype、FromStr、Builder |
+| [CODE_ORGANIZATION.md](docs/CODE_ORGANIZATION.md) | 文件组织规范：拆分原则、命名约定、反面示例、重构 Backlog |
 | [AGENT_SYSTEM.md](docs/AGENT_SYSTEM.md) | Agent Loop、Thinker、Dispatcher |
 | [GATEWAY.md](docs/GATEWAY.md) | WebSocket 协议、RPC 方法、Channels |
 | [TOOL_SYSTEM.md](docs/TOOL_SYSTEM.md) | AlephTool trait、内置工具、开发指南 |
