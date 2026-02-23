@@ -17,7 +17,7 @@ use super::overflow::OverflowDetector;
 use super::session_sync::SessionSync;
 use super::state::{LoopState, LoopStep, RequestContext};
 use super::traits::{ActionExecutor, CompressorTrait, ThinkerTrait};
-use super::swarm_events::AgentLoopEvent;
+use super::events::AgentLoopEvent;
 
 /// Extract file paths from tool arguments
 fn extract_affected_files(arguments: &serde_json::Value) -> Vec<String> {
