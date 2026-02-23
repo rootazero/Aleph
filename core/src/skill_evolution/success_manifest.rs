@@ -35,7 +35,7 @@
 //! The ConstraintValidator ensures these layers are consistent.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::Path;
 
 /// Success Manifest: Semantic constraints for a Skill
 ///
@@ -273,7 +273,7 @@ impl SuccessManifest {
     }
 
     /// Check if writing to a specific path is allowed
-    pub fn allows_write_to(&self, path: &PathBuf) -> bool {
+    pub fn allows_write_to(&self, path: &Path) -> bool {
         let path_str = path.to_string_lossy();
         self.allowed_operations
             .filesystem
@@ -302,7 +302,7 @@ impl SuccessManifest {
     }
 
     /// Check if reading from a specific path is allowed
-    pub fn allows_read_from(&self, path: &PathBuf) -> bool {
+    pub fn allows_read_from(&self, path: &Path) -> bool {
         let path_str = path.to_string_lossy();
         self.allowed_operations
             .filesystem
@@ -332,6 +332,7 @@ impl SuccessManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn test_success_manifest_creation() {

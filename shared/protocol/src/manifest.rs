@@ -107,7 +107,7 @@ impl ClientManifest {
     /// Returns true if:
     /// - Tool is in `specific_tools`, OR
     /// - Tool's category is in `tool_categories`
-    /// AND tool is NOT in `excluded_tools`
+    ///   AND tool is NOT in `excluded_tools`
     pub fn supports_tool(&self, tool_name: &str) -> bool {
         // Check exclusion first
         if self

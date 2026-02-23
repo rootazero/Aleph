@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(output.prompt, "A beautiful sunset");
         assert_eq!(output.provider, "mock-dalle");
         assert_eq!(output.location_type, "url");
-        assert!(output.duration_ms > 0 || output.duration_ms == 0); // Just verify it's set
+        assert!(output.duration_ms >= 0); // Just verify it's set
     }
 
     #[tokio::test]

@@ -43,7 +43,7 @@ use crate::exec::sandbox::capabilities::{
 };
 use crate::skill_evolution::success_manifest::SuccessManifest;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Constraint validator
 pub struct ConstraintValidator;
@@ -226,7 +226,7 @@ impl ConstraintValidator {
     }
 
     /// Check if a path pattern matches a specific path
-    fn path_matches(pattern: &PathBuf, path: &PathBuf) -> bool {
+    fn path_matches(pattern: &Path, path: &Path) -> bool {
         let pattern_str = pattern.to_string_lossy();
         let path_str = path.to_string_lossy();
 
