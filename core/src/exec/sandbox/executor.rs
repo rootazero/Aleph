@@ -11,21 +11,16 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Policy for handling sandbox unavailability
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FallbackPolicy {
     /// Deny execution if sandbox is unavailable
+    #[default]
     Deny,
     /// Request user approval before executing without sandbox
     RequestApproval,
     /// Warn user but execute without sandbox
     WarnAndExecute,
-}
-
-impl Default for FallbackPolicy {
-    fn default() -> Self {
-        Self::Deny
-    }
 }
 
 /// High-level sandbox execution manager

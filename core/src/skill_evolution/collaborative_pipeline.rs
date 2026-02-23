@@ -70,17 +70,12 @@ use tracing::{debug, info, warn};
 
 use crate::error::{AlephError, Result};
 use crate::exec::sandbox::capabilities::{
-    Capabilities, FileSystemCapability, NetworkCapability, ProcessCapability,
-    EnvironmentCapability,
+    Capabilities, FileSystemCapability, NetworkCapability,
 };
 use crate::providers::AiProvider;
 
 use super::constraint_validator::{ConstraintValidator, ValidationReport};
-use super::success_manifest::{
-    AllowedOperations, DataProcessing, FileSystemOperations, NetworkRestrictions,
-    ProcessRestrictions, ProhibitedOperations, SuccessManifest, FileSystemRestrictions,
-    ScriptExecution,
-};
+use super::success_manifest::SuccessManifest;
 use super::tracker::EvolutionTracker;
 use super::types::{SkillMetrics, SolidificationConfig};
 

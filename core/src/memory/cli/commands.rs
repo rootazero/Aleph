@@ -6,7 +6,6 @@ use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryFact, FactSpecificity, TemporalScope};
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::smart_embedder::SmartEmbedder;
-use std::sync::Arc;
 
 /// Filter options for listing facts
 #[derive(Debug, Clone, Default)]

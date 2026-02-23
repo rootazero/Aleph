@@ -16,9 +16,10 @@ use serde::{Deserialize, Serialize};
 /// - `Block`: Replace detected PII with a placeholder before sending to API (default for most categories)
 /// - `Warn`: Allow the message but emit a warning event
 /// - `Off`: No action, PII passes through unfiltered
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PiiAction {
+    #[default]
     Block,
     Warn,
     Off,
@@ -125,12 +126,6 @@ impl Default for PrivacyConfig {
             ip_address: default_off(),
             exclude_providers: Vec::new(),
         }
-    }
-}
-
-impl Default for PiiAction {
-    fn default() -> Self {
-        PiiAction::Block
     }
 }
 

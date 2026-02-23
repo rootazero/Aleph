@@ -6,7 +6,6 @@
 use crate::error::{AlephError, Result};
 use crate::memory::cortex::{DistillationMode, DistillationTask};
 use crate::memory::store::MemoryBackend;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};

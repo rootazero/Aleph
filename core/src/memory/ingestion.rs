@@ -5,7 +5,7 @@
 use crate::config::MemoryConfig;
 use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
-use crate::memory::store::{MemoryBackend, SessionStore, StoreStats};
+use crate::memory::store::{MemoryBackend, SessionStore};
 use crate::memory::dreaming::{ensure_dream_daemon, record_activity};
 use crate::memory::smart_embedder::SmartEmbedder;
 use crate::utils::pii::scrub_pii;

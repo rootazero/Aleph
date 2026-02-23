@@ -1,7 +1,6 @@
 use super::{ConnectorType, StateConnector};
 use crate::perception::state_bus::{AppState, Element, ElementState, ElementSource, Rect, StateSource};
 use crate::error::Result;
-use crate::AlephError;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;

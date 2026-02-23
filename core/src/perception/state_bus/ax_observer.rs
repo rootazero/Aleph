@@ -6,8 +6,6 @@
 
 use super::types::AxEvent;
 use crate::error::{AlephError, Result};
-use serde_json::Value;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 

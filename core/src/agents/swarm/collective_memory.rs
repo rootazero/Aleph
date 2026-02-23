@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 
 use super::bus::AgentMessageBus;
 use super::events::{EventTier, InfoEvent};
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 
 /// Collective Memory
 ///

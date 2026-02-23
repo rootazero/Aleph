@@ -7,7 +7,6 @@ use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 /// Strategy for merging facts
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

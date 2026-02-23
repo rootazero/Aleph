@@ -7,7 +7,7 @@ use serde_json::json;
 
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore, StoreStats};
+use crate::memory::store::{MemoryBackend, SessionStore};
 
 /// Memory entry for JSON serialization
 #[derive(Debug, Clone, Serialize)]

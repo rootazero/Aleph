@@ -9,11 +9,8 @@
 //! All modifications are persisted and broadcast as events.
 
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-use crate::config::Config;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, INTERNAL_ERROR};
 use crate::gateway::event_bus::{GatewayEventBus, GatewayEvent, ConfigChangedEvent};
 use crate::gateway::device_store::DeviceStore;

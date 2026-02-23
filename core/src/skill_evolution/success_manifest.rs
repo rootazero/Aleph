@@ -35,7 +35,6 @@
 //! The ConstraintValidator ensures these layers are consistent.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Success Manifest: Semantic constraints for a Skill

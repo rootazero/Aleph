@@ -14,33 +14,23 @@ pub struct ParameterBinding {
 }
 
 /// Validation rule for parameter values
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ValidationRule {
     IsFile,
     IsDirectory,
     IsPath,
+    #[default]
     None,
 }
 
-impl Default for ValidationRule {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
 /// Mapping type for parameter binding
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MappingType {
+    #[default]
     Single,
     EachElement,
-}
-
-impl Default for MappingType {
-    fn default() -> Self {
-        Self::Single
-    }
 }
 
 /// Required capabilities declaration for a tool

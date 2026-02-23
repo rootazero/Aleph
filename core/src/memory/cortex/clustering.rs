@@ -4,10 +4,9 @@
 //! and prevent the experience database from growing unbounded.
 
 use crate::error::{AlephError, Result};
-use crate::memory::cortex::{EvolutionStatus, Experience};
+use crate::memory::cortex::Experience;
 use crate::memory::store::MemoryBackend;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// Configuration for clustering service

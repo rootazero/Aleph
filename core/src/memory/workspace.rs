@@ -88,7 +88,7 @@ impl Workspace {
 /// Configuration overrides for a workspace.
 ///
 /// All fields are optional; when `None`, the global default applies.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
     /// Memory decay rate override (0.0 = no decay, 1.0 = maximum decay)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,19 +113,6 @@ pub struct WorkspaceConfig {
     /// Allowlist of tool names available in this workspace (empty = all tools)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_tools: Vec<String>,
-}
-
-impl Default for WorkspaceConfig {
-    fn default() -> Self {
-        Self {
-            decay_rate: None,
-            permanent_fact_types: Vec::new(),
-            default_provider: None,
-            default_model: None,
-            system_prompt_override: None,
-            allowed_tools: Vec::new(),
-        }
-    }
 }
 
 /// Filter for selecting workspaces when querying memory facts.

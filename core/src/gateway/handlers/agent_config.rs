@@ -9,7 +9,7 @@
 //! - agent_config.update_code_exec: Update code execution configuration
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};

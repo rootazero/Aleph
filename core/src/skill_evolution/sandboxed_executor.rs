@@ -61,7 +61,7 @@ use crate::exec::sandbox::{
 };
 use super::tool_generator::GeneratedToolDefinition;
 use super::sandbox_integration::resolve_tool_capabilities;
-use super::constraint_validator::{ConstraintValidator, ValidationReport, ConstraintMismatch};
+use super::constraint_validator::ConstraintValidator;
 
 /// Executor for running tools in sandbox
 pub struct SandboxedToolExecutor {

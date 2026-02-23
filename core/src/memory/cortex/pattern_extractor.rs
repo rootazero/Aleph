@@ -6,7 +6,6 @@
 use crate::error::{AlephError, Result};
 use crate::memory::cortex::{EnvironmentContext, Experience, ParameterMapping};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use tracing::{debug, info};
 
 /// Extracted pattern from an experience

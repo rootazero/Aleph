@@ -8,7 +8,6 @@
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde_json::Value;
 
 use crate::config::Config;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, INTERNAL_ERROR};

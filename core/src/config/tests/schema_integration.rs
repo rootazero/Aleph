@@ -4,9 +4,12 @@
 //! including schema generation, UI hints, config diffing, and reload planning.
 
 use crate::config::{
-    build_reload_plan, build_ui_hints, diff_config, generate_config_schema,
+    build_ui_hints,
     generate_config_schema_json, Config,
 };
+use crate::config::diff::diff_config;
+use crate::config::reload::build_reload_plan;
+use crate::config::schema::generate_config_schema;
 
 #[test]
 fn test_full_schema_generation() {
