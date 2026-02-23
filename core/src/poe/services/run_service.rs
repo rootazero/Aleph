@@ -147,17 +147,17 @@ impl<W: Worker + 'static> PoeRunManager<W> {
         let stream = params.stream;
 
         tokio::spawn(async move {
-            let result = execute_poe_task(
-                task_id_clone.clone(),
+            let result = execute_poe_task(PoeExecutionContext {
+                task_id: task_id_clone.clone(),
                 task,
                 worker,
                 validator,
                 config,
-                event_bus.clone(),
-                active_tasks.clone(),
+                event_bus: event_bus.clone(),
+                active_tasks: active_tasks.clone(),
                 abort_rx,
                 stream,
-            )
+            })
             .await;
 
             // Handle result
@@ -291,8 +291,8 @@ impl<W: Worker + 'static> PoeRunManager<W> {
 // POE Task Execution
 // ============================================================================
 
-/// Execute a POE task with event emission
-async fn execute_poe_task<W: Worker + 'static>(
+/// Context for a single POE task execution.
+struct PoeExecutionContext<W: Worker + 'static> {
     task_id: String,
     task: PoeTask,
     worker: W,
@@ -300,9 +300,26 @@ async fn execute_poe_task<W: Worker + 'static>(
     config: PoeConfig,
     event_bus: Arc<GatewayEventBus>,
     active_tasks: Arc<RwLock<HashMap<String, PoeTaskState>>>,
-    mut abort_rx: tokio::sync::watch::Receiver<bool>,
+    abort_rx: tokio::sync::watch::Receiver<bool>,
     stream: bool,
+}
+
+/// Execute a POE task with event emission
+async fn execute_poe_task<W: Worker + 'static>(
+    mut ctx: PoeExecutionContext<W>,
 ) -> Result<PoeOutcome, String> {
+    let PoeExecutionContext {
+        task_id,
+        task,
+        worker,
+        validator,
+        config,
+        event_bus,
+        active_tasks,
+        mut abort_rx,
+        stream,
+    } = ctx;
+
     let start_time = Instant::now();
 
     // Helper to emit events

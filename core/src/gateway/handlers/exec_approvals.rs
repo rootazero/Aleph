@@ -8,6 +8,8 @@
 //! - exec.approvals.node.get - Get node approval config
 //! - exec.approvals.node.set - Set node approval config
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -18,6 +20,9 @@ use crate::exec::{
     ApprovalBridge, ApprovalDecisionType, ConfigWithHash, ExecApprovalManager,
     ExecApprovalsFile, PendingApproval, StorageError,
 };
+
+/// Type alias for an async RPC handler function
+type RpcHandler = Box<dyn Fn(JsonRpcRequest) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>> + Send + Sync>;
 
 /// Parameters for exec.approval.request
 #[derive(Debug, Deserialize)]
@@ -105,8 +110,8 @@ pub struct CallbackHandleResponse {
 /// Create handlers that need the manager
 pub fn create_handlers(
     manager: Arc<ExecApprovalManager>,
-) -> impl Fn(&str) -> Option<Box<dyn Fn(JsonRpcRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = JsonRpcResponse> + Send>> + Send + Sync>> {
-    move |method: &str| -> Option<Box<dyn Fn(JsonRpcRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = JsonRpcResponse> + Send>> + Send + Sync>> {
+) -> impl Fn(&str) -> Option<RpcHandler> {
+    move |method: &str| -> Option<RpcHandler> {
         let mgr = manager.clone();
         match method {
             "exec.approval.request" => {

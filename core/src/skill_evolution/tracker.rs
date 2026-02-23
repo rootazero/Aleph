@@ -13,6 +13,18 @@ use crate::error::{AlephError, Result};
 
 use super::types::{ExecutionStatus, SkillExecution, SkillMetrics, SolidificationConfig};
 
+/// Intermediate struct for a skill_metrics database row query result
+struct SkillMetricsRow {
+    total_executions: i64,
+    successful_executions: i64,
+    avg_duration_ms: f64,
+    avg_satisfaction: Option<f64>,
+    failure_rate: f64,
+    last_used: i64,
+    first_used: i64,
+    context_frequency_json: String,
+}
+
 /// SQL schema for skill evolution tables
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS skill_executions (
@@ -177,22 +189,22 @@ impl EvolutionTracker {
             suggestion: None,
         })?;
 
-        let result: Option<(i64, i64, f64, Option<f64>, f64, i64, i64, String)> = conn
+        let result: Option<SkillMetricsRow> = conn
             .query_row(
                 "SELECT total_executions, successful_executions, avg_duration_ms, avg_satisfaction, failure_rate, last_used, first_used, context_frequency
                  FROM skill_metrics WHERE skill_id = ?1",
                 params![skill_id],
                 |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                        row.get(7)?,
-                    ))
+                    Ok(SkillMetricsRow {
+                        total_executions: row.get(0)?,
+                        successful_executions: row.get(1)?,
+                        avg_duration_ms: row.get(2)?,
+                        avg_satisfaction: row.get(3)?,
+                        failure_rate: row.get(4)?,
+                        last_used: row.get(5)?,
+                        first_used: row.get(6)?,
+                        context_frequency_json: row.get(7)?,
+                    })
                 },
             )
             .optional()
@@ -202,27 +214,18 @@ impl EvolutionTracker {
             })?;
 
         match result {
-            Some((
-                total,
-                successful,
-                avg_duration,
-                avg_satisfaction,
-                failure_rate,
-                last_used,
-                first_used,
-                context_json,
-            )) => {
+            Some(row) => {
                 let context_frequency: HashMap<String, u32> =
-                    serde_json::from_str(&context_json).unwrap_or_default();
+                    serde_json::from_str(&row.context_frequency_json).unwrap_or_default();
                 Ok(Some(SkillMetrics {
                     skill_id: skill_id.to_string(),
-                    total_executions: total as u64,
-                    successful_executions: successful as u64,
-                    avg_duration_ms: avg_duration as f32,
-                    avg_satisfaction: avg_satisfaction.map(|s| s as f32),
-                    failure_rate: failure_rate as f32,
-                    last_used,
-                    first_used,
+                    total_executions: row.total_executions as u64,
+                    successful_executions: row.successful_executions as u64,
+                    avg_duration_ms: row.avg_duration_ms as f32,
+                    avg_satisfaction: row.avg_satisfaction.map(|s| s as f32),
+                    failure_rate: row.failure_rate as f32,
+                    last_used: row.last_used,
+                    first_used: row.first_used,
                     context_frequency,
                 }))
             }

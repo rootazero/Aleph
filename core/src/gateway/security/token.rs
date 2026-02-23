@@ -217,7 +217,15 @@ mod tests {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
         // Create a device for tokens
         store
-            .upsert_device("dev-1", "Test", None, &[1u8; 32], "fp", "operator", &[])
+            .upsert_device(&crate::gateway::security::store::DeviceUpsertData {
+                device_id: "dev-1",
+                device_name: "Test",
+                device_type: None,
+                public_key: &[1u8; 32],
+                fingerprint: "fp",
+                role: "operator",
+                scopes: &[],
+            })
             .unwrap();
         TokenManager::new(store)
     }
@@ -307,7 +315,15 @@ mod tests {
     fn test_token_expiry() {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
         store
-            .upsert_device("dev-1", "Test", None, &[1u8; 32], "fp", "operator", &[])
+            .upsert_device(&crate::gateway::security::store::DeviceUpsertData {
+                device_id: "dev-1",
+                device_name: "Test",
+                device_type: None,
+                public_key: &[1u8; 32],
+                fingerprint: "fp",
+                role: "operator",
+                scopes: &[],
+            })
             .unwrap();
 
         // Create manager with very short expiry (10ms)

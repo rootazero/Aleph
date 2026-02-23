@@ -44,5 +44,5 @@ pub use identity_map::{IdentityMap, PlatformIdentity, UserId};
 pub use invitation_manager::{InvitationError, InvitationManager};
 pub use pairing::{PairingError, PairingManager, PairingRequest};
 pub use policy_engine::{PermissionResult, PolicyEngine};
-pub use store::{DeviceRow, PairingRequestRow, SecurityStore, TokenRow};
+pub use store::{DeviceRow, DeviceUpsertData, PairingRequestData, PairingRequestRow, SecurityStore, TokenRow};
 pub use token::{SignedToken, TokenError, TokenManager, TokenValidation};

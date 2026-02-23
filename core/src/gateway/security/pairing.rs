@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::crypto::{generate_pairing_code, DeviceFingerprint};
 use super::device::DeviceType;
-use super::store::{PairingRequestRow, SecurityStore};
+use super::store::{PairingRequestData, PairingRequestRow, SecurityStore};
 
 /// Default pairing code expiry (5 minutes in milliseconds)
 const DEFAULT_PAIRING_EXPIRY_MS: i64 = 5 * 60 * 1000;
@@ -163,18 +163,18 @@ impl PairingManager {
         let fingerprint = DeviceFingerprint::from_public_key(&public_key);
 
         self.store
-            .insert_pairing_request(
-                &request_id,
-                &code,
-                "device",
-                Some(&device_name),
-                device_type.map(|t| t.as_str()),
-                Some(&public_key),
-                None,
-                None,
-                remote_addr.as_deref(),
+            .insert_pairing_request(&PairingRequestData {
+                request_id: &request_id,
+                code: &code,
+                pairing_type: "device",
+                device_name: Some(&device_name),
+                device_type: device_type.map(|t| t.as_str()),
+                public_key: Some(&public_key),
+                channel: None,
+                sender_id: None,
+                remote_addr: remote_addr.as_deref(),
                 expires_at,
-            )
+            })
             .map_err(|e| PairingError::DatabaseError(e.to_string()))?;
 
         Ok(PairingRequest::Device {
@@ -213,18 +213,18 @@ impl PairingManager {
         let expires_at = now + self.expiry_ms;
 
         self.store
-            .insert_pairing_request(
-                &request_id,
-                &code,
-                "channel",
-                None,
-                None,
-                None,
-                Some(&channel),
-                Some(&sender_id),
-                None,
+            .insert_pairing_request(&PairingRequestData {
+                request_id: &request_id,
+                code: &code,
+                pairing_type: "channel",
+                device_name: None,
+                device_type: None,
+                public_key: None,
+                channel: Some(&channel),
+                sender_id: Some(&sender_id),
+                remote_addr: None,
                 expires_at,
-            )
+            })
             .map_err(|e| PairingError::DatabaseError(e.to_string()))?;
 
         Ok(PairingRequest::Channel {

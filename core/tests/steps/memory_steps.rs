@@ -287,7 +287,15 @@ async fn when_hybrid_search_text(w: &mut AlephWorld, text: String, value: f32) {
     let embedding = vec![value; EMBEDDING_DIM];
     let filter = SearchFilter::default();
     let scored = db
-        .hybrid_search(&embedding, EMBEDDING_DIM as u32, &text, 0.7, 0.3, &filter, 5)
+        .hybrid_search(&alephcore::memory::store::HybridSearchParams {
+            embedding: &embedding,
+            dim_hint: EMBEDDING_DIM as u32,
+            query_text: &text,
+            vector_weight: 0.7,
+            text_weight: 0.3,
+            filter: &filter,
+            limit: 5,
+        })
         .await
         .expect("Hybrid search failed");
 
