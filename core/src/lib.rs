@@ -67,7 +67,6 @@ pub mod memory;
 pub mod metrics;
 pub mod payload;
 pub mod permission;
-pub mod perception;
 pub mod pii;
 pub mod poe;
 pub mod prompt;
@@ -84,7 +83,6 @@ pub mod tool_output;
 pub mod tools;
 pub mod utils;
 pub mod video;
-pub mod vision;
 pub mod wizard;
 pub mod spec_driven;
 pub mod skill_evolution;
@@ -105,9 +103,6 @@ pub mod gateway;
 
 #[cfg(feature = "cron")]
 pub mod cron;
-
-#[cfg(feature = "browser")]
-pub mod browser;
 
 #[cfg(test)]
 mod tests;
@@ -290,7 +285,6 @@ pub use crate::search::{ProviderTestResult, SearchProviderTestConfig};
 // Vision & Generation Exports
 // =============================================================================
 
-pub use crate::vision::{VisionConfig, VisionRequest, VisionResult, VisionService};
 pub use crate::generation::{GenerationProvider, GenerationProviderRegistry, GenerationType};
 
 // =============================================================================
