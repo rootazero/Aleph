@@ -1,6 +1,6 @@
 //! Debug Handlers
 //!
-//! Debug and testing endpoints for Server-Client architecture validation.
+//! Debug and testing endpoints for architecture validation.
 //!
 //! These handlers are intended for development and testing purposes only.
 //! They should be disabled in production deployments.

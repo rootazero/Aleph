@@ -1,6 +1,6 @@
 //! # Aleph Protocol
 //!
-//! Pure type definitions for Aleph Server-Client communication.
+//! Pure type definitions for Aleph protocol communication.
 //!
 //! This crate contains only data types with no runtime dependencies,
 //! making it suitable for use by any client implementation.

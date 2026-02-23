@@ -352,7 +352,7 @@ impl GatewayClient {
     /// Authenticate with the gateway
     ///
     /// Uses ConfigStore to load/save authentication tokens.
-    /// Sends client manifest with capabilities and environment info.
+    /// Sends authentication credentials to establish a session.
     ///
     /// # Example
     ///
