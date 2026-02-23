@@ -34,10 +34,13 @@ use super::channel::{
     ChannelResult, ChannelStatus, ConversationId, InboundMessage, OutboundMessage, SendResult,
 };
 
+/// Type alias for a thread-safe, shareable channel handle
+type ChannelHandle = Arc<RwLock<Box<dyn Channel>>>;
+
 /// Central registry for all channel instances
 pub struct ChannelRegistry {
     /// Registered channel instances
-    channels: RwLock<HashMap<ChannelId, Arc<RwLock<Box<dyn Channel>>>>>,
+    channels: RwLock<HashMap<ChannelId, ChannelHandle>>,
     /// Channel factories by type
     factories: RwLock<HashMap<String, Arc<dyn ChannelFactory>>>,
     /// Unified inbound message sender
@@ -122,7 +125,7 @@ impl ChannelRegistry {
     }
 
     /// Get channel by ID
-    pub async fn get(&self, channel_id: &ChannelId) -> Option<Arc<RwLock<Box<dyn Channel>>>> {
+    pub async fn get(&self, channel_id: &ChannelId) -> Option<ChannelHandle> {
         let channels = self.channels.read().await;
         channels.get(channel_id).cloned()
     }
@@ -270,7 +273,7 @@ impl ChannelRegistry {
     async fn start_message_forwarder(
         &self,
         channel_id: ChannelId,
-        channel_arc: Arc<RwLock<Box<dyn Channel>>>,
+        channel_arc: ChannelHandle,
     ) {
         let inbound_tx = self.inbound_tx.clone();
 

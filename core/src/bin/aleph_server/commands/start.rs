@@ -522,16 +522,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
-    let auth_ctx = Arc::new(auth_handlers::AuthContext::new(
+    let auth_ctx = Arc::new(auth_handlers::AuthContext {
         token_manager,
         pairing_manager,
-        device_store.clone(),
+        device_store: device_store.clone(),
         security_store,
-        invitation_manager.clone(),
-        guest_session_manager.clone(),
-        event_bus.clone(),
-        full_config.gateway.require_auth,
-    ));
+        invitation_manager: invitation_manager.clone(),
+        guest_session_manager: guest_session_manager.clone(),
+        event_bus: event_bus.clone(),
+        require_auth: full_config.gateway.require_auth,
+    });
 
     // Register auth handlers
     register_auth_handlers(&mut server, &auth_ctx);

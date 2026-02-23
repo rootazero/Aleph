@@ -210,15 +210,15 @@ impl HybridRetrieval {
         let filter = SearchFilter::valid_only(None);
         let scored = self
             .database
-            .hybrid_search(
-                query_embedding,
+            .hybrid_search(&crate::memory::store::HybridSearchParams {
+                embedding: query_embedding,
                 dim_hint,
                 query_text,
-                self.config.vector_weight,
-                self.config.text_weight,
-                &filter,
-                self.config.max_results,
-            )
+                vector_weight: self.config.vector_weight,
+                text_weight: self.config.text_weight,
+                filter: &filter,
+                limit: self.config.max_results,
+            })
             .await?;
 
         Ok(Self::apply_min_score(scored, self.config.min_score))
@@ -237,15 +237,15 @@ impl HybridRetrieval {
         let filter = SearchFilter::valid_only(None);
         let scored = self
             .database
-            .hybrid_search(
-                query_embedding,
+            .hybrid_search(&crate::memory::store::HybridSearchParams {
+                embedding: query_embedding,
                 dim_hint,
                 query_text,
-                self.config.vector_weight,
-                self.config.text_weight,
-                &filter,
-                max_results,
-            )
+                vector_weight: self.config.vector_weight,
+                text_weight: self.config.text_weight,
+                filter: &filter,
+                limit: max_results,
+            })
             .await?;
 
         Ok(Self::apply_min_score(scored, self.config.min_score))

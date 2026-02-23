@@ -85,13 +85,13 @@ impl SecretVault {
         value: &str,
         metadata: EntryMetadata,
     ) -> Result<(), SecretError> {
-        let (ciphertext, nonce, salt) = self.crypto.encrypt(value)?;
+        let encrypted = self.crypto.encrypt(value)?;
         let now = chrono::Utc::now().timestamp();
 
         let entry = EncryptedEntry {
-            ciphertext,
-            nonce,
-            salt,
+            ciphertext: encrypted.ciphertext,
+            nonce: encrypted.nonce,
+            salt: encrypted.salt,
             created_at: self
                 .data
                 .entries

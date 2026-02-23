@@ -282,26 +282,17 @@ impl GatewayServer {
                         continue;
                     }
 
-                    let handlers = self.handlers.clone();
-                    let event_bus = self.event_bus.clone();
-                    let connections = self.connections.clone();
-                    let subscription_manager = self.subscription_manager.clone();
-                    let guest_session_manager = self.guest_session_manager.clone();
-                    let require_auth = self.config.require_auth;
+                    let conn_ctx = ConnectionContext {
+                        handlers: self.handlers.clone(),
+                        event_bus: self.event_bus.clone(),
+                        connections: self.connections.clone(),
+                        subscription_manager: self.subscription_manager.clone(),
+                        guest_session_manager: self.guest_session_manager.clone(),
+                        require_auth: self.config.require_auth,
+                    };
 
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(
-                            stream,
-                            peer_addr,
-                            handlers,
-                            event_bus,
-                            connections,
-                            subscription_manager,
-                            guest_session_manager,
-                            require_auth,
-                        )
-                        .await
-                        {
+                        if let Err(e) = handle_connection(stream, peer_addr, conn_ctx).await {
                             error!("Connection error from {}: {}", peer_addr, e);
                         }
                     });
@@ -345,26 +336,17 @@ impl GatewayServer {
                         continue;
                     }
 
-                    let handlers = self.handlers.clone();
-                    let event_bus = self.event_bus.clone();
-                    let connections = self.connections.clone();
-                    let subscription_manager = self.subscription_manager.clone();
-                    let guest_session_manager = self.guest_session_manager.clone();
-                    let require_auth = self.config.require_auth;
+                    let conn_ctx = ConnectionContext {
+                        handlers: self.handlers.clone(),
+                        event_bus: self.event_bus.clone(),
+                        connections: self.connections.clone(),
+                        subscription_manager: self.subscription_manager.clone(),
+                        guest_session_manager: self.guest_session_manager.clone(),
+                        require_auth: self.config.require_auth,
+                    };
 
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(
-                            stream,
-                            peer_addr,
-                            handlers,
-                            event_bus,
-                            connections,
-                            subscription_manager,
-                            guest_session_manager,
-                            require_auth,
-                        )
-                        .await
-                        {
+                        if let Err(e) = handle_connection(stream, peer_addr, conn_ctx).await {
                             error!("Connection error from {}: {}", peer_addr, e);
                         }
                     });
@@ -377,16 +359,21 @@ impl GatewayServer {
     }
 }
 
-/// Handle a single WebSocket connection
-async fn handle_connection(
-    stream: TcpStream,
-    peer_addr: SocketAddr,
+/// Shared context for handling a WebSocket connection.
+struct ConnectionContext {
     handlers: Arc<HandlerRegistry>,
     event_bus: Arc<GatewayEventBus>,
     connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
     subscription_manager: Arc<SubscriptionManager>,
     guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
     require_auth: bool,
+}
+
+/// Handle a single WebSocket connection
+async fn handle_connection(
+    stream: TcpStream,
+    peer_addr: SocketAddr,
+    ctx: ConnectionContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ws_stream = accept_async(stream).await?;
     let (mut write, mut read) = ws_stream.split();
@@ -395,7 +382,7 @@ async fn handle_connection(
     info!("New WebSocket connection: {}", conn_id);
 
     // Subscribe to event bus for this connection
-    let mut event_rx = event_bus.subscribe();
+    let mut event_rx = ctx.event_bus.subscribe();
 
     // Create reverse RPC manager for this connection
     let reverse_rpc = Arc::new(ReverseRpcManager::new());
@@ -406,7 +393,7 @@ async fn handle_connection(
 
     // Initialize connection state with routing support
     {
-        let mut conns = connections.write().await;
+        let mut conns = ctx.connections.write().await;
         conns.insert(
             conn_id.clone(),
             ConnectionState::with_routing(reverse_rpc.clone(), client_tx.clone()),
@@ -436,7 +423,7 @@ async fn handle_connection(
                             Ok(ref req) => {
                                 // Check authentication requirement
                                 let (is_first, is_authenticated) = {
-                                    let conns = connections.read().await;
+                                    let conns = ctx.connections.read().await;
                                     let state = conns.get(&conn_id);
                                     (
                                         state.is_none_or(|s| s.first_message),
@@ -445,7 +432,7 @@ async fn handle_connection(
                                 };
 
                                 // Auth gating logic
-                                if require_auth && !is_authenticated {
+                                if ctx.require_auth && !is_authenticated {
                                     // First message must be "connect"
                                     if is_first && req.method != "connect" {
                                         warn!(
@@ -477,7 +464,7 @@ async fn handle_connection(
                                         .unwrap_or_default()
                                     } else {
                                         // Handle connect request
-                                        let response = process_request(&text, &handlers).await;
+                                        let response = process_request(&text, &ctx.handlers).await;
 
                                         // If connect succeeded, mark as authenticated
                                         if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
@@ -520,7 +507,7 @@ async fn handle_connection(
                                                         }
                                                     });
 
-                                                let mut conns = connections.write().await;
+                                                let mut conns = ctx.connections.write().await;
                                                 if let Some(state) = conns.get_mut(&conn_id) {
                                                     state.authenticate(device_id.clone(), permissions);
                                                     state.guest_session_id = guest_session_id.clone();
@@ -536,7 +523,7 @@ async fn handle_connection(
 
                                         // Mark first_message = false even if connect failed
                                         {
-                                            let mut conns = connections.write().await;
+                                            let mut conns = ctx.connections.write().await;
                                             if let Some(state) = conns.get_mut(&conn_id) {
                                                 state.first_message = false;
                                             }
@@ -548,13 +535,13 @@ async fn handle_connection(
                                     // No auth required OR already authenticated
                                     // Handle events.* methods specially (they need conn_id)
                                     if req.method == "events.subscribe" {
-                                        let resp = handle_subscribe(req.clone(), &conn_id, subscription_manager.clone()).await;
+                                        let resp = handle_subscribe(req.clone(), &conn_id, ctx.subscription_manager.clone()).await;
                                         serde_json::to_string(&resp).unwrap_or_default()
                                     } else if req.method == "events.unsubscribe" {
-                                        let resp = handle_unsubscribe(req.clone(), &conn_id, subscription_manager.clone()).await;
+                                        let resp = handle_unsubscribe(req.clone(), &conn_id, ctx.subscription_manager.clone()).await;
                                         serde_json::to_string(&resp).unwrap_or_default()
                                     } else if req.method == "events.list" {
-                                        let resp = handle_events_list(req.clone(), &conn_id, subscription_manager.clone()).await;
+                                        let resp = handle_events_list(req.clone(), &conn_id, ctx.subscription_manager.clone()).await;
                                         serde_json::to_string(&resp).unwrap_or_default()
                                     } else if req.method == "debug.tool_call" {
                                         // Handle debug.tool_call - sends reverse RPC to client
@@ -565,7 +552,7 @@ async fn handle_connection(
                                         ).await;
                                         serde_json::to_string(&resp).unwrap_or_default()
                                     } else {
-                                        let response = process_request(&text, &handlers).await;
+                                        let response = process_request(&text, &ctx.handlers).await;
 
                                         // Extract guest_session_id from connect response (when require_auth=false)
                                         if req.method == "connect" {
@@ -589,7 +576,7 @@ async fn handle_connection(
                                                         });
 
                                                     if let Some(session_id) = guest_session_id {
-                                                        let mut conns = connections.write().await;
+                                                        let mut conns = ctx.connections.write().await;
                                                         if let Some(state) = conns.get_mut(&conn_id) {
                                                             state.guest_session_id = Some(session_id.clone());
                                                             info!("Connection {} authenticated as guest (session: {})", conn_id, session_id);
@@ -600,8 +587,8 @@ async fn handle_connection(
                                         }
 
                                         // Log RPC request for guest sessions
-                                        if let Some(ref gsm) = guest_session_manager {
-                                            let conns = connections.read().await;
+                                        if let Some(ref gsm) = ctx.guest_session_manager {
+                                            let conns = ctx.connections.read().await;
                                             if let Some(state) = conns.get(&conn_id) {
                                                 debug!("Checking for guest_session_id in connection state: {:?}", state.guest_session_id);
                                                 if let Some(ref session_id) = state.guest_session_id {
@@ -697,7 +684,7 @@ async fn handle_connection(
                                 .or_else(|| event_obj.get("method").and_then(|m| m.as_str()))
                                 .unwrap_or("");
 
-                            subscription_manager.should_receive(&conn_id, topic).await
+                            ctx.subscription_manager.should_receive(&conn_id, topic).await
                         } else {
                             // Can't parse event, forward by default
                             true
@@ -749,12 +736,12 @@ async fn handle_connection(
 
     // Cleanup
     {
-        let mut conns = connections.write().await;
+        let mut conns = ctx.connections.write().await;
 
         // Check if this was a guest session and terminate it
         if let Some(state) = conns.get(&conn_id) {
             if let Some(ref session_id) = state.guest_session_id {
-                if let Some(ref manager) = guest_session_manager {
+                if let Some(ref manager) = ctx.guest_session_manager {
                     info!("Terminating guest session: {}", session_id);
 
                     // Get session details before terminating
@@ -783,7 +770,7 @@ async fn handle_connection(
                                 .unwrap()
                                 .as_millis() as u64,
                         };
-                        let _ = event_bus.publish_json(&event);
+                        let _ = ctx.event_bus.publish_json(&event);
                     }
                 }
             }
@@ -793,7 +780,7 @@ async fn handle_connection(
     }
 
     // Remove subscriptions for this connection
-    subscription_manager.remove_connection(&conn_id).await;
+    ctx.subscription_manager.remove_connection(&conn_id).await;
 
     info!("Connection closed: {}", conn_id);
     Ok(())

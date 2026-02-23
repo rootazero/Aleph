@@ -18,6 +18,9 @@ use crate::wizard::{
     WizardFlow, WizardNextResult, WizardSession, WizardSessionError, WizardStatus, WizardStep,
 };
 
+/// Type alias for an async RPC handler function
+type RpcHandler = Box<dyn Fn(JsonRpcRequest) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>> + Send + Sync>;
+
 /// Parameters for wizard.start
 #[derive(Debug, Deserialize)]
 pub struct WizardStartParams {
@@ -381,9 +384,9 @@ pub async fn handle_status(
 /// Create handlers that need the session manager
 pub fn create_handlers(
     manager: Arc<WizardSessionManager>,
-) -> impl Fn(&str) -> Option<Box<dyn Fn(JsonRpcRequest) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>> + Send + Sync>>
+) -> impl Fn(&str) -> Option<RpcHandler>
 {
-    move |method: &str| -> Option<Box<dyn Fn(JsonRpcRequest) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>> + Send + Sync>> {
+    move |method: &str| -> Option<RpcHandler> {
         let mgr = manager.clone();
         match method {
             "wizard.start" => {

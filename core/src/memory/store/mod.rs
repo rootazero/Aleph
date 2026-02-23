@@ -28,6 +28,24 @@ use crate::memory::dreaming::{DailyInsight, DreamStatus};
 
 use types::{MemoryFilter, ScoredFact, SearchFilter};
 
+/// Parameters for hybrid (vector + text) search.
+pub struct HybridSearchParams<'a> {
+    /// Vector embedding for ANN search.
+    pub embedding: &'a [f32],
+    /// Dimensionality hint for selecting the correct vector column.
+    pub dim_hint: u32,
+    /// Text query for full-text search.
+    pub query_text: &'a str,
+    /// Weight applied to vector search scores.
+    pub vector_weight: f32,
+    /// Weight applied to text search scores.
+    pub text_weight: f32,
+    /// Additional filter predicates.
+    pub filter: &'a SearchFilter,
+    /// Maximum number of results to return.
+    pub limit: usize,
+}
+
 // ---------------------------------------------------------------------------
 // Supporting types
 // ---------------------------------------------------------------------------
@@ -189,13 +207,7 @@ pub trait MemoryStore: Send + Sync {
     /// Hybrid search combining vector similarity and text relevance.
     async fn hybrid_search(
         &self,
-        embedding: &[f32],
-        dim_hint: u32,
-        query_text: &str,
-        vector_weight: f32,
-        text_weight: f32,
-        filter: &SearchFilter,
-        limit: usize,
+        params: &HybridSearchParams<'_>,
     ) -> Result<Vec<ScoredFact>, AlephError>;
 
     // -- VFS path operations ------------------------------------------------

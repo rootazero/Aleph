@@ -18,7 +18,7 @@ use crate::memory::audit::AuditEntry;
 use crate::memory::context::{FactStats, FactType, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::types::{ScoredFact, SearchFilter};
-use crate::memory::store::{AuditStore, MemoryStore, PathEntry};
+use crate::memory::store::{AuditStore, HybridSearchParams, MemoryStore, PathEntry};
 
 use super::arrow_convert::{facts_to_record_batch, record_batch_to_facts};
 use super::LanceMemoryBackend;
@@ -233,29 +233,23 @@ impl MemoryStore for LanceMemoryBackend {
 
     async fn hybrid_search(
         &self,
-        embedding: &[f32],
-        dim_hint: u32,
-        query_text: &str,
-        vector_weight: f32,
-        text_weight: f32,
-        filter: &SearchFilter,
-        limit: usize,
+        params: &HybridSearchParams<'_>,
     ) -> Result<Vec<ScoredFact>, AlephError> {
         // LanceDB supports hybrid search when both nearest_to and full_text_search
         // are combined on a VectorQuery. It uses RRFReranker by default.
-        let column_name = format!("vec_{}", dim_hint);
-        let fts_query = FullTextSearchQuery::new(query_text.to_owned());
+        let column_name = format!("vec_{}", params.dim_hint);
+        let fts_query = FullTextSearchQuery::new(params.query_text.to_owned());
 
         let mut query = self
             .facts_table
             .query()
             .full_text_search(fts_query)
-            .nearest_to(embedding)
+            .nearest_to(params.embedding)
             .map_err(lance_err)?
             .column(&column_name)
-            .limit(limit);
+            .limit(params.limit);
 
-        if let Some(f) = filter.to_lance_filter() {
+        if let Some(f) = params.filter.to_lance_filter() {
             query = query.only_if(f);
         }
 
@@ -264,17 +258,7 @@ impl MemoryStore for LanceMemoryBackend {
             Err(_) => {
                 // If hybrid search fails (e.g. no FTS index), fall back to
                 // manual score fusion.
-                return self
-                    .manual_hybrid_search(
-                        embedding,
-                        dim_hint,
-                        query_text,
-                        vector_weight,
-                        text_weight,
-                        filter,
-                        limit,
-                    )
-                    .await;
+                return self.manual_hybrid_search(params).await;
             }
         };
 
@@ -569,22 +553,16 @@ impl LanceMemoryBackend {
     /// hybrid search is unavailable (e.g. no FTS index).
     async fn manual_hybrid_search(
         &self,
-        embedding: &[f32],
-        dim_hint: u32,
-        query_text: &str,
-        vector_weight: f32,
-        text_weight: f32,
-        filter: &SearchFilter,
-        limit: usize,
+        params: &HybridSearchParams<'_>,
     ) -> Result<Vec<ScoredFact>, AlephError> {
         // Run vector search and text search independently.
         let vec_results = self
-            .vector_search(embedding, dim_hint, filter, limit)
+            .vector_search(params.embedding, params.dim_hint, params.filter, params.limit)
             .await
             .unwrap_or_default();
 
         let text_results = self
-            .text_search(query_text, filter, limit)
+            .text_search(params.query_text, params.filter, params.limit)
             .await
             .unwrap_or_default();
 
@@ -595,14 +573,14 @@ impl LanceMemoryBackend {
             let entry = merged
                 .entry(sf.fact.id.clone())
                 .or_insert_with(|| (sf.fact.clone(), 0.0));
-            entry.1 += sf.score * vector_weight;
+            entry.1 += sf.score * params.vector_weight;
         }
 
         for sf in text_results {
             let entry = merged
                 .entry(sf.fact.id.clone())
                 .or_insert_with(|| (sf.fact.clone(), 0.0));
-            entry.1 += sf.score * text_weight;
+            entry.1 += sf.score * params.text_weight;
         }
 
         let mut results: Vec<ScoredFact> = merged
@@ -612,7 +590,7 @@ impl LanceMemoryBackend {
 
         // Sort by score descending.
         results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        results.truncate(limit);
+        results.truncate(params.limit);
 
         Ok(results)
     }

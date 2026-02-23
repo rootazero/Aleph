@@ -13,6 +13,18 @@ use sha2::Sha256;
 
 use super::types::SecretError;
 
+/// Result of encrypting a plaintext value.
+///
+/// Contains the ciphertext along with the nonce and salt needed for decryption.
+pub struct EncryptedData {
+    /// AES-256-GCM ciphertext
+    pub ciphertext: Vec<u8>,
+    /// GCM nonce (12 bytes)
+    pub nonce: [u8; 12],
+    /// HKDF salt (32 bytes, per-entry)
+    pub salt: [u8; 32],
+}
+
 /// HKDF info label for domain separation.
 const HKDF_INFO: &[u8] = b"aleph-secrets-v1";
 
@@ -42,9 +54,9 @@ impl SecretsCrypto {
 
     /// Encrypt a plaintext value.
     ///
-    /// Returns (ciphertext, nonce, salt) tuple.
+    /// Returns an `EncryptedData` containing the ciphertext, nonce, and salt.
     /// Each call generates a fresh random salt and nonce.
-    pub fn encrypt(&self, plaintext: &str) -> Result<(Vec<u8>, [u8; 12], [u8; 32]), SecretError> {
+    pub fn encrypt(&self, plaintext: &str) -> Result<EncryptedData, SecretError> {
         use rand::RngCore;
 
         // Generate random salt and nonce
@@ -66,7 +78,11 @@ impl SecretsCrypto {
         // (key goes out of scope and is on the stack, but let's be explicit)
         let _ = key;
 
-        Ok((ciphertext, nonce_bytes, salt))
+        Ok(EncryptedData {
+            ciphertext,
+            nonce: nonce_bytes,
+            salt,
+        })
     }
 
     /// Decrypt a ciphertext using the stored nonce and salt.
@@ -97,8 +113,8 @@ mod tests {
         let crypto = SecretsCrypto::new("test-master-key");
         let plaintext = "sk-ant-api03-very-secret-key";
 
-        let (ciphertext, nonce, salt) = crypto.encrypt(plaintext).unwrap();
-        let decrypted = crypto.decrypt(&ciphertext, &nonce, &salt).unwrap();
+        let encrypted = crypto.encrypt(plaintext).unwrap();
+        let decrypted = crypto.decrypt(&encrypted.ciphertext, &encrypted.nonce, &encrypted.salt).unwrap();
 
         assert_eq!(decrypted, plaintext);
     }
@@ -108,8 +124,8 @@ mod tests {
         let crypto = SecretsCrypto::new("test-master-key");
         let plaintext = "sk-ant-api03-very-secret-key";
 
-        let (ciphertext, _, _) = crypto.encrypt(plaintext).unwrap();
-        assert_ne!(ciphertext, plaintext.as_bytes());
+        let encrypted = crypto.encrypt(plaintext).unwrap();
+        assert_ne!(encrypted.ciphertext, plaintext.as_bytes());
     }
 
     #[test]
@@ -117,11 +133,11 @@ mod tests {
         let crypto = SecretsCrypto::new("test-master-key");
         let plaintext = "same-plaintext";
 
-        let (ct1, _, _) = crypto.encrypt(plaintext).unwrap();
-        let (ct2, _, _) = crypto.encrypt(plaintext).unwrap();
+        let e1 = crypto.encrypt(plaintext).unwrap();
+        let e2 = crypto.encrypt(plaintext).unwrap();
 
         // Different random salts → different ciphertexts
-        assert_ne!(ct1, ct2);
+        assert_ne!(e1.ciphertext, e2.ciphertext);
     }
 
     #[test]
@@ -129,8 +145,8 @@ mod tests {
         let crypto1 = SecretsCrypto::new("correct-key");
         let crypto2 = SecretsCrypto::new("wrong-key");
 
-        let (ciphertext, nonce, salt) = crypto1.encrypt("secret").unwrap();
-        let result = crypto2.decrypt(&ciphertext, &nonce, &salt);
+        let encrypted = crypto1.encrypt("secret").unwrap();
+        let result = crypto2.decrypt(&encrypted.ciphertext, &encrypted.nonce, &encrypted.salt);
 
         assert!(result.is_err());
         assert!(matches!(result, Err(SecretError::DecryptionFailed)));
@@ -139,22 +155,22 @@ mod tests {
     #[test]
     fn test_tampered_ciphertext_fails() {
         let crypto = SecretsCrypto::new("test-key");
-        let (mut ciphertext, nonce, salt) = crypto.encrypt("secret").unwrap();
+        let mut encrypted = crypto.encrypt("secret").unwrap();
 
         // Tamper with ciphertext
-        if let Some(byte) = ciphertext.first_mut() {
+        if let Some(byte) = encrypted.ciphertext.first_mut() {
             *byte ^= 0xFF;
         }
 
-        let result = crypto.decrypt(&ciphertext, &nonce, &salt);
+        let result = crypto.decrypt(&encrypted.ciphertext, &encrypted.nonce, &encrypted.salt);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_empty_plaintext() {
         let crypto = SecretsCrypto::new("test-key");
-        let (ciphertext, nonce, salt) = crypto.encrypt("").unwrap();
-        let decrypted = crypto.decrypt(&ciphertext, &nonce, &salt).unwrap();
+        let encrypted = crypto.encrypt("").unwrap();
+        let decrypted = crypto.decrypt(&encrypted.ciphertext, &encrypted.nonce, &encrypted.salt).unwrap();
         assert_eq!(decrypted, "");
     }
 
@@ -162,8 +178,8 @@ mod tests {
     fn test_unicode_plaintext() {
         let crypto = SecretsCrypto::new("test-key");
         let plaintext = "密钥测试🔑";
-        let (ciphertext, nonce, salt) = crypto.encrypt(plaintext).unwrap();
-        let decrypted = crypto.decrypt(&ciphertext, &nonce, &salt).unwrap();
+        let encrypted = crypto.encrypt(plaintext).unwrap();
+        let decrypted = crypto.decrypt(&encrypted.ciphertext, &encrypted.nonce, &encrypted.salt).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 }

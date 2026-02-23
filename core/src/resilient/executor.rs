@@ -13,10 +13,13 @@ use tracing::{debug, error, info, warn};
 use super::task::ResilientTask;
 use super::types::{DegradationReason, DegradationStrategy, TaskContext, TaskOutcome};
 
+/// Type alias for a notification callback invoked on task failure
+type NotifyCallback = Box<dyn Fn(&str, &str) + Send + Sync>;
+
 /// Executor for resilient tasks
 pub struct ResilientExecutor {
     /// Callback for notifications
-    notify_callback: Option<Box<dyn Fn(&str, &str) + Send + Sync>>,
+    notify_callback: Option<NotifyCallback>,
 }
 
 impl ResilientExecutor {

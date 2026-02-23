@@ -93,19 +93,10 @@ impl SecurityStore {
     // ========== Device Operations ==========
 
     /// Insert or update a device
-    pub fn upsert_device(
-        &self,
-        device_id: &str,
-        device_name: &str,
-        device_type: Option<&str>,
-        public_key: &[u8],
-        fingerprint: &str,
-        role: &str,
-        scopes: &[String],
-    ) -> SqliteResult<()> {
+    pub fn upsert_device(&self, data: &DeviceUpsertData<'_>) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
         let now = current_timestamp_ms();
-        let scopes_json = serde_json::to_string(scopes).unwrap_or_else(|e| {
+        let scopes_json = serde_json::to_string(data.scopes).unwrap_or_else(|e| {
             tracing::warn!("Failed to serialize device scopes: {}", e);
             "[]".to_string()
         });
@@ -120,7 +111,7 @@ impl SecurityStore {
                ON CONFLICT(device_id) DO UPDATE SET
                  device_name = excluded.device_name,
                  last_seen_at = ?8"#,
-            params![device_id, device_name, device_type, public_key, fingerprint, role, scopes_json, now],
+            params![data.device_id, data.device_name, data.device_type, data.public_key, data.fingerprint, data.role, scopes_json, now],
         )?;
         Ok(())
     }
@@ -306,19 +297,7 @@ impl SecurityStore {
     // ========== Pairing Request Operations ==========
 
     /// Insert a pairing request
-    pub fn insert_pairing_request(
-        &self,
-        request_id: &str,
-        code: &str,
-        pairing_type: &str,
-        device_name: Option<&str>,
-        device_type: Option<&str>,
-        public_key: Option<&[u8]>,
-        channel: Option<&str>,
-        sender_id: Option<&str>,
-        remote_addr: Option<&str>,
-        expires_at: i64,
-    ) -> SqliteResult<()> {
+    pub fn insert_pairing_request(&self, data: &PairingRequestData<'_>) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
         let now = current_timestamp_ms();
 
@@ -328,8 +307,9 @@ impl SecurityStore {
                 channel, sender_id, remote_addr, created_at, expires_at)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
             params![
-                request_id, code, pairing_type, device_name, device_type, public_key,
-                channel, sender_id, remote_addr, now, expires_at
+                data.request_id, data.code, data.pairing_type, data.device_name,
+                data.device_type, data.public_key, data.channel, data.sender_id,
+                data.remote_addr, now, data.expires_at
             ],
         )?;
         Ok(())
@@ -457,6 +437,33 @@ impl SecurityStore {
 
         Ok(senders)
     }
+}
+
+// ========== Parameter Structs ==========
+
+/// Data for inserting or creating a pairing request.
+pub struct PairingRequestData<'a> {
+    pub request_id: &'a str,
+    pub code: &'a str,
+    pub pairing_type: &'a str,
+    pub device_name: Option<&'a str>,
+    pub device_type: Option<&'a str>,
+    pub public_key: Option<&'a [u8]>,
+    pub channel: Option<&'a str>,
+    pub sender_id: Option<&'a str>,
+    pub remote_addr: Option<&'a str>,
+    pub expires_at: i64,
+}
+
+/// Data for inserting or updating a device.
+pub struct DeviceUpsertData<'a> {
+    pub device_id: &'a str,
+    pub device_name: &'a str,
+    pub device_type: Option<&'a str>,
+    pub public_key: &'a [u8],
+    pub fingerprint: &'a str,
+    pub role: &'a str,
+    pub scopes: &'a [String],
 }
 
 // ========== Row Types ==========
@@ -671,15 +678,15 @@ mod tests {
 
         // Insert device
         store
-            .upsert_device(
-                "dev-1",
-                "Test Device",
-                Some("macos"),
-                &[1u8; 32],
-                "abc123",
-                "operator",
-                &["*".to_string()],
-            )
+            .upsert_device(&DeviceUpsertData {
+                device_id: "dev-1",
+                device_name: "Test Device",
+                device_type: Some("macos"),
+                public_key: &[1u8; 32],
+                fingerprint: "abc123",
+                role: "operator",
+                scopes: &["*".to_string()],
+            })
             .unwrap();
 
         // Get device
@@ -702,7 +709,15 @@ mod tests {
 
         // Need a device first
         store
-            .upsert_device("dev-1", "Test", None, &[1u8; 32], "fp", "operator", &[])
+            .upsert_device(&DeviceUpsertData {
+                device_id: "dev-1",
+                device_name: "Test",
+                device_type: None,
+                public_key: &[1u8; 32],
+                fingerprint: "fp",
+                role: "operator",
+                scopes: &[],
+            })
             .unwrap();
 
         let expires = current_timestamp_ms() + 3600000; // 1 hour
@@ -729,18 +744,18 @@ mod tests {
 
         // Insert device pairing request
         store
-            .insert_pairing_request(
-                "req-1",
-                "A3B7K9M2",
-                "device",
-                Some("iPhone"),
-                Some("ios"),
-                Some(&[1u8; 32]),
-                None,
-                None,
-                Some("192.168.1.1"),
-                expires,
-            )
+            .insert_pairing_request(&PairingRequestData {
+                request_id: "req-1",
+                code: "A3B7K9M2",
+                pairing_type: "device",
+                device_name: Some("iPhone"),
+                device_type: Some("ios"),
+                public_key: Some(&[1u8; 32]),
+                channel: None,
+                sender_id: None,
+                remote_addr: Some("192.168.1.1"),
+                expires_at: expires,
+            })
             .unwrap();
 
         // Get by code

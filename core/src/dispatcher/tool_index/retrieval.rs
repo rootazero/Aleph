@@ -160,15 +160,15 @@ impl ToolRetrieval {
         let filter = crate::memory::store::types::SearchFilter::valid_only(
             Some(crate::memory::NamespaceScope::Owner),
         );
-        let scored = self.db.hybrid_search(
-            query_embedding,
-            crate::memory::EMBEDDING_DIM as u32,
+        let scored = self.db.hybrid_search(&crate::memory::store::HybridSearchParams {
+            embedding: query_embedding,
+            dim_hint: crate::memory::EMBEDDING_DIM as u32,
             query_text,
-            0.7, // vector weight
-            0.3, // text weight
-            &filter,
-            self.config.max_tools * 3,
-        ).await?;
+            vector_weight: 0.7,
+            text_weight: 0.3,
+            filter: &filter,
+            limit: self.config.max_tools * 3,
+        }).await?;
         let facts: Vec<MemoryFact> = scored.into_iter().map(|sf| {
             let mut fact = sf.fact;
             fact.similarity_score = Some(sf.score);

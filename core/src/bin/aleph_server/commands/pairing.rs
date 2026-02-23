@@ -97,15 +97,15 @@ pub async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error
     device_store.approve_device(&device)?;
 
     // Register device in security store for token generation
-    security_store.upsert_device(
-        &device_id,
-        &device_name,
-        None,
-        &[0u8; 32], // placeholder public key
-        &device_id[..16], // use device_id prefix as fingerprint
-        "operator",
-        &["*".to_string()],
-    )?;
+    security_store.upsert_device(&alephcore::gateway::security::store::DeviceUpsertData {
+        device_id: &device_id,
+        device_name: &device_name,
+        device_type: None,
+        public_key: &[0u8; 32], // placeholder public key
+        fingerprint: &device_id[..16], // use device_id prefix as fingerprint
+        role: "operator",
+        scopes: &["*".to_string()],
+    })?;
 
     // Generate token
     let token_manager = TokenManager::new(security_store);

@@ -12,6 +12,7 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_FAILED, INV
 use crate::gateway::security::{DeviceRole, DeviceType, PairingManager, PairingRequest, TokenManager};
 use crate::gateway::ClientManifest;
 
+use crate::gateway::security::store::DeviceUpsertData;
 use crate::gateway::security::SecurityStore;
 
 /// Parameters for the "hello" method (server -> client notification)
@@ -80,30 +81,7 @@ pub struct AuthContext {
     pub require_auth: bool,
 }
 
-impl AuthContext {
-    /// Create a new authentication context
-    pub fn new(
-        token_manager: Arc<TokenManager>,
-        pairing_manager: Arc<PairingManager>,
-        device_store: Arc<DeviceStore>,
-        security_store: Arc<SecurityStore>,
-        invitation_manager: Arc<crate::gateway::security::InvitationManager>,
-        guest_session_manager: Arc<crate::gateway::security::GuestSessionManager>,
-        event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
-        require_auth: bool,
-    ) -> Self {
-        Self {
-            token_manager,
-            pairing_manager,
-            device_store,
-            security_store,
-            invitation_manager,
-            guest_session_manager,
-            event_bus,
-            require_auth,
-        }
-    }
-}
+// AuthContext fields are all `pub`, so it is constructed directly via struct literal.
 
 /// Handle "connect" request
 ///
@@ -228,15 +206,15 @@ pub async fn handle_connect(
 
         // Register device in SecurityStore first (required for FK constraint on tokens)
         let device_name = params.device_name.as_deref().unwrap_or("Auto-Device");
-        if let Err(e) = ctx.security_store.upsert_device(
-            &device_id,
+        if let Err(e) = ctx.security_store.upsert_device(&DeviceUpsertData {
+            device_id: &device_id,
             device_name,
-            None,
-            &[0u8; 32], // Placeholder public key
-            &device_id[..16.min(device_id.len())], // Use prefix as fingerprint
-            DeviceRole::Operator.as_str(),
-            &["*".to_string()],
-        ) {
+            device_type: None,
+            public_key: &[0u8; 32], // Placeholder public key
+            fingerprint: &device_id[..16.min(device_id.len())], // Use prefix as fingerprint
+            role: DeviceRole::Operator.as_str(),
+            scopes: &["*".to_string()],
+        }) {
             warn!(error = %e, "Failed to register device");
             return JsonRpcResponse::error(request.id, -32603, format!("Failed to register device: {}", e));
         }
@@ -549,15 +527,15 @@ pub async fn handle_pairing_approve(
     }
 
     // Register device in SecurityStore for token FK constraint
-    if let Err(e) = ctx.security_store.upsert_device(
-        &device_id,
-        &device_name,
-        None,
-        &[0u8; 32], // placeholder public key
-        &device_id[..16], // use device_id prefix as fingerprint
-        "operator",
-        &["*".to_string()],
-    ) {
+    if let Err(e) = ctx.security_store.upsert_device(&DeviceUpsertData {
+        device_id: &device_id,
+        device_name: &device_name,
+        device_type: None,
+        public_key: &[0u8; 32], // placeholder public key
+        fingerprint: &device_id[..16], // use device_id prefix as fingerprint
+        role: "operator",
+        scopes: &["*".to_string()],
+    }) {
         warn!(error = %e, "Failed to register device in security store");
         return JsonRpcResponse::error(
             request.id,
@@ -794,23 +772,31 @@ mod tests {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
         // Create a device for token tests
         store
-            .upsert_device("test-dev", "Test", None, &[1u8; 32], "fp", "operator", &[])
+            .upsert_device(&DeviceUpsertData {
+                device_id: "test-dev",
+                device_name: "Test",
+                device_type: None,
+                public_key: &[1u8; 32],
+                fingerprint: "fp",
+                role: "operator",
+                scopes: &[],
+            })
             .unwrap();
 
         let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
         let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
         let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
 
-        Arc::new(AuthContext::new(
-            Arc::new(TokenManager::new(store.clone())),
-            Arc::new(PairingManager::new(store.clone())),
-            Arc::new(DeviceStore::in_memory().unwrap()),
-            store,
+        Arc::new(AuthContext {
+            token_manager: Arc::new(TokenManager::new(store.clone())),
+            pairing_manager: Arc::new(PairingManager::new(store.clone())),
+            device_store: Arc::new(DeviceStore::in_memory().unwrap()),
+            security_store: store,
             invitation_manager,
             guest_session_manager,
             event_bus,
-            true,
-        ))
+            require_auth: true,
+        })
     }
 
     #[tokio::test]
@@ -818,23 +804,31 @@ mod tests {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
         // Create a device for token tests
         store
-            .upsert_device("test-dev", "Test", None, &[1u8; 32], "fp", "operator", &[])
+            .upsert_device(&DeviceUpsertData {
+                device_id: "test-dev",
+                device_name: "Test",
+                device_type: None,
+                public_key: &[1u8; 32],
+                fingerprint: "fp",
+                role: "operator",
+                scopes: &[],
+            })
             .unwrap();
 
         let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
         let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
         let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
 
-        let ctx = Arc::new(AuthContext::new(
-            Arc::new(TokenManager::new(store.clone())),
-            Arc::new(PairingManager::new(store.clone())),
-            Arc::new(DeviceStore::in_memory().unwrap()),
-            store,
+        let ctx = Arc::new(AuthContext {
+            token_manager: Arc::new(TokenManager::new(store.clone())),
+            pairing_manager: Arc::new(PairingManager::new(store.clone())),
+            device_store: Arc::new(DeviceStore::in_memory().unwrap()),
+            security_store: store,
             invitation_manager,
             guest_session_manager,
             event_bus,
-            false, // Auth not required
-        ));
+            require_auth: false, // Auth not required
+        });
 
         let request = JsonRpcRequest::new(
             "connect",
