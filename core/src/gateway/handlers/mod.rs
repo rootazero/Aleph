@@ -89,6 +89,7 @@ pub mod debug;
 pub mod guests;
 pub mod workspace;
 pub mod state_bus;
+pub mod secret_approvals;
 #[cfg(feature = "discord")]
 pub mod discord_panel;
 
