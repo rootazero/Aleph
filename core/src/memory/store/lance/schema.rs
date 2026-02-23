@@ -37,7 +37,7 @@ fn string_list_field(name: &str, nullable: bool) -> Field {
 // Table schemas
 // ---------------------------------------------------------------------------
 
-/// Schema for the `facts` table (27 columns).
+/// Schema for the `facts` table (33 columns).
 pub fn facts_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -64,6 +64,14 @@ pub fn facts_schema() -> Arc<Schema> {
         Field::new("updated_at", DataType::Int64, false),
         Field::new("decay_invalidated_at", DataType::Int64, true),
         Field::new("version", DataType::Int32, false),
+        // ACMA fields
+        Field::new("tier", DataType::Utf8, false),
+        Field::new("scope", DataType::Utf8, false),
+        Field::new("persona_id", DataType::Utf8, true),
+        Field::new("strength", DataType::Float32, false),
+        Field::new("access_count", DataType::Int32, false),
+        Field::new("last_accessed_at", DataType::Int64, true),
+        // Vector columns
         vector_field("vec_384", 384),
         vector_field("vec_1024", 1024),
         vector_field("vec_1536", 1536),
@@ -129,9 +137,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn facts_schema_has_27_columns() {
+    fn facts_schema_has_33_columns() {
         let schema = facts_schema();
-        assert_eq!(schema.fields().len(), 27);
+        assert_eq!(schema.fields().len(), 33);
     }
 
     #[test]
@@ -225,6 +233,7 @@ mod tests {
             "temporal_scope", "layer", "category", "path", "parent_path", "namespace",
             "content_hash", "workspace", "confidence", "decay_score", "is_valid",
             "embedding_model", "created_at", "updated_at", "version",
+            "tier", "scope", "strength", "access_count",
         ];
         for name in &required {
             let field = schema.field_with_name(name).unwrap_or_else(|_| {
@@ -243,7 +252,8 @@ mod tests {
         let schema = facts_schema();
         let optional = [
             "tags", "source_memory_ids", "invalidation_reason",
-            "decay_invalidated_at", "vec_384", "vec_1024", "vec_1536",
+            "decay_invalidated_at", "persona_id", "last_accessed_at",
+            "vec_384", "vec_1024", "vec_1536",
         ];
         for name in &optional {
             let field = schema.field_with_name(name).unwrap_or_else(|_| {
@@ -255,5 +265,16 @@ mod tests {
                 name,
             );
         }
+    }
+
+    #[test]
+    fn facts_schema_has_acma_columns() {
+        let schema = facts_schema();
+        assert!(schema.field_with_name("tier").is_ok());
+        assert!(schema.field_with_name("scope").is_ok());
+        assert!(schema.field_with_name("persona_id").is_ok());
+        assert!(schema.field_with_name("strength").is_ok());
+        assert!(schema.field_with_name("access_count").is_ok());
+        assert!(schema.field_with_name("last_accessed_at").is_ok());
     }
 }
