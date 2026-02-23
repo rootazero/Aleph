@@ -85,6 +85,6 @@ pub struct ErrorResponse {
 pub struct ErrorDetails {
     pub message: String,
     #[serde(rename = "type")]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     pub error_type: String,
 }

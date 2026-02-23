@@ -153,6 +153,6 @@ pub struct GoogleErrorResponse {
 pub struct GoogleError {
     pub code: Option<i32>,
     pub message: Option<String>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     pub status: Option<String>,
 }

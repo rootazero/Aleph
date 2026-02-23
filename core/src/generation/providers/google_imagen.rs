@@ -349,7 +349,7 @@ struct GoogleErrorResponse {
 struct GoogleError {
     code: Option<i32>,
     message: Option<String>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     status: Option<String>,
 }
 
