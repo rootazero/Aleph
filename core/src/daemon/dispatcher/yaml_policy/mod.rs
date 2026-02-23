@@ -1,6 +1,7 @@
 //! YAML-based Policy System
 
 pub mod schema;
+#[allow(clippy::module_inception)]
 pub mod yaml_policy;
 pub mod loader;
 
