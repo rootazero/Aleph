@@ -14,7 +14,7 @@ use super::{Entity, AggregateRoot, ValueObject};
 // SkillId
 // ---------------------------------------------------------------------------
 
-/// Unique identifier for a skill, following the convention `plugin::skill_name`.
+/// Unique identifier for a skill, following the convention `plugin:skill_name`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SkillId(String);
 
@@ -29,14 +29,14 @@ impl SkillId {
         &self.0
     }
 
-    /// Return the plugin prefix (part before `::`) if present.
+    /// Return the plugin prefix (part before `:`) if present.
     pub fn plugin_prefix(&self) -> Option<&str> {
-        self.0.split_once("::").map(|(prefix, _)| prefix)
+        self.0.split_once(':').map(|(prefix, _)| prefix)
     }
 
-    /// Return the skill name (part after `::`, or the whole id if no prefix).
+    /// Return the skill name (part after `:`, or the whole id if no prefix).
     pub fn skill_name(&self) -> &str {
-        self.0.split_once("::").map_or(self.0.as_str(), |(_, name)| name)
+        self.0.split_once(':').map_or(self.0.as_str(), |(_, name)| name)
     }
 }
 
@@ -529,25 +529,25 @@ mod tests {
 
     #[test]
     fn test_skill_id_display() {
-        let id = SkillId::new("git::commit");
-        assert_eq!(format!("{}", id), "git::commit");
+        let id = SkillId::new("git:commit");
+        assert_eq!(format!("{}", id), "git:commit");
         assert_eq!(id.plugin_prefix(), Some("git"));
         assert_eq!(id.skill_name(), "commit");
     }
 
     #[test]
     fn test_skill_id_equality() {
-        let a = SkillId::new("git::commit");
-        let b = SkillId::new("git::commit");
-        let c = SkillId::new("git::push");
+        let a = SkillId::new("git:commit");
+        let b = SkillId::new("git:commit");
+        let c = SkillId::new("git:push");
         assert_eq!(a, b);
         assert_ne!(a, c);
     }
 
     #[test]
     fn test_skill_id_from_string() {
-        let from_str: SkillId = "hello::world".into();
-        let from_string: SkillId = String::from("hello::world").into();
+        let from_str: SkillId = "hello:world".into();
+        let from_string: SkillId = String::from("hello:world").into();
         assert_eq!(from_str, from_string);
 
         // No prefix
@@ -628,7 +628,7 @@ mod tests {
     #[test]
     fn test_skill_manifest_entity_trait() {
         let manifest = SkillManifest::new(
-            "git::commit",
+            "git:commit",
             "Git Commit",
             "Helps write good commit messages",
             SkillContent::new("You are a git expert."),
@@ -636,8 +636,8 @@ mod tests {
         );
 
         // Entity trait
-        assert_eq!(manifest.id().as_str(), "git::commit");
-        assert_eq!(format!("{}", manifest.id()), "git::commit");
+        assert_eq!(manifest.id().as_str(), "git:commit");
+        assert_eq!(format!("{}", manifest.id()), "git:commit");
 
         // Accessors
         assert_eq!(manifest.name(), "Git Commit");
@@ -656,7 +656,7 @@ mod tests {
     #[test]
     fn test_skill_manifest_with_eligibility() {
         let mut manifest = SkillManifest::new(
-            "docker::build",
+            "docker:build",
             "Docker Build",
             "Builds Docker images",
             SkillContent::new("Docker expert."),
@@ -679,7 +679,7 @@ mod tests {
     #[test]
     fn test_skill_manifest_is_model_visible() {
         let mut manifest = SkillManifest::new(
-            "secret::hidden",
+            "secret:hidden",
             "Hidden Skill",
             "Not visible to model",
             SkillContent::new("secret"),
