@@ -130,7 +130,7 @@ pub use config::{GatewayConfig, ToolRoutingConfig, PolicyOverride};
 #[cfg(feature = "gateway")]
 pub use session_manager::{SessionManager, SessionManagerConfig};
 #[cfg(feature = "gateway")]
-pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus, SimpleExecutionEngine, ClientContext};
+pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus, SimpleExecutionEngine};
 #[cfg(feature = "gateway")]
 pub use loop_callback_adapter::{EventEmittingCallback, ResponseChunkEmitter, UserQuestion};
 #[cfg(feature = "gateway")]
