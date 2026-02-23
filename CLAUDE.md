@@ -108,30 +108,30 @@ pub trait ValueObject: Eq + Clone {}
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         CLIENT LAYER                             │
-│   macOS App │ Tauri App │ CLI │ Telegram │ Discord │ WebChat   │
+│                       INTERFACE LAYER                            │
+│   macOS App │ Tauri App │ CLI │ Telegram │ Discord │ WebChat    │
+│              (纯 I/O — 输入用户消息，展示 Server 响应)            │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │ WebSocket (JSON-RPC 2.0)
                                 │ ws://127.0.0.1:18789
 ┌───────────────────────────────┴─────────────────────────────────┐
-│                         GATEWAY LAYER                            │
-│   Router │ Session Manager │ Event Bus │ Channels │ Hot Reload  │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-┌───────────────────────────────┴─────────────────────────────────┐
-│                          AGENT LAYER                             │
-│            Observe → Think → Act → Feedback → Compress           │
-│   Agent Loop │ Thinker │ Dispatcher │ Guards │ Overflow         │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-┌───────────────────────────────┴─────────────────────────────────┐
-│                        EXECUTION LAYER                           │
-│   Providers │ Executor │ Tool Server │ MCP │ Extensions │ Exec  │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-┌───────────────────────────────┴─────────────────────────────────┐
-│                         STORAGE LAYER                            │
-│   Memory (LanceDB) │ Resilience (SQLite) │ Config │ Keychain    │
+│                    ALEPH SERVER (自包含)                          │
+│                                                                   │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │ GATEWAY — Router │ Session │ Event Bus │ Interfaces      │    │
+│  └──────────────────────────────┬───────────────────────────┘    │
+│                                 │                                 │
+│  ┌──────────────────────────────┴───────────────────────────┐    │
+│  │ AGENT — Observe → Think → Act → Feedback → Compress      │    │
+│  └──────────────────────────────┬───────────────────────────┘    │
+│                                 │                                 │
+│  ┌──────────────────────────────┴───────────────────────────┐    │
+│  │ EXECUTION — Providers │ Executor │ Tool Server │ MCP      │    │
+│  └──────────────────────────────┬───────────────────────────┘    │
+│                                 │                                 │
+│  ┌──────────────────────────────┴───────────────────────────┐    │
+│  │ STORAGE — Memory (LanceDB) │ State (SQLite) │ Config      │    │
+│  └──────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -151,64 +151,19 @@ pub trait ValueObject: Eq + Clone {}
 
 详见：[完整架构文档](docs/ARCHITECTURE.md)
 
-### 🌐 Server-Client 模式
+### 🏛️ Server-Centric 架构
 
-Aleph 支持 **Server-Client 分布式架构**，实现"大脑在云端，手脚在身边"：
+Aleph 是一个**自包含的 AI Server**。所有感知、思考、执行都在 Server 侧完成。
 
-```
-┌─────────────────┐                    ┌─────────────────┐
-│  Client (手脚)   │                    │  Server (大脑)   │
-├─────────────────┤                    ├─────────────────┤
-│ 本地工具执行     │ ←── tool.call ──── │ Agent Loop      │
-│ Shell/文件系统   │ ── tool.result ──→ │ LLM 交互        │
-│ UI 交互         │                    │ 任务调度        │
-└─────────────────┘                    └─────────────────┘
-```
+外部 Interface（App、Bot、CLI）仅负责消息的输入和展示，不承担任何业务逻辑。
+它们如同社交软件的对话窗口，只是交互入口。
 
-#### 核心组件
-
-| 组件 | 位置 | 职责 |
-|------|------|------|
-| **ExecutionPolicy** | `dispatcher/types/` | 工具执行位置策略 (ServerOnly/ClientOnly/PreferServer/PreferClient) |
-| **ClientManifest** | `gateway/` | Client 能力声明 (工具类别、约束、环境) |
-| **ToolRouter** | `executor/` | 路由决策引擎 (Policy + 能力 → 决策) |
-| **ReverseRpcManager** | `gateway/` | Server→Client 反向 RPC 调用 |
-| **RoutedExecutor** | `executor/` | 集成路由的工具执行器 |
-
-#### 路由决策矩阵
-
-| Policy | Client 有能力 | Client 无能力 |
-|--------|--------------|--------------|
-| **ServerOnly** | Server 执行 | Server 执行 |
-| **ClientOnly** | Client 执行 | ❌ Error |
-| **PreferServer** | Server 执行 | Server 执行 |
-| **PreferClient** | Client 执行 | Server 回退 |
-
-#### ⚠️ 关键架构原则：Server-Side Execution
-
-**IMPORTANT**: 在 Aleph 的 Server-Client 架构中：
-
-- **Client 的定义**: Client **仅仅是对话窗口（UI）**，负责消息的输入输出和展示
-- **Server 的职责**: **所有任务都在 Server 端完成**，包括但不限于：
-  - 屏幕识别和截图分析
-  - 浏览器自动化
-  - 文件系统操作
-  - Shell 命令执行
-  - 工具调用和编排
-  - AI 推理和决策
-
-**架构意图**：
-- Client 是"眼睛和嘴巴"（输入输出界面）
-- Server 是"大脑和手脚"（思考和执行中心）
-- 即使在分布式部署中，所有的感知（Perception）、思考（Thinking）、行动（Action）都发生在 Server 侧
-
-**实施指导**：
-- 开发新功能时，默认所有逻辑在 Server 实现
-- Client 只负责 WebSocket 通信和 UI 渲染
-- 不要在 Client 侧实现业务逻辑或工具执行
-- System State Bus (SSB) 等感知系统运行在 Server 侧
-
-详见：[Server-Client 架构设计](docs/plans/2026-02-06-server-client-architecture-design.md) | [实施计划](docs/plans/2026-02-06-server-client-implementation.md)
+| Interface 类型 | 示例 | 通信方式 |
+|---------------|------|----------|
+| **Native App** | macOS App, Tauri Desktop | WebSocket |
+| **CLI** | aleph-cli | WebSocket |
+| **Bot** | Telegram, Discord | 各平台 API |
+| **Web** | Dashboard, WebChat | HTTP/WebSocket |
 
 ---
 
@@ -220,7 +175,7 @@ aleph/
 │   └── src/
 │       ├── gateway/                # WebSocket 控制面 (34 files)
 │       │   ├── handlers/           # RPC 方法处理器 (33 handlers)
-│       │   ├── channels/           # 消息渠道 (Telegram, Discord, iMessage)
+│       │   ├── interfaces/          # 交互接口 (Telegram, Discord, iMessage)
 │       │   └── security/           # 认证、配对、设备管理
 │       ├── agent_loop/             # Observe-Think-Act-Feedback (15 files)
 │       ├── thinker/                # LLM 交互层 (9 files)
@@ -813,7 +768,7 @@ Example: `gateway: add WebSocket server foundation`
 |------|------|
 | [AGENT_DESIGN_PHILOSOPHY.md](docs/AGENT_DESIGN_PHILOSOPHY.md) | 四大设计思想：第一性原理、启发式、自学习、POE |
 | [POE Architecture](docs/plans/2026-02-01-poe-architecture-design.md) | POE 架构详细设计 |
-| [Server-Client Architecture](docs/plans/2026-02-06-server-client-architecture-design.md) | Server-Client 分布式架构设计 |
+| [Server-Centric Architecture](docs/plans/2026-02-23-server-centric-architecture-design.md) | Server-centric 架构设计 |
 
 ---
 
@@ -825,7 +780,7 @@ Example: `gateway: add WebSocket server foundation`
 - **项目定位**: 自托管个人 AI 助手，Gateway 控制面架构
 - **核心循环**: Observe → Think → Act → Feedback → Compress
 - **技术栈**: Rust (Gateway + Agent) + Swift (macOS) + React (Tauri)
-- **当前状态**: Phase 8 (Multi-Channel)，Gateway 完整实现，Server-Client 架构已实现
+- **当前状态**: Phase 8 (Multi-Channel)，Gateway 完整实现，Server-centric 架构
 
 ### Memory Prompt
 
