@@ -333,6 +333,194 @@ impl Default for InvocationPolicy {
 
 impl ValueObject for InvocationPolicy {}
 
+// ---------------------------------------------------------------------------
+// SkillContent
+// ---------------------------------------------------------------------------
+
+/// The textual content of a skill (prompt text, instructions, etc.).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillContent(String);
+
+impl SkillContent {
+    /// Create a new `SkillContent`.
+    pub fn new(content: impl Into<String>) -> Self {
+        Self(content.into())
+    }
+
+    /// Return the underlying string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Check if the content is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl ValueObject for SkillContent {}
+
+// ---------------------------------------------------------------------------
+// SkillManifest (Aggregate Root)
+// ---------------------------------------------------------------------------
+
+/// The primary aggregate root for the skill system.
+///
+/// A `SkillManifest` represents a fully resolved skill with its identity,
+/// content, eligibility rules, installation instructions, and invocation
+/// policy. It implements `Entity<Id=SkillId>` and `AggregateRoot`.
+#[derive(Debug, Clone)]
+pub struct SkillManifest {
+    /// Unique skill identifier.
+    id: SkillId,
+    /// Human-readable name.
+    name: String,
+    /// Optional plugin that owns this skill.
+    plugin: Option<PluginId>,
+    /// Short description of what this skill does.
+    description: String,
+    /// The prompt/instruction content.
+    content: SkillContent,
+    /// How the content is injected.
+    scope: PromptScope,
+    /// When the skill is eligible.
+    eligibility: EligibilitySpec,
+    /// How to install dependencies.
+    install_specs: Vec<InstallSpec>,
+    /// How the skill can be invoked.
+    invocation: InvocationPolicy,
+    /// Where the skill came from.
+    source: SkillSource,
+}
+
+impl SkillManifest {
+    /// Create a new `SkillManifest` with required fields and sensible defaults.
+    pub fn new(
+        id: impl Into<SkillId>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        content: SkillContent,
+        source: SkillSource,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            plugin: None,
+            description: description.into(),
+            content,
+            scope: PromptScope::default(),
+            eligibility: EligibilitySpec::default(),
+            install_specs: Vec::new(),
+            invocation: InvocationPolicy::default(),
+            source,
+        }
+    }
+
+    // --- Accessors ---
+
+    /// Human-readable name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Optional owning plugin.
+    pub fn plugin(&self) -> Option<&PluginId> {
+        self.plugin.as_ref()
+    }
+
+    /// Short description.
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    /// The prompt content.
+    pub fn content(&self) -> &SkillContent {
+        &self.content
+    }
+
+    /// How the content is injected.
+    pub fn scope(&self) -> &PromptScope {
+        &self.scope
+    }
+
+    /// Eligibility conditions.
+    pub fn eligibility(&self) -> &EligibilitySpec {
+        &self.eligibility
+    }
+
+    /// Installation instructions.
+    pub fn install_specs(&self) -> &[InstallSpec] {
+        &self.install_specs
+    }
+
+    /// Invocation policy.
+    pub fn invocation(&self) -> &InvocationPolicy {
+        &self.invocation
+    }
+
+    /// Where the skill came from.
+    pub fn source(&self) -> &SkillSource {
+        &self.source
+    }
+
+    /// Override priority (delegates to `SkillSource::priority()`).
+    pub fn priority(&self) -> u8 {
+        self.source.priority()
+    }
+
+    // --- Query methods ---
+
+    /// Whether this skill should be visible to the model.
+    ///
+    /// A skill is model-visible when it is NOT disabled AND the invocation
+    /// policy does not disable model invocation.
+    pub fn is_model_visible(&self) -> bool {
+        self.scope != PromptScope::Disabled && !self.invocation.disable_model_invocation
+    }
+
+    /// Whether a user can invoke this skill directly.
+    pub fn is_user_invocable(&self) -> bool {
+        self.invocation.user_invocable
+    }
+
+    // --- Mutators ---
+
+    /// Set the owning plugin.
+    pub fn set_plugin(&mut self, plugin: PluginId) {
+        self.plugin = Some(plugin);
+    }
+
+    /// Set the prompt scope.
+    pub fn set_scope(&mut self, scope: PromptScope) {
+        self.scope = scope;
+    }
+
+    /// Set the eligibility spec.
+    pub fn set_eligibility(&mut self, eligibility: EligibilitySpec) {
+        self.eligibility = eligibility;
+    }
+
+    /// Set the installation specs.
+    pub fn set_install_specs(&mut self, specs: Vec<InstallSpec>) {
+        self.install_specs = specs;
+    }
+
+    /// Set the invocation policy.
+    pub fn set_invocation(&mut self, invocation: InvocationPolicy) {
+        self.invocation = invocation;
+    }
+}
+
+impl Entity for SkillManifest {
+    type Id = SkillId;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
+}
+
+impl AggregateRoot for SkillManifest {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,5 +621,88 @@ mod tests {
         assert_eq!("windows".parse::<Os>().unwrap(), Os::Windows);
         assert_eq!("win".parse::<Os>().unwrap(), Os::Windows);
         assert!("bsd".parse::<Os>().is_err());
+    }
+
+    // === Task 3 tests ===
+
+    #[test]
+    fn test_skill_manifest_entity_trait() {
+        let manifest = SkillManifest::new(
+            "git::commit",
+            "Git Commit",
+            "Helps write good commit messages",
+            SkillContent::new("You are a git expert."),
+            SkillSource::Bundled,
+        );
+
+        // Entity trait
+        assert_eq!(manifest.id().as_str(), "git::commit");
+        assert_eq!(format!("{}", manifest.id()), "git::commit");
+
+        // Accessors
+        assert_eq!(manifest.name(), "Git Commit");
+        assert_eq!(manifest.description(), "Helps write good commit messages");
+        assert_eq!(manifest.content().as_str(), "You are a git expert.");
+        assert!(!manifest.content().is_empty());
+        assert_eq!(manifest.plugin(), None);
+        assert_eq!(*manifest.scope(), PromptScope::System);
+        assert_eq!(manifest.priority(), 1); // Bundled
+
+        // Default query methods
+        assert!(manifest.is_model_visible());
+        assert!(manifest.is_user_invocable());
+    }
+
+    #[test]
+    fn test_skill_manifest_with_eligibility() {
+        let mut manifest = SkillManifest::new(
+            "docker::build",
+            "Docker Build",
+            "Builds Docker images",
+            SkillContent::new("Docker expert."),
+            SkillSource::Global,
+        );
+
+        let eligibility = EligibilitySpec {
+            os: Some(vec![Os::Darwin, Os::Linux]),
+            required_bins: vec!["docker".to_string()],
+            ..Default::default()
+        };
+        manifest.set_eligibility(eligibility);
+        manifest.set_plugin(PluginId::new("docker"));
+
+        assert_eq!(manifest.eligibility().os.as_ref().unwrap().len(), 2);
+        assert_eq!(manifest.eligibility().required_bins[0], "docker");
+        assert_eq!(manifest.plugin().unwrap().as_str(), "docker");
+    }
+
+    #[test]
+    fn test_skill_manifest_is_model_visible() {
+        let mut manifest = SkillManifest::new(
+            "secret::hidden",
+            "Hidden Skill",
+            "Not visible to model",
+            SkillContent::new("secret"),
+            SkillSource::Workspace,
+        );
+
+        // Default: visible
+        assert!(manifest.is_model_visible());
+
+        // Disabled scope: not visible
+        manifest.set_scope(PromptScope::Disabled);
+        assert!(!manifest.is_model_visible());
+
+        // Re-enable scope, but disable model invocation
+        manifest.set_scope(PromptScope::System);
+        manifest.set_invocation(InvocationPolicy {
+            disable_model_invocation: true,
+            ..Default::default()
+        });
+        assert!(!manifest.is_model_visible());
+
+        // Both enabled: visible again
+        manifest.set_invocation(InvocationPolicy::default());
+        assert!(manifest.is_model_visible());
     }
 }
