@@ -171,7 +171,6 @@ mod tests {
                 h.finish()
             },
             value_len: 35,
-            prefix: "sk-a".to_string(),
         };
         detector.register_injected(&[injected], &["sk-ant-my-super-secret-key-12345678"]);
 
@@ -187,7 +186,6 @@ mod tests {
             name: "key".to_string(),
             value_hash: 12345,
             value_len: 20,
-            prefix: "sk-a".to_string(),
         };
         detector.register_injected(&[injected], &["some-long-secret-value-here"]);
 
@@ -212,7 +210,6 @@ mod tests {
                 name: "k".to_string(),
                 value_hash: 999,
                 value_len: 10,
-                prefix: "abcd".to_string(),
             }],
             &["abcdefghij"],
         );

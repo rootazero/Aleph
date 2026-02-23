@@ -15,12 +15,13 @@ pub trait SecretResolver: Send + Sync {
 }
 
 /// Record of a secret injected during rendering.
+///
+/// Contains hashes and metadata only — never plaintext secret values.
 #[derive(Debug, Clone)]
 pub struct InjectedSecret {
     pub name: String,
     pub value_hash: u64,
     pub value_len: usize,
-    pub prefix: String,
 }
 
 impl InjectedSecret {
@@ -33,7 +34,6 @@ impl InjectedSecret {
             name: name.to_string(),
             value_hash: hash,
             value_len: value.len(),
-            prefix: value.chars().take(4).collect(),
         }
     }
 }
@@ -142,7 +142,7 @@ mod tests {
         assert_eq!(record.name, "key");
         assert_eq!(record.value_len, "my-secret-value".len());
         assert_ne!(record.value_hash, 0);
-        assert_eq!(record.prefix, "my-s");
+        // prefix field removed — InjectedSecret must never store plaintext
     }
 
     #[test]

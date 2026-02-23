@@ -4,9 +4,7 @@
 //! stored in the SecretVault. Private keys are decrypted only
 //! during the signing operation and never returned to the caller.
 
-use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{SigningKey, VerifyingKey};
-use k256::elliptic_curve::sec1::ToEncodedPoint;
 use std::fmt;
 
 use super::types::SecretError;
@@ -22,7 +20,12 @@ pub enum SignIntent {
         domain_hash: [u8; 32],
         struct_hash: [u8; 32],
     },
-    /// EIP-1559 transaction signing
+    /// EIP-1559 transaction signing (simplified).
+    ///
+    /// **WARNING**: Uses simplified byte concatenation instead of proper RLP encoding.
+    /// Signatures produced with this variant are NOT valid for on-chain submission.
+    /// Use PersonalSign or TypedData for production signing. A future version will
+    /// add proper RLP encoding for on-chain transaction signing.
     Transaction {
         chain_id: u64,
         to: [u8; 20],
