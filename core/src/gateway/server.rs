@@ -12,15 +12,12 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 use futures_util::{StreamExt, SinkExt};
 use tracing::{info, warn, error, debug};
 
-use super::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, PARSE_ERROR, TOOL_ERROR};
+use super::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, PARSE_ERROR};
 use super::event_bus::GatewayEventBus;
-use super::ClientManifest;
 use super::handlers::HandlerRegistry;
 use super::handlers::events::{
     SubscriptionManager, handle_subscribe, handle_unsubscribe, handle_list as handle_events_list,
 };
-use super::handlers::debug::{parse_tool_call_params, DebugToolCallResult};
-use super::reverse_rpc::ReverseRpcManager;
 use crate::providers::protocols::ProtocolLoader;
 use notify::RecommendedWatcher;
 use notify_debouncer_full::{Debouncer, FileIdMap};
@@ -39,22 +36,13 @@ pub struct ConnectionState {
     pub device_id: Option<String>,
     /// Permissions (set after successful connect)
     pub permissions: Vec<String>,
-    /// Client capability manifest (set during connect if provided)
-    pub manifest: Option<ClientManifest>,
-    /// Reverse RPC manager for Server-Client tool routing
-    pub reverse_rpc: Option<Arc<ReverseRpcManager>>,
-    /// Channel sender for sending requests to the client
-    pub client_sender: Option<tokio::sync::mpsc::Sender<JsonRpcRequest>>,
     /// Guest session ID (set for guest connections)
     pub guest_session_id: Option<String>,
 }
 
 impl ConnectionState {
-    /// Create a new connection state with Server-Client routing support
-    fn with_routing(
-        reverse_rpc: Arc<ReverseRpcManager>,
-        client_sender: tokio::sync::mpsc::Sender<JsonRpcRequest>,
-    ) -> Self {
+    /// Create a new connection state
+    fn new() -> Self {
         Self {
             authenticated: false,
             first_message: true,
@@ -62,9 +50,6 @@ impl ConnectionState {
             metadata: HashMap::new(),
             device_id: None,
             permissions: vec![],
-            manifest: None,
-            reverse_rpc: Some(reverse_rpc),
-            client_sender: Some(client_sender),
             guest_session_id: None,
         }
     }
@@ -74,52 +59,6 @@ impl ConnectionState {
         self.authenticated = true;
         self.device_id = Some(device_id);
         self.permissions = permissions;
-    }
-
-    /// Set the client manifest after successful connect
-    pub fn set_manifest(&mut self, manifest: ClientManifest) {
-        self.manifest = Some(manifest);
-    }
-
-    /// Check if client supports a specific tool
-    pub fn supports_tool(&self, tool_name: &str) -> bool {
-        self.manifest
-            .as_ref()
-            .map(|m| m.supports_tool(tool_name))
-            .unwrap_or(false)
-    }
-
-    /// Check if client has a specific scope granted
-    pub fn has_scope(&self, category: &str, scope: &str) -> bool {
-        self.manifest
-            .as_ref()
-            .map(|m| m.has_scope(category, scope))
-            .unwrap_or(true) // No manifest = all allowed
-    }
-
-    /// Check if this connection has a client manifest (supports routing)
-    pub fn has_manifest(&self) -> bool {
-        self.manifest.is_some()
-    }
-
-    /// Check if this connection supports Server-Client routing
-    ///
-    /// Returns true if the connection has all required components:
-    /// - Client manifest (capability declaration)
-    /// - Reverse RPC manager
-    /// - Client sender channel
-    pub fn supports_routing(&self) -> bool {
-        self.manifest.is_some() && self.reverse_rpc.is_some() && self.client_sender.is_some()
-    }
-
-    /// Create a ClientContext for Server-Client routing
-    ///
-    /// Returns None if the connection doesn't have all required components.
-    pub fn client_context(&self) -> Option<super::execution_engine::ClientContext> {
-        let manifest = self.manifest.clone()?;
-        let reverse_rpc = self.reverse_rpc.clone()?;
-        let sender = self.client_sender.clone()?;
-        Some(super::execution_engine::ClientContext::new(manifest, reverse_rpc, sender))
     }
 }
 
@@ -385,20 +324,10 @@ async fn handle_connection(
     // Subscribe to event bus for this connection
     let mut event_rx = ctx.event_bus.subscribe();
 
-    // Create reverse RPC manager for this connection
-    let reverse_rpc = Arc::new(ReverseRpcManager::new());
-
-    // Create channel for sending requests to the client (for Server-Client routing)
-    // This allows ExecutionEngine to send tool.call requests to the client
-    let (client_tx, mut client_rx) = tokio::sync::mpsc::channel::<JsonRpcRequest>(32);
-
-    // Initialize connection state with routing support
+    // Initialize connection state
     {
         let mut conns = ctx.connections.write().await;
-        conns.insert(
-            conn_id.clone(),
-            ConnectionState::with_routing(reverse_rpc.clone(), client_tx.clone()),
-        );
+        conns.insert(conn_id.clone(), ConnectionState::new());
     }
 
     loop {
@@ -408,14 +337,6 @@ async fn handle_connection(
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         debug!("Received from {}: {}", conn_id, &text[..text.len().min(200)]);
-
-                        // First, check if this is a response to a reverse RPC call
-                        if let Ok(response) = serde_json::from_str::<JsonRpcResponse>(&text) {
-                            if reverse_rpc.handle_response(response) {
-                                debug!("Handled reverse RPC response from {}", conn_id);
-                                continue;
-                            }
-                        }
 
                         // Parse request to check method for auth gating
                         let request: Result<JsonRpcRequest, _> = serde_json::from_str(&text);
@@ -543,14 +464,6 @@ async fn handle_connection(
                                         serde_json::to_string(&resp).unwrap_or_default()
                                     } else if req.method == "events.list" {
                                         let resp = handle_events_list(req.clone(), &conn_id, ctx.subscription_manager.clone()).await;
-                                        serde_json::to_string(&resp).unwrap_or_default()
-                                    } else if req.method == "debug.tool_call" {
-                                        // Handle debug.tool_call - sends reverse RPC to client
-                                        let resp = handle_debug_tool_call(
-                                            req.clone(),
-                                            &mut write,
-                                            reverse_rpc.clone(),
-                                        ).await;
                                         serde_json::to_string(&resp).unwrap_or_default()
                                     } else {
                                         let response = process_request(&text, &ctx.handlers).await;
@@ -708,30 +621,6 @@ async fn handle_connection(
                     }
                 }
             }
-            // Forward requests to client (for Server-Client reverse RPC)
-            // This handles tool.call requests from ExecutionEngine
-            request = client_rx.recv() => {
-                match request {
-                    Some(req) => {
-                        debug!("Sending request to client {}: {}", conn_id, req.method);
-                        match serde_json::to_string(&req) {
-                            Ok(json) => {
-                                if let Err(e) = write.send(Message::Text(json.into())).await {
-                                    error!("Failed to send request to {}: {}", conn_id, e);
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                error!("Failed to serialize request for {}: {}", conn_id, e);
-                            }
-                        }
-                    }
-                    None => {
-                        // Channel closed, this is normal during shutdown
-                        debug!("Client request channel closed for {}", conn_id);
-                    }
-                }
-            }
         }
     }
 
@@ -815,111 +704,6 @@ async fn process_request(text: &str, handlers: &HandlerRegistry) -> String {
     // Dispatch to handler
     let response = handlers.handle(&request).await;
     serde_json::to_string(&response).unwrap_or_default()
-}
-
-/// Handle debug.tool_call - sends a reverse RPC to the client
-///
-/// This is a test endpoint for validating the Server-Client reverse RPC mechanism.
-/// It sends a tool.call request to the connected client and waits for the response.
-async fn handle_debug_tool_call<S>(
-    request: JsonRpcRequest,
-    write: &mut S,
-    reverse_rpc: Arc<ReverseRpcManager>,
-) -> JsonRpcResponse
-where
-    S: futures_util::Sink<Message> + Unpin,
-    S::Error: std::fmt::Display,
-{
-    use std::time::Instant;
-    use serde_json::json;
-
-    // Parse parameters
-    let params = match parse_tool_call_params(&request) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
-
-    info!(
-        tool = %params.tool,
-        timeout_ms = params.timeout_ms,
-        "debug.tool_call: sending reverse RPC to client"
-    );
-
-    let start = Instant::now();
-
-    // Create reverse RPC request
-    let (rpc_request, pending) = reverse_rpc.create_request(
-        "tool.call",
-        json!({
-            "tool": params.tool,
-            "args": params.args,
-        }),
-    );
-
-    // Send request to client
-    let request_json = match serde_json::to_string(&rpc_request) {
-        Ok(j) => j,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                TOOL_ERROR,
-                format!("Failed to serialize tool.call request: {}", e),
-            );
-        }
-    };
-
-    debug!("Sending tool.call to client: {}", request_json);
-
-    if let Err(e) = write.send(Message::Text(request_json.into())).await {
-        return JsonRpcResponse::error(
-            request.id,
-            TOOL_ERROR,
-            format!("Failed to send tool.call to client: {}", e),
-        );
-    }
-
-    // Wait for response with timeout
-    let timeout = std::time::Duration::from_millis(params.timeout_ms);
-    let result = pending.wait_timeout(timeout).await;
-
-    let duration_ms = start.elapsed().as_millis() as u64;
-
-    match result {
-        Ok(value) => {
-            info!(
-                tool = %params.tool,
-                duration_ms = duration_ms,
-                "debug.tool_call: received response from client"
-            );
-
-            let debug_result = DebugToolCallResult {
-                success: true,
-                result: Some(value),
-                error: None,
-                duration_ms,
-                executed_on: "client".to_string(),
-            };
-
-            JsonRpcResponse::success(request.id, json!(debug_result))
-        }
-        Err(e) => {
-            error!(
-                tool = %params.tool,
-                error = %e,
-                "debug.tool_call: failed"
-            );
-
-            let debug_result = DebugToolCallResult {
-                success: false,
-                result: None,
-                error: Some(e.to_string()),
-                duration_ms,
-                executed_on: "client".to_string(),
-            };
-
-            JsonRpcResponse::success(request.id, json!(debug_result))
-        }
-    }
 }
 
 /// Gateway server errors
