@@ -40,6 +40,7 @@ use crate::config::ProfileConfig;
 use crate::dispatcher::UnifiedTool;
 use crate::error::{AlephError, Result};
 use crate::gateway::security::policy_engine::PolicyEngine;
+use super::exec_security_gate::ExecSecurityGate;
 
 /// Normalize tool name by extracting base tool name from various formats
 ///
@@ -102,6 +103,8 @@ pub struct SingleStepExecutor<R: ToolRegistry> {
     config: SingleStepConfig,
     /// Tool result cache
     result_cache: Arc<super::cache_store::ToolResultCache>,
+    /// Optional exec security gate for shell command protection
+    exec_security_gate: Option<Arc<ExecSecurityGate>>,
 }
 
 impl<R: ToolRegistry> SingleStepExecutor<R> {
@@ -112,6 +115,7 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
             tool_registry,
             config: SingleStepConfig::default(),
             result_cache: Arc::new(super::cache_store::ToolResultCache::new(cache_config)),
+            exec_security_gate: None,
         }
     }
 
@@ -122,6 +126,7 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
             tool_registry,
             config,
             result_cache: Arc::new(super::cache_store::ToolResultCache::new(cache_config)),
+            exec_security_gate: None,
         }
     }
 
@@ -134,6 +139,7 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
             tool_registry,
             config: SingleStepConfig::default(),
             result_cache: Arc::new(super::cache_store::ToolResultCache::new(cache_config)),
+            exec_security_gate: None,
         }
     }
 
@@ -143,6 +149,17 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
     /// without executing the tool.
     pub fn tool_registry(&self) -> Option<&R> {
         Some(&*self.tool_registry)
+    }
+
+    /// Attach an ExecSecurityGate for shell command protection.
+    ///
+    /// When attached, bash/code_exec tool calls are intercepted:
+    /// - SecurityKernel assesses risk (Blocked/Danger/Caution/Safe)
+    /// - Danger tier requires human approval via ExecApprovalManager
+    /// - SecretMasker applied to all outputs
+    pub fn with_exec_security_gate(mut self, gate: Arc<ExecSecurityGate>) -> Self {
+        self.exec_security_gate = Some(gate);
+        self
     }
 
     /// Execute a tool call
@@ -243,8 +260,34 @@ impl<R: ToolRegistry + 'static> ActionExecutor for SingleStepExecutor<R> {
 
                 match permission_result {
                     crate::gateway::security::policy_engine::PermissionResult::Allowed => {
-                        // Permission granted, proceed with execution
-                        self.execute_tool_call(tool_name, arguments.clone()).await
+                        // Layer 4: Exec security gate (bash/code_exec only)
+                        if let Some(gate) = &self.exec_security_gate {
+                            if ExecSecurityGate::is_exec_tool(&normalized_tool_name) {
+                                match gate.pre_execute(&normalized_tool_name, arguments, identity).await {
+                                    crate::executor::PreExecDecision::Block { reason } => {
+                                        return ActionResult::ToolError {
+                                            error: reason,
+                                            retryable: false,
+                                        };
+                                    }
+                                    crate::executor::PreExecDecision::Allow { .. } => {
+                                        // Proceed to execution
+                                    }
+                                }
+                            }
+                        }
+
+                        // Execute the tool
+                        let result = self.execute_tool_call(tool_name, arguments.clone()).await;
+
+                        // Layer 5: SecretMasker on output
+                        if let Some(gate) = &self.exec_security_gate {
+                            if ExecSecurityGate::is_exec_tool(&normalized_tool_name) {
+                                return gate.post_execute(result);
+                            }
+                        }
+
+                        result
                     }
                     crate::gateway::security::policy_engine::PermissionResult::Denied { reason } => {
                         // Permission denied
@@ -619,5 +662,58 @@ mod tests {
 
         // Should succeed because guest has permission for translate
         assert!(matches!(result, ActionResult::ToolSuccess { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_exec_gate_blocks_dangerous_command() {
+        use crate::exec::ExecApprovalManager;
+        use crate::executor::ExecSecurityGate;
+        use std::sync::Arc;
+        use aleph_protocol::IdentityContext;
+
+        let tool_registry = Arc::new(crate::executor::BuiltinToolRegistry::new());
+        let approval_manager = Arc::new(ExecApprovalManager::new());
+        let gate = Arc::new(ExecSecurityGate::new(approval_manager, None));
+
+        let executor = SingleStepExecutor::new(tool_registry)
+            .with_exec_security_gate(gate);
+
+        let identity = IdentityContext::owner("session:test".to_string(), "test".to_string());
+        let action = Action::ToolCall {
+            tool_name: "bash".to_string(),
+            arguments: serde_json::json!({"cmd": "rm -rf /"}),
+        };
+
+        let result = executor.execute(&action, &identity).await;
+        assert!(matches!(result, ActionResult::ToolError { .. }));
+
+        if let ActionResult::ToolError { error, .. } = result {
+            assert!(error.contains("Blocked"), "Expected Blocked error, got: {}", error);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_executor_without_gate_still_works() {
+        // When no gate is attached, executor should work normally
+        let mut registry = MockToolRegistry::new();
+        registry.add_tool(create_test_tool("bash"));
+        registry.set_result("bash", serde_json::json!({"stdout": "hello", "exit_code": 0}));
+
+        let executor = SingleStepExecutor::new(Arc::new(registry));
+
+        let identity = aleph_protocol::IdentityContext::owner(
+            "session:test".to_string(), "test".to_string()
+        );
+        // A safe action that doesn't require shell
+        let action = Action::ToolCall {
+            tool_name: "bash".to_string(),
+            arguments: serde_json::json!({"cmd": "echo hello"}),
+        };
+
+        let result = executor.execute(&action, &identity).await;
+        // Without gate, shouldn't be blocked (might succeed or fail for other reasons but not Blocked)
+        if let ActionResult::ToolError { ref error, .. } = result {
+            assert!(!error.contains("Blocked"), "Unexpected block without gate: {}", error);
+        }
     }
 }
