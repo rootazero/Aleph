@@ -50,7 +50,7 @@ struct RpcRequest {
 /// (with `method` but no `id`).
 #[derive(Debug, Deserialize)]
 struct RpcResponse {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from JSON-RPC 2.0 wire format
     jsonrpc: String,
     id: Option<u64>,
     result: Option<Value>,

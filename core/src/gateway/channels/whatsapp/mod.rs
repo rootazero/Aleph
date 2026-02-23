@@ -54,9 +54,6 @@ pub struct WhatsAppChannel {
     config: WhatsAppConfig,
     /// Inbound message sender
     inbound_tx: mpsc::Sender<InboundMessage>,
-    /// Inbound message receiver (taken by the channel registry)
-    #[allow(dead_code)]
-    inbound_rx: Option<mpsc::Receiver<InboundMessage>>,
     /// Bridge process manager
     bridge_manager: BridgeManager,
     /// JSON-RPC client for communicating with the bridge
@@ -70,7 +67,7 @@ pub struct WhatsAppChannel {
 impl WhatsAppChannel {
     /// Create a new WhatsApp channel
     pub fn new(id: impl Into<String>, config: WhatsAppConfig) -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::channel(100);
+        let (inbound_tx, _inbound_rx) = mpsc::channel(100);
 
         let info = ChannelInfo {
             id: ChannelId::new(id),
@@ -87,7 +84,6 @@ impl WhatsAppChannel {
             info,
             config,
             inbound_tx,
-            inbound_rx: Some(inbound_rx),
             bridge_manager,
             rpc_client: None,
             pairing_state: Arc::new(RwLock::new(PairingState::Idle)),

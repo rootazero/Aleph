@@ -597,11 +597,11 @@ pub async fn handle_test_connection(
     _config: Arc<RwLock<Config>>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
-    #[allow(dead_code)]
     struct Params {
         provider_type: String,
         api_key: Option<String>,
         secret_name: Option<String>,
+        #[allow(dead_code)] // Deserialized from RPC params; reserved for actual connection test
         base_url: Option<String>,
         model: Option<String>,
     }

@@ -34,12 +34,12 @@ pub enum InvitationError {
 struct PendingInvitation {
     /// Unique guest ID
     guest_id: String,
-    /// Guest display name
+    /// Guest display name (stored for future admin inspection)
     #[allow(dead_code)]
     guest_name: String,
     /// Encrypted invitation token (the secret shared with guest)
     token: String,
-    /// When this invitation was created (Unix timestamp milliseconds)
+    /// When this invitation was created (stored for future audit/admin)
     #[allow(dead_code)]
     created_at: i64,
     /// When this invitation expires
