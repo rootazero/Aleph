@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::agent_loop::overflow::OverflowDetector;
+use crate::agent_loop::ContextProvider;
 use crate::components::{
     ExecutionSession, SessionCompactor, SessionPart, ToolCallStatus,
 };
@@ -18,6 +19,8 @@ pub struct MessageBuilder {
     compactor: Option<Arc<SessionCompactor>>,
     /// Optional overflow detector for token limit warnings
     overflow_detector: Option<Arc<OverflowDetector>>,
+    /// Context providers for injecting additional context
+    context_providers: Vec<Box<dyn ContextProvider>>,
 }
 
 impl MessageBuilder {
@@ -27,6 +30,7 @@ impl MessageBuilder {
             config,
             compactor: None,
             overflow_detector: None,
+            context_providers: Vec::new(),
         }
     }
 
@@ -39,6 +43,7 @@ impl MessageBuilder {
             config,
             compactor: Some(compactor),
             overflow_detector: None,
+            context_providers: Vec::new(),
         }
     }
 
@@ -54,6 +59,7 @@ impl MessageBuilder {
             config,
             compactor: None,
             overflow_detector: Some(detector),
+            context_providers: Vec::new(),
         }
     }
 
@@ -69,7 +75,17 @@ impl MessageBuilder {
             config,
             compactor,
             overflow_detector: detector,
+            context_providers: Vec::new(),
         }
+    }
+
+    /// Add context providers to the message builder
+    ///
+    /// Context providers inject additional context into messages at build time.
+    /// Providers are sorted by priority (descending) before injection.
+    pub fn with_providers(mut self, providers: Vec<Box<dyn ContextProvider>>) -> Self {
+        self.context_providers = providers;
+        self
     }
 
     /// Check if compactor is set (for testing)
@@ -227,7 +243,8 @@ impl MessageBuilder {
     ///
     /// This is the main entry point that:
     /// 1. Converts filtered parts to messages
-    /// 2. Injects system reminders if needed
+    /// 2. Injects context from ContextProviders (sorted by priority)
+    /// 3. Injects system reminders if needed
     pub fn build_messages(
         &self,
         session: &ExecutionSession,
@@ -235,12 +252,42 @@ impl MessageBuilder {
     ) -> Vec<Message> {
         let mut messages = self.parts_to_messages(filtered_parts);
 
+        // Inject context from all ContextProviders (sorted by priority, descending)
+        self.inject_context_providers(&mut messages);
+
         // Inject reminders if enabled and threshold met
         if self.config.inject_reminders {
             self.inject_reminders(&mut messages, session);
         }
 
         messages
+    }
+
+    /// Inject context from all ContextProviders
+    ///
+    /// Providers are sorted by priority (descending) so higher priority
+    /// contexts appear first in the prompt. Each context is injected as
+    /// a user message (following the pattern used for system reminders).
+    fn inject_context_providers(&self, messages: &mut Vec<Message>) {
+        if self.context_providers.is_empty() {
+            return;
+        }
+
+        // Sort providers by priority (descending)
+        let mut providers: Vec<_> = self.context_providers.iter().collect();
+        providers.sort_by_key(|p| -p.priority());
+
+        // Inject contexts as user messages
+        for provider in providers {
+            if let Some(context) = provider.get_context() {
+                tracing::debug!(
+                    provider = provider.name(),
+                    priority = provider.priority(),
+                    "Injecting context from provider"
+                );
+                messages.push(Message::user(context));
+            }
+        }
     }
 
     /// Inject system reminders by wrapping the last user message
