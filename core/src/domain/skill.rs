@@ -102,7 +102,7 @@ impl From<String> for PluginId {
 
 /// Where a skill originates from. Determines override priority.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum SkillSource {
     /// Shipped with the binary.
     Bundled,
