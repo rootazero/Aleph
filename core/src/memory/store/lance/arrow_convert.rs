@@ -14,7 +14,8 @@ use arrow_array::{
 
 use crate::error::AlephError;
 use crate::memory::context::{
-    ContextAnchor, FactSource, FactSpecificity, FactType, MemoryEntry, MemoryFact, TemporalScope,
+    ContextAnchor, FactSource, FactSpecificity, FactType, MemoryCategory, MemoryEntry, MemoryFact,
+    MemoryLayer, TemporalScope,
 };
 use crate::memory::store::{GraphEdge, GraphNode};
 
@@ -141,6 +142,8 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
         StringArray::from_iter_values(facts.iter().map(|f| f.specificity.as_str()));
     let temporal_scope_arr =
         StringArray::from_iter_values(facts.iter().map(|f| f.temporal_scope.as_str()));
+    let layer_arr = StringArray::from_iter_values(facts.iter().map(|f| f.layer.as_str()));
+    let category_arr = StringArray::from_iter_values(facts.iter().map(|f| f.category.as_str()));
     let path_arr = StringArray::from_iter_values(facts.iter().map(|f| f.path.as_str()));
     let parent_path_arr =
         StringArray::from_iter_values(facts.iter().map(|f| f.parent_path.as_str()));
@@ -236,25 +239,27 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
             Arc::new(fact_source_arr),           // 3  fact_source
             Arc::new(specificity_arr),           // 4  specificity
             Arc::new(temporal_scope_arr),        // 5  temporal_scope
-            Arc::new(path_arr),                  // 6  path
-            Arc::new(parent_path_arr),           // 7  parent_path
-            Arc::new(namespace_arr),             // 8  namespace
-            Arc::new(workspace_arr),             // 9  workspace
-            Arc::new(tags_arr),                  // 10 tags
-            Arc::new(src_ids_arr),               // 11 source_memory_ids
-            Arc::new(content_hash_arr),          // 12 content_hash
-            Arc::new(confidence_arr),            // 13 confidence
-            Arc::new(decay_score_arr),           // 14 decay_score
-            Arc::new(is_valid_arr),              // 15 is_valid
-            Arc::new(invalidation_reason_arr),   // 16 invalidation_reason
-            Arc::new(embedding_model_arr),       // 17 embedding_model
-            Arc::new(created_at_arr),            // 18 created_at
-            Arc::new(updated_at_arr),            // 19 updated_at
-            Arc::new(decay_invalidated_at_arr),  // 20 decay_invalidated_at
-            Arc::new(version_arr),               // 21 version
-            Arc::new(vec_384),                   // 22 vec_384
-            Arc::new(vec_1024),                  // 23 vec_1024
-            Arc::new(vec_1536),                  // 24 vec_1536
+            Arc::new(layer_arr),                 // 6  layer
+            Arc::new(category_arr),              // 7  category
+            Arc::new(path_arr),                  // 8  path
+            Arc::new(parent_path_arr),           // 9  parent_path
+            Arc::new(namespace_arr),             // 10 namespace
+            Arc::new(workspace_arr),             // 11 workspace
+            Arc::new(tags_arr),                  // 12 tags
+            Arc::new(src_ids_arr),               // 13 source_memory_ids
+            Arc::new(content_hash_arr),          // 14 content_hash
+            Arc::new(confidence_arr),            // 15 confidence
+            Arc::new(decay_score_arr),           // 16 decay_score
+            Arc::new(is_valid_arr),              // 17 is_valid
+            Arc::new(invalidation_reason_arr),   // 18 invalidation_reason
+            Arc::new(embedding_model_arr),       // 19 embedding_model
+            Arc::new(created_at_arr),            // 20 created_at
+            Arc::new(updated_at_arr),            // 21 updated_at
+            Arc::new(decay_invalidated_at_arr),  // 22 decay_invalidated_at
+            Arc::new(version_arr),               // 23 version
+            Arc::new(vec_384),                   // 24 vec_384
+            Arc::new(vec_1024),                  // 25 vec_1024
+            Arc::new(vec_1536),                  // 26 vec_1536
         ],
     )
     .map_err(|e| conv_err(e))?;
@@ -275,6 +280,8 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
     let fact_source_col = col::<StringArray>(batch, "fact_source")?;
     let specificity_col = col::<StringArray>(batch, "specificity")?;
     let temporal_scope_col = col::<StringArray>(batch, "temporal_scope")?;
+    let layer_col = col::<StringArray>(batch, "layer").ok();
+    let category_col = col::<StringArray>(batch, "category").ok();
     let path_col = col::<StringArray>(batch, "path")?;
     let parent_path_col = col::<StringArray>(batch, "parent_path")?;
     let content_hash_col = col::<StringArray>(batch, "content_hash")?;
@@ -297,6 +304,14 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
 
     let mut facts = Vec::with_capacity(n);
     for i in 0..n {
+        let fact_type = FactType::from_str_or_other(fact_type_col.value(i));
+        let layer = layer_col
+            .map(|c| MemoryLayer::from_str_or_default(c.value(i)))
+            .unwrap_or(MemoryLayer::L2Detail);
+        let category = category_col
+            .map(|c| MemoryCategory::from_str_or_default(c.value(i)))
+            .unwrap_or_else(|| fact_type.default_category());
+
         // Determine embedding: prefer vec_384, then 1024, then 1536.
         let embedding = vec_384_col
             .and_then(|c| read_vector(c, i))
@@ -306,11 +321,13 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
         let fact = MemoryFact {
             id: id_col.value(i).to_string(),
             content: content_col.value(i).to_string(),
-            fact_type: FactType::from_str_or_other(fact_type_col.value(i)),
+            fact_type,
             fact_source: FactSource::from_str_or_default(fact_source_col.value(i)),
             specificity: FactSpecificity::from_str_or_default(specificity_col.value(i)),
             temporal_scope: TemporalScope::from_str_or_default(temporal_scope_col.value(i)),
             path: path_col.value(i).to_string(),
+            layer,
+            category,
             parent_path: parent_path_col.value(i).to_string(),
             content_hash: content_hash_col.value(i).to_string(),
             embedding_model: embedding_model_col.value(i).to_string(),
@@ -730,6 +747,20 @@ mod tests {
         );
         assert_eq!(f.decay_invalidated_at, Some(1700001000));
         assert!(f.embedding.is_none());
+    }
+
+    #[test]
+    fn fact_roundtrip_preserves_layer_and_category() {
+        let mut original = make_fact_with_embedding();
+        original.layer = MemoryLayer::L1Overview;
+        original.category = MemoryCategory::Patterns;
+
+        let batch = facts_to_record_batch(&[original.clone()]).expect("to_batch");
+        let recovered = record_batch_to_facts(&batch).expect("from_batch");
+
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].layer, MemoryLayer::L1Overview);
+        assert_eq!(recovered[0].category, MemoryCategory::Patterns);
     }
 
     #[test]

@@ -3,8 +3,9 @@
 use alephcore::resilience::database::StateDatabase;
 use alephcore::memory::store::{LanceMemoryBackend, MemoryBackend};
 use alephcore::memory::{
-    ContextAnchor, FactSpecificity, FactType, MemoryEntry, MemoryFact, MemoryIngestion,
-    MemoryRetrieval, PromptAugmenter, SmartEmbedder, TemporalScope, EMBEDDING_DIM,
+    ContextAnchor, FactSpecificity, FactType, MemoryCategory, MemoryEntry, MemoryFact,
+    MemoryIngestion, MemoryLayer, MemoryRetrieval, PromptAugmenter, SmartEmbedder, TemporalScope,
+    EMBEDDING_DIM,
 };
 use alephcore::{MemoryConfig, MemoryStats};
 use std::sync::Arc;
@@ -122,6 +123,8 @@ impl MemoryContext {
         embedding: Vec<f32>,
         is_valid: bool,
     ) -> MemoryFact {
+        let category = fact_type.default_category();
+
         MemoryFact {
             id: id.to_string(),
             content: content.to_string(),
@@ -142,6 +145,8 @@ impl MemoryContext {
             temporal_scope: TemporalScope::default(),
             similarity_score: None,
             path: String::new(),
+            layer: MemoryLayer::L2Detail,
+            category,
             fact_source: alephcore::memory::context::FactSource::Extracted,
             content_hash: String::new(),
             parent_path: String::new(),

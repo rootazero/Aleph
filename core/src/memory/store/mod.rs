@@ -216,6 +216,14 @@ pub trait MemoryStore: Send + Sync {
         workspace: &str,
     ) -> Result<Option<MemoryFact>, AlephError>;
 
+    /// Retrieve facts by VFS path prefix with additional filters.
+    async fn get_facts_by_path_prefix(
+        &self,
+        path_prefix: &str,
+        filter: &SearchFilter,
+        limit: usize,
+    ) -> Result<Vec<MemoryFact>, AlephError>;
+
     // -- Statistics & bulk --------------------------------------------------
 
     /// Count facts matching the given filter.

@@ -382,7 +382,10 @@ mod tests {
     async fn test_full_embedding_evolution_flow() {
         use crate::memory::store::MemoryBackend;
         use crate::memory::embedding_migration::EmbeddingMigration;
-        use crate::memory::context::{MemoryFact, FactType, FactSpecificity, TemporalScope, FactSource};
+        use crate::memory::context::{
+            FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer,
+            TemporalScope,
+        };
 
         // TODO: Create LanceMemoryBackend for test
         let db: MemoryBackend = unimplemented!("Migrate test to use LanceMemoryBackend");
@@ -404,6 +407,8 @@ mod tests {
             temporal_scope: TemporalScope::Contextual,
             similarity_score: None,
             path: "aleph://user/preferences/".to_string(),
+            layer: MemoryLayer::L2Detail,
+            category: MemoryCategory::Preferences,
             fact_source: FactSource::Extracted,
             content_hash: "abc123".to_string(),
             parent_path: "aleph://user/".to_string(),

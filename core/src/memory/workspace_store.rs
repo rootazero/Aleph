@@ -6,7 +6,9 @@
 //! persistence layer.
 
 use crate::error::AlephError;
-use crate::memory::context::{FactSource, FactSpecificity, FactType, MemoryFact, TemporalScope};
+use crate::memory::context::{
+    FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
+};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::MemoryBackend;
 use crate::memory::store::MemoryStore;
@@ -39,6 +41,8 @@ pub async fn create_workspace(db: &MemoryBackend, ws: &Workspace) -> Result<(), 
         temporal_scope: TemporalScope::Permanent,
         similarity_score: None,
         path,
+        layer: MemoryLayer::L2Detail,
+        category: MemoryCategory::Entities,
         fact_source: FactSource::Manual,
         content_hash: String::new(),
         parent_path,
