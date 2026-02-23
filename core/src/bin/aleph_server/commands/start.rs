@@ -815,14 +815,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         full_config.gateway.require_auth, args.daemon,
     );
 
-    register_session_handlers(&mut server, &session_manager);
-    if !args.daemon {
-        println!("  - sessions.list   : List all sessions");
-        println!("  - sessions.history: Get session message history");
-        println!("  - sessions.reset  : Clear session messages");
-        println!("  - sessions.delete : Delete a session");
-        println!();
-    }
+    register_session_handlers(&mut server, &session_manager, args.daemon);
 
     let channel_registry = initialize_channels(&mut server, args.daemon).await;
     initialize_inbound_router(channel_registry, router, args.daemon).await;
@@ -957,6 +950,7 @@ fn register_guest_handlers(
 fn register_session_handlers(
     server: &mut GatewayServer,
     session_manager: &Arc<SessionManager>,
+    daemon: bool,
 ) {
     // sessions.list
     let sm_list = session_manager.clone();
@@ -985,6 +979,15 @@ fn register_session_handlers(
         let sm = sm_delete.clone();
         async move { session_handlers::handle_delete_db(req, sm).await }
     });
+
+    if !daemon {
+        println!("Session methods:");
+        println!("  - sessions.list   : List all sessions");
+        println!("  - sessions.history: Get session message history");
+        println!("  - sessions.reset  : Clear session messages");
+        println!("  - sessions.delete : Delete a session");
+        println!();
+    }
 }
 
 #[cfg(feature = "gateway")]
