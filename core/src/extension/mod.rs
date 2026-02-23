@@ -163,6 +163,8 @@ pub struct ExtensionManager {
 }
 
 impl ExtensionManager {
+    // ── Constructors ──────────────────────────────────────────────────────────
+
     /// Create a new extension manager
     pub async fn new(config: ExtensionConfig) -> ExtensionResult<Self> {
         let discovery = DiscoveryManager::new(config.discovery.clone())?;
@@ -193,119 +195,27 @@ impl ExtensionManager {
         Self::new(ExtensionConfig::default()).await
     }
 
-    /// Load all extensions
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    /// Load all extensions.
+    ///
+    /// Delegates the discovery-and-registration loops to `ComponentLoader::load_all()`,
+    /// then marks the cache as loaded.
     pub async fn load_all(&self) -> ExtensionResult<LoadSummary> {
-        let mut summary = LoadSummary::default();
+        let summary = self.loader.load_all(
+            &self.discovery,
+            &self.registry,
+            &self.hook_executor,
+        ).await?;
 
-        // 1. Load skills
-        let skill_dirs = self.discovery.discover_skill_dirs()?;
-        for dir in skill_dirs {
-            match self.loader.load_skill(&dir.path).await {
-                Ok(skill) => {
-                    self.registry.write().await.register_skill(skill);
-                    summary.skills_loaded += 1;
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to load skill from {:?}: {}", dir.path, e);
-                    summary.errors.push(format!("{}: {}", dir.path.display(), e));
-                }
-            }
-        }
-
-        // 2. Load commands
-        let command_dirs = self.discovery.discover_command_dirs()?;
-        for dir in command_dirs {
-            match self.loader.load_command(&dir.path).await {
-                Ok(cmd) => {
-                    self.registry.write().await.register_command(cmd);
-                    summary.commands_loaded += 1;
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to load command from {:?}: {}", dir.path, e);
-                    summary.errors.push(format!("{}: {}", dir.path.display(), e));
-                }
-            }
-        }
-
-        // 3. Load agents
-        let agent_dirs = self.discovery.discover_agent_dirs()?;
-        for dir in agent_dirs {
-            match self.loader.load_agent(&dir.path).await {
-                Ok(agent) => {
-                    self.registry.write().await.register_agent(agent);
-                    summary.agents_loaded += 1;
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to load agent from {:?}: {}", dir.path, e);
-                    summary.errors.push(format!("{}: {}", dir.path.display(), e));
-                }
-            }
-        }
-
-        // 4. Load plugins
-        let plugin_dirs = self.discovery.discover_plugin_dirs()?;
-        for dir in plugin_dirs {
-            match self.loader.load_plugin(&dir.path).await {
-                Ok(plugin) => {
-                    // Register plugin hooks
-                    if !plugin.hooks.is_empty() {
-                        let mut executor = self.hook_executor.write().await;
-                        for hook in plugin.hooks.clone() {
-                            executor.add_hook(hook);
-                            summary.hooks_loaded += 1;
-                        }
-                    }
-
-                    // Register plugin components
-                    let reg = &mut *self.registry.write().await;
-                    for skill in plugin.skills.clone() {
-                        reg.register_skill(skill);
-                        summary.skills_loaded += 1;
-                    }
-                    for cmd in plugin.commands.clone() {
-                        reg.register_command(cmd);
-                        summary.commands_loaded += 1;
-                    }
-                    for agent in plugin.agents.clone() {
-                        reg.register_agent(agent);
-                        summary.agents_loaded += 1;
-                    }
-                    reg.register_plugin(plugin);
-                    summary.plugins_loaded += 1;
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to load plugin from {:?}: {}", dir.path, e);
-                    summary.errors.push(format!("{}: {}", dir.path.display(), e));
-                }
-            }
-        }
-
-        // 5. Load runtime plugins (Node.js, WASM)
-        // Note: Runtime plugins are discovered separately and loaded via PluginLoader.
-        // They register tools and hooks with the PluginRegistry (not ComponentRegistry).
-        // For now, runtime plugin discovery is handled via separate API calls.
-        // TODO: Add automatic discovery and loading of runtime plugins here.
-
-        tracing::info!(
-            "Extension loading complete: {} skills, {} commands, {} agents, {} plugins, {} hooks",
-            summary.skills_loaded,
-            summary.commands_loaded,
-            summary.agents_loaded,
-            summary.plugins_loaded,
-            summary.hooks_loaded
-        );
-
-        // Update cache state
-        {
-            let mut state = self.cache_state.write().await;
-            state.loaded = true;
-            state.loaded_at = Some(Instant::now());
-        }
+        let mut cache = self.cache_state.write().await;
+        cache.loaded = true;
+        cache.loaded_at = Some(Instant::now());
 
         Ok(summary)
     }
 
-    /// Ensure extensions are loaded (lazy-loading entry point)
+    /// Ensure extensions are loaded (lazy-loading entry point).
     ///
     /// This method is idempotent - calling it multiple times only loads once.
     /// Use `reload()` to force a fresh load.
@@ -361,6 +271,8 @@ impl ExtensionManager {
         self.cache_state.read().await.loaded
     }
 
+    // ── Skill / Command / Agent Queries ───────────────────────────────────────
+
     /// Get all skills (from enabled sources)
     pub async fn get_all_skills(&self) -> Vec<ExtensionSkill> {
         self.registry.read().await.get_all_skills()
@@ -396,6 +308,8 @@ impl ExtensionManager {
         self.registry.read().await.get_agent(name)
     }
 
+    // ── Discovery Access ─────────────────────────────────────────────────────
+
     /// Get the merged configuration
     pub fn get_config(&self) -> &AlephConfig {
         self.config_manager.get_config()
@@ -411,9 +325,7 @@ impl ExtensionManager {
         Ok(self.discovery.aleph_home()?)
     }
 
-    // =========================================================================
-    // Hook Execution
-    // =========================================================================
+    // ── Hook Execution ────────────────────────────────────────────────────────
 
     /// Execute hooks for an event
     pub async fn execute_hooks(
@@ -429,9 +341,7 @@ impl ExtensionManager {
         self.hook_executor.read().await.hook_count()
     }
 
-    // =========================================================================
-    // Runtime Plugin Operations (Node.js, WASM)
-    // =========================================================================
+    // ── Plugin Execution ──────────────────────────────────────────────────────
 
     /// Call a tool on a runtime plugin.
     ///
@@ -595,9 +505,7 @@ impl ExtensionManager {
         self.plugin_loader.write().await.unload_plugin(plugin_id)
     }
 
-    // =========================================================================
-    // Service Lifecycle
-    // =========================================================================
+    // ── Service Management ────────────────────────────────────────────────────
 
     /// Start a background service.
     ///
@@ -732,9 +640,7 @@ impl ExtensionManager {
         self.service_manager.read().await
     }
 
-    // =========================================================================
-    // Skill/Command Execution
-    // =========================================================================
+    // ── Skill / Command Execution ─────────────────────────────────────────────
 
     /// Execute a skill with arguments
     ///
@@ -766,9 +672,7 @@ impl ExtensionManager {
         Ok(cmd.with_arguments(arguments))
     }
 
-    // =========================================================================
-    // Skill Tool (LLM-callable)
-    // =========================================================================
+    // ── Skill Tool (LLM-callable) ─────────────────────────────────────────────
 
     /// Invoke a skill as an LLM tool
     ///
@@ -813,9 +717,7 @@ impl ExtensionManager {
         skill_tool::build_skill_tool_description(&skills)
     }
 
-    // =========================================================================
-    // MCP Server Access
-    // =========================================================================
+    // ── Configuration ─────────────────────────────────────────────────────────
 
     /// Get all MCP server configurations from loaded plugins
     pub async fn get_mcp_servers(&self) -> HashMap<String, McpServerConfig> {
@@ -859,9 +761,7 @@ impl ExtensionManager {
         servers
     }
 
-    // =========================================================================
-    // Plugin Info
-    // =========================================================================
+    // ── Plugin Info ───────────────────────────────────────────────────────────
 
     /// Get all loaded plugin info
     pub async fn get_plugin_info(&self) -> Vec<PluginInfo> {
@@ -879,9 +779,7 @@ impl ExtensionManager {
         self.registry.read().await.get_plugin(name).cloned()
     }
 
-    // =========================================================================
-    // Primary/Sub-Agent Support
-    // =========================================================================
+    // ── Primary / Sub-Agent Support ───────────────────────────────────────────
 
     /// Get all primary agents (can be selected by user)
     pub async fn get_primary_agents(&self) -> Vec<ExtensionAgent> {
@@ -905,9 +803,7 @@ impl ExtensionManager {
             .collect()
     }
 
-    // =========================================================================
-    // Configuration Access
-    // =========================================================================
+    // ── Configuration Access ──────────────────────────────────────────────────
 
     /// Get the default model from configuration
     pub fn get_default_model(&self) -> Option<&str> {
@@ -932,35 +828,6 @@ impl ExtensionManager {
             .as_ref()
             .map(|v| v.iter().map(|s| s.as_str()).collect())
             .unwrap_or_default()
-    }
-}
-
-/// Summary of extension loading
-#[derive(Debug, Default)]
-pub struct LoadSummary {
-    /// Number of skills loaded
-    pub skills_loaded: usize,
-    /// Number of commands loaded
-    pub commands_loaded: usize,
-    /// Number of agents loaded
-    pub agents_loaded: usize,
-    /// Number of plugins loaded
-    pub plugins_loaded: usize,
-    /// Number of hooks loaded
-    pub hooks_loaded: usize,
-    /// Errors encountered during loading
-    pub errors: Vec<String>,
-}
-
-impl LoadSummary {
-    /// Check if loading was successful (no errors)
-    pub fn is_success(&self) -> bool {
-        self.errors.is_empty()
-    }
-
-    /// Total components loaded
-    pub fn total_loaded(&self) -> usize {
-        self.skills_loaded + self.commands_loaded + self.agents_loaded + self.plugins_loaded
     }
 }
 
