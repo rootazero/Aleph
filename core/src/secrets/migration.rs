@@ -3,8 +3,7 @@
 //! Detects plaintext api_key fields in config.toml and migrates them
 //! to the encrypted vault, replacing with secret_name references.
 
-use std::path::Path;
-use tracing::{info, warn};
+use tracing::info;
 
 use super::types::{EntryMetadata, SecretError};
 use super::vault::SecretVault;

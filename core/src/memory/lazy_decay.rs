@@ -7,7 +7,6 @@ use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::decay::{DecayConfig, MemoryStrength};
-use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Result of lazy decay evaluation

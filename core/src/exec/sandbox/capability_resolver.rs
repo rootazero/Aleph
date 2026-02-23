@@ -1,6 +1,6 @@
 use crate::error::{AlephError, Result};
 use super::capabilities::{Capabilities, FileSystemCapability};
-use super::parameter_binding::{CapabilityOverrides, FileSystemOverride, ParameterBinding, ValidationRule, MappingType};
+use super::parameter_binding::{CapabilityOverrides, ParameterBinding, ValidationRule, MappingType};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::fs;

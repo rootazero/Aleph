@@ -9,7 +9,7 @@
 //! This is a platform-specific module. The macOS implementation uses
 //! CGEvent APIs for input simulation.
 
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::perception::state_bus::Rect;
 
 /// Simulation executor for UI interactions.

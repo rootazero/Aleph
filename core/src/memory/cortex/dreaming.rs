@@ -5,7 +5,7 @@
 
 use crate::error::Result;
 use crate::memory::cortex::{
-    DistillationMode, DistillationPriority, DistillationService, DistillationTask, EvolutionStatus,
+    DistillationMode, DistillationPriority, DistillationService, DistillationTask,
 };
 use crate::memory::store::MemoryBackend;
 use crate::memory::value_estimator::cortex::CortexValueEstimator;

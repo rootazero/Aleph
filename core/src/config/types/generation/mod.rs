@@ -14,6 +14,7 @@ mod provider;
 
 // Re-export all types for backward compatibility
 pub use config::GenerationConfig;
+#[allow(unused_imports)]
 pub use defaults::GenerationDefaults;
 pub use provider::GenerationProviderConfig;
 

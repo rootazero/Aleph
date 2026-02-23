@@ -24,12 +24,11 @@
 
 use crate::error::{AlephError, Result};
 use crate::perception::simulation_executor::SimulationExecutor;
-use crate::perception::state_bus::{StateCache, SystemStateBus};
+use crate::perception::state_bus::SystemStateBus;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 /// Action dispatcher with closed-loop validation.

@@ -4,7 +4,7 @@
 //! "muscle memory" execution by replaying verified patterns.
 
 use crate::error::{AlephError, Result};
-use crate::memory::cortex::{EvolutionStatus, Experience, ParameterMapping, ReplayMatch};
+use crate::memory::cortex::{Experience, ParameterMapping, ReplayMatch};
 use crate::memory::store::MemoryBackend;
 use crate::memory::smart_embedder::SmartEmbedder;
 use std::sync::Arc;

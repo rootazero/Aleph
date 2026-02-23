@@ -9,7 +9,6 @@ use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryFact};
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use super::config::ToolRetrievalConfig;
-use std::sync::Arc;
 
 /// Hydration level for a retrieved tool
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
