@@ -74,7 +74,7 @@ pub mod channel;
 #[cfg(feature = "gateway")]
 pub mod channel_registry;
 #[cfg(feature = "gateway")]
-pub mod channels;
+pub mod interfaces;
 #[cfg(feature = "gateway")]
 pub mod device_store;
 #[cfg(feature = "gateway")]

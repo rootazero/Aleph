@@ -142,7 +142,7 @@ impl IMessageConfig {
             DmPolicy::Disabled => false,
             DmPolicy::Pairing => true, // Will prompt for pairing
             DmPolicy::Allowlist => {
-                crate::gateway::channels::imessage::target::is_allowed_sender(
+                crate::gateway::interfaces::imessage::target::is_allowed_sender(
                     sender,
                     &self.allow_from,
                 )
