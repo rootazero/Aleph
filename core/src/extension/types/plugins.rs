@@ -161,6 +161,43 @@ impl PluginStatus {
     }
 }
 
+// =============================================================================
+// Load Summary
+// =============================================================================
+
+/// Summary of extension loading returned by ComponentLoader::load_all()
+#[derive(Debug, Default)]
+pub struct LoadSummary {
+    /// Number of skills loaded
+    pub skills_loaded: usize,
+    /// Number of commands loaded
+    pub commands_loaded: usize,
+    /// Number of agents loaded
+    pub agents_loaded: usize,
+    /// Number of plugins loaded
+    pub plugins_loaded: usize,
+    /// Number of hooks loaded
+    pub hooks_loaded: usize,
+    /// Errors encountered during loading
+    pub errors: Vec<String>,
+}
+
+impl LoadSummary {
+    /// Check if loading was successful (no errors)
+    pub fn is_success(&self) -> bool {
+        self.errors.is_empty()
+    }
+
+    /// Total components loaded
+    pub fn total_loaded(&self) -> usize {
+        self.skills_loaded + self.commands_loaded + self.agents_loaded + self.plugins_loaded
+    }
+}
+
+// =============================================================================
+// Plugin Record
+// =============================================================================
+
 /// Plugin record - comprehensive plugin information for registry tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginRecord {
