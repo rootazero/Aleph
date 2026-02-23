@@ -19,6 +19,7 @@ pub mod ai_retrieval;
 pub mod audit;
 pub mod augmentation;
 pub mod cleanup;
+pub mod composer;
 pub mod compression;
 pub mod context;
 pub mod decay;
@@ -62,6 +63,7 @@ pub use audit::{
 };
 pub use augmentation::PromptAugmenter;
 pub use cleanup::CleanupService;
+pub use composer::{ComposedContext, CompositionRequest, ContextComposer};
 pub use compression::{
     CompressionPriority, CompressionScheduler, CompressionService, CompressionSignal,
     CompressionTrigger, DetectionResult, FactExtractor, SignalDetector, SignalKeywords,
