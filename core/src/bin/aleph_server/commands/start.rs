@@ -47,13 +47,13 @@ use alephcore::gateway::security::{TokenManager, PairingManager};
 #[cfg(feature = "gateway")]
 use alephcore::gateway::device_store::DeviceStore;
 #[cfg(all(feature = "gateway", target_os = "macos"))]
-use alephcore::gateway::channels::imessage::{IMessageChannel, IMessageConfig};
+use alephcore::gateway::interfaces::imessage::{IMessageChannel, IMessageConfig};
 #[cfg(all(feature = "gateway", feature = "telegram"))]
-use alephcore::gateway::channels::telegram::{TelegramChannel, TelegramConfig};
+use alephcore::gateway::interfaces::telegram::{TelegramChannel, TelegramConfig};
 #[cfg(all(feature = "gateway", feature = "discord"))]
-use alephcore::gateway::channels::discord::{DiscordChannel, DiscordConfig};
+use alephcore::gateway::interfaces::discord::{DiscordChannel, DiscordConfig};
 #[cfg(all(feature = "gateway", feature = "whatsapp"))]
-use alephcore::gateway::channels::whatsapp::{WhatsAppChannel, WhatsAppConfig};
+use alephcore::gateway::interfaces::whatsapp::{WhatsAppChannel, WhatsAppConfig};
 #[cfg(feature = "gateway")]
 use alephcore::executor::BuiltinToolRegistry;
 #[cfg(feature = "gateway")]

@@ -1,10 +1,12 @@
-//! Channel Implementations
+//! Interface Implementations
 //!
-//! This module contains concrete channel implementations for various messaging platforms.
+//! This module contains concrete interface implementations for various messaging platforms.
+//! Each interface represents a connection endpoint (Telegram, Discord, iMessage, CLI, etc.)
+//! through which users interact with the Aleph Server.
 //!
-//! # Available Channels
+//! # Available Interfaces
 //!
-//! - **CLI**: Command-line interface channel for testing and local use
+//! - **CLI**: Command-line interface for testing and local use
 //! - **iMessage**: macOS iMessage integration (requires Full Disk Access)
 //! - **Telegram**: Telegram Bot API integration (requires `telegram` feature)
 //! - **Discord**: Discord Bot API integration (requires `discord` feature)

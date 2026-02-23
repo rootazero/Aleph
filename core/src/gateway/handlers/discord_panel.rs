@@ -21,7 +21,7 @@ use tracing::{debug, info};
 
 use crate::gateway::channel::{ChannelId, ChannelStatus};
 use crate::gateway::channel_registry::ChannelRegistry;
-use crate::gateway::channels::discord::api;
+use crate::gateway::interfaces::discord::api;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 
 // ---------------------------------------------------------------------------

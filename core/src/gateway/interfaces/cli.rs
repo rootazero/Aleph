@@ -6,7 +6,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use alephcore::gateway::channels::CliChannel;
+//! use alephcore::gateway::interfaces::CliChannel;
 //!
 //! let channel = CliChannel::new("cli".to_string());
 //! channel.start().await?;
