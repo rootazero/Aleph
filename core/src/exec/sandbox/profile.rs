@@ -11,8 +11,8 @@ impl ProfileGenerator {
             .prefix("aleph-sandbox-")
             .tempdir()?;
         let path = temp_dir.path().to_path_buf();
-        // Keep the directory by converting to path (prevents auto-cleanup)
-        let _ = temp_dir.into_path();
+        // Keep the directory (prevents auto-cleanup on drop)
+        let _ = temp_dir.keep();
         Ok(path)
     }
 

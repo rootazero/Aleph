@@ -46,9 +46,8 @@ impl AuditQuery {
 
         // Check filesystem capabilities
         for fs_cap in &capabilities.filesystem {
-            match fs_cap {
-                FileSystemCapability::ReadWrite { .. } => score += 20,
-                _ => {}
+            if let FileSystemCapability::ReadWrite { .. } = fs_cap {
+                score += 20;
             }
         }
 

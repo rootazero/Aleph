@@ -294,7 +294,7 @@ impl CriticAgent {
         let redundant_reads = self.count_redundant_file_reads(chain);
         let redundancy_penalty = redundant_reads as f32 * 0.1;
 
-        (base_score - redundancy_penalty).max(0.0).min(1.0)
+        (base_score - redundancy_penalty).clamp(0.0, 1.0)
     }
 
     /// Generate a critic report with optimization suggestions using LLM

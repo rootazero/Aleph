@@ -86,7 +86,7 @@ impl CortexValueEstimator {
         let token_efficiency = experience.token_efficiency.unwrap_or(0.5);
 
         // Get user feedback (default to 0.5 if not available)
-        let user_feedback = Some(0.5); // TODO: Implement user feedback collection
+        let user_feedback = 0.5; // TODO: Implement user feedback collection
 
         // Get novelty score (default to 0.5 if not available)
         let novelty_score = experience.novelty_score.unwrap_or(0.5);
@@ -94,13 +94,13 @@ impl CortexValueEstimator {
         // Calculate weighted final score
         let final_score = self.weight_success * success_rate
             + self.weight_efficiency * token_efficiency
-            + self.weight_feedback * user_feedback.unwrap_or(0.5)
+            + self.weight_feedback * user_feedback
             + self.weight_novelty * novelty_score;
 
         Ok(ExperienceScore {
             success_rate,
             token_efficiency,
-            user_feedback,
+            user_feedback: Some(user_feedback),
             novelty_score,
             final_score: final_score.clamp(0.0, 1.0),
         })
@@ -159,11 +159,11 @@ fn levenshtein_distance(s1: &str, s2: &str) -> usize {
     let mut matrix = vec![vec![0; len2 + 1]; len1 + 1];
 
     // Initialize first row and column
-    for i in 0..=len1 {
-        matrix[i][0] = i;
+    for (i, row) in matrix.iter_mut().enumerate().take(len1 + 1) {
+        row[0] = i;
     }
-    for j in 0..=len2 {
-        matrix[0][j] = j;
+    for (j, val) in matrix[0].iter_mut().enumerate().take(len2 + 1) {
+        *val = j;
     }
 
     // Fill matrix

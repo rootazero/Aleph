@@ -200,11 +200,11 @@ impl YamlSpec {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, YamlSpecError> {
         let content = std::fs::read_to_string(path.as_ref())
             .map_err(|e| YamlSpecError::IoError(e.to_string()))?;
-        Self::from_str(&content)
+        Self::parse(&content)
     }
 
     /// Parse a YAML spec from a string.
-    pub fn from_str(content: &str) -> Result<Self, YamlSpecError> {
+    pub fn parse(content: &str) -> Result<Self, YamlSpecError> {
         serde_yaml::from_str(content)
             .map_err(|e| YamlSpecError::ParseError(e.to_string()))
     }
@@ -351,7 +351,7 @@ scenarios:
 
     #[test]
     fn test_parse_yaml_spec() {
-        let spec = YamlSpec::from_str(SAMPLE_SPEC).unwrap();
+        let spec = YamlSpec::parse(SAMPLE_SPEC).unwrap();
         assert_eq!(spec.name, "Test Spec");
         assert_eq!(spec.version, "1.0");
         assert_eq!(spec.scenarios.len(), 1);
@@ -359,7 +359,7 @@ scenarios:
 
     #[test]
     fn test_scenario_to_test_case() {
-        let spec = YamlSpec::from_str(SAMPLE_SPEC).unwrap();
+        let spec = YamlSpec::parse(SAMPLE_SPEC).unwrap();
         let test_cases = spec.to_test_cases();
         assert_eq!(test_cases.len(), 1);
         assert_eq!(test_cases[0].name, "Simple test");
@@ -392,7 +392,7 @@ scenarios:
           prompt: "Validate this"
           criteria: "Must pass"
 "#;
-        let spec = YamlSpec::from_str(spec_with_judge).unwrap();
+        let spec = YamlSpec::parse(spec_with_judge).unwrap();
         assert_eq!(spec.deterministic_scenarios().len(), 1);
         assert_eq!(spec.semantic_scenarios().len(), 1);
     }
