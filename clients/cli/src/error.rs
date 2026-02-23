@@ -47,3 +47,9 @@ impl From<anyhow::Error> for CliError {
         CliError::Other(err.to_string())
     }
 }
+
+impl From<tokio_tungstenite::tungstenite::Error> for CliError {
+    fn from(err: tokio_tungstenite::tungstenite::Error) -> Self {
+        CliError::WebSocket(err.to_string())
+    }
+}
