@@ -20,7 +20,8 @@ use crate::agent_loop::{AgentLoop, LoopConfig, LoopResult, RequestContext, RunCo
 use crate::compressor::NoOpCompressor;
 use crate::dispatcher::UnifiedTool;
 use crate::executor::{SingleStepExecutor, ToolRegistry};
-use crate::thinker::{ProviderRegistry as ThinkerProviderRegistry, SingleProviderRegistry, Thinker, ThinkerConfig};
+use crate::gateway::handlers::plugins::get_extension_manager;
+use crate::thinker::{PromptConfig, ProviderRegistry as ThinkerProviderRegistry, SingleProviderRegistry, Thinker, ThinkerConfig};
 use aleph_protocol::IdentityContext;
 
 /// Configuration for the execution engine
@@ -452,7 +453,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Create Thinker with provider
         let provider = self.provider_registry.default_provider();
         let thinker_registry = Arc::new(SingleProviderRegistry::new(provider));
-        let thinker = Arc::new(Thinker::new(thinker_registry, ThinkerConfig::default()));
+
+        // Inject available skill instructions from SkillSystem snapshot
+        let skill_instructions = if let Ok(manager) = get_extension_manager() {
+            let snapshot = manager.skill_system().current_snapshot().await;
+            if snapshot.prompt_xml.is_empty() { None } else { Some(snapshot.prompt_xml) }
+        } else {
+            None
+        };
+        let thinker_config = ThinkerConfig {
+            prompt: PromptConfig { skill_instructions, ..PromptConfig::default() },
+            ..ThinkerConfig::default()
+        };
+        let thinker = Arc::new(Thinker::new(thinker_registry, thinker_config));
 
         // Create Executor with routing support
         let local_executor = Arc::new(SingleStepExecutor::new(self.tool_registry.clone()));
