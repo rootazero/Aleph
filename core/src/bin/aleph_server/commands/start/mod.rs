@@ -482,11 +482,10 @@ struct AuthBundle {
     guest_session_manager: Arc<alephcore::gateway::security::GuestSessionManager>,
 }
 
-/// Initialize all authentication and security subsystems.
-/// Registers auth + guest handlers on `server`.
+/// Initialize authentication and security subsystems (construction only).
+/// Does NOT register handlers — the orchestrator layer is responsible for that.
 #[cfg(feature = "gateway")]
 fn initialize_auth(
-    server: &mut GatewayServer,
     port: u16,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     require_auth: bool,
@@ -548,57 +547,6 @@ fn initialize_auth(
         require_auth,
     });
 
-    register_auth_handlers(server, &auth_ctx);
-    register_guest_handlers(server, &invitation_manager, &guest_session_manager, &event_bus);
-    server.set_guest_session_manager(guest_session_manager.clone());
-
-    // Load application config and integrate secret vault
-    let mut app_config_inner = match alephcore::Config::load() {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            eprintln!("Error loading application config: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    {
-        use tracing::debug;
-        use alephcore::secrets::{SecretVault, resolve_master_key};
-        use alephcore::secrets::migration::{needs_migration, migrate_api_keys, save_migrated_config};
-        use alephcore::secrets::vault::resolve_provider_secrets;
-
-        if let Ok(master_key) = resolve_master_key() {
-            let vault_path = SecretVault::default_path();
-            match SecretVault::open(&vault_path, &master_key) {
-                Ok(mut vault) => {
-                    if needs_migration(&app_config_inner) {
-                        match migrate_api_keys(&mut app_config_inner, &mut vault) {
-                            Ok(result) => {
-                                if result.migrated_count > 0 {
-                                    let _ = save_migrated_config(&app_config_inner);
-                                    info!(
-                                        count = result.migrated_count,
-                                        "Migrated plaintext API keys to vault"
-                                    );
-                                }
-                            }
-                            Err(e) => warn!(error = %e, "Failed to migrate API keys to vault"),
-                        }
-                    }
-                    if let Err(e) = resolve_provider_secrets(&mut app_config_inner, &vault) {
-                        warn!(error = %e, "Failed to resolve provider secrets from vault");
-                    }
-                }
-                Err(e) => warn!(error = %e, "Failed to open secret vault"),
-            }
-        } else {
-            debug!("ALEPH_MASTER_KEY not set, secret vault disabled");
-        }
-    }
-
-    let app_config = Arc::new(tokio::sync::RwLock::new(app_config_inner));
-    register_config_handlers(server, app_config, event_bus.clone(), device_store.clone());
-
     if !daemon {
         println!("Auth methods:");
         println!("  - connect         : Authenticate connection");
@@ -611,6 +559,50 @@ fn initialize_auth(
     }
 
     AuthBundle { device_store, auth_ctx, mdns_broadcaster, invitation_manager, guest_session_manager }
+}
+
+/// Load and return the application config, running secrets vault migration if needed.
+#[cfg(feature = "gateway")]
+fn load_app_config() -> alephcore::Config {
+    use tracing::{info, warn, debug};
+    use alephcore::secrets::{SecretVault, resolve_master_key};
+    use alephcore::secrets::migration::{needs_migration, migrate_api_keys, save_migrated_config};
+    use alephcore::secrets::vault::resolve_provider_secrets;
+
+    let mut config = match alephcore::Config::load() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("Error loading application config: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    if let Ok(master_key) = resolve_master_key() {
+        let vault_path = SecretVault::default_path();
+        match SecretVault::open(&vault_path, &master_key) {
+            Ok(mut vault) => {
+                if needs_migration(&config) {
+                    match migrate_api_keys(&mut config, &mut vault) {
+                        Ok(result) => {
+                            if result.migrated_count > 0 {
+                                let _ = save_migrated_config(&config);
+                                info!(count = result.migrated_count, "Migrated plaintext API keys to vault");
+                            }
+                        }
+                        Err(e) => warn!(error = %e, "Failed to migrate API keys to vault"),
+                    }
+                }
+                if let Err(e) = resolve_provider_secrets(&mut config, &vault) {
+                    warn!(error = %e, "Failed to resolve provider secrets from vault");
+                }
+            }
+            Err(e) => warn!(error = %e, "Failed to open secret vault"),
+        }
+    } else {
+        debug!("ALEPH_MASTER_KEY not set, secret vault disabled");
+    }
+
+    config
 }
 
 /// Spawn Ctrl-C and SIGTERM handlers; return the oneshot receiver for run_until_shutdown.
@@ -815,10 +807,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     register_poe_handlers(&mut server, event_bus.clone(), args.daemon).await;
 
+    // Auth subsystem construction
     let auth_bundle = initialize_auth(
-        &mut server, args.port, event_bus.clone(),
+        args.port, event_bus.clone(),
         full_config.gateway.require_auth, args.daemon,
     );
+    register_auth_handlers(&mut server, &auth_bundle.auth_ctx);
+    register_guest_handlers(&mut server, &auth_bundle.invitation_manager, &auth_bundle.guest_session_manager, &event_bus);
+    server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
+
+    // App config loading and handler registration
+    let app_config = Arc::new(tokio::sync::RwLock::new(load_app_config()));
+    register_config_handlers(&mut server, app_config, event_bus.clone(), auth_bundle.device_store.clone());
 
     register_session_handlers(&mut server, &session_manager, args.daemon);
 
