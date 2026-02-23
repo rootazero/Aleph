@@ -9,8 +9,9 @@
 use std::sync::Arc;
 
 use serde_json::Value;
+use tracing::{info, warn};
 
-use crate::exec::{ExecApprovalManager, SecretMasker, SecurityKernel};
+use crate::exec::{ExecApprovalManager, RiskLevel, SecretMasker, SecurityKernel};
 use crate::exec::sandbox::{FallbackPolicy, SandboxManager};
 
 /// Decision from pre-execution gate
@@ -71,6 +72,50 @@ impl ExecSecurityGate {
             _ => None,
         }
     }
+
+    /// Pre-execution gate: assess risk, block or allow.
+    ///
+    /// Danger tier will be handled in Task 4 (currently falls through to Allow).
+    pub async fn pre_execute(
+        &self,
+        tool_name: &str,
+        args: &Value,
+        _identity: &aleph_protocol::IdentityContext,
+    ) -> PreExecDecision {
+        // If we can't extract a command, allow through (e.g., Python/JS)
+        let Some(cmd) = Self::extract_command(tool_name, args) else {
+            return PreExecDecision::Allow { use_sandbox: false };
+        };
+
+        let risk = self.security_kernel.assess(&cmd);
+
+        match risk {
+            RiskLevel::Blocked => {
+                let assessment = self.security_kernel.assess_detailed(&cmd);
+                warn!(
+                    cmd = %cmd,
+                    "Shell command blocked by SecurityKernel"
+                );
+                PreExecDecision::Block {
+                    reason: format!("Blocked: {} ({})", assessment.reason, cmd),
+                }
+            }
+
+            RiskLevel::Danger => {
+                // Handled in Task 4 — approval flow
+                info!(cmd = %cmd, "Danger-tier command — approval pending (Task 4)");
+                PreExecDecision::Allow { use_sandbox: false }
+            }
+
+            RiskLevel::Caution | RiskLevel::Safe => {
+                let use_sandbox = self.sandbox_manager.as_ref()
+                    .map(|s| s.is_available())
+                    .unwrap_or(false);
+                info!(cmd = %cmd, risk = ?risk, use_sandbox, "Shell command allowed");
+                PreExecDecision::Allow { use_sandbox }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -83,6 +128,10 @@ mod tests {
     fn make_gate() -> ExecSecurityGate {
         let manager = Arc::new(ExecApprovalManager::new());
         ExecSecurityGate::new(manager, None)
+    }
+
+    fn make_identity() -> aleph_protocol::IdentityContext {
+        aleph_protocol::IdentityContext::owner("session:test".to_string(), "cli".to_string())
     }
 
     #[test]
@@ -119,5 +168,56 @@ mod tests {
     fn test_extract_command_missing_field() {
         let args = json!({});
         assert_eq!(ExecSecurityGate::extract_command("bash", &args), None);
+    }
+
+    #[tokio::test]
+    async fn test_pre_execute_blocked_command() {
+        let manager = Arc::new(ExecApprovalManager::new());
+        let gate = ExecSecurityGate::new(manager, None);
+
+        let identity = make_identity();
+        let args = json!({"cmd": "rm -rf /"});
+
+        let decision = gate.pre_execute("bash", &args, &identity).await;
+        assert!(matches!(decision, PreExecDecision::Block { .. }));
+        if let PreExecDecision::Block { reason } = decision {
+            assert!(reason.contains("Blocked"), "Expected 'Blocked' in reason, got: {}", reason);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pre_execute_safe_command_allowed() {
+        let manager = Arc::new(ExecApprovalManager::new());
+        let gate = ExecSecurityGate::new(manager, None);
+
+        let identity = make_identity();
+        let args = json!({"cmd": "ls -la"});
+
+        let decision = gate.pre_execute("bash", &args, &identity).await;
+        assert!(matches!(decision, PreExecDecision::Allow { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_pre_execute_caution_command_allowed() {
+        let manager = Arc::new(ExecApprovalManager::new());
+        let gate = ExecSecurityGate::new(manager, None);
+
+        let identity = make_identity();
+        let args = json!({"cmd": "npm install"});
+
+        let decision = gate.pre_execute("bash", &args, &identity).await;
+        assert!(matches!(decision, PreExecDecision::Allow { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_pre_execute_no_command_allows() {
+        let manager = Arc::new(ExecApprovalManager::new());
+        let gate = ExecSecurityGate::new(manager, None);
+
+        let identity = make_identity();
+        let args = json!({"language": "python", "code": "print('hello')"});
+
+        let decision = gate.pre_execute("code_exec", &args, &identity).await;
+        assert!(matches!(decision, PreExecDecision::Allow { .. }));
     }
 }
