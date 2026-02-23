@@ -77,22 +77,51 @@ use alephcore::gateway::{
 use crate::cli::DEFAULT_LOG_FILE;
 use crate::server_init::{serve_webchat, handle_run_with_engine};
 
-/// Start the gateway server
+// ── Subsystem initializer functions ──────────────────────────────────────────
+// Each function handles one cohesive initialization concern, extracted from
+// start_server() to keep the orchestrator function under 100 lines.
+
+/// Validate that the bind address is available, or exit if not.
 #[cfg(feature = "gateway")]
-pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    use alephcore::gateway::server::GatewayConfig as ServerConfig;
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-    use tracing::{debug, info, warn};
-
-    // Handle daemon mode
-    if args.daemon {
-        let log_file = args.log_file.clone().or_else(|| {
-            Some(PathBuf::from(DEFAULT_LOG_FILE))
-        });
-        daemonize(&args.pid_file, log_file.as_ref())?;
+fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    let addr: SocketAddr = format!("{}:{}", args.bind, args.port)
+        .parse()
+        .map_err(|e| format!("Invalid address: {}", e))?;
+    if !args.force {
+        if let Err(e) = std::net::TcpListener::bind(addr) {
+            eprintln!("Error: Cannot bind to {}: {}", addr, e);
+            eprintln!("Hint: Use --force to attempt to start anyway, or choose a different port with --port");
+            std::process::exit(1);
+        }
     }
+    Ok(())
+}
 
-    // Initialize tracing
+/// Print the startup banner and available method list to stdout.
+#[cfg(feature = "gateway")]
+fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayConfig) {
+    println!("PII filtering engine initialized (enabled: {})", full_config.privacy.pii_filtering);
+    println!("╔═══════════════════════════════════════════════╗");
+    println!("║         Aleph Gateway v{}           ║", env!("CARGO_PKG_VERSION"));
+    println!("╠═══════════════════════════════════════════════╣");
+    println!("║  WebSocket: ws://{}          ║", addr);
+    println!("║  Protocol:  JSON-RPC 2.0                      ║");
+    println!("╚═══════════════════════════════════════════════╝");
+    println!();
+    println!("Available methods:");
+    println!("  - health    : Check server health status");
+    println!("  - echo      : Echo back parameters (testing)");
+    println!("  - version   : Get server version info");
+    println!("  - agent.run : Execute agent request with streaming");
+    println!();
+    println!("Agents: {:?}", full_config.agents.keys().collect::<Vec<_>>());
+    println!();
+}
+
+/// Initialize the tracing subscriber with log level from CLI args.
+#[cfg(feature = "gateway")]
+fn initialize_tracing(args: &Args) {
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
     let filter = format!("aleph_server={},alephcore::gateway={}", args.log_level, args.log_level);
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer()
@@ -103,21 +132,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         .with(tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&filter)))
         .init();
+}
 
-    let addr: SocketAddr = format!("{}:{}", args.bind, args.port)
-        .parse()
-        .map_err(|e| format!("Invalid address: {}", e))?;
-
-    // Check if port is available (unless --force is specified)
-    if !args.force {
-        if let Err(e) = std::net::TcpListener::bind(addr) {
-            eprintln!("Error: Cannot bind to {}: {}", addr, e);
-            eprintln!("Hint: Use --force to attempt to start anyway, or choose a different port with --port");
-            std::process::exit(1);
-        }
-    }
-
-    // Load configuration from file or defaults
+/// Load gateway configuration, apply CLI overrides, and return resolved values.
+/// Returns (full_config, final_bind, final_port, final_max_connections).
+#[cfg(feature = "gateway")]
+fn load_gateway_config(args: &Args) -> (FullGatewayConfig, String, u16, usize) {
     let full_config = match &args.config {
         Some(config_path) => {
             let path = expand_path(&config_path.to_string_lossy());
@@ -135,7 +155,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
         }
         None => {
-            // Try default location, fall back to defaults if not found
             match FullGatewayConfig::load_default() {
                 Ok(cfg) => cfg,
                 Err(e) => {
@@ -165,54 +184,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         full_config.gateway.max_connections
     };
 
-    // Update addr with possibly overridden values
-    let addr: SocketAddr = format!("{}:{}", final_bind, final_port)
-        .parse()
-        .map_err(|e| format!("Invalid address: {}", e))?;
+    (full_config, final_bind, final_port, final_max_connections)
+}
 
-    // Initialize PII filtering engine from config
-    alephcore::pii::PiiEngine::init(full_config.privacy.clone());
-    if !args.daemon {
-        println!("PII filtering engine initialized (enabled: {})", full_config.privacy.pii_filtering);
-    }
-
-    if !args.daemon {
-        println!("╔═══════════════════════════════════════════════╗");
-        println!("║         Aleph Gateway v{}           ║", env!("CARGO_PKG_VERSION"));
-        println!("╠═══════════════════════════════════════════════╣");
-        println!("║  WebSocket: ws://{}          ║", addr);
-        println!("║  Protocol:  JSON-RPC 2.0                      ║");
-        println!("╚═══════════════════════════════════════════════╝");
-        println!();
-        println!("Available methods:");
-        println!("  - health    : Check server health status");
-        println!("  - echo      : Echo back parameters (testing)");
-        println!("  - version   : Get server version info");
-        println!("  - agent.run : Execute agent request with streaming");
-        println!();
-        println!("Agents: {:?}", full_config.agents.keys().collect::<Vec<_>>());
-        println!();
-    }
-
-    let config = ServerConfig {
-        max_connections: final_max_connections,
-        require_auth: full_config.gateway.require_auth,
-        timeout_secs: 300,
-    };
-
-    let mut server = GatewayServer::with_config(addr, config);
-
-    // Initialize SessionManager for persistent session storage (before creating agents)
-    let session_manager: Arc<SessionManager> = match SessionManager::with_defaults() {
+/// Initialize the SessionManager with SQLite persistence, falling back to a
+/// temporary path on error.
+#[cfg(feature = "gateway")]
+async fn initialize_session_manager(daemon: bool) -> Arc<SessionManager> {
+    match SessionManager::with_defaults() {
         Ok(sm) => {
-            if !args.daemon {
+            if !daemon {
                 println!("Session manager initialized (SQLite persistence)");
             }
             Arc::new(sm)
         }
         Err(e) => {
             eprintln!("Warning: Failed to initialize session manager: {}. Using temp storage.", e);
-            // Create fallback with temporary path
             let temp_path = std::env::temp_dir().join("aleph_sessions.db");
             match SessionManager::new(SessionManagerConfig {
                 db_path: temp_path,
@@ -225,43 +212,51 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
             }
         }
-    };
+    }
+}
 
-    // Initialize ExtensionManager for plugin system
+/// Initialize the ExtensionManager for the plugin system.
+#[cfg(feature = "gateway")]
+async fn initialize_extension_manager(daemon: bool) {
     match alephcore::extension::ExtensionManager::with_defaults().await {
         Ok(extension_manager) => {
             let manager = Arc::new(extension_manager);
             if let Err(_existing) = alephcore::gateway::init_extension_manager(manager) {
-                // Already initialized (shouldn't happen in normal flow)
-                if !args.daemon {
+                if !daemon {
                     println!("Extension manager already initialized");
                 }
-            } else if !args.daemon {
+            } else if !daemon {
                 println!("Extension manager initialized");
             }
         }
         Err(e) => {
-            if !args.daemon {
+            if !daemon {
                 eprintln!("Warning: Failed to initialize extension manager: {}. Plugin tools will be unavailable.", e);
             }
         }
     }
+}
 
-    // Set up agent.run handler with dependencies
-    let event_bus = server.event_bus().clone();
-    let router = Arc::new(AgentRouter::new());
-
-    // Create shared AgentRunManager for tracking run states (used by both modes)
+/// Register agent.run / agent.status / agent.cancel handlers.
+/// Selects real ExecutionEngine when an API key is available, otherwise uses
+/// the simulated AgentRunManager.
+/// Returns the shared AgentRunManager (needed for status/cancel regardless of mode).
+#[cfg(feature = "gateway")]
+async fn register_agent_handlers(
+    server: &mut GatewayServer,
+    session_manager: Arc<SessionManager>,
+    event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
+    router: Arc<AgentRouter>,
+    full_config: &FullGatewayConfig,
+    daemon: bool,
+) -> Arc<AgentRunManager> {
     let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
 
-    // Try to create real ExecutionEngine with Claude provider
     if can_create_provider_from_env() {
         match create_provider_registry_from_env() {
             Ok(provider_registry) => {
-                // Create BuiltinToolRegistry
                 let tool_registry = Arc::new(BuiltinToolRegistry::new());
 
-                // Build tools list from builtin definitions
                 use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
                 use alephcore::dispatcher::{UnifiedTool, ToolSource};
                 let tools: Vec<UnifiedTool> = BUILTIN_TOOL_DEFINITIONS
@@ -274,7 +269,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     ))
                     .collect();
 
-                // Create ExecutionEngine
                 let engine = Arc::new(ExecutionEngine::new(
                     ExecutionEngineConfig::default(),
                     provider_registry,
@@ -283,7 +277,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     session_manager.clone(),
                 ));
 
-                // Create agent registry with agents from config (using SessionManager for persistence)
                 let agent_registry = Arc::new(AgentRegistry::new());
                 for agent_config in full_config.get_agent_instance_configs() {
                     let agent_id = agent_config.agent_id.clone();
@@ -293,7 +286,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     ) {
                         Ok(agent) => {
                             agent_registry.register(agent).await;
-                            if !args.daemon {
+                            if !daemon {
                                 println!("  Registered agent: {} (with SQLite persistence)", agent_id);
                             }
                         }
@@ -303,13 +296,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     }
                 }
 
-                if !args.daemon {
+                if !daemon {
                     let provider_name = available_provider_from_env().unwrap_or("unknown");
                     println!("  Mode: Real AgentLoop ({} API)", provider_name);
                     println!();
                 }
 
-                // Register agent.run handler with real execution
                 let engine_clone = engine.clone();
                 let event_bus_clone = event_bus.clone();
                 let router_clone = router.clone();
@@ -325,10 +317,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 });
             }
             Err(e) => {
-                if !args.daemon {
+                if !daemon {
                     eprintln!("Warning: Failed to create provider: {}. Falling back to simulated mode.", e);
                 }
-                // Fall back to simulated mode using shared run_manager
                 let run_manager_clone = run_manager.clone();
                 server.handlers_mut().register("agent.run", move |req| {
                     let manager = run_manager_clone.clone();
@@ -337,12 +328,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
         }
     } else {
-        if !args.daemon {
+        if !daemon {
             println!("  Mode: Simulated (set ANTHROPIC_API_KEY or OPENAI_API_KEY for real execution)");
             println!();
         }
-
-        // Use simulated AgentRunManager (shared)
         let run_manager_clone = run_manager.clone();
         server.handlers_mut().register("agent.run", move |req| {
             let manager = run_manager_clone.clone();
@@ -350,7 +339,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         });
     }
 
-    // Register agent.status and agent.cancel handlers (work for both real and simulated modes)
+    // Register status/cancel (work for both real and simulated modes)
     let run_manager_status = run_manager.clone();
     server.handlers_mut().register("agent.status", move |req| {
         let manager = run_manager_status.clone();
@@ -363,7 +352,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         async move { handle_agent_cancel(req, manager).await }
     });
 
-    if !args.daemon {
+    if !daemon {
         println!("Agent control methods:");
         println!("  - agent.run     : Execute agent request with streaming");
         println!("  - agent.status  : Query run status by run_id");
@@ -371,14 +360,21 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         println!();
     }
 
-    // Initialize POE (Principle-Operation-Evaluation) services
+    run_manager
+}
+
+/// Register POE (Principle-Operation-Evaluation) handlers when an Anthropic
+/// API key is available. Skips silently (with a note) if the key is absent.
+#[cfg(feature = "gateway")]
+async fn register_poe_handlers(
+    server: &mut GatewayServer,
+    event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
+    daemon: bool,
+) {
     if let Ok(poe_provider) = create_claude_provider_from_env() {
-        // Create ManifestBuilder for contract generation
         let poe_provider_arc: Arc<dyn alephcore::providers::AiProvider> = poe_provider;
         let manifest_builder = Arc::new(ManifestBuilder::new(poe_provider_arc.clone()));
 
-        // Create factories for PoeRunManager
-        // WorkerFactory creates a GatewayAgentLoopWorker for each run
         let provider_for_worker = poe_provider_arc.clone();
         let worker_factory: WorkerFactory<GatewayAgentLoopWorker> = Arc::new(move || {
             create_gateway_worker(
@@ -387,13 +383,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             )
         });
 
-        // ValidatorFactory creates a CompositeValidator for each run
         let provider_for_validator = poe_provider_arc.clone();
         let validator_factory: ValidatorFactory = Arc::new(move || {
             CompositeValidator::new(provider_for_validator.clone())
         });
 
-        // Create PoeRunManager for direct execution
         let poe_run_manager = Arc::new(PoeRunManager::new(
             event_bus.clone(),
             worker_factory,
@@ -401,14 +395,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             PoeConfig::default(),
         ));
 
-        // Create PoeContractService for contract signing workflow
         let poe_contract_service = Arc::new(PoeContractService::new(
             manifest_builder,
             poe_run_manager.clone(),
             event_bus.clone(),
         ));
 
-        // Register POE direct execution handlers
         let poe_rm_run = poe_run_manager.clone();
         server.handlers_mut().register("poe.run", move |req| {
             let manager = poe_rm_run.clone();
@@ -433,7 +425,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             async move { handle_poe_list(req, manager).await }
         });
 
-        // Register POE contract signing handlers
         let poe_cs_prepare = poe_contract_service.clone();
         server.handlers_mut().register("poe.prepare", move |req| {
             let service = poe_cs_prepare.clone();
@@ -458,7 +449,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             async move { handle_pending(req, service).await }
         });
 
-        if !args.daemon {
+        if !daemon {
             println!("POE (First Principles) methods:");
             println!("  - poe.prepare : Generate contract from instruction");
             println!("  - poe.sign    : Sign contract and start execution");
@@ -470,17 +461,38 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             println!("  - poe.list    : List active tasks");
             println!();
         }
-    } else if !args.daemon {
+    } else if !daemon {
         println!("POE methods: Disabled (requires ANTHROPIC_API_KEY or OPENAI_API_KEY)");
         println!();
     }
+}
 
-    // Initialize authentication context
+/// Return type for initialize_auth: all security objects needed by the caller.
+#[cfg(feature = "gateway")]
+struct AuthBundle {
+    device_store: Arc<DeviceStore>,
+    auth_ctx: Arc<auth_handlers::AuthContext>,
+    mdns_broadcaster: Option<alephcore::gateway::MdnsBroadcaster>,
+    invitation_manager: Arc<alephcore::gateway::security::InvitationManager>,
+    guest_session_manager: Arc<alephcore::gateway::security::GuestSessionManager>,
+}
+
+/// Initialize all authentication and security subsystems.
+/// Registers auth + guest handlers on `server`.
+#[cfg(feature = "gateway")]
+fn initialize_auth(
+    server: &mut GatewayServer,
+    port: u16,
+    event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
+    require_auth: bool,
+    daemon: bool,
+) -> AuthBundle {
+    use tracing::{info, warn};
+
     let device_store_path = dirs::home_dir()
         .map(|h| h.join(".aleph/devices.db"))
         .unwrap_or_else(|| PathBuf::from("/tmp/aleph_devices.db"));
 
-    // Ensure parent directory exists
     if let Some(parent) = device_store_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -493,7 +505,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             })
     );
 
-    // Initialize security store for tokens
     let security_store_path = device_store_path.parent()
         .map(|p| p.join("security.db"))
         .unwrap_or_else(|| PathBuf::from("/tmp/aleph_security.db"));
@@ -510,8 +521,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let invitation_manager = Arc::new(alephcore::gateway::security::InvitationManager::new());
     let guest_session_manager = Arc::new(alephcore::gateway::security::GuestSessionManager::new());
 
-    // Start mDNS broadcaster for local network discovery
-    let mdns_broadcaster = match alephcore::gateway::MdnsBroadcaster::new(args.port, "aleph") {
+    let mdns_broadcaster = match alephcore::gateway::MdnsBroadcaster::new(port, "aleph") {
         Ok(broadcaster) => {
             info!("mDNS service discovery enabled");
             Some(broadcaster)
@@ -530,19 +540,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         invitation_manager: invitation_manager.clone(),
         guest_session_manager: guest_session_manager.clone(),
         event_bus: event_bus.clone(),
-        require_auth: full_config.gateway.require_auth,
+        require_auth,
     });
 
-    // Register auth handlers
-    register_auth_handlers(&mut server, &auth_ctx);
-
-    // Register guest handlers
-    register_guest_handlers(&mut server, &invitation_manager, &guest_session_manager, &event_bus);
-
-    // Set guest session manager on server for disconnect cleanup
+    register_auth_handlers(server, &auth_ctx);
+    register_guest_handlers(server, &invitation_manager, &guest_session_manager, &event_bus);
     server.set_guest_session_manager(guest_session_manager.clone());
 
-    // Load application config (Config) and integrate secret vault
+    // Load application config and integrate secret vault
     let mut app_config_inner = match alephcore::Config::load() {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -551,8 +556,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
-    // Secret vault integration: migrate plaintext API keys and resolve secret references
     {
+        use tracing::debug;
         use alephcore::secrets::{SecretVault, resolve_master_key};
         use alephcore::secrets::migration::{needs_migration, migrate_api_keys, save_migrated_config};
         use alephcore::secrets::vault::resolve_provider_secrets;
@@ -561,7 +566,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             let vault_path = SecretVault::default_path();
             match SecretVault::open(&vault_path, &master_key) {
                 Ok(mut vault) => {
-                    // Run migration if needed
                     if needs_migration(&app_config_inner) {
                         match migrate_api_keys(&mut app_config_inner, &mut vault) {
                             Ok(result) => {
@@ -576,7 +580,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             Err(e) => warn!(error = %e, "Failed to migrate API keys to vault"),
                         }
                     }
-                    // Resolve secret references
                     if let Err(e) = resolve_provider_secrets(&mut app_config_inner, &vault) {
                         warn!(error = %e, "Failed to resolve provider secrets from vault");
                     }
@@ -588,11 +591,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // Register config handlers (for ConfigManager SDK)
     let app_config = Arc::new(tokio::sync::RwLock::new(app_config_inner));
-    register_config_handlers(&mut server, app_config, event_bus.clone(), device_store.clone());
+    register_config_handlers(server, app_config, event_bus.clone(), device_store.clone());
 
-    if !args.daemon {
+    if !daemon {
         println!("Auth methods:");
         println!("  - connect         : Authenticate connection");
         println!("  - pairing.approve : Approve device pairing");
@@ -603,159 +605,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         println!();
     }
 
-    // Register session handlers with SessionManager
-    register_session_handlers(&mut server, &session_manager);
+    AuthBundle { device_store, auth_ctx, mdns_broadcaster, invitation_manager, guest_session_manager }
+}
 
-    if !args.daemon {
-        println!("  - sessions.list   : List all sessions");
-        println!("  - sessions.history: Get session message history");
-        println!("  - sessions.reset  : Clear session messages");
-        println!("  - sessions.delete : Delete a session");
-        println!();
-    }
-
-    // Initialize ChannelRegistry for multi-channel messaging
-    let channel_registry = Arc::new(ChannelRegistry::new());
-
-    // Register iMessage channel on macOS
-    #[cfg(target_os = "macos")]
-    {
-        // Create iMessage config with enabled = true
-        let imessage_config = IMessageConfig {
-            enabled: true,
-            ..Default::default()
-        };
-
-        let imessage_channel = IMessageChannel::new(imessage_config);
-        let channel_id = channel_registry.register(Box::new(imessage_channel)).await;
-        if !args.daemon {
-            println!("Registered channel: {} (iMessage)", channel_id);
-        }
-    }
-
-    // Register Telegram channel
-    #[cfg(feature = "telegram")]
-    {
-        let telegram_config = TelegramConfig::default(); // Will need actual token in real use
-        let telegram_channel = TelegramChannel::new("telegram", telegram_config);
-        let channel_id = channel_registry.register(Box::new(telegram_channel)).await;
-        if !args.daemon {
-            println!("Registered channel: {} (Telegram)", channel_id);
-        }
-    }
-
-    // Register Discord channel
-    #[cfg(feature = "discord")]
-    {
-        let discord_config = DiscordConfig::default();
-        let discord_channel = DiscordChannel::new("discord", discord_config);
-        let channel_id = channel_registry.register(Box::new(discord_channel)).await;
-        if !args.daemon {
-            println!("Registered channel: {} (Discord)", channel_id);
-        }
-    }
-
-    // Register WhatsApp channel
-    #[cfg(feature = "whatsapp")]
-    {
-        let whatsapp_config = WhatsAppConfig::default();
-        let whatsapp_channel = WhatsAppChannel::new("whatsapp", whatsapp_config);
-        let channel_id = channel_registry.register(Box::new(whatsapp_channel)).await;
-        if !args.daemon {
-            println!("Registered channel: {} (WhatsApp)", channel_id);
-        }
-    }
-
-    // Register channel handlers
-    register_channel_handlers(&mut server, &channel_registry);
-
-    if !args.daemon {
-        println!("Channel methods:");
-        println!("  - channels.list   : List all channels");
-        println!("  - channels.status : Get channel status");
-        println!("  - channel.start   : Start a channel");
-        println!("  - channel.stop    : Stop a channel");
-        println!("  - channel.send    : Send message via channel");
-        println!();
-    }
-
-    // ── Social Connectivity: LinkManager ──────────────────────────────────
-    // The LinkManager scans ~/.aleph/bridges/ for external bridge plugins
-    // and ~/.aleph/links/ for link instance configs, starting any enabled
-    // external bridge links alongside the builtin channels registered above.
-    {
-        use alephcore::gateway::link::LinkManager;
-        let base_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".aleph");
-        let link_manager = LinkManager::new(base_dir);
-        if let Err(e) = link_manager.start().await {
-            tracing::warn!("LinkManager startup encountered errors: {}", e);
-        }
-        if !args.daemon {
-            println!("LinkManager started (external bridge plugins)");
-            println!();
-        }
-    }
-    // ─────────────────────────────────────────────────────────────────────
-
-    // Initialize PairingStore for InboundMessageRouter
-    let pairing_store_path = dirs::home_dir()
-        .map(|h| h.join(".aleph/pairing.db"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/aleph_pairing.db"));
-
-    // Ensure parent directory exists
-    if let Some(parent) = pairing_store_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    let pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore> = Arc::new(
-        SqlitePairingStore::new(&pairing_store_path)
-            .unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to create pairing store: {}. Using in-memory.", e);
-                SqlitePairingStore::in_memory().expect("Failed to create in-memory pairing store")
-            })
-    );
-
-    // Create InboundMessageRouter with unified routing (uses AgentRouter bindings)
-    let routing_config = RoutingConfig::default();
-    let inbound_router = Arc::new(
-        InboundMessageRouter::new(
-            channel_registry.clone(),
-            pairing_store.clone(),
-            routing_config,
-        )
-        .with_agent_router(router.clone())
-    );
-
-    // Start the inbound message router
-    let _inbound_router_handle = inbound_router.clone().start().await;
-    if !args.daemon {
-        println!("Inbound message router started");
-        println!();
-    }
-
-    // Initialize ConfigWatcher for hot configuration reload
-    let config_path = args.config.clone()
-        .map(|p| expand_path(&p.to_string_lossy()))
-        .or_else(|| {
-            dirs::home_dir().map(|h| h.join(".aleph/config.toml"))
-        });
-
-    let _config_watcher = setup_config_watcher(&mut server, config_path, &event_bus, args.daemon).await;
-
-    // Start WebChat HTTP server if configured
-    start_webchat_server(args, &final_bind, final_port).await;
-
-    // Start ControlPlane embedded UI server
-    #[cfg(feature = "control-plane")]
-    start_control_plane_server(&final_bind, final_port, args.daemon).await;
-
-    // Set up graceful shutdown
+/// Spawn Ctrl-C and SIGTERM handlers; return the oneshot receiver for run_until_shutdown.
+#[cfg(feature = "gateway")]
+fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Receiver<()> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let pid_file = args.pid_file.clone();
     let daemon_mode = args.daemon;
-
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
         if !daemon_mode {
@@ -765,7 +623,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let _ = shutdown_tx.send(());
     });
 
-    // Also handle SIGTERM for daemon mode
     #[cfg(unix)]
     {
         let pid_file_term = args.pid_file.clone();
@@ -779,10 +636,211 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         });
     }
 
+    shutdown_rx
+}
+
+/// Register all messaging channels (iMessage, Telegram, Discord, WhatsApp)
+/// and the LinkManager for external bridge plugins.
+/// Returns the populated ChannelRegistry.
+#[cfg(feature = "gateway")]
+async fn initialize_channels(server: &mut GatewayServer, daemon: bool) -> Arc<ChannelRegistry> {
+    let channel_registry = Arc::new(ChannelRegistry::new());
+
+    #[cfg(target_os = "macos")]
+    {
+        let imessage_config = IMessageConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let imessage_channel = IMessageChannel::new(imessage_config);
+        let channel_id = channel_registry.register(Box::new(imessage_channel)).await;
+        if !daemon {
+            println!("Registered channel: {} (iMessage)", channel_id);
+        }
+    }
+
+    #[cfg(feature = "telegram")]
+    {
+        let telegram_config = TelegramConfig::default();
+        let telegram_channel = TelegramChannel::new("telegram", telegram_config);
+        let channel_id = channel_registry.register(Box::new(telegram_channel)).await;
+        if !daemon {
+            println!("Registered channel: {} (Telegram)", channel_id);
+        }
+    }
+
+    #[cfg(feature = "discord")]
+    {
+        let discord_config = DiscordConfig::default();
+        let discord_channel = DiscordChannel::new("discord", discord_config);
+        let channel_id = channel_registry.register(Box::new(discord_channel)).await;
+        if !daemon {
+            println!("Registered channel: {} (Discord)", channel_id);
+        }
+    }
+
+    #[cfg(feature = "whatsapp")]
+    {
+        let whatsapp_config = WhatsAppConfig::default();
+        let whatsapp_channel = WhatsAppChannel::new("whatsapp", whatsapp_config);
+        let channel_id = channel_registry.register(Box::new(whatsapp_channel)).await;
+        if !daemon {
+            println!("Registered channel: {} (WhatsApp)", channel_id);
+        }
+    }
+
+    register_channel_handlers(server, &channel_registry);
+
+    if !daemon {
+        println!("Channel methods:");
+        println!("  - channels.list   : List all channels");
+        println!("  - channels.status : Get channel status");
+        println!("  - channel.start   : Start a channel");
+        println!("  - channel.stop    : Stop a channel");
+        println!("  - channel.send    : Send message via channel");
+        println!();
+    }
+
+    // Start external bridge plugins via LinkManager
+    {
+        use alephcore::gateway::link::LinkManager;
+        let base_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".aleph");
+        let link_manager = LinkManager::new(base_dir);
+        if let Err(e) = link_manager.start().await {
+            tracing::warn!("LinkManager startup encountered errors: {}", e);
+        }
+        if !daemon {
+            println!("LinkManager started (external bridge plugins)");
+            println!();
+        }
+    }
+
+    channel_registry
+}
+
+/// Initialize InboundMessageRouter and start it.
+/// Connects the channel registry to the agent router for unified routing.
+#[cfg(feature = "gateway")]
+async fn initialize_inbound_router(
+    channel_registry: Arc<ChannelRegistry>,
+    router: Arc<AgentRouter>,
+    daemon: bool,
+) {
+    let pairing_store_path = dirs::home_dir()
+        .map(|h| h.join(".aleph/pairing.db"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/aleph_pairing.db"));
+
+    if let Some(parent) = pairing_store_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore> = Arc::new(
+        SqlitePairingStore::new(&pairing_store_path)
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to create pairing store: {}. Using in-memory.", e);
+                SqlitePairingStore::in_memory().expect("Failed to create in-memory pairing store")
+            })
+    );
+
+    let routing_config = RoutingConfig::default();
+    let inbound_router = Arc::new(
+        InboundMessageRouter::new(
+            channel_registry.clone(),
+            pairing_store.clone(),
+            routing_config,
+        )
+        .with_agent_router(router.clone())
+    );
+
+    let _inbound_router_handle = inbound_router.clone().start().await;
+    if !daemon {
+        println!("Inbound message router started");
+        println!();
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Start the gateway server
+#[cfg(feature = "gateway")]
+pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    use alephcore::gateway::server::GatewayConfig as ServerConfig;
+
+    // Handle daemon mode
+    if args.daemon {
+        let log_file = args.log_file.clone().or_else(|| {
+            Some(PathBuf::from(DEFAULT_LOG_FILE))
+        });
+        daemonize(&args.pid_file, log_file.as_ref())?;
+    }
+
+    initialize_tracing(args);
+    validate_bind_address(args)?;
+
+    let (full_config, final_bind, final_port, final_max_connections) = load_gateway_config(args);
+
+    let addr: SocketAddr = format!("{}:{}", final_bind, final_port)
+        .parse()
+        .map_err(|e| format!("Invalid address: {}", e))?;
+
+    alephcore::pii::PiiEngine::init(full_config.privacy.clone());
+    if !args.daemon {
+        print_startup_banner(addr, &full_config);
+    }
+
+    let server_config = ServerConfig {
+        max_connections: final_max_connections,
+        require_auth: full_config.gateway.require_auth,
+        timeout_secs: 300,
+    };
+    let mut server = GatewayServer::with_config(addr, server_config);
+
+    let session_manager = initialize_session_manager(args.daemon).await;
+    initialize_extension_manager(args.daemon).await;
+
+    let event_bus = server.event_bus().clone();
+    let router = Arc::new(AgentRouter::new());
+
+    register_agent_handlers(
+        &mut server, session_manager.clone(), event_bus.clone(),
+        router.clone(), &full_config, args.daemon,
+    ).await;
+
+    register_poe_handlers(&mut server, event_bus.clone(), args.daemon).await;
+
+    let auth_bundle = initialize_auth(
+        &mut server, args.port, event_bus.clone(),
+        full_config.gateway.require_auth, args.daemon,
+    );
+
+    register_session_handlers(&mut server, &session_manager);
+    if !args.daemon {
+        println!("  - sessions.list   : List all sessions");
+        println!("  - sessions.history: Get session message history");
+        println!("  - sessions.reset  : Clear session messages");
+        println!("  - sessions.delete : Delete a session");
+        println!();
+    }
+
+    let channel_registry = initialize_channels(&mut server, args.daemon).await;
+    initialize_inbound_router(channel_registry, router, args.daemon).await;
+
+    let config_path = args.config.clone()
+        .map(|p| expand_path(&p.to_string_lossy()))
+        .or_else(|| dirs::home_dir().map(|h| h.join(".aleph/config.toml")));
+    let _config_watcher = setup_config_watcher(&mut server, config_path, &event_bus, args.daemon).await;
+
+    start_webchat_server(args, &final_bind, final_port).await;
+
+    #[cfg(feature = "control-plane")]
+    start_control_plane_server(&final_bind, final_port, args.daemon).await;
+
+    let shutdown_rx = setup_graceful_shutdown(args);
     server.run_until_shutdown(shutdown_rx).await?;
 
-    // Clean shutdown: unregister mDNS service
-    if let Some(broadcaster) = mdns_broadcaster {
+    if let Some(broadcaster) = auth_bundle.mdns_broadcaster {
         broadcaster.shutdown();
     }
 
