@@ -9,9 +9,9 @@
 //!
 //! # Architecture
 //!
-//! Aleph follows a Server-Client architecture:
-//! - **Server** (this binary): Core AI engine and execution environment
-//! - **Clients**: macOS App, Tauri Desktop, CLI, Telegram, Discord
+//! Aleph follows a server-centric architecture:
+//! - **Server** (this binary): Self-contained AI engine — all execution happens here
+//! - **Interfaces**: macOS App, Tauri Desktop, CLI, Telegram, Discord (pure I/O)
 //!
 //! # Usage
 //!
