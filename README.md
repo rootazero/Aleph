@@ -265,12 +265,12 @@ cargo run -p alephcore --features gateway --bin aleph-gateway -- start
 cargo run -p aleph-cli -- "Hello, Aleph!"
 
 # Option 2: Use Tauri Desktop (cross-platform GUI)
-cd clients/desktop
+cd apps/desktop
 pnpm install
 pnpm tauri dev
 
 # Option 3: Build macOS Native App
-cd clients/macos
+cd apps/macos
 xcodegen generate
 xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug
 ```

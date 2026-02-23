@@ -241,7 +241,7 @@ aleph/
 │       ├── runtimes/               # 运行时管理 (uv, fnm, yt-dlp)
 │       ├── config/                 # 配置系统 + 热重载
 │       └── lib.rs                  # 60+ public modules
-├── clients/
+├── apps/
 │   ├── cli/                        # Rust CLI 客户端
 │   ├── macos/                      # macOS App (Swift/SwiftUI, 45+ dirs)
 │   └── desktop/                    # Cross-platform Tauri App
@@ -294,10 +294,10 @@ cargo run --bin aleph-server
 cargo run --bin aleph-server --features control-plane
 
 # macOS App
-cd clients/macos && xcodegen generate && open Aleph.xcodeproj
+cd apps/macos && xcodegen generate && open Aleph.xcodeproj
 
 # Tauri App
-cd clients/desktop && pnpm install && pnpm tauri dev
+cd apps/desktop && pnpm install && pnpm tauri dev
 ```
 
 ---
@@ -768,7 +768,7 @@ plugin-wasm = ["extism"]
 
 - Python path: ~/.uv/python3/bin/python
 - Install Python package: cd ~/.uv/python3 && uv pip install <package>
-- Xcode generation: cd clients/macos && xcodegen generate
+- Xcode generation: cd apps/macos && xcodegen generate
 - Syntax validation: ~/.uv/python3/bin/python Scripts/verify_swift_syntax.py <file.swift>
 - Xcode build cache cleanup: rm -rf ~/Library/Developer/Xcode/DerivedData/(Aleph)-*
 - This project uses XcodeGen to manage the Xcode project. See docs/XCODEGEN_README.md for detailed workflow instructions.
