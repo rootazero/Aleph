@@ -25,6 +25,7 @@
 // Social Connectivity: Bridge & Link data models (always compiled)
 pub mod bridge;
 pub mod link;
+pub mod transport;
 
 #[cfg(feature = "gateway")]
 pub mod protocol;
