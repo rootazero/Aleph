@@ -20,6 +20,8 @@ pub trait AggregateRoot: Entity {}
 /// Equality is based on its attributes.
 pub trait ValueObject: Eq + Clone {}
 
+pub mod skill;
+
 #[cfg(test)]
 mod tests {
     use super::*;
