@@ -4,6 +4,7 @@
 //! eligibility evaluation, SKILL.md parsing, and prompt injection.
 
 pub mod eligibility;
+pub mod installer;
 pub mod manifest;
 pub mod prompt;
 pub mod registry;
@@ -11,6 +12,7 @@ pub mod snapshot;
 pub mod status;
 
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
+pub use installer::{build_install_command, filter_install_specs_for_current_os};
 pub use manifest::{parse_skill_content, parse_skill_file, SkillParseError};
 pub use prompt::build_skills_prompt_xml;
 pub use registry::SkillRegistry;
