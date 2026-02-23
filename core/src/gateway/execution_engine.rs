@@ -454,12 +454,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let provider = self.provider_registry.default_provider();
         let thinker_registry = Arc::new(SingleProviderRegistry::new(provider));
 
-        // Inject available skill instructions from SkillSystem snapshot
-        let skill_instructions = if let Ok(manager) = get_extension_manager() {
-            let snapshot = manager.skill_system().current_snapshot().await;
-            if snapshot.prompt_xml.is_empty() { None } else { Some(snapshot.prompt_xml) }
-        } else {
-            None
+        // Inject skill instructions from SkillSystem v2 snapshot into prompt
+        let skill_instructions = match get_extension_manager().ok().and_then(|m| m.skill_system()) {
+            Some(sys) => {
+                let snapshot = sys.current_snapshot().await;
+                if snapshot.prompt_xml.is_empty() { None } else { Some(snapshot.prompt_xml) }
+            }
+            None => None,
         };
         let thinker_config = ThinkerConfig {
             prompt: PromptConfig { skill_instructions, ..PromptConfig::default() },

@@ -48,7 +48,6 @@ pub mod discovery;
 pub mod hooks;
 mod plugin_loader;
 pub mod runtime;
-pub mod skill_system;
 pub mod sync_api;
 
 mod channel_manager;
@@ -73,7 +72,6 @@ pub use plugin_loader::PluginLoader;
 pub use provider_adapter::PluginProviderAdapter;
 pub use registry::*;
 pub use service_manager::ServiceManager;
-pub use skill_system::{SkillEntry, SkillSnapshot, SkillSystem};
 pub use skill_tool::{build_skill_tool_description, check_skill_permission, request_skill_permission_async};
 pub use template::SkillTemplate;
 pub use types::*;
@@ -163,8 +161,8 @@ pub struct ExtensionManager {
     /// Service lifecycle manager
     service_manager: Arc<RwLock<ServiceManager>>,
 
-    /// Skill system for snapshot-based skill XML injection into LLM prompts
-    skill_system: SkillSystem,
+    /// Skill System v2 (independent bounded context)
+    skill_system: Option<crate::skill::SkillSystem>,
 }
 
 impl ExtensionManager {
@@ -192,15 +190,13 @@ impl ExtensionManager {
             plugin_loader,
             plugin_registry,
             service_manager,
-            skill_system: SkillSystem::new(),
+            skill_system: None,
         })
     }
 
-    /// Create with default configuration and initialize the skill system
+    /// Create with default configuration
     pub async fn with_defaults() -> ExtensionResult<Self> {
-        let manager = Self::new(ExtensionConfig::default()).await?;
-        manager.skill_system.init_from_defaults().await;
-        Ok(manager)
+        Self::new(ExtensionConfig::default()).await
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -840,9 +836,20 @@ impl ExtensionManager {
 
     // ── Skill System ──────────────────────────────────────────────────────────
 
-    /// Get the skill system for snapshot-based skill XML injection
-    pub fn skill_system(&self) -> &SkillSystem {
-        &self.skill_system
+    /// Get the Skill System v2 instance.
+    pub fn skill_system(&self) -> Option<&crate::skill::SkillSystem> {
+        self.skill_system.as_ref()
+    }
+
+    /// Initialize the Skill System v2 with given directories.
+    pub async fn init_skill_system(
+        &mut self,
+        dirs: Vec<PathBuf>,
+    ) -> Result<(), crate::skill::SkillSystemError> {
+        let sys = crate::skill::SkillSystem::new();
+        sys.init(dirs).await?;
+        self.skill_system = Some(sys);
+        Ok(())
     }
 }
 
