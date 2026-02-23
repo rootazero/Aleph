@@ -68,7 +68,7 @@ pub use compression::{
 };
 pub use context::{
     CompressionResult, CompressionSession, ContextAnchor, FactSource, FactSpecificity,
-    FactStats, FactType, MemoryEntry, MemoryFact, TemporalScope, compute_parent_path,
+    FactStats, FactType, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer, TemporalScope, compute_parent_path,
     PRESET_PATHS,
 };
 pub use decay::{DecayConfig, MemoryStrength};

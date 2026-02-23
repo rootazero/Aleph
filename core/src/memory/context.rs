@@ -201,6 +201,20 @@ impl FactType {
             | FactType::SubagentTranscript => "aleph://agent/experiences/",
         }
     }
+
+    /// Map fact type to standardized memory category.
+    pub fn default_category(&self) -> MemoryCategory {
+        match self {
+            FactType::Preference => MemoryCategory::Preferences,
+            FactType::Plan | FactType::Personal => MemoryCategory::Profile,
+            FactType::Learning | FactType::Project | FactType::Other => MemoryCategory::Entities,
+            FactType::Tool => MemoryCategory::Patterns,
+            FactType::SubagentRun | FactType::SubagentSession | FactType::SubagentCheckpoint => {
+                MemoryCategory::Cases
+            }
+            FactType::SubagentTranscript => MemoryCategory::Events,
+        }
+    }
 }
 
 impl std::str::FromStr for FactType {
@@ -281,6 +295,104 @@ impl std::str::FromStr for FactSource {
 }
 
 impl std::fmt::Display for FactSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Tiered loading level for memory retrieval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryLayer {
+    /// Abstract summary for fast scanning.
+    L0Abstract,
+    /// Structured overview for navigation.
+    L1Overview,
+    /// Full-detail content.
+    #[default]
+    L2Detail,
+}
+
+impl MemoryLayer {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::L0Abstract => "l0_abstract",
+            Self::L1Overview => "l1_overview",
+            Self::L2Detail => "l2_detail",
+        }
+    }
+
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Self::L2Detail)
+    }
+}
+
+impl std::str::FromStr for MemoryLayer {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "l0_abstract" => Ok(Self::L0Abstract),
+            "l1_overview" => Ok(Self::L1Overview),
+            "l2_detail" => Ok(Self::L2Detail),
+            _ => Err(format!("Unknown memory layer: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Standardized memory categories inspired by OpenViking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryCategory {
+    Profile,
+    Preferences,
+    #[default]
+    Entities,
+    Events,
+    Cases,
+    Patterns,
+}
+
+impl MemoryCategory {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Profile => "profile",
+            Self::Preferences => "preferences",
+            Self::Entities => "entities",
+            Self::Events => "events",
+            Self::Cases => "cases",
+            Self::Patterns => "patterns",
+        }
+    }
+
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Self::Entities)
+    }
+}
+
+impl std::str::FromStr for MemoryCategory {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "profile" => Ok(Self::Profile),
+            "preferences" => Ok(Self::Preferences),
+            "entities" => Ok(Self::Entities),
+            "events" => Ok(Self::Events),
+            "cases" => Ok(Self::Cases),
+            "patterns" => Ok(Self::Patterns),
+            _ => Err(format!("Unknown memory category: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
     }
@@ -454,6 +566,10 @@ pub struct MemoryFact {
     pub similarity_score: Option<f32>,
     /// VFS path for hierarchical organization (e.g., "aleph://user/preferences/coding")
     pub path: String,
+    /// Tiered loading level for retrieval.
+    pub layer: MemoryLayer,
+    /// Standardized memory category.
+    pub category: MemoryCategory,
     /// Fact origin/type
     pub fact_source: FactSource,
     /// Content hash for L1 staleness detection
@@ -484,6 +600,7 @@ impl MemoryFact {
 
         let path = fact_type.default_path().to_string();
         let parent_path = compute_parent_path(&path);
+        let category = fact_type.default_category();
 
         Self {
             id: uuid::Uuid::new_v4().to_string(),
@@ -503,6 +620,8 @@ impl MemoryFact {
             workspace: "default".to_string(),
             similarity_score: None,
             path,
+            layer: MemoryLayer::L2Detail,
+            category,
             fact_source: FactSource::Extracted,
             content_hash: String::new(),
             parent_path,
@@ -519,6 +638,7 @@ impl MemoryFact {
 
         let path = fact_type.default_path().to_string();
         let parent_path = compute_parent_path(&path);
+        let category = fact_type.default_category();
 
         Self {
             id,
@@ -538,6 +658,8 @@ impl MemoryFact {
             workspace: "default".to_string(),
             similarity_score: None,
             path,
+            layer: MemoryLayer::L2Detail,
+            category,
             fact_source: FactSource::Extracted,
             content_hash: String::new(),
             parent_path,
@@ -585,6 +707,18 @@ impl MemoryFact {
     /// Set fact source
     pub fn with_fact_source(mut self, source: FactSource) -> Self {
         self.fact_source = source;
+        self
+    }
+
+    /// Set memory layer
+    pub fn with_layer(mut self, layer: MemoryLayer) -> Self {
+        self.layer = layer;
+        self
+    }
+
+    /// Set memory category
+    pub fn with_category(mut self, category: MemoryCategory) -> Self {
+        self.category = category;
         self
     }
 
@@ -856,6 +990,39 @@ mod tests {
         assert_eq!(FactSource::Manual.as_str(), "manual");
         assert_eq!(FactSource::from_str_or_default("summary"), FactSource::Summary);
         assert_eq!(FactSource::from_str_or_default("unknown"), FactSource::Extracted);
+    }
+
+    #[test]
+    fn test_memory_layer_roundtrip() {
+        assert_eq!(MemoryLayer::L0Abstract.as_str(), "l0_abstract");
+        assert_eq!(
+            MemoryLayer::from_str_or_default("l1_overview"),
+            MemoryLayer::L1Overview
+        );
+        assert_eq!(
+            MemoryLayer::from_str_or_default("unknown"),
+            MemoryLayer::L2Detail
+        );
+    }
+
+    #[test]
+    fn test_memory_category_roundtrip() {
+        assert_eq!(MemoryCategory::Profile.as_str(), "profile");
+        assert_eq!(
+            MemoryCategory::from_str_or_default("patterns"),
+            MemoryCategory::Patterns
+        );
+        assert_eq!(
+            MemoryCategory::from_str_or_default("unknown"),
+            MemoryCategory::Entities
+        );
+    }
+
+    #[test]
+    fn test_memory_fact_defaults_layer_and_category() {
+        let fact = MemoryFact::new("User likes Vim".to_string(), FactType::Preference, vec![]);
+        assert_eq!(fact.layer, MemoryLayer::L2Detail);
+        assert_eq!(fact.category, MemoryCategory::Preferences);
     }
 
     #[test]

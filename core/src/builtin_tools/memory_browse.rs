@@ -10,7 +10,8 @@ use super::error::ToolError;
 use crate::error::Result;
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::{MemoryBackend, MemoryStore, PathEntry as StorePathEntry};
-use crate::memory::FactSource;
+use crate::memory::workspace::WorkspaceFilter;
+use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter};
 use crate::tools::AlephTool;
 
 /// Browse action type
@@ -141,16 +142,26 @@ impl MemoryBrowseTool {
             .await
             .map_err(|e| ToolError::Execution(format!("Failed to list path: {}", e)))?;
 
-        let entries: Vec<BrowseLsEntry> = children.into_iter().map(|c| BrowseLsEntry {
-            // The new PathEntry has: path, is_leaf, child_count
-            // We adapt to the old BrowseLsEntry fields
-            name: c.path.trim_start_matches(path).to_string(),
-            path: c.path.clone(),
-            is_directory: !c.is_leaf,
-            fact_count: c.child_count,
-            l1_available: false, // TODO: Check if L1 exists for this path
-            abstract_line: String::new(), // TODO: Extract from L1 if available
-        }).collect();
+        let mut entries = Vec::with_capacity(children.len());
+        for child in children {
+            let summary = self.summary_fact_for_path(&child.path, workspace).await?;
+            let l1_available = summary
+                .as_ref()
+                .is_some_and(|f| f.layer == MemoryLayer::L1Overview);
+            let abstract_line = summary
+                .as_ref()
+                .map(|f| Self::extract_abstract_line(&f.content))
+                .unwrap_or_default();
+
+            entries.push(BrowseLsEntry {
+                name: child.path.strip_prefix(path).unwrap_or(&child.path).to_string(),
+                path: child.path.clone(),
+                is_directory: !child.is_leaf,
+                fact_count: child.child_count,
+                l1_available,
+                abstract_line,
+            });
+        }
 
         let summary = format!("{} - {} entries", path, entries.len());
 
@@ -166,35 +177,29 @@ impl MemoryBrowseTool {
     }
 
     async fn handle_read(&self, path: &str, workspace: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
-        // First try L1 overview (fact with FactSource::Summary at this path)
-        if let Ok(Some(l1)) = self.database.get_by_path(path, &NamespaceScope::Owner, workspace).await {
-            if l1.fact_source == FactSource::Summary {
-                return Ok(MemoryBrowseOutput {
-                    action: "read".to_string(),
-                    path: path.to_string(),
-                    entries: None,
-                    content: Some(l1.content.clone()),
-                    metadata: Some(ReadMetadata {
-                        fact_type: l1.fact_type.to_string(),
-                        fact_source: l1.fact_source.to_string(),
-                        created_at: l1.created_at,
-                        updated_at: l1.updated_at,
-                        confidence: l1.confidence,
-                    }),
-                    matches: None,
-                    summary: format!("{} - L1 Overview", path),
-                });
-            }
+        if let Some(summary_fact) = self.summary_fact_for_path(path, workspace).await? {
+            return Ok(MemoryBrowseOutput {
+                action: "read".to_string(),
+                path: path.to_string(),
+                entries: None,
+                content: Some(summary_fact.content.clone()),
+                metadata: Some(ReadMetadata {
+                    fact_type: summary_fact.fact_type.to_string(),
+                    fact_source: summary_fact.fact_source.to_string(),
+                    created_at: summary_fact.created_at,
+                    updated_at: summary_fact.updated_at,
+                    confidence: summary_fact.confidence,
+                }),
+                matches: None,
+                summary: format!("{} - {} summary", path, summary_fact.layer),
+            });
         }
 
-        // Otherwise return all facts at this path
-        // Old: db.get_facts_by_path_prefix(path) → New: get_all_facts + filter by path prefix
-        // TODO: Add get_facts_by_path_prefix to MemoryStore for efficiency
-        let all_facts = self.database.get_all_facts(false).await
+        // Otherwise return all L2 detail facts under this prefix.
+        let facts = self.database
+            .get_facts_by_path_prefix(path, &self.detail_filter(workspace), 500)
+            .await
             .map_err(|e| ToolError::Execution(format!("Failed to read path: {}", e)))?;
-        let facts: Vec<_> = all_facts.into_iter()
-            .filter(|f| f.path.starts_with(path) && f.is_valid && f.workspace == workspace)
-            .collect();
 
         if facts.is_empty() {
             return Ok(MemoryBrowseOutput {
@@ -245,13 +250,10 @@ impl MemoryBrowseTool {
     }
 
     async fn handle_glob(&self, path: &str, pattern: &str, workspace: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
-        // Old: db.get_facts_by_path_prefix(path) → New: get_all_facts + filter
-        // TODO: Add get_facts_by_path_prefix to MemoryStore for efficiency
-        let all_facts = self.database.get_all_facts(false).await
+        let path_facts = self.database
+            .get_facts_by_path_prefix(path, &self.detail_filter(workspace), 1000)
+            .await
             .map_err(|e| ToolError::Execution(format!("Failed to glob: {}", e)))?;
-        let path_facts: Vec<_> = all_facts.into_iter()
-            .filter(|f| f.path.starts_with(path) && f.is_valid && f.workspace == workspace)
-            .collect();
 
         let matches: Vec<GlobMatch> = path_facts.into_iter()
             .filter(|f| {
@@ -279,6 +281,59 @@ impl MemoryBrowseTool {
             matches: Some(matches),
             summary,
         })
+    }
+
+    fn detail_filter(&self, workspace: &str) -> SearchFilter {
+        SearchFilter::new()
+            .with_valid_only()
+            .with_workspace(WorkspaceFilter::Single(workspace.to_string()))
+            .with_layer(MemoryLayer::L2Detail)
+    }
+
+    async fn summary_fact_for_path(
+        &self,
+        path: &str,
+        workspace: &str,
+    ) -> std::result::Result<Option<MemoryFact>, ToolError> {
+        let filter = SearchFilter::new()
+            .with_valid_only()
+            .with_workspace(WorkspaceFilter::Single(workspace.to_string()));
+
+        let mut summaries: Vec<MemoryFact> = self
+            .database
+            .get_facts_by_path_prefix(path, &filter, 128)
+            .await
+            .map_err(|e| ToolError::Execution(format!("Failed to read summaries: {}", e)))?
+            .into_iter()
+            .filter(|f| f.path == path && f.fact_source == FactSource::Summary)
+            .collect();
+
+        summaries.sort_by(|a, b| {
+            Self::summary_layer_rank(a.layer)
+                .cmp(&Self::summary_layer_rank(b.layer))
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
+        });
+
+        Ok(summaries.into_iter().next())
+    }
+
+    fn summary_layer_rank(layer: MemoryLayer) -> u8 {
+        match layer {
+            MemoryLayer::L1Overview => 0,
+            MemoryLayer::L0Abstract => 1,
+            MemoryLayer::L2Detail => 2,
+        }
+    }
+
+    fn extract_abstract_line(content: &str) -> String {
+        content
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or_default()
+            .chars()
+            .take(120)
+            .collect()
     }
 }
 
@@ -315,7 +370,19 @@ impl AlephTool for MemoryBrowseTool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::memory::store::lance::LanceMemoryBackend;
+    use crate::memory::store::MemoryBackend;
+    use crate::memory::{FactType, MemoryFact};
+
     use super::*;
+
+    async fn create_test_db() -> (MemoryBackend, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let backend = LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap();
+        (Arc::new(backend), temp_dir)
+    }
 
     #[test]
     fn test_browse_args_serialization() {
@@ -358,5 +425,37 @@ mod tests {
         assert!(json.contains("preferences/"));
         // content should be absent (skip_serializing_if = None)
         assert!(!json.contains("\"content\""));
+    }
+
+    #[tokio::test]
+    async fn test_memory_browse_ls_marks_l1_available() {
+        let (db, _temp_dir) = create_test_db().await;
+        let tool = MemoryBrowseTool::new(db.clone());
+
+        let detail_fact = MemoryFact::new("User likes Rust".into(), FactType::Preference, vec![])
+            .with_path("aleph://user/preferences/coding/".to_string())
+            .with_layer(MemoryLayer::L2Detail);
+
+        let summary_fact = MemoryFact::new("Coding overview\n- Rust".into(), FactType::Other, vec![])
+            .with_path("aleph://user/preferences/coding/".to_string())
+            .with_fact_source(FactSource::Summary)
+            .with_layer(MemoryLayer::L1Overview);
+
+        db.insert_fact(&detail_fact).await.unwrap();
+        db.insert_fact(&summary_fact).await.unwrap();
+
+        let output = tool
+            .handle_ls("aleph://user/preferences/", "default")
+            .await
+            .unwrap();
+
+        let entries = output.entries.unwrap();
+        let coding = entries
+            .iter()
+            .find(|entry| entry.path == "aleph://user/preferences/coding/")
+            .unwrap();
+
+        assert!(coding.l1_available);
+        assert!(!coding.abstract_line.is_empty());
     }
 }
