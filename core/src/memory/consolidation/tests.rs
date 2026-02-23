@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use crate::memory::{FactSource, FactSpecificity, FactType, MemoryFact, TemporalScope};
+use crate::memory::{
+    FactSource, FactSpecificity, FactType, MemoryFact, MemoryLayer, TemporalScope,
+};
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::store::lance::LanceMemoryBackend;
 use crate::Result;
@@ -17,6 +19,8 @@ fn create_test_fact(
     confidence: f32,
     days_old: i64,
 ) -> MemoryFact {
+    let category = fact_type.default_category();
+
     // Create 384-dim embedding based on content hash
     let mut embedding = vec![0.0; 384];
     let hash = content.len() % 384;
@@ -44,12 +48,14 @@ fn create_test_fact(
         temporal_scope: TemporalScope::Permanent,
         similarity_score: None,
         path: String::new(),
+        layer: MemoryLayer::L2Detail,
+        category,
         fact_source: FactSource::Extracted,
         content_hash: String::new(),
         parent_path: String::new(),
         embedding_model: String::new(),
-            namespace: "owner".to_string(),
-            workspace: "default".to_string(),
+        namespace: "owner".to_string(),
+        workspace: "default".to_string(),
     }
 }
 

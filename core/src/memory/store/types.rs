@@ -3,7 +3,7 @@
 //! Provides filter, scoring, and query types shared across
 //! MemoryStore, GraphStore, and SessionStore implementations.
 
-use crate::memory::context::{FactType, MemoryFact};
+use crate::memory::context::{FactType, MemoryCategory, MemoryFact, MemoryLayer};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::workspace::WorkspaceFilter;
 
@@ -30,6 +30,10 @@ pub struct SearchFilter {
     pub workspace: Option<WorkspaceFilter>,
     /// Restrict to a specific fact type.
     pub fact_type: Option<FactType>,
+    /// Restrict to a specific memory layer.
+    pub layer: Option<MemoryLayer>,
+    /// Restrict to a specific memory category.
+    pub category: Option<MemoryCategory>,
     /// Filter by validity flag (`true` = only valid, `false` = only invalid).
     pub is_valid: Option<bool>,
     /// Restrict to facts whose `path` starts with this prefix.
@@ -75,6 +79,18 @@ impl SearchFilter {
     /// Set fact type filter.
     pub fn with_fact_type(mut self, ft: FactType) -> Self {
         self.fact_type = Some(ft);
+        self
+    }
+
+    /// Set memory layer filter.
+    pub fn with_layer(mut self, layer: MemoryLayer) -> Self {
+        self.layer = Some(layer);
+        self
+    }
+
+    /// Set memory category filter.
+    pub fn with_category(mut self, category: MemoryCategory) -> Self {
+        self.category = Some(category);
         self
     }
 
@@ -131,6 +147,14 @@ impl SearchFilter {
 
         if let Some(ref ft) = self.fact_type {
             clauses.push(format!("fact_type = '{}'", ft.as_str()));
+        }
+
+        if let Some(layer) = self.layer {
+            clauses.push(format!("layer = '{}'", layer.as_str()));
+        }
+
+        if let Some(category) = self.category {
+            clauses.push(format!("category = '{}'", category.as_str()));
         }
 
         if let Some(valid) = self.is_valid {
@@ -360,6 +384,17 @@ mod tests {
         assert!(sql.contains("workspace = 'crypto'"));
         assert!(sql.contains("namespace = 'owner'"));
         assert!(sql.contains("is_valid = true"));
+    }
+
+    #[test]
+    fn search_filter_supports_layer_and_category() {
+        let filter = SearchFilter::new()
+            .with_layer(MemoryLayer::L0Abstract)
+            .with_category(MemoryCategory::Preferences);
+
+        let sql = filter.to_lance_filter().unwrap();
+        assert!(sql.contains("layer = 'l0_abstract'"));
+        assert!(sql.contains("category = 'preferences'"));
     }
 
     #[test]

@@ -349,6 +349,25 @@ impl MemoryStore for LanceMemoryBackend {
         Ok(facts.into_iter().next())
     }
 
+    async fn get_facts_by_path_prefix(
+        &self,
+        path_prefix: &str,
+        filter: &SearchFilter,
+        limit: usize,
+    ) -> Result<Vec<MemoryFact>, AlephError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let prefix_clause = format!("starts_with(path, '{}')", path_prefix);
+        let scoped_filter = match filter.to_lance_filter() {
+            Some(existing) => format!("{} AND {}", existing, prefix_clause),
+            None => prefix_clause,
+        };
+
+        scan_facts(&self.facts_table, Some(scoped_filter.as_str()), Some(limit)).await
+    }
+
     // -- Statistics & bulk --------------------------------------------------
 
     async fn count_facts(&self, filter: &SearchFilter) -> Result<usize, AlephError> {
@@ -960,6 +979,40 @@ mod tests {
             .await
             .unwrap();
         assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_facts_by_path_prefix() {
+        let (_tmp, backend) = create_test_backend().await;
+
+        let mut fact_a = make_test_fact("A", FactType::Preference, false);
+        fact_a.path = "aleph://user/preferences/coding/rust".to_string();
+        fact_a.parent_path = "aleph://user/preferences/coding/".to_string();
+
+        let mut fact_b = make_test_fact("B", FactType::Preference, false);
+        fact_b.path = "aleph://user/preferences/coding/vim".to_string();
+        fact_b.parent_path = "aleph://user/preferences/coding/".to_string();
+
+        let mut fact_c = make_test_fact("C", FactType::Preference, false);
+        fact_c.path = "aleph://user/preferences/ui/theme".to_string();
+        fact_c.parent_path = "aleph://user/preferences/ui/".to_string();
+
+        backend
+            .batch_insert_facts(&[fact_a, fact_b, fact_c])
+            .await
+            .unwrap();
+
+        let results = backend
+            .get_facts_by_path_prefix(
+                "aleph://user/preferences/coding/",
+                &SearchFilter::new().with_fact_type(FactType::Preference),
+                10,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|f| f.path.starts_with("aleph://user/preferences/coding/")));
     }
 
     #[tokio::test]
