@@ -62,10 +62,9 @@ pub struct ExternalServerConfig {
 
 /// Tool location - where a tool comes from
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 enum ToolLocation {
-    /// External server (name)
-    External(String),
+    /// External server (name stored for debugging/future use)
+    External(#[allow(dead_code)] String),
 }
 
 /// MCP Client - registry for external MCP server connections

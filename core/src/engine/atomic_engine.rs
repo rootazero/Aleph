@@ -14,9 +14,8 @@ pub struct AtomicEngine {
     executor: AtomicExecutor,
     /// Maximum retry attempts for self-healing
     max_retries: usize,
-    /// Working directory for relative path resolution
-    #[allow(dead_code)]
-    working_dir: PathBuf,
+    /// Working directory for relative path resolution (retained for diagnostics)
+    _working_dir: PathBuf,
 }
 
 /// Execution result with optional feedback for self-healing
@@ -37,7 +36,7 @@ impl AtomicEngine {
             reflex: Arc::new(RwLock::new(ReflexLayer::with_default_rules())),
             executor: AtomicExecutor::new(working_dir.clone()),
             max_retries: 3,
-            working_dir,
+            _working_dir: working_dir,
         }
     }
 

@@ -19,9 +19,8 @@ use super::spec::{AlephSkillSpec, SandboxMode};
 #[derive(Clone)]
 pub struct MarkdownCliTool {
     pub spec: AlephSkillSpec,
-    /// Whether usage examples have been injected in current session
-    #[allow(dead_code)]
-    context_injected: Arc<AtomicBool>,
+    /// Whether usage examples have been injected in current session (kept for session lifecycle)
+    _context_injected: Arc<AtomicBool>,
 }
 
 impl MarkdownCliTool {
@@ -29,7 +28,7 @@ impl MarkdownCliTool {
     pub fn new(spec: AlephSkillSpec) -> Self {
         Self {
             spec,
-            context_injected: Arc::new(AtomicBool::new(false)),
+            _context_injected: Arc::new(AtomicBool::new(false)),
         }
     }
 

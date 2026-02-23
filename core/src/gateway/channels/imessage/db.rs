@@ -41,7 +41,7 @@ pub struct RawMessage {
     pub text: Option<String>,
     pub handle_id: i64,
     pub date: i64,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Populated from SQLite query; used for filtering context
     pub is_from_me: bool,
     pub cache_has_attachments: bool,
     pub chat_id: Option<i64>,

@@ -320,15 +320,15 @@ enum AnalysisResponse {
 
 #[derive(Debug, Deserialize)]
 struct TaskDef {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from LLM JSON response
     id: String,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from LLM JSON response
     name: String,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from LLM JSON response
     description: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from LLM JSON response
     deps: Vec<String>,
     #[serde(default = "default_risk")]
     risk: String,

@@ -22,9 +22,8 @@ use crate::providers::AiProvider;
 /// Provides a unified API for planning and executing task graphs.
 /// Renamed from CoworkEngine to reflect the agent-centric architecture.
 pub struct AgentEngine {
-    /// Configuration (stored for model routing access, core parameters are hardcoded)
-    #[allow(dead_code)]
-    pub(crate) config: AgentConfig,
+    /// Configuration (stored for future model routing access, core parameters are hardcoded)
+    pub(crate) _config: AgentConfig,
     pub(crate) planner: Arc<dyn TaskPlanner>,
     pub(crate) scheduler: RwLock<DagScheduler>,
     pub(crate) executors: ExecutorRegistry,
@@ -62,7 +61,7 @@ impl AgentEngine {
         };
 
         Self {
-            config,
+            _config: config,
             planner: Arc::new(LlmTaskPlanner::new(provider.clone())),
             scheduler: RwLock::new(DagScheduler::with_config(scheduler_config)),
             executors,
@@ -97,7 +96,7 @@ impl AgentEngine {
         };
 
         Self {
-            config,
+            _config: config,
             planner,
             scheduler: RwLock::new(DagScheduler::with_config(scheduler_config)),
             executors,
@@ -136,7 +135,7 @@ impl AgentEngine {
         };
 
         Self {
-            config,
+            _config: config,
             planner,
             scheduler: RwLock::new(DagScheduler::with_config(scheduler_config)),
             executors,

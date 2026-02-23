@@ -33,8 +33,7 @@ impl Default for ExperienceReplayConfig {
 
 /// L1.5 Experience Replay Layer
 pub struct ExperienceReplayLayer {
-    #[allow(dead_code)]
-    db: MemoryBackend,
+    _db: MemoryBackend,
     embedder: Arc<SmartEmbedder>,
     config: ExperienceReplayConfig,
 }
@@ -47,7 +46,7 @@ impl ExperienceReplayLayer {
         config: ExperienceReplayConfig,
     ) -> Self {
         Self {
-            db,
+            _db: db,
             embedder,
             config,
         }

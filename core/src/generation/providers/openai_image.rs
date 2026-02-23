@@ -248,7 +248,7 @@ struct ImageGenerationRequest {
 #[derive(Debug, Clone, Deserialize)]
 struct ImageGenerationResponse {
     /// Unix timestamp of when the request was created
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     created: u64,
     /// Array of generated images
     data: Vec<ImageData>,
@@ -278,10 +278,10 @@ struct OpenAiError {
     #[serde(rename = "type")]
     error_type: String,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     param: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     code: Option<String>,
 }
 

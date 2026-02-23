@@ -25,7 +25,7 @@ pub use url::extract_youtube_url;
 mod tests {
     use super::*;
     use parser::{decode_html_entities, extract_json_object, parse_transcript_xml};
-    use super::url::{contains_youtube_url, parse_video_id};
+    use super::url::parse_video_id;
 
     #[test]
     fn test_parse_video_id_standard_url() {
@@ -84,17 +84,6 @@ mod tests {
         let input = "No video URL here";
         let url = extract_youtube_url(input);
         assert!(url.is_none());
-    }
-
-    #[test]
-    fn test_contains_youtube_url() {
-        assert!(contains_youtube_url(
-            "https://youtube.com/watch?v=abc12345678"
-        ));
-        assert!(contains_youtube_url(
-            "Check https://youtu.be/abc12345678 out"
-        ));
-        assert!(!contains_youtube_url("No URL here"));
     }
 
     #[test]

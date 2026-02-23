@@ -240,7 +240,7 @@ impl RuleLearner {
 
         // Create a simple extractor that captures the entire input
         let extractor = Box::new(SimpleExtractor {
-            action: record.action.clone(),
+            _action: record.action.clone(),
         });
 
         Some(KeywordRule {
@@ -297,8 +297,7 @@ impl Default for RuleLearner {
 
 /// Simple parameter extractor that uses the learned action directly
 struct SimpleExtractor {
-    #[allow(dead_code)]
-    action: AtomicAction,
+    _action: AtomicAction,
 }
 
 impl super::ParamExtractor for SimpleExtractor {

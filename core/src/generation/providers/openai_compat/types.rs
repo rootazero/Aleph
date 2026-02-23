@@ -45,7 +45,7 @@ pub struct ImageGenerationRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImageGenerationResponse {
     /// Unix timestamp of when the request was created
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     pub created: u64,
     /// Array of generated images
     pub data: Vec<ImageData>,
@@ -75,9 +75,9 @@ pub struct OpenAiError {
     #[serde(rename = "type")]
     pub error_type: String,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     pub param: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     pub code: Option<String>,
 }

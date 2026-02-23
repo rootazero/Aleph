@@ -152,8 +152,7 @@ struct PoeLoopCallback {
     /// Execution logs
     execution_log: Arc<RwLock<Vec<StepLog>>>,
     /// Workspace root for relative path calculation
-    /// Reserved for future use: converting absolute paths to workspace-relative paths
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Architecture reserve: will convert absolute paths to workspace-relative paths
     workspace: PathBuf,
     /// Step counter for logging
     step_counter: Arc<RwLock<u32>>,

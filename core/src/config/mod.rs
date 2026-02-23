@@ -18,13 +18,9 @@ mod save;
 mod validate;
 mod migration;
 mod methods;
-pub mod diff;
-pub mod reload;
-
 pub mod schema;
 pub mod types;
 pub mod ui_hints;
-pub mod watcher;
 
 // Re-export main types
 pub use structs::{Config, FullConfig};
@@ -37,9 +33,6 @@ pub use ui_hints::{build_ui_hints, ConfigUiHints};
 
 // Re-export types for backward compatibility
 pub use types::*;
-
-#[allow(unused_imports)]
-pub use watcher::ConfigWatcher;
 
 // Tests
 #[cfg(test)]

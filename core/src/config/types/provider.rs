@@ -3,7 +3,6 @@
 //! Contains AI provider configuration:
 //! - ProviderConfig: Individual provider settings (API key, model, etc.)
 //! - ProviderConfigEntry: Provider with name (for UniFFI)
-//! - TestConnectionResult: Connection test result
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -18,18 +17,6 @@ pub struct ProviderConfigEntry {
     pub name: String,
     #[serde(flatten)]
     pub config: ProviderConfig,
-}
-
-// =============================================================================
-// TestConnectionResult
-// =============================================================================
-
-/// Test connection result (for provider connection testing)
-#[allow(dead_code)] // Reserved for connection testing feature
-#[derive(Debug, Clone, JsonSchema)]
-pub struct TestConnectionResult {
-    pub success: bool,
-    pub message: String,
 }
 
 // =============================================================================

@@ -65,8 +65,6 @@ impl Default for PrivacyFilterConfig {
 /// Privacy filter middleware.
 pub struct PrivacyFilter {
     config: PrivacyFilterConfig,
-    #[allow(dead_code)] // Will be used when credit card filtering is implemented
-    credit_card_regex: Regex,
     ssn_regex: Regex,
     phone_regex: Regex,
 }
@@ -76,7 +74,6 @@ impl PrivacyFilter {
     pub fn new(config: PrivacyFilterConfig) -> Self {
         Self {
             config,
-            credit_card_regex: Regex::new(r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b").unwrap(),
             ssn_regex: Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap(),
             phone_regex: Regex::new(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b").unwrap(),
         }

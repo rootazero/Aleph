@@ -1,23 +1,24 @@
-//! Agent Loop Events for Swarm Intelligence
+//! AgentLoop events for Swarm Intelligence integration
 //!
-//! This module defines semantic events published by AgentLoop at key operation points.
-//! These events are NOT tier-classified - SwarmCoordinator handles classification.
+//! These events represent key moments in the AgentLoop lifecycle that
+//! are published to the SwarmCoordinator for collective intelligence.
 
 use serde::{Deserialize, Serialize};
-use crate::agent_loop::decision::ActionResult;
 
-/// Semantic events published by AgentLoop at key operation points
-/// These events are NOT tier-classified - SwarmCoordinator handles classification
+use super::decision::ActionResult;
+
+/// Events emitted by AgentLoop for Swarm Intelligence
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentLoopEvent {
-    /// Tool execution started
+    /// Action initiated (before tool execution)
     ActionInitiated {
         agent_id: String,
         action_type: String,
-        target: Option<String>,  // File path, tool name, etc.
+        target: Option<String>,
     },
 
-    /// Tool execution completed
+    /// Action completed (after tool execution)
     ActionCompleted {
         agent_id: String,
         action_type: String,
@@ -25,14 +26,14 @@ pub enum AgentLoopEvent {
         duration_ms: u64,
     },
 
-    /// Agent made a decision about next action
+    /// Decision made (after thinking phase)
     DecisionMade {
         agent_id: String,
-        decision: String,  // "refactor Auth module", "fix dependency conflict"
+        decision: String,
         affected_files: Vec<String>,
     },
 
-    /// Agent captured important insight (error, contradiction, discovery)
+    /// Insight captured (from thinking or execution)
     InsightCaptured {
         agent_id: String,
         insight: String,
@@ -41,7 +42,8 @@ pub enum AgentLoopEvent {
 }
 
 /// Severity level for insights
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum InsightSeverity {
     Info,
     Warning,

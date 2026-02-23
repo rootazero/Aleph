@@ -62,7 +62,7 @@ impl ExecutionTelemetry {
 
 /// Cortex telemetry collector
 pub struct CortexTelemetry {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Architecture reserve: will be used by distillation pipeline (Month 2)
     db: Option<MemoryBackend>,
     enabled: bool,
 }

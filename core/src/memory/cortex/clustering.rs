@@ -43,15 +43,14 @@ pub struct Cluster {
 
 /// Clustering service for grouping similar experiences
 pub struct ClusteringService {
-    #[allow(dead_code)]
-    db: MemoryBackend,
+    _db: MemoryBackend,
     config: ClusteringConfig,
 }
 
 impl ClusteringService {
     /// Create a new clustering service
     pub fn new(db: MemoryBackend, config: ClusteringConfig) -> Self {
-        Self { db, config }
+        Self { _db: db, config }
     }
 
     /// Run clustering on candidate experiences

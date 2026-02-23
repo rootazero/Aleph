@@ -143,7 +143,7 @@ where
     /// let message_builder = builder.build_message_builder(msg_config);
     /// ```
     pub fn build_message_builder(&self, config: MessageBuilderConfig) -> MessageBuilder {
-        let mut context_providers: Vec<Box<dyn ContextProvider>> = Vec::new();
+        let context_providers: Vec<Box<dyn ContextProvider>> = Vec::new();
 
         // If Swarm enabled, add SwarmContextProvider
         // Note: This is a placeholder implementation. In the real integration,

@@ -330,7 +330,7 @@ struct StabilityErrorResponse {
     /// Error message
     message: String,
     /// Error name/type
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     name: Option<String>,
 }
 
