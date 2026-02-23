@@ -29,27 +29,27 @@ pub struct SemanticAggregator {
 }
 
 /// Sliding window for event buffering
-pub(crate) struct SlidingWindow {
+pub struct SlidingWindow {
     max_size: usize,
     events: VecDeque<InfoEvent>,
 }
 
 impl SlidingWindow {
-    pub(crate) fn new(max_size: usize) -> Self {
+    pub fn new(max_size: usize) -> Self {
         Self {
             max_size,
             events: VecDeque::with_capacity(max_size),
         }
     }
 
-    pub(crate) fn push(&mut self, event: InfoEvent) {
+    pub fn push(&mut self, event: InfoEvent) {
         if self.events.len() >= self.max_size {
             self.events.pop_front();
         }
         self.events.push_back(event);
     }
 
-    pub(crate) fn get_recent(&self, count: usize) -> Vec<&InfoEvent> {
+    pub fn get_recent(&self, count: usize) -> Vec<&InfoEvent> {
         self.events
             .iter()
             .rev()

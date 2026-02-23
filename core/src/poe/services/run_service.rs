@@ -306,7 +306,7 @@ struct PoeExecutionContext<W: Worker + 'static> {
 
 /// Execute a POE task with event emission
 async fn execute_poe_task<W: Worker + 'static>(
-    mut ctx: PoeExecutionContext<W>,
+    ctx: PoeExecutionContext<W>,
 ) -> Result<PoeOutcome, String> {
     let PoeExecutionContext {
         task_id,

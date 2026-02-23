@@ -45,6 +45,8 @@ pub struct DebugToolCallResult {
 }
 
 /// Parse debug.tool_call parameters from request
+// JsonRpcResponse is 152+ bytes but boxing it would complicate all handler call sites
+#[allow(clippy::result_large_err)]
 pub fn parse_tool_call_params(request: &JsonRpcRequest) -> Result<DebugToolCallParams, JsonRpcResponse> {
     let params = request.params.as_ref().ok_or_else(|| {
         JsonRpcResponse::error(

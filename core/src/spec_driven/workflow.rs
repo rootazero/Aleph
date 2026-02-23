@@ -131,9 +131,9 @@ impl SpecDrivenWorkflow {
             // Phase 5: Check if acceptable
             if evaluation.score >= self.config.min_score && evaluation.is_acceptable {
                 let result = WorkflowResult::Success {
-                    spec: spec.clone(),
+                    spec: Box::new(spec.clone()),
                     tests,
-                    evaluation,
+                    evaluation: Box::new(evaluation),
                 };
                 self.callback.on_complete(&result);
                 return Ok(result);

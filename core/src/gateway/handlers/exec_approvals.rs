@@ -354,6 +354,8 @@ async fn handle_callback(
 }
 
 /// Parse params from request
+// JsonRpcResponse is 152+ bytes but boxing it would complicate all handler call sites
+#[allow(clippy::result_large_err)]
 fn parse_params<T: for<'de> Deserialize<'de>>(request: &JsonRpcRequest) -> Result<T, JsonRpcResponse> {
     match &request.params {
         Some(params) => serde_json::from_value(params.clone()).map_err(|e| {

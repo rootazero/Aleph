@@ -52,7 +52,7 @@ pub struct CapabilityApprovalRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ApprovalRequest {
     Command(CommandApprovalRequest),
-    Capability(CapabilityApprovalRequest),
+    Capability(Box<CapabilityApprovalRequest>),
 }
 
 /// Command approval request (placeholder for existing type)

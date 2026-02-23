@@ -50,6 +50,8 @@ fn default_max_lines() -> u32 {
 // Helper: Parse params
 // ============================================================================
 
+// JsonRpcResponse is 152+ bytes but boxing it would complicate all handler call sites
+#[allow(clippy::result_large_err)]
 fn parse_params<T: serde::de::DeserializeOwned>(
     request: &JsonRpcRequest,
     required_field: &str,
