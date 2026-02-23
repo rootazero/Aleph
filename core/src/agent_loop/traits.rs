@@ -79,11 +79,6 @@ pub trait ActionExecutor: Send + Sync {
     async fn execute(&self, action: &Action, identity: &IdentityContext) -> ActionResult;
 }
 
-/// Deprecated alias for backward compatibility
-#[deprecated(since = "0.2.0", note = "Use ActionExecutor instead")]
-#[allow(dead_code)]
-pub type ExecutorTrait = dyn ActionExecutor;
-
 /// Compressor trait - abstraction for context compression
 ///
 /// This trait is implemented by the ContextCompressor module

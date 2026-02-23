@@ -67,8 +67,6 @@ pub struct BlockReplyChunker {
     config: ChunkerConfig,
     buffer: String,
     emitted_blocks: VecDeque<String>,
-    /// Cached fence spans (invalidated on buffer modification)
-    cached_spans: Option<Vec<FenceSpan>>,
 }
 
 impl Default for BlockReplyChunker {
@@ -84,14 +82,12 @@ impl BlockReplyChunker {
             config,
             buffer: String::new(),
             emitted_blocks: VecDeque::new(),
-            cached_spans: None,
         }
     }
 
     /// Add text to the chunker, returns any complete blocks
     pub fn push(&mut self, text: &str) -> Vec<String> {
         self.buffer.push_str(text);
-        self.cached_spans = None; // Invalidate cache
         self.try_emit_blocks()
     }
 
@@ -102,15 +98,6 @@ impl BlockReplyChunker {
         } else {
             Some(std::mem::take(&mut self.buffer))
         }
-    }
-
-    /// Get fence spans for current buffer (cached)
-    #[allow(dead_code)]
-    fn fence_spans(&mut self) -> &[FenceSpan] {
-        if self.cached_spans.is_none() && self.config.fence_aware {
-            self.cached_spans = Some(parse_fence_spans(&self.buffer));
-        }
-        self.cached_spans.as_deref().unwrap_or(&[])
     }
 
     /// Try to emit complete blocks
@@ -136,7 +123,6 @@ impl BlockReplyChunker {
                     // Safe break outside fence
                     let block = self.buffer.drain(..=pos).collect::<String>();
                     blocks.push(block.trim().to_string());
-                    self.cached_spans = None;
                 }
                 Some(BreakPoint::FenceSplit { pos, close_line, reopen_line }) => {
                     // Breaking inside fence - need to close and reopen
@@ -152,7 +138,6 @@ impl BlockReplyChunker {
                     // Prepend fence reopen to remaining buffer
                     let remainder = std::mem::take(&mut self.buffer);
                     self.buffer = format!("{}\n{}", reopen_line, remainder);
-                    self.cached_spans = None;
                 }
                 None => {
                     if self.buffer.len() >= self.config.max_block_size {
@@ -171,7 +156,6 @@ impl BlockReplyChunker {
 
                                 let remainder = std::mem::take(&mut self.buffer);
                                 self.buffer = format!("{}\n{}", split.reopen_line, remainder);
-                                self.cached_spans = None;
                                 continue;
                             }
                         }
@@ -179,7 +163,6 @@ impl BlockReplyChunker {
                         // Safe to split directly
                         let block: String = self.buffer.drain(..split_pos).collect();
                         blocks.push(block.trim().to_string());
-                        self.cached_spans = None;
                     } else {
                         break;
                     }
@@ -322,7 +305,6 @@ impl BlockReplyChunker {
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.emitted_blocks.clear();
-        self.cached_spans = None;
     }
 }
 
