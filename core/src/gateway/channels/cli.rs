@@ -80,8 +80,6 @@ pub struct CliChannel {
     info: ChannelInfo,
     config: CliChannelConfig,
     state: Arc<RwLock<CliChannelState>>,
-    #[allow(dead_code)]
-    inbound_rx: Arc<RwLock<Option<mpsc::Receiver<InboundMessage>>>>,
 }
 
 impl CliChannel {
@@ -97,7 +95,7 @@ impl CliChannel {
 
     /// Create a new CLI channel with custom configuration
     pub fn with_config(config: CliChannelConfig) -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::channel(100);
+        let (inbound_tx, _inbound_rx) = mpsc::channel(100);
 
         let info = ChannelInfo {
             id: ChannelId::new(&config.id),
@@ -131,7 +129,6 @@ impl CliChannel {
             info,
             config,
             state: Arc::new(RwLock::new(state)),
-            inbound_rx: Arc::new(RwLock::new(Some(inbound_rx))),
         }
     }
 

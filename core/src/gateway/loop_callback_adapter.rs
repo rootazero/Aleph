@@ -37,9 +37,6 @@ pub struct EventEmittingCallback<E: EventEmitter> {
     tool_id_map: Mutex<HashMap<String, String>>,
     /// Timestamps for tool execution tracking
     tool_start_times: Mutex<HashMap<String, Instant>>,
-    /// Channel for user response (for blocking on_user_input_required)
-    #[allow(dead_code)]
-    user_response_rx: Option<tokio::sync::oneshot::Receiver<String>>,
     /// Channel sender for sending user questions to UI
     user_question_tx: Option<tokio::sync::mpsc::Sender<UserQuestion>>,
 }
@@ -62,7 +59,6 @@ impl<E: EventEmitter> EventEmittingCallback<E> {
             chunk_counter: AtomicU64::new(0),
             tool_id_map: Mutex::new(HashMap::new()),
             tool_start_times: Mutex::new(HashMap::new()),
-            user_response_rx: None,
             user_question_tx: None,
         }
     }
@@ -82,7 +78,6 @@ impl<E: EventEmitter> EventEmittingCallback<E> {
             chunk_counter: AtomicU64::new(0),
             tool_id_map: Mutex::new(HashMap::new()),
             tool_start_times: Mutex::new(HashMap::new()),
-            user_response_rx: None,
             user_question_tx: Some(user_question_tx),
         }
     }

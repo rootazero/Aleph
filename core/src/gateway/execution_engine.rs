@@ -189,17 +189,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         senders.insert(run_id.to_string(), sender);
     }
 
-    /// Remove and trigger abort for a run
-    #[allow(dead_code)]
-    async fn trigger_abort(&self, run_id: &str) -> bool {
-        let mut senders = self.abort_senders.write().await;
-        if let Some(sender) = senders.remove(run_id) {
-            let _ = sender.send(true);
-            return true;
-        }
-        false
-    }
-
     /// Format history for AgentLoop
     fn format_history(&self, history: &[super::agent_instance::SessionMessage]) -> String {
         let mut formatted = String::new();

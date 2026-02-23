@@ -239,7 +239,7 @@ fn default_true() -> bool {
 pub struct ConfigSchemaRequest {
     /// Whether to include plugin schemas (reserved for future use)
     #[serde(default = "default_true")]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from RPC params; reserved for plugin schema inclusion
     pub include_plugins: bool,
 }
 

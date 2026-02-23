@@ -90,13 +90,10 @@ pub struct AgentInstance {
 
 /// Session data stored in memory
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct SessionData {
-    key: SessionKey,
     messages: Vec<SessionMessage>,
     created_at: chrono::DateTime<chrono::Utc>,
     last_active_at: chrono::DateTime<chrono::Utc>,
-    metadata: HashMap<String, String>,
 }
 
 /// A message in a session
@@ -261,11 +258,9 @@ impl AgentInstance {
             if let Some(loaded) = storage.load_session(&key_str) {
                 debug!("Loaded session '{}' from disk with {} messages", key_str, loaded.messages.len());
                 sessions.insert(key_str.clone(), SessionData {
-                    key: key.clone(),
                     messages: loaded.messages,
                     created_at: loaded.meta.created_at,
                     last_active_at: chrono::Utc::now(),
-                    metadata: HashMap::new(),
                 });
                 loaded_from_disk = true;
             }
@@ -275,11 +270,9 @@ impl AgentInstance {
         if !loaded_from_disk {
             let now = chrono::Utc::now();
             sessions.insert(key_str.clone(), SessionData {
-                key: key.clone(),
                 messages: Vec::new(),
                 created_at: now,
                 last_active_at: now,
-                metadata: HashMap::new(),
             });
 
             // Create on disk
