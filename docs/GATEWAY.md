@@ -9,7 +9,7 @@
 The Gateway is Aleph's control plane, providing:
 - WebSocket server for real-time communication
 - JSON-RPC 2.0 protocol for structured requests
-- Multi-channel message routing (Telegram, Discord, iMessage, CLI)
+- Multi-interface message routing (Telegram, Discord, iMessage, CLI)
 - Event distribution and streaming
 - Session management and persistence
 
@@ -34,7 +34,7 @@ The Gateway is Aleph's control plane, providing:
 │  └──────────────┘     └──────────────┘     └──────────────┘    │
 │                                                                  │
 │  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐    │
-│  │   Session    │     │    Event     │     │   Channel    │    │
+│  │   Session    │     │    Event     │     │  Interface   │    │
 │  │   Manager    │     │     Bus      │     │   Registry   │    │
 │  │              │     │              │     │              │    │
 │  │ • SQLite     │     │ • Pub/Sub    │     │ • Telegram   │    │
@@ -155,7 +155,7 @@ The Gateway is Aleph's control plane, providing:
 | Domain | Methods |
 |--------|---------|
 | `auth.*` | `connect`, `pairing.approve`, `pairing.reject`, `devices.list` |
-| `channel.*` | `status`, `config`, `login` |
+| `interface.*` | `status`, `config`, `login` |
 | `mcp.*` | `start`, `stop`, `list`, `call` |
 | `plugins.*` | `install`, `uninstall`, `list`, `enable`, `disable` |
 | `skills.*` | `list`, `install`, `activate` |
@@ -185,15 +185,15 @@ Subscribe to events using glob patterns:
 
 ---
 
-## Channels
+## Interfaces
 
-**Location**: `core/src/gateway/channels/`
+**Location**: `core/src/gateway/interfaces/`
 
-### Channel Trait
+### Interface Trait
 
 ```rust
 #[async_trait]
-pub trait Channel: Send + Sync {
+pub trait Interface: Send + Sync {
     fn name(&self) -> &str;
 
     async fn start(&self) -> Result<()>;
@@ -201,7 +201,7 @@ pub trait Channel: Send + Sync {
 
     async fn send_message(
         &self,
-        target: &ChannelTarget,
+        target: &InterfaceTarget,
         message: &str,
     ) -> Result<()>;
 
@@ -209,21 +209,21 @@ pub trait Channel: Send + Sync {
 }
 ```
 
-### Available Channels
+### Available Interfaces
 
-| Channel | Feature Flag | Description |
-|---------|--------------|-------------|
+| Interface | Feature Flag | Description |
+|-----------|--------------|-------------|
 | CLI | `cli` | Command-line interface |
 | Telegram | `telegram` | Telegram Bot API |
 | Discord | `discord` | Discord Bot |
 | iMessage | (macOS only) | Apple iMessage |
 | WebChat | `gateway` | Built-in web chat |
 
-### Channel Configuration
+### Interface Configuration
 
 ```json5
 {
-  "channels": {
+  "interfaces": {
     "telegram": {
       "token": "BOT_TOKEN",
       "allowFrom": ["+1234567890"],
@@ -381,7 +381,7 @@ Configuration changes are detected via file watcher:
     ▼
 ┌─────────────────────────────────┐
 │ Apply changes                   │
-│ • Restart affected channels     │
+│ • Restart affected interfaces    │
 │ • Update routing rules          │
 │ • Emit config.changed event     │
 └─────────────────────────────────┘

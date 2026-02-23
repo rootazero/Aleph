@@ -8,11 +8,11 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              CLIENT LAYER                                    │
+│                           INTERFACE LAYER (I/O)                               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
 │  │ macOS    │  │  Tauri   │  │   CLI    │  │ Telegram │  │ Discord  │      │
-│  │  App     │  │   App    │  │          │  │   Bot    │  │   Bot    │      │
+│  │  App     │  │   App    │  │          │  │Interface │  │Interface │      │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘      │
 │       │             │             │             │             │             │
 │       └─────────────┴─────────────┴─────────────┴─────────────┘             │
@@ -30,7 +30,7 @@
 │  │  (JSON-RPC) │  │  Manager    │  │    Bus      │  │  (Auth)     │        │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘        │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │  Channel    │  │   Config    │  │  Webhooks   │  │    Cron     │        │
+│  │ Interface   │  │   Config    │  │  Webhooks   │  │    Cron     │        │
 │  │  Registry   │  │ Hot Reload  │  │             │  │  Scheduler  │        │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘        │
 └───────────────────────────────────┬─────────────────────────────────────────┘
@@ -92,7 +92,7 @@
           │                │                │
           ▼                ▼                ▼
     ┌───────────┐    ┌───────────┐    ┌───────────┐
-    │ channels  │    │  routing  │    │ handlers  │
+    │interfaces │    │  routing  │    │ handlers  │
     └───────────┘    └───────────┘    └─────┬─────┘
                                             │
                            ┌────────────────┼────────────────┐
@@ -205,7 +205,7 @@ Thinker Decision (tool_use)
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| **gateway** | `core/src/gateway/` | WebSocket server, JSON-RPC routing, channels |
+| **gateway** | `core/src/gateway/` | WebSocket server, JSON-RPC routing, interfaces |
 | **agent_loop** | `core/src/agent_loop/` | Observe-Think-Act-Feedback cycle |
 | **thinker** | `core/src/thinker/` | LLM interaction, prompt building, streaming |
 | **dispatcher** | `core/src/dispatcher/` | Task orchestration, tool filtering |
@@ -370,10 +370,10 @@ default = ["gateway"]
 gateway = ["tokio-tungstenite", "axum", ...]
 cli = ["inquire"]
 
-# Channels (require gateway)
+# Interfaces (require gateway)
 telegram = ["teloxide", "gateway"]
 discord = ["serenity", "gateway"]
-all-channels = ["telegram", "discord"]
+all-interfaces = ["telegram", "discord"]
 
 # Optional features
 cron = ["cron", "gateway"]
@@ -392,11 +392,11 @@ plugin-all = ["plugin-wasm", "plugin-nodejs"]
 ### macOS App
 
 ```
-platforms/macos/
+apps/macos/
 ├── Aleph/
 │   ├── Sources/
 │   │   ├── App/              # App lifecycle
-│   │   ├── Gateway/          # WebSocket client
+│   │   ├── Gateway/          # WebSocket interface
 │   │   ├── Store/            # SwiftUI state
 │   │   ├── Services/         # Core services
 │   │   ├── Components/       # UI components
@@ -409,7 +409,7 @@ platforms/macos/
 ### Tauri App
 
 ```
-platforms/tauri/
+apps/desktop/
 ├── src/                      # React frontend
 │   ├── components/
 │   └── App.tsx

@@ -1,3 +1,8 @@
+> **SUPERSEDED** by `docs/plans/2026-02-23-server-centric-architecture-design.md`
+> This document describes a deprecated Server-Client architecture that has been replaced.
+
+---
+
 # Server-Client Architecture Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

@@ -195,7 +195,7 @@ Keep: runtime checks, timeout, output size limits, env filtering.
 
 ### CLI guests Completion
 
-**File:** `clients/cli/src/commands/guests.rs`
+**File:** `apps/cli/src/commands/guests.rs`
 
 Add missing subcommands from design doc:
 
