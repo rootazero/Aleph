@@ -1,0 +1,287 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Aether.Views.Settings.ProvidersSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="260" MinWidth="220" MaxWidth="320"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Left Panel - Provider List -->
+        <Border Grid.Column="0"
+                Background="{ThemeResource LayerFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="0,0,1,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Header -->
+                <Border Grid.Row="0"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        Padding="16,12"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="0,0,0,1">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="AI Providers" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                        <TextBlock Text="Configure API keys and connections"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   FontSize="12"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Provider List -->
+                <ListView x:Name="ProviderListView"
+                          Grid.Row="1"
+                          SelectionMode="Single"
+                          SelectionChanged="ProviderListView_SelectionChanged"
+                          Padding="8">
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Padding="8,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="32"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Provider Icon -->
+                                <Border Grid.Column="0"
+                                        Width="28" Height="28"
+                                        Background="{Binding IconBackground}"
+                                        CornerRadius="6">
+                                    <Image Width="16" Height="16"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center">
+                                        <Image.Source>
+                                            <SvgImageSource UriSource="{Binding IconPath}"/>
+                                        </Image.Source>
+                                    </Image>
+                                </Border>
+
+                                <!-- Provider Name -->
+                                <TextBlock Grid.Column="1"
+                                           Text="{Binding Name}"
+                                           Margin="8,0,0,0"
+                                           VerticalAlignment="Center"/>
+
+                                <!-- Status Indicator -->
+                                <Ellipse Grid.Column="2"
+                                         Width="8" Height="8"
+                                         Fill="{Binding StatusColor}"/>
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </Grid>
+        </Border>
+
+        <!-- Right Panel - Provider Configuration -->
+        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+            <Grid>
+                <StackPanel x:Name="DetailPanel"
+                            Padding="24"
+                            Spacing="16"
+                            Visibility="Collapsed">
+
+                    <!-- Provider Header -->
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            CornerRadius="8"
+                            Padding="16">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <Border Grid.Column="0"
+                                    x:Name="ProviderIconBorder"
+                                    Width="48" Height="48"
+                                    Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                    CornerRadius="8">
+                                <Image x:Name="ProviderIconImage"
+                                       Width="24" Height="24"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+                            </Border>
+
+                            <StackPanel Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center">
+                                <TextBlock x:Name="ProviderNameText"
+                                           Style="{StaticResource SubtitleTextBlockStyle}"/>
+                                <TextBlock x:Name="ProviderDescText"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           FontSize="12"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- API Configuration -->
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            CornerRadius="8"
+                            Padding="16">
+                        <StackPanel Spacing="16">
+                            <TextBlock Text="API Configuration" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+
+                            <!-- API Key -->
+                            <Grid x:Name="ApiKeyGrid">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="100"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="API Key" VerticalAlignment="Center"/>
+                                <PasswordBox Grid.Column="1"
+                                             x:Name="ApiKeyBox"
+                                             PlaceholderText="Enter your API key"
+                                             PasswordChanged="ApiKeyBox_PasswordChanged"/>
+                            </Grid>
+
+                            <!-- Base URL (for Ollama or custom endpoints) -->
+                            <Grid x:Name="BaseUrlGrid" Visibility="Collapsed">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="100"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Base URL" VerticalAlignment="Center"/>
+                                <TextBox Grid.Column="1"
+                                         x:Name="BaseUrlBox"
+                                         PlaceholderText="http://localhost:11434"
+                                         TextChanged="BaseUrlBox_TextChanged"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Model Selection -->
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            CornerRadius="8"
+                            Padding="16">
+                        <StackPanel Spacing="16">
+                            <TextBlock Text="Model Selection" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="100"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Model" VerticalAlignment="Center"/>
+                                <ComboBox Grid.Column="1"
+                                          x:Name="ModelComboBox"
+                                          HorizontalAlignment="Stretch"
+                                          SelectionChanged="ModelComboBox_SelectionChanged"/>
+                            </Grid>
+
+                            <!-- Set as Default -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0" Spacing="2">
+                                    <TextBlock Text="Set as Default"/>
+                                    <TextBlock Text="Use this provider for AI conversations"
+                                               FontSize="11"
+                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                </StackPanel>
+
+                                <ToggleSwitch Grid.Column="1"
+                                              x:Name="DefaultProviderToggle"
+                                              OnContent="On"
+                                              OffContent="Off"
+                                              IsOn="False"
+                                              Toggled="DefaultProviderToggle_Toggled"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Test Connection -->
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            CornerRadius="8"
+                            Padding="16">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" Spacing="4">
+                                <TextBlock Text="Connection Test" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                                <TextBlock x:Name="TestResultText"
+                                           Text="Test your API connection"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           FontSize="12"/>
+                            </StackPanel>
+
+                            <Button Grid.Column="1"
+                                    x:Name="TestConnectionButton"
+                                    Click="TestConnection_Click">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <FontIcon Glyph="&#xE768;" FontSize="12"/>
+                                    <TextBlock Text="Test"/>
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                    </Border>
+
+                    <!-- Get API Key Link -->
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            CornerRadius="8"
+                            Padding="16">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" Spacing="4">
+                                <TextBlock Text="Get API Key" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                                <TextBlock x:Name="ApiKeyHelpText"
+                                           Text="Visit the provider's website to get an API key"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           FontSize="12"/>
+                            </StackPanel>
+
+                            <HyperlinkButton Grid.Column="1"
+                                             x:Name="GetApiKeyLink"
+                                             Content="Get Key →"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- Save Button -->
+                    <Button x:Name="SaveButton"
+                            Style="{StaticResource AccentButtonStyle}"
+                            HorizontalAlignment="Right"
+                            IsEnabled="False"
+                            Click="SaveButton_Click">
+                        <TextBlock Text="Save Configuration"/>
+                    </Button>
+                </StackPanel>
+
+                <!-- Empty State -->
+                <StackPanel x:Name="EmptyDetailState"
+                            Visibility="Visible"
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center"
+                            Spacing="8">
+                    <FontIcon Glyph="&#xE8B9;" FontSize="48"
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock Text="Select a provider to configure"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+
+        <!-- Status InfoBar -->
+        <InfoBar x:Name="StatusInfoBar"
+                 Grid.ColumnSpan="2"
+                 IsOpen="False"
+                 IsClosable="True"
+                 Severity="Informational"
+                 VerticalAlignment="Top"
+                 Margin="24"/>
+    </Grid>
+</UserControl>
