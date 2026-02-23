@@ -60,7 +60,7 @@ pub struct LinkConfig {
     pub enabled: bool,
 
     /// Bridge-specific settings (validated against bridge's settings_schema)
-    #[serde(default)]
+    #[serde(default = "default_settings")]
     pub settings: serde_json::Value,
 
     /// Message routing configuration
@@ -70,6 +70,10 @@ pub struct LinkConfig {
 
 fn default_enabled() -> bool {
     true
+}
+
+fn default_settings() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
 }
 
 // ---------------------------------------------------------------------------
@@ -200,7 +204,7 @@ name: Bare Link
         assert_eq!(cfg.routing.agent, "main"); // default "main"
         assert_eq!(cfg.routing.dm_policy, DmPolicyConfig::Pairing); // secure default
         assert_eq!(cfg.routing.group_policy, GroupPolicyConfig::Disabled); // secure default
-        assert_eq!(cfg.settings, serde_json::Value::Null); // default
+        assert_eq!(cfg.settings, serde_json::json!({})); // default: empty object
     }
 
     #[test]
