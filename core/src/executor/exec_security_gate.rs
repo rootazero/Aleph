@@ -241,6 +241,35 @@ impl ExecSecurityGate {
             }
         }
     }
+
+    /// Post-execution masking: redact secrets from ToolSuccess output.
+    ///
+    /// Applies SecretMasker to stdout and stderr string fields in the output Value.
+    /// Non-ToolSuccess variants are passed through unchanged.
+    pub fn post_execute(&self, result: crate::agent_loop::ActionResult) -> crate::agent_loop::ActionResult {
+        match result {
+            crate::agent_loop::ActionResult::ToolSuccess { mut output, duration_ms } => {
+                // Mask stdout field if present
+                if let Some(stdout) = output.get("stdout").and_then(|v| v.as_str()) {
+                    let masked = self.masker.mask(stdout);
+                    output["stdout"] = serde_json::Value::String(masked);
+                }
+                // Mask stderr field if present
+                if let Some(stderr) = output.get("stderr").and_then(|v| v.as_str()) {
+                    let masked = self.masker.mask(stderr);
+                    output["stderr"] = serde_json::Value::String(masked);
+                }
+                // Mask plain string output if not an object
+                if output.is_string() {
+                    let s = output.as_str().unwrap().to_string();
+                    let masked = self.masker.mask(&s);
+                    output = serde_json::Value::String(masked);
+                }
+                crate::agent_loop::ActionResult::ToolSuccess { output, duration_ms }
+            }
+            other => other,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -388,5 +417,74 @@ mod tests {
             matches!(decision, PreExecDecision::Allow { .. }),
             "Expected Allow after approval, got {:?}", decision
         );
+    }
+
+    #[test]
+    fn test_post_execute_masks_api_key_in_stdout() {
+        let manager = Arc::new(ExecApprovalManager::new());
+        let gate = ExecSecurityGate::new(manager, None);
+
+        let raw_output = serde_json::json!({
+            "success": true,
+            "stdout": "API_KEY=sk-abcdefghijklmnopqrstuvwxyz12345678901234 found",
+            "stderr": "",
+            "exit_code": 0,
+        });
+
+        let result = crate::agent_loop::ActionResult::ToolSuccess {
+            output: raw_output,
+            duration_ms: 100,
+        };
+
+        let masked = gate.post_execute(result);
+
+        if let crate::agent_loop::ActionResult::ToolSuccess { output, .. } = masked {
+            let stdout = output["stdout"].as_str().unwrap();
+            // The secret should be redacted somehow (not present in full form)
+            assert!(!stdout.contains("abcdefghijklmno"), "API key should be redacted");
+        } else {
+            panic!("Expected ToolSuccess");
+        }
+    }
+
+    #[test]
+    fn test_post_execute_passthrough_on_tool_error() {
+        let manager = Arc::new(ExecApprovalManager::new());
+        let gate = ExecSecurityGate::new(manager, None);
+
+        let result = crate::agent_loop::ActionResult::ToolError {
+            error: "execution failed".to_string(),
+            retryable: false,
+        };
+
+        let masked = gate.post_execute(result);
+        assert!(matches!(masked, crate::agent_loop::ActionResult::ToolError { .. }));
+    }
+
+    #[test]
+    fn test_post_execute_clean_output_unchanged() {
+        let manager = Arc::new(ExecApprovalManager::new());
+        let gate = ExecSecurityGate::new(manager, None);
+
+        let raw_output = serde_json::json!({
+            "success": true,
+            "stdout": "Hello world\nno secrets here",
+            "stderr": "",
+        });
+
+        let original_stdout = raw_output["stdout"].as_str().unwrap().to_string();
+
+        let result = crate::agent_loop::ActionResult::ToolSuccess {
+            output: raw_output,
+            duration_ms: 50,
+        };
+
+        let masked = gate.post_execute(result);
+
+        if let crate::agent_loop::ActionResult::ToolSuccess { output, .. } = masked {
+            assert_eq!(output["stdout"].as_str().unwrap(), original_stdout);
+        } else {
+            panic!("Expected ToolSuccess");
+        }
     }
 }
