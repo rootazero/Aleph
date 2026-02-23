@@ -116,7 +116,6 @@ mod tests {
             window_title: Some("Test Note".to_string()),
             attachments: None,
             topic_id: None,
-            perception: None,
         }
     }
 

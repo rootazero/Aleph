@@ -13,7 +13,6 @@
 //! - [`PdfGenerateTool`] - PDF generation from text/Markdown
 //! - [`ImageGenerateTool`] - Image generation from text prompts
 //! - [`SpeechGenerateTool`] - Text-to-speech generation
-//! - [`CanvasTool`] - Visual canvas for A2UI rendering
 //! - [`MessageTool`] - Cross-channel message operations
 //!
 //! # Meta Tools (Smart Tool Discovery)
@@ -36,7 +35,6 @@ use tracing::debug;
 
 pub mod atomic_ops;
 pub mod bash_exec;
-pub mod canvas;
 pub mod code_exec;
 pub mod error;
 pub mod file_ops;
@@ -51,7 +49,6 @@ pub mod pdf_generate;
 pub mod search;
 pub mod sessions;
 pub mod skill_reader;
-pub mod snapshot_capture;
 pub mod web_fetch;
 pub mod youtube;
 pub mod mcp_resource;
@@ -77,7 +74,6 @@ pub use skill_reader::{
     ListSkillsArgs, ListSkillsOutput, ListSkillsTool, ReadSkillArgs, ReadSkillOutput,
     ReadSkillTool, SkillSummary,
 };
-pub use snapshot_capture::SnapshotCaptureTool;
 pub use web_fetch::{WebFetchArgs, WebFetchTool};
 pub use youtube::{YouTubeArgs, YouTubeTool};
 pub use mcp_resource::{McpReadResourceArgs, McpReadResourceOutput, McpReadResourceTool};
@@ -88,15 +84,6 @@ pub use message::{
     ChannelCapabilities, DeleteParams, EditParams, MessageAction, MessageOperations,
     MessageResult, MessageTool, MessageToolArgs, MessageToolOutput, ReactParams, ReplyParams,
     SendParams,
-};
-
-// Canvas tool re-exports
-pub use canvas::{
-    create_router as create_canvas_router, parse_jsonl, parse_message, validate_jsonl,
-    A2uiMessage, A2uiParseError, BeginRendering, CanvasAction, CanvasBackend, CanvasController,
-    CanvasHostConfig, CanvasHostState, CanvasState, CanvasTool, CanvasToolArgs, CanvasToolOutput,
-    Component, ComponentType, DataModelUpdate, DataUpdate, EventHandler, NoOpBackend,
-    SnapshotFormat, Surface, SurfaceManager, SurfaceUpdate, UserAction, WindowPlacement,
 };
 
 // ============================================================================

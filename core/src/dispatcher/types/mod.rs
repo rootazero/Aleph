@@ -56,4 +56,3 @@ pub use index::{ToolIndex, ToolIndexCategory, ToolIndexEntry};
 
 // Tool Info Types (for Gateway JSON-RPC)
 pub use tool_info::{ToolSourceType, UnifiedToolInfo};
-
