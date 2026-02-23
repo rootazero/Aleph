@@ -27,7 +27,6 @@
 //! | session | Session management |
 //! | channel | Channel status |
 //! | events | Event subscription |
-//! | ocr | OCR operations |
 //! | memory | Memory search |
 //! | models | Model discovery |
 //! | chat | Chat control |
@@ -35,7 +34,6 @@
 //! | exec_approvals | Exec approval management |
 //! | wizard | Wizard session management |
 //! | supervisor | Process supervision via PTY |
-//! | browser | Browser/CDP (feature-gated) |
 //! | poe | POE (Principle-Operation-Evaluation) task execution |
 //! | identity | Identity/soul management |
 //! | workspace | Workspace isolation management |
@@ -59,7 +57,6 @@ pub mod config;
 pub mod config_ext;
 pub mod logs;
 pub mod commands;
-pub mod ocr;
 pub mod memory;
 pub mod plugins;
 pub mod services;
@@ -88,7 +85,6 @@ pub mod identity;
 pub mod debug;
 pub mod guests;
 pub mod workspace;
-pub mod state_bus;
 pub mod secret_approvals;
 #[cfg(feature = "discord")]
 pub mod discord_panel;
@@ -97,8 +93,6 @@ pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode
 pub use identity::SharedIdentityResolver;
 pub use guests::SharedInvitationManager;
 pub use config::{handle_get_full_config, handle_patch_config};
-#[cfg(feature = "browser")]
-pub mod browser;
 
 use std::collections::HashMap;
 use std::future::Future;
