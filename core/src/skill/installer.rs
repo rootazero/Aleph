@@ -1,7 +1,7 @@
 //! Installer — converts `InstallSpec` values into executable shell commands
 //! and filters specs by the current operating system.
 
-use crate::domain::skill::{InstallKind, InstallSpec, Os};
+use crate::domain::skill::{InstallKind, InstallSpec};
 use crate::skill::eligibility::current_os;
 
 /// Build a shell command string for the given install spec.

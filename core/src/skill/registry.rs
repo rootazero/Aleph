@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::domain::skill::{SkillId, SkillManifest, SkillSource, SkillContent};
+use crate::domain::skill::{SkillId, SkillManifest};
 use crate::domain::Entity;
 
 /// In-memory skill registry that stores `SkillManifest` values keyed by `SkillId`.
@@ -80,6 +80,7 @@ impl SkillRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::skill::{SkillContent, SkillSource};
 
     /// Helper: create a SkillManifest with the given name and source.
     fn make_manifest(name: &str, source: SkillSource) -> SkillManifest {

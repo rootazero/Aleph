@@ -250,11 +250,7 @@ pub fn split_frontmatter(content: &str) -> Result<(&str, &str), SkillParseError>
     let yaml_str = &rest[..closing_pos];
     let after_closing = &rest[closing_pos + 3..]; // skip past `---`
     // Skip optional newline after closing ---
-    let body = if after_closing.starts_with('\n') {
-        &after_closing[1..]
-    } else {
-        after_closing
-    };
+    let body = after_closing.strip_prefix('\n').unwrap_or(after_closing);
 
     Ok((yaml_str, body))
 }

@@ -175,10 +175,11 @@ impl FromStr for Os {
 // ---------------------------------------------------------------------------
 
 /// Controls how a skill's prompt content is injected.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PromptScope {
     /// Injected into the system prompt.
+    #[default]
     System,
     /// Injected as a tool description.
     Tool,
@@ -186,12 +187,6 @@ pub enum PromptScope {
     Standalone,
     /// Skill is disabled entirely.
     Disabled,
-}
-
-impl Default for PromptScope {
-    fn default() -> Self {
-        Self::System
-    }
 }
 
 impl ValueObject for PromptScope {}
@@ -273,19 +268,14 @@ impl ValueObject for InstallSpec {}
 // ---------------------------------------------------------------------------
 
 /// How arguments are passed to a dispatched command.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ArgMode {
     /// Pass the raw user input as-is.
+    #[default]
     Raw,
     /// Parse user input into structured arguments.
     Parsed,
-}
-
-impl Default for ArgMode {
-    fn default() -> Self {
-        Self::Raw
-    }
 }
 
 impl ValueObject for ArgMode {}
