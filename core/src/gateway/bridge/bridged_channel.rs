@@ -208,10 +208,13 @@ impl BridgedChannel {
         }
 
         // Tell the bridge to shut down, then close the transport.
+        // Use a timeout since the transport may already be dead.
         if let Some(transport) = &self.transport {
-            let _ = transport
-                .request("aleph.link.stop", serde_json::json!({}))
-                .await;
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                transport.request("aleph.link.stop", serde_json::json!({})),
+            )
+            .await;
             let _ = transport.close().await;
         }
 
@@ -247,9 +250,16 @@ impl BridgedChannel {
             .unwrap_or("unknown")
             .to_string();
 
+        // Prefer the bridge-provided timestamp if available, fall back to local clock.
+        let timestamp = resp
+            .get("timestamp")
+            .and_then(|v| v.as_i64())
+            .and_then(|ts| Utc.timestamp_opt(ts, 0).single())
+            .unwrap_or_else(Utc::now);
+
         Ok(SendResult {
             message_id: MessageId::new(message_id),
-            timestamp: Utc::now(),
+            timestamp,
         })
     }
 
@@ -431,6 +441,18 @@ async fn handle_event(
 
 /// Convert a bridge [`AttachmentPayload`] into a channel [`Attachment`].
 fn convert_attachment(payload: &AttachmentPayload) -> Attachment {
+    let decoded = match base64::engine::general_purpose::STANDARD.decode(&payload.data) {
+        Ok(bytes) => Some(bytes),
+        Err(e) => {
+            warn!(
+                mime_type = %payload.mime_type,
+                error = %e,
+                "Attachment base64 decode failed; dropping data"
+            );
+            None
+        }
+    };
+
     Attachment {
         id: uuid::Uuid::new_v4().to_string(),
         mime_type: payload.mime_type.clone(),
@@ -438,11 +460,7 @@ fn convert_attachment(payload: &AttachmentPayload) -> Attachment {
         size: None,
         url: None,
         path: None,
-        data: Some(
-            base64::engine::general_purpose::STANDARD
-                .decode(&payload.data)
-                .unwrap_or_default(),
-        ),
+        data: decoded,
     }
 }
 
