@@ -495,8 +495,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 IdentityContext::owner(session_key_str.clone(), "gateway".to_string())
             });
 
-        // Run agent loop with local executor
-        debug!(run_id = run_id, "Running agent loop with local executor");
+        // Run with local executor
         let agent_loop = AgentLoop::new(thinker, local_executor, compressor, loop_config);
         let mut run_context = RunContext::new(
             request.input.clone(),

@@ -327,10 +327,7 @@ async fn handle_connection(
     // Initialize connection state
     {
         let mut conns = ctx.connections.write().await;
-        conns.insert(
-            conn_id.clone(),
-            ConnectionState::new(),
-        );
+        conns.insert(conn_id.clone(), ConnectionState::new());
     }
 
     loop {

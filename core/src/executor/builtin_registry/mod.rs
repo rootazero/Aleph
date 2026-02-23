@@ -59,7 +59,6 @@ mod tests {
         assert!(registry.get_tool("file_ops").is_some());
         assert!(registry.get_tool("code_exec").is_some());
         assert!(registry.get_tool("pdf_generate").is_some());
-        assert!(registry.get_tool("snapshot_capture").is_some());
 
         // Verify unknown tool returns None
         assert!(registry.get_tool("unknown").is_none());

@@ -10,7 +10,6 @@ use tracing::{debug, info, warn};
 use crate::gateway::device_store::{ApprovedDevice, DeviceStore};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_FAILED, INVALID_PARAMS};
 use crate::gateway::security::{DeviceRole, DeviceType, PairingManager, PairingRequest, TokenManager};
-
 use crate::gateway::security::store::DeviceUpsertData;
 use crate::gateway::security::SecurityStore;
 
@@ -177,7 +176,7 @@ pub async fn handle_connect(
                             .unwrap_or_else(|| {
                                 (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
                             }),
-                                    }),
+                    }),
                 );
             }
             Err(e) => {
@@ -224,7 +223,6 @@ pub async fn handle_connect(
         };
 
         info!(device_id = %device_id, "Connection accepted (auth not required)");
-
 
         return JsonRpcResponse::success(
             request.id,
