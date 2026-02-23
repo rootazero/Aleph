@@ -302,13 +302,16 @@ fn guess_source(path: &Path) -> SkillSource {
     let path_str = path.to_string_lossy();
 
     if path_str.contains(".aleph/skills") {
-        // If the path is within a project directory (has more components after .aleph/skills)
-        // and is not the home directory, treat as Workspace
         if let Some(home) = dirs::home_dir() {
             let home_skills = home.join(".aleph").join("skills");
             if path.starts_with(&home_skills) {
                 return SkillSource::Global;
             }
+        } else {
+            // Cannot determine home directory — fall back to Global for safety
+            // so we don't accidentally give workspace-level priority
+            tracing::warn!("dirs::home_dir() returned None, defaulting to Global source");
+            return SkillSource::Global;
         }
         return SkillSource::Workspace;
     }

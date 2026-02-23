@@ -114,9 +114,12 @@ impl EligibilityService {
             }
         }
 
-        // 7. required_config (currently no config system wired, treat as missing)
-        for key in &spec.required_config {
-            reasons.push(IneligibilityReason::MissingConfig(key.clone()));
+        // 7. required_config — config system not yet wired, skip checks for now
+        if !spec.required_config.is_empty() {
+            tracing::debug!(
+                count = spec.required_config.len(),
+                "required_config checks not yet implemented, skipping"
+            );
         }
 
         if reasons.is_empty() {
