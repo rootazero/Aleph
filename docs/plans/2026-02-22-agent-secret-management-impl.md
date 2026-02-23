@@ -10,6 +10,12 @@
 
 **Design Doc:** `docs/plans/2026-02-22-agent-secret-management-design.md`
 
+**Status Update (2026-02-23):**
+- `SecretVault` module, migration, and runtime secret resolution are present in `core/src/secrets/`.
+- Gateway provider validation supports `api_key` OR `secret_name`.
+- `providers.create/update` now persist `secret_name` and avoid plaintext re-persistence.
+- Remaining planning scope moved to `docs/plans/2026-02-23-agent-secret-management-phase2-phase3-implementation-plan.md`.
+
 ---
 
 ### Task 1: Add crypto dependencies to Cargo.toml

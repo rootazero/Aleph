@@ -44,6 +44,10 @@ pub struct GenerationProviderConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
 
+    /// Reference to a secret in the vault (replaces plaintext api_key)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_name: Option<String>,
+
     /// Base URL for API (optional, for self-hosted or proxy)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
@@ -94,6 +98,7 @@ impl Default for GenerationProviderConfig {
         Self {
             provider_type: String::new(),
             api_key: None,
+            secret_name: None,
             base_url: None,
             model: None,
             enabled: true,

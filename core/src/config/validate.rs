@@ -56,13 +56,18 @@ impl Config {
         for (name, provider) in &self.providers {
             let protocol = provider.protocol();
 
-            // Check API key for cloud providers (not required for Ollama)
+            // Check credentials for cloud providers (not required for Ollama)
             if (protocol == "openai" || protocol == "anthropic" || protocol == "gemini")
                 && provider.api_key.is_none()
+                && provider.secret_name.is_none()
             {
-                error!(provider = %name, protocol = %protocol, "Provider missing API key");
+                error!(
+                    provider = %name,
+                    protocol = %protocol,
+                    "Provider missing credentials (api_key/secret_name)"
+                );
                 return Err(AlephError::invalid_config(format!(
-                    "Provider '{}' requires an API key",
+                    "Provider '{}' requires an API key or secret_name",
                     name
                 )));
             }

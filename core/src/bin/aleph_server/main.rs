@@ -56,7 +56,7 @@ mod commands;
 mod server_init;
 
 use clap::Parser;
-use cli::{Args, Command, PairingAction, DevicesAction, PluginsAction, AuditAction};
+use cli::{Args, AuditAction, Command, DevicesAction, PairingAction, PluginsAction};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -66,6 +66,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.command {
         Some(Command::Stop) => {
             return daemon::handle_stop(&args.pid_file);
+        }
+        Some(Command::Secret { action }) => {
+            return commands::handle_secret_command(action);
         }
         Some(Command::Status { json }) => {
             return daemon::handle_status(&args.pid_file, json);
