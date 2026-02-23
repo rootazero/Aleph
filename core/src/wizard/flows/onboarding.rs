@@ -2,8 +2,6 @@
 //!
 //! A 10-stage wizard for initial setup and configuration.
 
-#![allow(dead_code)] // In development
-
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -23,32 +21,6 @@ pub enum Provider {
     OpenRouter,
 }
 
-impl Provider {
-    fn display_name(&self) -> &str {
-        match self {
-            Provider::Anthropic => "Anthropic (Claude)",
-            Provider::OpenAI => "OpenAI (GPT)",
-            Provider::Google => "Google (Gemini)",
-            Provider::Ollama => "Ollama (Local)",
-            Provider::OpenRouter => "OpenRouter (Multi-provider)",
-        }
-    }
-
-    fn requires_api_key(&self) -> bool {
-        !matches!(self, Provider::Ollama)
-    }
-
-    fn api_key_name(&self) -> &str {
-        match self {
-            Provider::Anthropic => "ANTHROPIC_API_KEY",
-            Provider::OpenAI => "OPENAI_API_KEY",
-            Provider::Google => "GOOGLE_API_KEY",
-            Provider::Ollama => "",
-            Provider::OpenRouter => "OPENROUTER_API_KEY",
-        }
-    }
-}
-
 /// Messaging app choice
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -58,18 +30,6 @@ pub enum MessagingApp {
     Slack,
     IMessage,
     None,
-}
-
-impl MessagingApp {
-    fn display_name(&self) -> &str {
-        match self {
-            MessagingApp::Telegram => "Telegram",
-            MessagingApp::Discord => "Discord",
-            MessagingApp::Slack => "Slack",
-            MessagingApp::IMessage => "iMessage (macOS only)",
-            MessagingApp::None => "None (Skip for now)",
-        }
-    }
 }
 
 /// Thinking level
@@ -82,19 +42,6 @@ pub enum ThinkingLevel {
     Medium,
     High,
     XHigh,
-}
-
-impl ThinkingLevel {
-    fn display_name(&self) -> &str {
-        match self {
-            ThinkingLevel::Off => "Off - No extended thinking",
-            ThinkingLevel::Minimal => "Minimal - Brief reasoning",
-            ThinkingLevel::Low => "Low - Quick analysis",
-            ThinkingLevel::Medium => "Medium - Balanced (Recommended)",
-            ThinkingLevel::High => "High - Deep analysis",
-            ThinkingLevel::XHigh => "XHigh - Maximum depth",
-        }
-    }
 }
 
 /// Collected onboarding data
@@ -119,16 +66,12 @@ pub struct OnboardingData {
 }
 
 /// Onboarding wizard flow
-pub struct OnboardingFlow {
-    data: OnboardingData,
-}
+pub struct OnboardingFlow;
 
 impl OnboardingFlow {
     /// Create a new onboarding flow
     pub fn new() -> Self {
-        Self {
-            data: OnboardingData::default(),
-        }
+        Self
     }
 
     /// Create provider options
@@ -230,7 +173,7 @@ impl OnboardingFlow {
 
 impl Default for OnboardingFlow {
     fn default() -> Self {
-        Self::new()
+        Self
     }
 }
 

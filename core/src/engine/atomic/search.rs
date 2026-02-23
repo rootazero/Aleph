@@ -20,12 +20,6 @@ struct SearchMatch {
     line_number: usize,
     /// Content of the matching line
     line_content: String,
-    /// Start position of match in line
-    #[allow(dead_code)]
-    match_start: usize,
-    /// End position of match in line
-    #[allow(dead_code)]
-    match_end: usize,
 }
 
 /// Search operations handler
@@ -186,8 +180,6 @@ impl SearchOpsHandler {
                             file: file.clone(),
                             line_number: line_num + 1,
                             line_content: line.to_string(),
-                            match_start: 0, // TODO: Calculate actual match position
-                            match_end: line.len(),
                         });
                     }
                 }
@@ -230,8 +222,6 @@ impl SearchOpsHandler {
                             file: file.clone(),
                             line_number: line_num + 1,
                             line_content: line.to_string(),
-                            match_start: 0,
-                            match_end: line.len(),
                         });
                     }
                 }

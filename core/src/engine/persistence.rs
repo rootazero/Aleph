@@ -47,9 +47,8 @@ pub struct Persistence {
     /// Database connection (Mutex instead of RwLock because rusqlite::Connection is not Sync)
     conn: Arc<Mutex<Connection>>,
 
-    /// Database file path
-    #[allow(dead_code)]
-    db_path: PathBuf,
+    /// Database file path (retained for diagnostics)
+    _db_path: PathBuf,
 }
 
 impl Persistence {
@@ -75,7 +74,7 @@ impl Persistence {
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
-            db_path,
+            _db_path: db_path,
         })
     }
 

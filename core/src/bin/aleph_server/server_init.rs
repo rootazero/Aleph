@@ -72,9 +72,9 @@ where
     use serde::{Deserialize, Serialize};
     use serde_json::{json, Value};
 
-    /// Parameters for agent.run request
+    // Deserialized from JSON-RPC params; fields read via serde
     #[derive(Debug, Clone, Deserialize)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from JSON-RPC request params
     struct AgentRunParams {
         pub input: String,
         #[serde(default)]

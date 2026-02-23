@@ -4,7 +4,7 @@
 //! Types are organized by domain:
 //!
 //! - `general`: Core settings (GeneralConfig, ShortcutsConfig, BehaviorConfig)
-//! - `provider`: AI provider settings (ProviderConfig, ProviderConfigEntry, TestConnectionResult)
+//! - `provider`: AI provider settings (ProviderConfig, ProviderConfigEntry)
 //! - `routing`: Routing rules (RoutingRuleConfig)
 //! - `memory`: Memory/RAG settings (MemoryConfig)
 //! - `search`: Search capability settings (SearchConfigInternal, SearchConfig, PIIConfig)
