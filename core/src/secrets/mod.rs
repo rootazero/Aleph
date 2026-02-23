@@ -10,9 +10,11 @@ pub mod migration;
 pub mod placeholder;
 pub mod types;
 pub mod vault;
+pub mod web3_signer;
 
 pub use injection::{render_with_secrets, InjectedSecret, SecretResolver};
 pub use leak_detector::{LeakDecision, LeakDetector};
 pub use placeholder::{extract_secret_refs, SecretRef};
 pub use types::{DecryptedSecret, SecretError};
 pub use vault::{resolve_master_key, SecretVault};
+pub use web3_signer::{EvmSigner, SignIntent, SignedResult};
