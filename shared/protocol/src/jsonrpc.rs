@@ -301,7 +301,7 @@ fn uuid_v4() -> String {
     format!(
         "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
         (random >> 32) as u32,
-        (random >> 16) as u16 & 0xFFFF,
+        ((random >> 16) as u16),
         random as u16 & 0x0FFF,
         ((random >> 48) as u16 & 0x3FFF) | 0x8000,
         random & 0xFFFFFFFFFFFF

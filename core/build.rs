@@ -2,8 +2,6 @@
 //
 // Automatically builds ControlPlane UI when control-plane feature is enabled
 
-use std::process::Command;
-use std::path::Path;
 
 fn main() {
     #[cfg(feature = "control-plane")]

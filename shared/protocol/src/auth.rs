@@ -6,20 +6,17 @@ use uuid;
 /// User role in Personal AI Hub
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Role {
     /// Full system control, can manage guests
     Owner,
     /// Limited access with scoped permissions
     Guest,
     /// Unauthenticated, access denied
+    #[default]
     Anonymous,
 }
 
-impl Default for Role {
-    fn default() -> Self {
-        Self::Anonymous
-    }
-}
 
 impl Role {
     /// Returns true if the role is Owner
@@ -64,7 +61,7 @@ impl GuestScope {
     /// - `true` if `expires_at` is set and current_time >= expires_at
     /// - `false` if `expires_at` is None or current_time < expires_at
     pub fn is_expired(&self, current_time: i64) -> bool {
-        self.expires_at.map_or(false, |exp| current_time >= exp)
+        self.expires_at.is_some_and(|exp| current_time >= exp)
     }
 
     /// Checks if a tool name is allowed by this scope
