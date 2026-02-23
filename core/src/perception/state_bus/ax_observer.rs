@@ -11,8 +11,8 @@ use tracing::{debug, warn};
 
 /// AX Observer - listens for Accessibility API notifications.
 pub struct AxObserver {
-    #[allow(dead_code)] // Sender kept alive to prevent channel closure
-    event_tx: mpsc::UnboundedSender<AxEvent>,
+    /// Sender kept alive to prevent channel closure
+    _event_tx: mpsc::UnboundedSender<AxEvent>,
 }
 
 impl AxObserver {
@@ -34,7 +34,7 @@ impl AxObserver {
             })
             .map_err(|e| AlephError::tool(format!("Failed to spawn AX observer thread: {}", e)))?;
 
-        Ok((Self { event_tx: tx }, rx))
+        Ok((Self { _event_tx: tx }, rx))
     }
 }
 

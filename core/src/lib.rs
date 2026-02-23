@@ -80,7 +80,6 @@ pub mod skills;
 pub mod suggestion;
 pub mod supervisor;
 pub mod thinker;
-mod title_generator;
 pub mod tool_output;
 pub mod tools;
 pub mod utils;

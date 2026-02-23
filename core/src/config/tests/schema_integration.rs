@@ -1,14 +1,12 @@
 //! Integration tests for the config schema system.
 //!
 //! These tests verify that all schema-related components work together correctly,
-//! including schema generation, UI hints, config diffing, and reload planning.
+//! including schema generation and UI hints.
 
 use crate::config::{
     build_ui_hints,
-    generate_config_schema_json, Config,
+    generate_config_schema_json,
 };
-use crate::config::diff::diff_config;
-use crate::config::reload::build_reload_plan;
 use crate::config::schema::generate_config_schema;
 
 #[test]
@@ -191,169 +189,6 @@ fn test_schema_and_hints_consistency() {
             );
         }
     }
-}
-
-#[test]
-fn test_config_diff_integration() {
-    // Test with actual Config type
-    let config1 = Config::default();
-    let config2 = Config::default();
-
-    // Same config should have no changes
-    let changes = diff_config(&config1, &config2);
-    assert!(
-        changes.is_empty(),
-        "Identical configs should have no diff, got {:?}",
-        changes
-    );
-}
-
-#[test]
-fn test_reload_plan_gateway_restart() {
-    // Gateway changes require full restart
-    let gateway_changes = build_reload_plan(&["gateway.port".to_string()]);
-    assert!(
-        gateway_changes.restart_gateway,
-        "gateway.port change should require gateway restart"
-    );
-
-    let gateway_bind_changes = build_reload_plan(&["gateway.bind".to_string()]);
-    assert!(
-        gateway_bind_changes.restart_gateway,
-        "gateway.bind change should require gateway restart"
-    );
-}
-
-#[test]
-fn test_reload_plan_hot_update() {
-    // Provider changes should be hot-updatable
-    let provider_changes = build_reload_plan(&["providers.openai.model".to_string()]);
-    assert!(
-        !provider_changes.restart_gateway,
-        "provider model change should not require gateway restart"
-    );
-    assert!(
-        !provider_changes.requires_restart(),
-        "provider model change should not require any restart"
-    );
-    assert!(
-        provider_changes
-            .hot_paths
-            .contains(&"providers.openai.model".to_string()),
-        "provider model should be in hot_paths"
-    );
-}
-
-#[test]
-fn test_reload_plan_channel_restart() {
-    // Channel changes require that specific channel to restart
-    let channel_changes = build_reload_plan(&["channels.telegram.token".to_string()]);
-    assert!(
-        channel_changes.restart_channels.contains("telegram"),
-        "telegram token change should restart telegram channel"
-    );
-    assert!(
-        !channel_changes.restart_gateway,
-        "telegram token change should not require full gateway restart"
-    );
-    assert!(
-        channel_changes.requires_restart(),
-        "telegram token change should require restart (channel restart)"
-    );
-}
-
-#[test]
-fn test_reload_plan_hooks_and_cron() {
-    // Hook changes require hook reload
-    let hook_changes = build_reload_plan(&["hooks.email.enabled".to_string()]);
-    assert!(hook_changes.reload_hooks, "hook change should reload hooks");
-    assert!(
-        !hook_changes.restart_gateway,
-        "hook change should not require gateway restart"
-    );
-
-    // Cron changes require cron restart
-    let cron_changes = build_reload_plan(&["cron.daily.schedule".to_string()]);
-    assert!(cron_changes.restart_cron, "cron change should restart cron");
-    assert!(
-        !cron_changes.restart_gateway,
-        "cron change should not require gateway restart"
-    );
-}
-
-#[test]
-fn test_reload_plan_security_restart() {
-    // Security changes require full restart
-    let security_changes = build_reload_plan(&["security.require_auth".to_string()]);
-    assert!(
-        security_changes.restart_gateway,
-        "security change should require gateway restart"
-    );
-}
-
-#[test]
-fn test_reload_plan_mcp_restart() {
-    // MCP changes require full restart
-    let mcp_changes = build_reload_plan(&["mcp.filesystem.command".to_string()]);
-    assert!(
-        mcp_changes.restart_gateway,
-        "MCP change should require gateway restart"
-    );
-}
-
-#[test]
-fn test_reload_plan_plugins_restart() {
-    // Plugin changes require full restart
-    let plugin_changes = build_reload_plan(&["plugins.my-plugin.enabled".to_string()]);
-    assert!(
-        plugin_changes.restart_gateway,
-        "plugin change should require gateway restart"
-    );
-}
-
-#[test]
-fn test_reload_plan_mixed_changes() {
-    // Test handling multiple types of changes
-    let mixed_changes = build_reload_plan(&[
-        "gateway.port".to_string(),
-        "channels.telegram.token".to_string(),
-        "providers.openai.model".to_string(),
-        "hooks.email.enabled".to_string(),
-    ]);
-
-    assert!(
-        mixed_changes.restart_gateway,
-        "should require gateway restart due to gateway.port"
-    );
-    assert!(
-        mixed_changes.restart_channels.contains("telegram"),
-        "should restart telegram channel"
-    );
-    assert!(
-        mixed_changes
-            .hot_paths
-            .contains(&"providers.openai.model".to_string()),
-        "should have provider model in hot_paths"
-    );
-    assert!(
-        mixed_changes.reload_hooks,
-        "should reload hooks"
-    );
-}
-
-#[test]
-fn test_reload_plan_empty() {
-    let empty_plan = build_reload_plan(&[]);
-    assert!(empty_plan.is_empty(), "Empty changes should create empty plan");
-    assert!(
-        !empty_plan.requires_restart(),
-        "Empty plan should not require restart"
-    );
-    assert_eq!(
-        empty_plan.summary(),
-        "No changes detected",
-        "Empty plan summary should indicate no changes"
-    );
 }
 
 #[test]

@@ -41,9 +41,8 @@ pub struct AtomicResult {
 ///
 /// Delegates operations to specialized handlers using composition pattern.
 pub struct AtomicExecutor {
-    /// Shared execution context
-    #[allow(dead_code)]
-    context: Arc<ExecutorContext>,
+    /// Shared execution context (kept alive for handlers)
+    _context: Arc<ExecutorContext>,
 
     /// File operations handler
     file_ops: FileOpsHandler,
@@ -68,7 +67,7 @@ impl AtomicExecutor {
         let context = Arc::new(ExecutorContext::new(working_dir));
 
         Self {
-            context: context.clone(),
+            _context: context.clone(),
             file_ops: FileOpsHandler::new(context.clone(), 10 * 1024 * 1024), // 10MB
             edit_ops: EditOpsHandler::new(context.clone(), 10 * 1024 * 1024), // 10MB
             bash_ops: BashOpsHandler::new(context.clone(), Duration::from_secs(30)),

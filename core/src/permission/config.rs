@@ -46,27 +46,6 @@ pub fn config_to_ruleset(config: &PermissionConfigMap) -> Ruleset {
         .collect()
 }
 
-/// Expand home directory in patterns
-#[allow(dead_code)]
-pub fn expand_pattern(pattern: &str) -> String {
-    if pattern.starts_with("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return format!("{}{}", home.display(), &pattern[1..]);
-        }
-    }
-    if pattern.starts_with("$HOME/") {
-        if let Some(home) = dirs::home_dir() {
-            return format!("{}{}", home.display(), &pattern[5..]);
-        }
-    }
-    if pattern == "~" || pattern == "$HOME" {
-        if let Some(home) = dirs::home_dir() {
-            return home.display().to_string();
-        }
-    }
-    pattern.to_string()
-}
-
 /// Default permission configuration
 pub fn default_config() -> PermissionConfigMap {
     let mut config = HashMap::new();

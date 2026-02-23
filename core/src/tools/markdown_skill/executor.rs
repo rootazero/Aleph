@@ -388,16 +388,6 @@ impl VirtualFsSandbox {
         );
     }
 
-    /// Get paths info for debugging
-    #[allow(dead_code)]
-    fn info(&self) -> SandboxInfo {
-        SandboxInfo {
-            root: self.root_dir.clone(),
-            work: self.work_dir.clone(),
-            home: self.home_dir.clone(),
-            temp: self.temp_dir.clone(),
-        }
-    }
 }
 
 impl Drop for VirtualFsSandbox {
@@ -418,12 +408,3 @@ impl Drop for VirtualFsSandbox {
     }
 }
 
-/// Sandbox path information (for debugging/testing)
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct SandboxInfo {
-    root: PathBuf,
-    work: PathBuf,
-    home: PathBuf,
-    temp: PathBuf,
-}

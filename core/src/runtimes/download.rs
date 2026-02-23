@@ -145,7 +145,7 @@ pub fn extract_tar_gz(archive_path: &Path, dest_dir: &Path, strip_components: us
 /// * `archive_path` - Path to the .tar.xz file
 /// * `dest_dir` - Directory to extract files into
 /// * `strip_components` - Number of leading path components to strip (like tar --strip-components)
-#[allow(dead_code)] // Used by ffmpeg on Linux, may appear unused on other platforms
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // Used by ffmpeg on Linux
 pub fn extract_tar_xz(archive_path: &Path, dest_dir: &Path, strip_components: usize) -> Result<()> {
     info!(archive = ?archive_path, dest = ?dest_dir, "Extracting tar.xz archive");
 

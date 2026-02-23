@@ -27,12 +27,6 @@ pub fn extract_youtube_url(input: &str) -> Option<String> {
         .map(|m| m.as_str().to_string())
 }
 
-/// Check if the input contains a YouTube URL
-#[allow(dead_code)]
-pub fn contains_youtube_url(input: &str) -> bool {
-    YOUTUBE_DETECT_REGEX.is_match(input)
-}
-
 /// Parse video ID from a YouTube URL
 pub fn parse_video_id(url: &str) -> Result<String> {
     YOUTUBE_URL_REGEX

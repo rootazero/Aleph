@@ -53,7 +53,6 @@
 mod actor;
 mod config;
 mod handle;
-mod health;
 mod types;
 
 pub use actor::{HealthCheckConfig, McpManagerActor};
