@@ -241,7 +241,7 @@ impl CortexDreamingService {
 
     /// Process a batch of candidate experiences
     async fn process_batch(
-        db: &crate::memory::store::lance::LanceMemoryBackend,
+        _db: &crate::memory::store::lance::LanceMemoryBackend,
         distillation_service: &Arc<RwLock<DistillationService>>,
         value_estimator: &CortexValueEstimator,
         config: &CortexDreamingConfig,

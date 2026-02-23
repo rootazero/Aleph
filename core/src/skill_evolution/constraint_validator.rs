@@ -230,9 +230,8 @@ impl ConstraintValidator {
         let pattern_str = pattern.to_string_lossy();
         let path_str = path.to_string_lossy();
 
-        if pattern_str.ends_with("/**") {
+        if let Some(prefix) = pattern_str.strip_suffix("/**") {
             // Recursive match
-            let prefix = &pattern_str[..pattern_str.len() - 3];
             path_str.starts_with(prefix)
         } else if pattern_str.ends_with("/*") {
             // Single-level match

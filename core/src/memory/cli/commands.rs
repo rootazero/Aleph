@@ -390,13 +390,14 @@ impl MemoryCommands {
     /// Restore a fact from recycle bin
     pub async fn restore(&self, id: &str) -> Result<String, AlephError> {
         // Resolve ID (support prefix match)
-        let full_id = self.resolve_fact_id(id).await?;
+        let _full_id = self.resolve_fact_id(id).await?;
 
         // TODO: Implement restore via new store API (update fact to set is_valid = true)
         // self.db.restore_fact(&full_id).await?;
         return Err(AlephError::other("restore_fact not yet implemented in new store API"));
 
-        Ok(full_id)
+        #[allow(unreachable_code)]
+        Ok(_full_id)
     }
 
     /// Resolve a fact ID (supports prefix matching)

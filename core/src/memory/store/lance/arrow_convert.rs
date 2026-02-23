@@ -287,7 +287,7 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
             Arc::new(vec_1536),                  // 32 vec_1536
         ],
     )
-    .map_err(|e| conv_err(e))?;
+    .map_err(conv_err)?;
 
     Ok(batch)
 }
@@ -460,7 +460,7 @@ pub fn graph_nodes_to_record_batch(nodes: &[GraphNode]) -> Result<RecordBatch, A
             Arc::new(workspace_arr),   // 8 workspace
         ],
     )
-    .map_err(|e| conv_err(e))?;
+    .map_err(conv_err)?;
 
     Ok(batch)
 }
@@ -541,7 +541,7 @@ pub fn graph_edges_to_record_batch(edges: &[GraphEdge]) -> Result<RecordBatch, A
             Arc::new(workspace_arr),     // 11 workspace
         ],
     )
-    .map_err(|e| conv_err(e))?;
+    .map_err(conv_err)?;
 
     Ok(batch)
 }
@@ -641,7 +641,7 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
             Arc::new(vec_384),          // 10 vec_384
         ],
     )
-    .map_err(|e| conv_err(e))?;
+    .map_err(conv_err)?;
 
     Ok(batch)
 }

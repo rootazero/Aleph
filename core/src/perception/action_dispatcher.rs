@@ -214,8 +214,8 @@ impl ActionDispatcher {
     /// Execute with visual fallback.
     async fn execute_with_fallback(
         &self,
-        request: &ActionRequest,
-        fallback: &VisualFallback,
+        _request: &ActionRequest,
+        _fallback: &VisualFallback,
     ) -> Result<ActionResult> {
         // TODO: Implement visual anchor matching
         // For now, return error

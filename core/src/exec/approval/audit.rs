@@ -184,8 +184,8 @@ fn parse_capabilities_from_strings(capability_strings: &[String]) -> Capabilitie
     let mut capabilities = Capabilities::default();
 
     for cap_str in capability_strings {
-        if cap_str.starts_with("filesystem.") {
-            let fs_type = &cap_str[11..]; // Skip "filesystem."
+        if let Some(fs_type) = cap_str.strip_prefix("filesystem.") {
+            // Skip "filesystem."
             match fs_type {
                 "read_write" => {
                     capabilities.filesystem.push(FileSystemCapability::ReadWrite {
@@ -199,8 +199,8 @@ fn parse_capabilities_from_strings(capability_strings: &[String]) -> Capabilitie
                 }
                 _ => {}
             }
-        } else if cap_str.starts_with("network.") {
-            let net_type = &cap_str[8..]; // Skip "network."
+        } else if let Some(net_type) = cap_str.strip_prefix("network.") {
+            // Skip "network."
             match net_type {
                 "allow_all" => {
                     capabilities.network = NetworkCapability::AllowAll;

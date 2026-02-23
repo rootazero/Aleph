@@ -28,12 +28,12 @@ pub trait StateConnector: Send + Sync {
     async fn capture_state(&self, bundle_id: &str, window_id: &str) -> Result<AppState>;
 
     /// Start continuous monitoring (optional)
-    async fn start_monitoring(&self, bundle_id: &str) -> Result<()> {
+    async fn start_monitoring(&self, _bundle_id: &str) -> Result<()> {
         Ok(())
     }
 
     /// Stop monitoring
-    async fn stop_monitoring(&self, bundle_id: &str) -> Result<()> {
+    async fn stop_monitoring(&self, _bundle_id: &str) -> Result<()> {
         Ok(())
     }
 }

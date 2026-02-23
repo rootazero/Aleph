@@ -57,9 +57,6 @@ impl SlidingWindow {
             .collect()
     }
 
-    fn clear(&mut self) {
-        self.events.clear();
-    }
 }
 
 impl SemanticAggregator {

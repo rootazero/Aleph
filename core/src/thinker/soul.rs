@@ -252,17 +252,17 @@ impl SoulManifest {
         let mut current_content = String::new();
 
         for line in body.lines() {
-            if line.starts_with("## ") {
+            if let Some(rest) = line.strip_prefix("## ") {
                 // New section - save previous
                 if let Some(ref section) = current_section {
                     Self::apply_section(manifest, section, &current_content);
                 }
-                current_section = Some(line[3..].trim().to_lowercase());
+                current_section = Some(rest.trim().to_lowercase());
                 current_content.clear();
-            } else if line.starts_with("# ") {
+            } else if let Some(rest) = line.strip_prefix("# ") {
                 // Check if this is a section header (e.g., "# Identity")
                 // vs a title line (e.g., "# Soul: Aleph")
-                let header = line[2..].trim().to_lowercase();
+                let header = rest.trim().to_lowercase();
                 if Self::is_known_section(&header) {
                     // Treat as section header
                     if let Some(ref section) = current_section {
@@ -341,10 +341,8 @@ impl SoulManifest {
             .lines()
             .filter_map(|line| {
                 let trimmed = line.trim();
-                if trimmed.starts_with("- ") {
-                    Some(trimmed[2..].trim().to_string())
-                } else if trimmed.starts_with("* ") {
-                    Some(trimmed[2..].trim().to_string())
+                if let Some(rest) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")) {
+                    Some(rest.trim().to_string())
                 } else if !trimmed.is_empty() {
                     // Continuation of previous item or standalone text
                     Some(trimmed.to_string())
