@@ -1,4 +1,5 @@
 /// Context capture data structures for memory anchors
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{AggregateRoot, Entity};
@@ -398,6 +399,108 @@ impl std::fmt::Display for MemoryCategory {
     }
 }
 
+/// Memory tier for cognitive architecture.
+///
+/// Controls how a fact is treated during retrieval and decay:
+/// - **Core**: always loaded, never decayed (identity-level knowledge)
+/// - **ShortTerm**: active working memory, subject to rapid decay
+/// - **LongTerm**: consolidated knowledge, slow decay curve
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryTier {
+    /// Identity-level facts: always loaded, never decayed.
+    Core,
+    /// Active working memory, subject to rapid decay.
+    #[default]
+    ShortTerm,
+    /// Consolidated knowledge, slow decay curve.
+    LongTerm,
+}
+
+impl MemoryTier {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Core => "core",
+            Self::ShortTerm => "short_term",
+            Self::LongTerm => "long_term",
+        }
+    }
+
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Self::ShortTerm)
+    }
+}
+
+impl std::str::FromStr for MemoryTier {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "core" => Ok(Self::Core),
+            "short_term" => Ok(Self::ShortTerm),
+            "long_term" => Ok(Self::LongTerm),
+            _ => Err(format!("Unknown memory tier: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Visibility scope for a memory fact.
+///
+/// Controls which retrieval contexts can see a given fact:
+/// - **Global**: visible everywhere
+/// - **Workspace**: visible only within a specific workspace
+/// - **Persona**: visible only to a specific persona
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryScope {
+    /// Visible everywhere.
+    #[default]
+    Global,
+    /// Visible only within a specific workspace.
+    Workspace,
+    /// Visible only to a specific persona.
+    Persona,
+}
+
+impl MemoryScope {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Global => "global",
+            Self::Workspace => "workspace",
+            Self::Persona => "persona",
+        }
+    }
+
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Self::Global)
+    }
+}
+
+impl std::str::FromStr for MemoryScope {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "global" => Ok(Self::Global),
+            "workspace" => Ok(Self::Workspace),
+            "persona" => Ok(Self::Persona),
+            _ => Err(format!("Unknown memory scope: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// Preset directory paths for the aleph:// VFS
 pub const PRESET_PATHS: &[(&str, &str)] = &[
     ("aleph://user/", "User domain root"),
@@ -578,6 +681,28 @@ pub struct MemoryFact {
     pub parent_path: String,
     /// Name of the embedding model that generated this fact's vector
     pub embedding_model: String,
+    /// Cognitive memory tier (Core / ShortTerm / LongTerm)
+    #[serde(default)]
+    pub tier: MemoryTier,
+    /// Visibility scope (Global / Workspace / Persona)
+    #[serde(default)]
+    pub scope: MemoryScope,
+    /// Optional persona identifier when scope == Persona
+    #[serde(default)]
+    pub persona_id: Option<String>,
+    /// Reinforcement strength (0.0 .. 1.0+), decayed over time
+    #[serde(default = "default_strength")]
+    pub strength: f32,
+    /// Number of times this fact has been accessed / retrieved
+    #[serde(default)]
+    pub access_count: u32,
+    /// Timestamp of last retrieval (Unix seconds)
+    #[serde(default)]
+    pub last_accessed_at: Option<i64>,
+}
+
+fn default_strength() -> f32 {
+    1.0
 }
 
 impl Entity for MemoryFact {
@@ -626,6 +751,12 @@ impl MemoryFact {
             content_hash: String::new(),
             parent_path,
             embedding_model: String::new(),
+            tier: MemoryTier::ShortTerm,
+            scope: MemoryScope::Global,
+            persona_id: None,
+            strength: 1.0,
+            access_count: 0,
+            last_accessed_at: None,
         }
     }
 
@@ -664,6 +795,12 @@ impl MemoryFact {
             content_hash: String::new(),
             parent_path,
             embedding_model: String::new(),
+            tier: MemoryTier::ShortTerm,
+            scope: MemoryScope::Global,
+            persona_id: None,
+            strength: 1.0,
+            access_count: 0,
+            last_accessed_at: None,
         }
     }
 
@@ -719,6 +856,24 @@ impl MemoryFact {
     /// Set memory category
     pub fn with_category(mut self, category: MemoryCategory) -> Self {
         self.category = category;
+        self
+    }
+
+    /// Set cognitive memory tier
+    pub fn with_tier(mut self, tier: MemoryTier) -> Self {
+        self.tier = tier;
+        self
+    }
+
+    /// Set visibility scope
+    pub fn with_scope(mut self, scope: MemoryScope) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    /// Set persona identifier (implies Persona scope)
+    pub fn with_persona_id(mut self, persona_id: String) -> Self {
+        self.persona_id = Some(persona_id);
         self
     }
 
@@ -1068,5 +1223,80 @@ mod tests {
         assert_eq!(compute_parent_path("aleph://user/preferences/"), "aleph://user/");
         assert_eq!(compute_parent_path("aleph://user/"), "aleph://");
         assert_eq!(compute_parent_path(""), "");
+    }
+
+    #[test]
+    fn test_memory_tier_roundtrip() {
+        assert_eq!(MemoryTier::Core.as_str(), "core");
+        assert_eq!(MemoryTier::ShortTerm.as_str(), "short_term");
+        assert_eq!(MemoryTier::LongTerm.as_str(), "long_term");
+        assert_eq!(
+            MemoryTier::from_str_or_default("core"),
+            MemoryTier::Core
+        );
+        assert_eq!(
+            MemoryTier::from_str_or_default("short_term"),
+            MemoryTier::ShortTerm
+        );
+        assert_eq!(
+            MemoryTier::from_str_or_default("long_term"),
+            MemoryTier::LongTerm
+        );
+        assert_eq!(
+            MemoryTier::from_str_or_default("unknown"),
+            MemoryTier::ShortTerm
+        ); // default
+        assert_eq!(format!("{}", MemoryTier::Core), "core");
+    }
+
+    #[test]
+    fn test_memory_scope_roundtrip() {
+        assert_eq!(MemoryScope::Global.as_str(), "global");
+        assert_eq!(MemoryScope::Workspace.as_str(), "workspace");
+        assert_eq!(MemoryScope::Persona.as_str(), "persona");
+        assert_eq!(
+            MemoryScope::from_str_or_default("global"),
+            MemoryScope::Global
+        );
+        assert_eq!(
+            MemoryScope::from_str_or_default("workspace"),
+            MemoryScope::Workspace
+        );
+        assert_eq!(
+            MemoryScope::from_str_or_default("persona"),
+            MemoryScope::Persona
+        );
+        assert_eq!(
+            MemoryScope::from_str_or_default("unknown"),
+            MemoryScope::Global
+        ); // default
+        assert_eq!(format!("{}", MemoryScope::Persona), "persona");
+    }
+
+    #[test]
+    fn test_memory_fact_defaults_tier_and_scope() {
+        let fact = MemoryFact::new("User likes Vim".to_string(), FactType::Preference, vec![]);
+        assert_eq!(fact.tier, MemoryTier::ShortTerm);
+        assert_eq!(fact.scope, MemoryScope::Global);
+        assert_eq!(fact.persona_id, None);
+        assert!((fact.strength - 1.0).abs() < f32::EPSILON);
+        assert_eq!(fact.access_count, 0);
+        assert_eq!(fact.last_accessed_at, None);
+    }
+
+    #[test]
+    fn test_memory_fact_with_persona() {
+        let fact = MemoryFact::new(
+            "User prefers dark mode".to_string(),
+            FactType::Preference,
+            vec![],
+        )
+        .with_tier(MemoryTier::Core)
+        .with_scope(MemoryScope::Persona)
+        .with_persona_id("persona-coder".to_string());
+
+        assert_eq!(fact.tier, MemoryTier::Core);
+        assert_eq!(fact.scope, MemoryScope::Persona);
+        assert_eq!(fact.persona_id, Some("persona-coder".to_string()));
     }
 }

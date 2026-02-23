@@ -382,6 +382,71 @@ pub async fn cleanup_decayed_facts(
 
 ---
 
+## Cognitive Memory Architecture (ACMA)
+
+**Location**: `core/src/memory/composer.rs`, `core/src/memory/decay.rs`, `core/src/memory/dreaming.rs`
+
+Aleph's memory system uses three orthogonal dimensions for each `MemoryFact`:
+
+| Dimension | Field | Values | Purpose |
+|-----------|-------|--------|---------|
+| Abstraction | `layer` | L0Abstract / L1Overview / L2Detail | Granularity (abstract to detail) |
+| Temperature | `tier` | Core / ShortTerm / LongTerm | Temporal lifecycle |
+| Visibility | `scope` | Global / Workspace / Persona | Access isolation |
+
+### Memory Tiers
+
+| Tier | Behavior | Decay |
+|------|----------|-------|
+| **Core** | Injected into system prompt every request | Never decays |
+| **ShortTerm** | Default for new facts. High fidelity, recent. | Ebbinghaus curve (configurable half-life) |
+| **LongTerm** | Consolidated semantic knowledge. | Protected from decay |
+
+### Memory Scopes
+
+| Scope | Visibility | Use Case |
+|-------|-----------|----------|
+| **Global** | All personas, all workspaces | User preferences, API keys |
+| **Workspace** | All personas in one workspace | Project architecture, TODOs |
+| **Persona** | One specific persona only | Role-specific patterns, drafts |
+
+### Context Composition
+
+At session start, `ContextComposer` assembles context via a layered union:
+
+1. **Core(Persona=P) + Core(Global)** → injected into system prompt
+2. **Query(Global) + Query(Workspace=W) + Query(Persona=P)** → relevant memories
+
+```rust
+// Build Core filter
+let core_filter = ContextComposer::build_core_filter(&req);
+// Build retrieval filter (STM + LTM, no Core)
+let retrieval_filter = ContextComposer::build_retrieval_filter(&req);
+```
+
+### Forgetting Curve
+
+Facts track persistent `strength` (0.0-1.0), updated by `DreamDaemon`:
+
+- **Decay**: Exponential based on time since last access (`update_strength()`)
+- **Reinforcement**: Each retrieval hit boosts strength (`on_access()`)
+- **Consolidation**: STM facts with strength ≥ threshold distilled into LTM
+- **Pruning**: Facts with strength below threshold permanently deleted
+- **Protection**: Core tier facts never decay or get pruned
+
+### ACMA Configuration
+
+```toml
+[memory.consolidation_pipeline]
+enabled = true
+strength_threshold = 0.6     # STM minimum strength for consolidation
+pruning_threshold = 0.1      # below this, permanent deletion
+max_facts_per_run = 50       # batch size per Dream cycle
+cooldown_days = 1             # minimum interval between checks
+```
+
+---
+
 ## Retention Policies
 
 **Location**: `core/src/memory/retention.rs`

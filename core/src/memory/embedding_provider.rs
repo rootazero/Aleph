@@ -415,6 +415,12 @@ mod tests {
             embedding_model: "old-model-v1".to_string(),
             namespace: "owner".to_string(),
             workspace: "default".to_string(),
+            tier: crate::memory::context::MemoryTier::ShortTerm,
+            scope: crate::memory::context::MemoryScope::Global,
+            persona_id: None,
+            strength: 1.0,
+            access_count: 0,
+            last_accessed_at: None,
         };
 
         crate::memory::store::MemoryStore::insert_fact(db.as_ref(), &fact).await.unwrap();

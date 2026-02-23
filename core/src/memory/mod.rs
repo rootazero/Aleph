@@ -19,6 +19,7 @@ pub mod ai_retrieval;
 pub mod audit;
 pub mod augmentation;
 pub mod cleanup;
+pub mod composer;
 pub mod compression;
 pub mod context;
 pub mod decay;
@@ -62,14 +63,15 @@ pub use audit::{
 };
 pub use augmentation::PromptAugmenter;
 pub use cleanup::CleanupService;
+pub use composer::{ComposedContext, CompositionRequest, ContextComposer};
 pub use compression::{
     CompressionPriority, CompressionScheduler, CompressionService, CompressionSignal,
     CompressionTrigger, DetectionResult, FactExtractor, SignalDetector, SignalKeywords,
 };
 pub use context::{
     CompressionResult, CompressionSession, ContextAnchor, FactSource, FactSpecificity,
-    FactStats, FactType, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer, TemporalScope, compute_parent_path,
-    PRESET_PATHS,
+    FactStats, FactType, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer, MemoryScope,
+    MemoryTier, TemporalScope, compute_parent_path, PRESET_PATHS,
 };
 pub use decay::{DecayConfig, MemoryStrength};
 pub use dreaming::{DailyInsight, DreamStatus, MemoryDecayReport, ensure_dream_daemon, record_activity};
