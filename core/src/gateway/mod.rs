@@ -104,11 +104,6 @@ pub mod run_event_bus;
 #[cfg(feature = "gateway")]
 pub mod workspace;
 #[cfg(feature = "gateway")]
-mod client_manifest;
-#[cfg(feature = "gateway")]
-mod reverse_rpc;
-
-#[cfg(feature = "gateway")]
 pub use server::GatewayServer;
 #[cfg(feature = "gateway")]
 pub use protocol::{JsonRpcRequest, JsonRpcResponse, JsonRpcError};
@@ -199,7 +194,3 @@ pub use workspace::{
     Workspace, WorkspaceManager, WorkspaceManagerConfig, WorkspaceError,
     CacheState, UserActiveWorkspace,
 };
-#[cfg(feature = "gateway")]
-pub use client_manifest::{ClientManifest, ClientCapabilities, ClientEnvironment, ExecutionConstraints};
-#[cfg(feature = "gateway")]
-pub use reverse_rpc::{ReverseRpcManager, ReverseRpcError, PendingRequest};
