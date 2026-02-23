@@ -5,8 +5,10 @@
 
 pub mod eligibility;
 pub mod manifest;
+pub mod prompt;
 pub mod registry;
 
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
 pub use manifest::{parse_skill_content, parse_skill_file, SkillParseError};
+pub use prompt::build_skills_prompt_xml;
 pub use registry::SkillRegistry;
