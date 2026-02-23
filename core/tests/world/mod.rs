@@ -15,7 +15,6 @@ mod logging_ctx;
 mod memory_ctx;
 mod message_builder_ctx;
 mod models_ctx;
-mod perception_ctx;
 mod poe_ctx;
 mod protocol_ctx;
 mod scheduler_ctx;
@@ -36,7 +35,6 @@ pub use logging_ctx::LoggingContext;
 pub use memory_ctx::MemoryContext;
 pub use message_builder_ctx::MessageBuilderContext;
 pub use models_ctx::ModelsContext;
-pub use perception_ctx::PerceptionContext;
 pub use poe_ctx::{PoeContext, PoeConstraint, PoeOutcomeType};
 pub use protocol_ctx::ProtocolContext;
 pub use scheduler_ctx::SchedulerContext;
@@ -76,7 +74,6 @@ pub struct AlephWorld {
     pub logging: Option<LoggingContext>,
     pub memory: Option<MemoryContext>,
     pub message_builder: Option<MessageBuilderContext>,
-    pub perception: Option<PerceptionContext>,
     pub agent_loop: Option<AgentLoopContext>,
     pub extension: Option<ExtensionContext>,
     pub poe: Option<PoeContext>,

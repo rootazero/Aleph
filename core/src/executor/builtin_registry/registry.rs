@@ -11,7 +11,7 @@ use crate::agents::sub_agents::SubAgentDispatcher;
 use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
 use crate::error::{AlephError, Result};
 use crate::generation::GenerationProviderRegistry;
-use crate::builtin_tools::{BashExecTool, CanvasTool, CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool, SnapshotCaptureTool, WebFetchTool, YouTubeTool};
+use crate::builtin_tools::{BashExecTool, CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool, WebFetchTool, YouTubeTool};
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::builtin_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillListTool};
 #[cfg(feature = "gateway")]
@@ -47,14 +47,10 @@ pub struct BuiltinToolRegistry {
     pub(crate) pdf_generate_tool: PdfGenerateTool,
     /// Image generation tool instance (optional - requires generation registry)
     pub(crate) image_generate_tool: Option<ImageGenerateTool>,
-    /// Canvas tool instance for visual rendering
-    pub(crate) canvas_tool: CanvasTool,
     /// Read skill tool instance (for Progressive Disclosure pattern)
     pub(crate) read_skill_tool: ReadSkillTool,
     /// List skills tool instance
     pub(crate) list_skills_tool: SkillListTool,
-    /// Snapshot capture tool instance
-    pub(crate) snapshot_capture_tool: SnapshotCaptureTool,
     /// Generation provider registry for video/audio generation
     pub(crate) generation_registry: Option<Arc<std::sync::RwLock<GenerationProviderRegistry>>>,
     /// Dispatcher tool registry for meta tools (smart tool discovery)
@@ -95,10 +91,6 @@ impl BuiltinToolRegistry {
         // Skill reading tools (Progressive Disclosure pattern)
         let read_skill_tool = ReadSkillTool::default();
         let list_skills_tool = SkillListTool::default();
-        let snapshot_capture_tool = SnapshotCaptureTool;
-
-        // Canvas tool for visual rendering
-        let canvas_tool = CanvasTool::new_noop();
 
         // Create image generation tool if generation registry is provided
         let image_generate_tool = config.generation_registry.as_ref().map(|registry| {
@@ -179,17 +171,6 @@ impl BuiltinToolRegistry {
             ),
         );
 
-        // Canvas tool for visual rendering
-        tools.insert(
-            "canvas".to_string(),
-            UnifiedTool::new(
-                "builtin:canvas",
-                "canvas",
-                CanvasTool::DESCRIPTION,
-                ToolSource::Builtin,
-            ),
-        );
-
         // Skill reading tools (Progressive Disclosure pattern)
         tools.insert(
             "read_skill".to_string(),
@@ -207,16 +188,6 @@ impl BuiltinToolRegistry {
                 "builtin:list_skills",
                 "list_skills",
                 SkillListTool::DESCRIPTION,
-                ToolSource::Builtin,
-            ),
-        );
-
-        tools.insert(
-            "snapshot_capture".to_string(),
-            UnifiedTool::new(
-                "builtin:snapshot_capture",
-                "snapshot_capture",
-                SnapshotCaptureTool::DESCRIPTION,
                 ToolSource::Builtin,
             ),
         );
@@ -352,10 +323,8 @@ impl BuiltinToolRegistry {
             code_exec_tool,
             pdf_generate_tool,
             image_generate_tool,
-            canvas_tool,
             read_skill_tool,
             list_skills_tool,
-            snapshot_capture_tool,
             generation_registry,
             dispatcher_registry,
             sub_agent_dispatcher,
@@ -414,9 +383,6 @@ impl ToolRegistry for BuiltinToolRegistry {
             "code_exec" => Box::pin(async move { self.code_exec_tool.call_json(arguments).await }),
             "pdf_generate" => Box::pin(async move { self.pdf_generate_tool.call_json(arguments).await }),
 
-            // Canvas tool for visual rendering
-            "canvas" => Box::pin(async move { self.canvas_tool.call_json(arguments).await }),
-
             // Generation tools - image uses AlephTool, video/audio use legacy execute_* methods
             "generate_image" => Box::pin(async move {
                 let tool = self.image_generate_tool.as_ref().ok_or_else(|| {
@@ -449,7 +415,6 @@ impl ToolRegistry for BuiltinToolRegistry {
             // Skill reading tools - use call_json
             "read_skill" => Box::pin(async move { self.read_skill_tool.call_json(arguments).await }),
             "list_skills" => Box::pin(async move { self.list_skills_tool.call_json(arguments).await }),
-            "snapshot_capture" => Box::pin(async move { self.snapshot_capture_tool.call_json(arguments).await }),
 
             // Sessions tools for cross-session communication (requires gateway feature)
             #[cfg(feature = "gateway")]

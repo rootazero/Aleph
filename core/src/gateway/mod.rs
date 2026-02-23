@@ -126,7 +126,7 @@ pub use mdns_broadcaster::MdnsBroadcaster;
 #[cfg(feature = "gateway")]
 pub use agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry, AgentState};
 #[cfg(feature = "gateway")]
-pub use config::{GatewayConfig, ToolRoutingConfig, PolicyOverride};
+pub use config::GatewayConfig;
 #[cfg(feature = "gateway")]
 pub use session_manager::{SessionManager, SessionManagerConfig};
 #[cfg(feature = "gateway")]
