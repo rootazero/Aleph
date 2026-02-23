@@ -15,7 +15,7 @@ use arrow_array::{
 use crate::error::AlephError;
 use crate::memory::context::{
     ContextAnchor, FactSource, FactSpecificity, FactType, MemoryCategory, MemoryEntry, MemoryFact,
-    MemoryLayer, TemporalScope,
+    MemoryLayer, MemoryScope, MemoryTier, TemporalScope,
 };
 use crate::memory::store::{GraphEdge, GraphNode};
 
@@ -346,6 +346,12 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
                 .unwrap_or_else(|| "default".to_string()),
             embedding,
             similarity_score: None,
+            tier: MemoryTier::ShortTerm,
+            scope: MemoryScope::Global,
+            persona_id: None,
+            strength: 1.0,
+            access_count: 0,
+            last_accessed_at: None,
         };
         facts.push(fact);
     }
