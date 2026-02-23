@@ -210,7 +210,8 @@ impl StdioTransport {
         connected: Arc<AtomicBool>,
     ) {
         tokio::spawn(async move {
-            let mut buf_reader = BufReader::new(reader);
+            // reader is already AsyncBufRead — use it directly (no double-wrap).
+            let mut buf_reader = reader;
             let mut line = String::new();
 
             loop {
