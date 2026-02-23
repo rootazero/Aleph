@@ -156,6 +156,12 @@ impl SecretVault {
     }
 }
 
+impl super::injection::SecretResolver for SecretVault {
+    fn resolve(&self, name: &str) -> Result<super::types::DecryptedSecret, super::types::SecretError> {
+        self.get(name)
+    }
+}
+
 /// Resolve the master key from environment or return error.
 pub fn resolve_master_key() -> Result<String, SecretError> {
     std::env::var("ALEPH_MASTER_KEY").map_err(|_| SecretError::MasterKeyMissing)
