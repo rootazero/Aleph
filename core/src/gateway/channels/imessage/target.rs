@@ -76,6 +76,7 @@ impl IMessageTarget {
 
 /// Parse error
 #[derive(Debug, thiserror::Error)]
+#[allow(clippy::enum_variant_names)]
 pub enum ParseError {
     #[error("Invalid target format: {0}")]
     InvalidFormat(String),

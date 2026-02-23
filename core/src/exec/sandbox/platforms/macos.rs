@@ -17,6 +17,12 @@ use tokio::process::Command;
 /// macOS sandbox adapter using sandbox-exec
 pub struct MacOSSandbox;
 
+impl Default for MacOSSandbox {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl MacOSSandbox {
     pub fn new() -> Self {
         Self
@@ -80,7 +86,7 @@ impl SandboxAdapter for MacOSSandbox {
                 }
             }
         }
-        profile.push_str("\n");
+        profile.push('\n');
 
         // Network restrictions
         profile.push_str(";; Network restrictions\n");

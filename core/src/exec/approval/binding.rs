@@ -27,7 +27,7 @@ pub fn check_binding_compliance(
     declared_bindings: &HashMap<String, String>,
 ) -> Result<(), EscalationTrigger> {
     // Check for missing required bindings
-    for (param_name, _binding_value) in declared_bindings {
+    for param_name in declared_bindings.keys() {
         if !runtime_params.contains_key(param_name) {
             return Err(EscalationTrigger {
                 reason: EscalationReason::UndeclaredBinding,
@@ -38,7 +38,7 @@ pub fn check_binding_compliance(
     }
 
     // Check for extra undeclared parameters
-    for (param_name, _param_value) in runtime_params {
+    for param_name in runtime_params.keys() {
         if !declared_bindings.contains_key(param_name) {
             return Err(EscalationTrigger {
                 reason: EscalationReason::UndeclaredBinding,

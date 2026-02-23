@@ -413,7 +413,7 @@ impl DreamDaemon {
 
         report.graph_decay = self.graph_store.apply_decay(&self.graph_decay).await?;
         let decayed_count = self.database.apply_fact_decay(
-            self.memory_decay.half_life_days as f32,
+            self.memory_decay.half_life_days,
             self.memory_decay.min_strength,
         ).await?;
         report.memory_decay = MemoryDecayReport {

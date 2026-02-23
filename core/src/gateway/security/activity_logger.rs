@@ -17,7 +17,7 @@ use tracing::{debug, warn};
 const MAX_LOGS_PER_SESSION: usize = 1000;
 
 /// How long to keep logs after session ends (milliseconds)
-const LOG_RETENTION_MS: i64 = 3600_000; // 1 hour
+const LOG_RETENTION_MS: i64 = 3_600_000; // 1 hour
 
 /// Guest activity logger
 ///

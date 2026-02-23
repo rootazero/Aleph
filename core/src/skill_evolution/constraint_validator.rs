@@ -214,14 +214,14 @@ impl ConstraintValidator {
         report: &mut ValidationReport,
     ) {
         // If Manifest prohibits fork, Capabilities must enforce no_fork
-        if manifest.prohibited_operations.process.prohibit_fork {
-            if !capabilities.process.no_fork {
-                report.add_error(ValidationError::ProcessMismatch {
-                    manifest_rule: "Prohibit fork/exec".to_string(),
-                    capabilities_rule: "Allow fork/exec".to_string(),
-                    reason: "Manifest prohibits fork but Capabilities allow it".to_string(),
-                });
-            }
+        if manifest.prohibited_operations.process.prohibit_fork
+            && !capabilities.process.no_fork
+        {
+            report.add_error(ValidationError::ProcessMismatch {
+                manifest_rule: "Prohibit fork/exec".to_string(),
+                capabilities_rule: "Allow fork/exec".to_string(),
+                reason: "Manifest prohibits fork but Capabilities allow it".to_string(),
+            });
         }
     }
 

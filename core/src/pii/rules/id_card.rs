@@ -60,13 +60,13 @@ impl IdCardRule {
             Err(_) => return false,
         };
 
-        if year < 1900 || year > 2100 {
+        if !(1900..=2100).contains(&year) {
             return false;
         }
-        if month < 1 || month > 12 {
+        if !(1..=12).contains(&month) {
             return false;
         }
-        if day < 1 || day > 31 {
+        if !(1..=31).contains(&day) {
             return false;
         }
         true

@@ -190,7 +190,7 @@ impl ToolGenerator {
             entrypoint: format!("entrypoint.{}", get_extension(&self.config.runtime)),
             self_tested: false,
             requires_confirmation: self.config.require_confirmation,
-            required_capabilities: Some(Self::generate_required_capabilities(&suggestion)),
+            required_capabilities: Some(Self::generate_required_capabilities(suggestion)),
             approval_metadata: None,
             success_manifest: None, // Will be populated by collaborative pipeline
             generated: GenerationMetadata {

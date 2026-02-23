@@ -96,21 +96,19 @@ impl ResourceGovernor {
         // Check battery level (if on battery power)
         if let Ok(manager) = battery::Manager::new() {
             if let Ok(batteries) = manager.batteries() {
-                for battery_result in batteries {
-                    if let Ok(battery) = battery_result {
-                        let state = battery.state();
-                        let level = battery.state_of_charge().value * 100.0;
+                for battery in batteries.flatten() {
+                    let state = battery.state();
+                    let level = battery.state_of_charge().value * 100.0;
 
-                        // Only throttle if on battery and below threshold
-                        if matches!(state, battery::State::Discharging)
-                            && level < self.limits.battery_threshold
-                        {
-                            debug!(
-                                "Battery level ({:.1}%) below threshold ({:.1}%)",
-                                level, self.limits.battery_threshold
-                            );
-                            return Ok(GovernorDecision::Throttle);
-                        }
+                    // Only throttle if on battery and below threshold
+                    if matches!(state, battery::State::Discharging)
+                        && level < self.limits.battery_threshold
+                    {
+                        debug!(
+                            "Battery level ({:.1}%) below threshold ({:.1}%)",
+                            level, self.limits.battery_threshold
+                        );
+                        return Ok(GovernorDecision::Throttle);
                     }
                 }
             }

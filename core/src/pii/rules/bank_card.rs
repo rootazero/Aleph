@@ -43,7 +43,7 @@ impl BankCardRule {
             })
             .sum();
 
-        sum % 10 == 0
+        sum.is_multiple_of(10)
     }
 
     /// Check if surrounded by decimal context (e.g., JSON float)
