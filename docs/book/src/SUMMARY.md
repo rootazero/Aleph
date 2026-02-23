@@ -30,13 +30,13 @@
     - [events.*](./gateway/methods/events.md)
     - [browser.*](./gateway/methods/browser.md)
 
-# Channels
+# Interfaces
 
-- [Overview](./channels/overview.md)
-- [Telegram](./channels/telegram.md)
-- [Discord](./channels/discord.md)
-- [iMessage](./channels/imessage.md)
-- [WebChat](./channels/webchat.md)
+- [Overview](./interfaces/overview.md)
+- [Telegram](./interfaces/telegram.md)
+- [Discord](./interfaces/discord.md)
+- [iMessage](./interfaces/imessage.md)
+- [WebChat](./interfaces/webchat.md)
 
 # Tools & Extensions
 

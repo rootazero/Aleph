@@ -22,7 +22,6 @@ mod client;
 mod commands;
 mod config;
 mod error;
-mod executor;
 mod ui;
 
 use clap::{Parser, Subcommand};

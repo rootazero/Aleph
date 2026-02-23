@@ -127,18 +127,18 @@ Think of it as **your personal Jarvis** — but instead of being trapped in Tony
 
 ## 🏗️ Architecture
 
-Aleph uses a **Gateway-first architecture** inspired by Moltbot, where a WebSocket server acts as the control plane coordinating all interactions:
+Aleph uses a **server-centric architecture** where the Server is the brain and hands of the system. Interfaces (apps, bots, CLI) are pure I/O layers that connect via WebSocket:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         CLIENT LAYER                             │
+│                      INTERFACE LAYER (I/O)                        │
 │   macOS App │ Tauri App │ CLI │ Telegram │ Discord │ WebChat   │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │ WebSocket (JSON-RPC 2.0)
                                 │ ws://127.0.0.1:18789
 ┌───────────────────────────────┴─────────────────────────────────┐
 │                         GATEWAY LAYER                            │
-│   Router │ Session Manager │ Event Bus │ Channels │ Hot Reload  │
+│  Router │ Session Manager │ Event Bus │ Interfaces │ Hot Reload │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │
 ┌───────────────────────────────┴─────────────────────────────────┐
@@ -162,62 +162,27 @@ For detailed architecture documentation, see [ARCHITECTURE.md](docs/ARCHITECTURE
 
 ---
 
-## 🌐 Client Architecture: Server-Client Model
+## 🌐 Server-Centric Architecture
 
-Aleph supports a **distributed Server-Client architecture** where the "brain" (AI processing) runs on a server while "hands and feet" (UI and local tools) run on clients.
+Aleph uses a **server-centric architecture** where the Server handles all intelligence, execution, and state. Interfaces are lightweight I/O layers.
 
-### Architecture Evolution
+### Design Principles
 
-**Before (Fat Client)**:
-```
-Client → Embedded AlephCore → AI Providers
-```
-- Heavy: Each client embeds full AI processing
-- Isolated: No session sharing between devices
-- Slow updates: Core changes require client rebuild
+- **Server is the brain and hands**: All perception, thinking, and action happens server-side
+- **Interfaces are eyes and mouth**: They only handle message input/output and display
+- **All tools execute on Server**: No client-side tool execution needed
+- **Shared sessions**: All interfaces share the same session state through the Gateway
 
-**After (Thin Client)**:
-```
-Client → aleph-client-sdk → WebSocket → Gateway → AlephCore → AI Providers
-```
-- Lightweight: Clients only handle UI and local I/O
-- Connected: Share sessions across all devices
-- Fast updates: Core updates without client changes
+### Available Interfaces
 
-### Available Clients
-
-| Client | Platform | Status | Description |
-|--------|----------|--------|-------------|
-| **CLI** | macOS, Linux, Windows | ✅ Production | Command-line interface with streaming support |
-| **Desktop** | macOS, Linux, Windows | ✅ Production | Cross-platform GUI built with Tauri + React |
-| **macOS Native** | macOS | 🚧 In Progress | Native Swift/SwiftUI app with system integration |
-| **Mobile** | iOS, Android | 📋 Planned | Native mobile apps |
-
-### Client SDK
-
-All clients use the **aleph-client-sdk** (Rust library) providing:
-
-- **Transport Layer**: WebSocket connection management with auto-reconnect
-- **RPC Layer**: JSON-RPC 2.0 client with request/response matching
-- **Authentication**: Token-based auth with secure storage
-- **Event Streaming**: Real-time agent feedback (reasoning, tool calls, responses)
-- **Tool Routing**: Server-Client execution policy (ServerOnly, ClientOnly, PreferServer, PreferClient)
-
-**Features**:
-```toml
-[features]
-default = ["transport", "rpc", "client"]
-transport = ["tokio-tungstenite"]
-rpc = ["serde_json"]
-client = ["transport", "rpc"]
-local-executor = []  # Enable client-side tool execution
-native-tls = ["tokio-tungstenite/native-tls"]
-rustls = ["tokio-tungstenite/rustls"]
-```
-
-### Testing
-
-See [TESTING_CLIENT_REFACTORING.md](docs/TESTING_CLIENT_REFACTORING.md) for comprehensive testing procedures.
+| Interface | Platform | Status | Description |
+|-----------|----------|--------|-------------|
+| **CLI** | macOS, Linux, Windows | Production | Command-line interface with streaming support |
+| **Desktop** | macOS, Linux, Windows | Production | Cross-platform GUI built with Tauri + React |
+| **macOS Native** | macOS | In Progress | Native Swift/SwiftUI app with system integration |
+| **Telegram** | Cross-platform | Production | Telegram Bot interface |
+| **Discord** | Cross-platform | Production | Discord Bot interface |
+| **Mobile** | iOS, Android | Planned | Native mobile apps |
 
 ---
 
@@ -265,12 +230,12 @@ cargo run -p alephcore --features gateway --bin aleph-gateway -- start
 cargo run -p aleph-cli -- "Hello, Aleph!"
 
 # Option 2: Use Tauri Desktop (cross-platform GUI)
-cd clients/desktop
+cd apps/desktop
 pnpm install
 pnpm tauri dev
 
 # Option 3: Build macOS Native App
-cd clients/macos
+cd apps/macos
 xcodegen generate
 xcodebuild -project Aleph.xcodeproj -scheme Aleph -configuration Debug
 ```
@@ -316,6 +281,7 @@ aleph/
 ├── core/                    # Rust Core (alephcore crate)
 │   ├── src/
 │   │   ├── gateway/         # WebSocket control plane
+│   │   │   └── interfaces/  # I/O interfaces (Telegram, Discord, etc.)
 │   │   ├── agent_loop/      # Agent execution loop
 │   │   ├── thinker/         # LLM interaction
 │   │   ├── dispatcher/      # Task orchestration
@@ -324,9 +290,10 @@ aleph/
 │   │   ├── extension/       # Plugin system
 │   │   └── ...
 │   └── Cargo.toml
-├── platforms/
+├── apps/
+│   ├── cli/                 # CLI interface
 │   ├── macos/               # Swift/SwiftUI native app
-│   └── tauri/               # Cross-platform Tauri app
+│   └── desktop/             # Cross-platform Tauri app
 └── docs/                    # Documentation
 ```
 
@@ -337,10 +304,10 @@ aleph/
 cd core && cargo build && cargo test
 
 # macOS App
-cd platforms/macos && xcodegen generate && open Aleph.xcodeproj
+cd apps/macos && xcodegen generate && open Aleph.xcodeproj
 
 # Tauri App
-cd platforms/tauri && pnpm install && pnpm tauri dev
+cd apps/desktop && pnpm install && pnpm tauri dev
 ```
 
 ### Contributing

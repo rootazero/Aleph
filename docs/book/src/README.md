@@ -56,7 +56,7 @@ aleph chat "Hello, Aleph!"
 | [Getting Started](./getting-started/installation.md) | Installation and initial setup |
 | [Architecture](./architecture/overview.md) | System design and components |
 | [Gateway RPC](./gateway/protocol.md) | WebSocket API reference |
-| [Channels](./channels/overview.md) | Messaging platform integrations |
+| [Interfaces](./interfaces/overview.md) | Messaging platform integrations |
 | [Security](./security/exec-approval.md) | Security model and approvals |
 | [CLI Reference](./cli/commands.md) | Command-line interface |
 | [Development](./development/building.md) | Building and contributing |

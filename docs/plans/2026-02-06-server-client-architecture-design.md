@@ -1,3 +1,8 @@
+> **SUPERSEDED** by `docs/plans/2026-02-23-server-centric-architecture-design.md`
+> This document describes a deprecated Server-Client architecture that has been replaced.
+
+---
+
 # Server-Client 架构设计
 
 > 将 Aleph 从"本地一体化"架构演进为"大脑在云端，手脚在身边"的分布式架构
