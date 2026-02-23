@@ -779,9 +779,34 @@ pub fn create_gateway_worker(
     let registry = std::sync::Arc::new(SingleProviderRegistry::new(provider));
     let thinker = std::sync::Arc::new(Thinker::new(registry, ThinkerConfig::default()));
 
-    // Create Executor with builtin tool registry
+    // Create Executor with builtin tool registry + ExecSecurityGate
     let tool_registry = std::sync::Arc::new(BuiltinToolRegistry::new());
-    let executor = std::sync::Arc::new(SingleStepExecutor::new(tool_registry));
+
+    // Initialize ExecApprovalManager for human-in-the-loop shell approval
+    let approval_manager = std::sync::Arc::new(crate::exec::ExecApprovalManager::new());
+
+    // Initialize platform-specific SandboxManager (macOS only)
+    #[cfg(target_os = "macos")]
+    let sandbox_manager = {
+        use crate::exec::sandbox::{FallbackPolicy, SandboxManager};
+        use crate::exec::sandbox::platforms::MacOSSandbox;
+        Some(std::sync::Arc::new(
+            SandboxManager::new(std::sync::Arc::new(MacOSSandbox::new()))
+                .with_fallback_policy(FallbackPolicy::WarnAndExecute),
+        ))
+    };
+    #[cfg(not(target_os = "macos"))]
+    let sandbox_manager: Option<std::sync::Arc<crate::exec::sandbox::SandboxManager>> = None;
+
+    // Create ExecSecurityGate: risk assessment + approval + sandbox + secret masking
+    let exec_gate = std::sync::Arc::new(
+        crate::executor::ExecSecurityGate::new(approval_manager, sandbox_manager),
+    );
+
+    let executor = std::sync::Arc::new(
+        SingleStepExecutor::new(tool_registry)
+            .with_exec_security_gate(exec_gate),
+    );
 
     // Build tools list from builtin definitions
     let tools: Vec<UnifiedTool> = BUILTIN_TOOL_DEFINITIONS
@@ -1085,5 +1110,20 @@ mod tests {
             hash,
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         );
+    }
+
+    #[test]
+    fn test_worker_executor_creation_with_gate() {
+        // Compilation test: verifies ExecSecurityGate wiring compiles correctly
+        use crate::exec::ExecApprovalManager;
+        use crate::executor::{ExecSecurityGate, SingleStepExecutor, BuiltinToolRegistry};
+        use std::sync::Arc;
+
+        let tool_registry = Arc::new(BuiltinToolRegistry::new());
+        let approval_manager = Arc::new(ExecApprovalManager::new());
+        let gate = Arc::new(ExecSecurityGate::new(approval_manager, None));
+        let _executor = SingleStepExecutor::new(tool_registry)
+            .with_exec_security_gate(gate);
+        // If this compiles, the wiring is correct
     }
 }

