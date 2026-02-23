@@ -20,6 +20,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -150,6 +151,11 @@ impl UnixSocketTransport {
         max_retries: u32,
         retry_delay_ms: u64,
     ) -> Result<(), TransportError> {
+        // Guard against concurrent connect() calls spawning multiple read loops.
+        if self.connected.load(Ordering::Acquire) {
+            return Ok(()); // already connected
+        }
+
         let mut last_err = None;
 
         for attempt in 0..=max_retries {
@@ -221,7 +227,6 @@ impl UnixSocketTransport {
                     Ok(0) => {
                         // EOF: bridge disconnected.
                         debug!(path = %socket_path.display(), "Bridge socket EOF");
-                        connected.store(false, Ordering::Release);
                         break;
                     }
                     Ok(_) => {
@@ -249,10 +254,17 @@ impl UnixSocketTransport {
                             path = %socket_path.display(),
                             "Error reading from bridge socket"
                         );
-                        connected.store(false, Ordering::Release);
                         break;
                     }
                 }
+            }
+
+            // Read loop exited (EOF or IO error) — drain all pending requests
+            // so callers don't hang forever waiting on a oneshot channel.
+            connected.store(false, Ordering::Release);
+            let mut map = pending.lock().await;
+            for (_id, sender) in map.drain() {
+                let _ = sender.send(Err("Bridge disconnected".into()));
             }
         });
     }
@@ -331,27 +343,42 @@ impl Transport for UnixSocketTransport {
             map.insert(id, tx);
         }
 
-        // Write to socket.
+        // Write to socket. On failure, remove the pending entry so the
+        // caller doesn't leak a oneshot that will never be resolved.
         {
             let mut writer_guard = self.writer.lock().await;
-            let writer = writer_guard
-                .as_mut()
-                .ok_or(TransportError::NotConnected)?;
-            writer.write_all(payload.as_bytes()).await.map_err(|e| {
-                TransportError::Io(e)
-            })?;
-            writer.flush().await.map_err(TransportError::Io)?;
+            let writer = match writer_guard.as_mut() {
+                Some(w) => w,
+                None => {
+                    self.pending.lock().await.remove(&id);
+                    return Err(TransportError::NotConnected);
+                }
+            };
+            if let Err(e) = writer.write_all(payload.as_bytes()).await {
+                self.pending.lock().await.remove(&id);
+                return Err(TransportError::Io(e));
+            }
+            if let Err(e) = writer.flush().await {
+                self.pending.lock().await.remove(&id);
+                return Err(TransportError::Io(e));
+            }
         }
 
-        // Wait for response.
-        match rx.await {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(err_msg)) => Err(TransportError::RequestFailed(err_msg)),
-            Err(_) => {
+        // Wait for response with a 30-second timeout.
+        match tokio::time::timeout(Duration::from_secs(30), rx).await {
+            Ok(Ok(Ok(value))) => Ok(value),
+            Ok(Ok(Err(err_msg))) => Err(TransportError::RequestFailed(err_msg)),
+            Ok(Err(_)) => {
                 // The sender was dropped (read loop exited).
                 Err(TransportError::ConnectionFailed(
                     "Connection lost while waiting for response".into(),
                 ))
+            }
+            Err(_) => {
+                // Timeout — remove the pending entry so the read loop doesn't
+                // try to resolve a closed channel later.
+                self.pending.lock().await.remove(&id);
+                Err(TransportError::Timeout)
             }
         }
     }
@@ -369,17 +396,19 @@ impl Transport for UnixSocketTransport {
         self.connected.store(false, Ordering::Release);
 
         // Drop the writer to close our end of the socket.
-        let mut writer_guard = self.writer.lock().await;
-        *writer_guard = None;
+        // This causes the read loop to get EOF and exit, which in turn
+        // drops the event_tx clone — eventually unblocking next_event().
+        {
+            let mut writer_guard = self.writer.lock().await;
+            *writer_guard = None;
+        }
 
-        // Drop the event receiver.
-        let mut rx_guard = self.event_rx.lock().await;
-        *rx_guard = None;
-
-        // Cancel all pending requests.
-        let mut map = self.pending.lock().await;
-        for (_id, sender) in map.drain() {
-            let _ = sender.send(Err("Transport closed".into()));
+        // Drain all pending requests so callers don't hang.
+        {
+            let mut map = self.pending.lock().await;
+            for (_id, sender) in map.drain() {
+                let _ = sender.send(Err("Transport closed".into()));
+            }
         }
 
         debug!(path = %self.socket_path.display(), "Transport closed");

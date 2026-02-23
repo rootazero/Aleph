@@ -167,6 +167,9 @@ pub trait Transport: Send + Sync + fmt::Debug {
     ///
     /// Returns `None` when the transport is closed or the bridge has
     /// disconnected.
+    ///
+    /// Note: Only a single concurrent caller is supported. If multiple tasks
+    /// call `next_event` simultaneously, only one will receive each event.
     async fn next_event(&self) -> Option<BridgeEvent>;
 
     /// Gracefully close the transport connection.
