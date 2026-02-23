@@ -3,7 +3,7 @@
 //! Provides filter, scoring, and query types shared across
 //! MemoryStore, GraphStore, and SessionStore implementations.
 
-use crate::memory::context::{FactType, MemoryCategory, MemoryFact, MemoryLayer};
+use crate::memory::context::{FactType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::workspace::WorkspaceFilter;
 
@@ -44,6 +44,14 @@ pub struct SearchFilter {
     pub created_after: Option<i64>,
     /// Only facts created at or before this Unix timestamp (seconds).
     pub created_before: Option<i64>,
+    /// Restrict to a specific cognitive memory tier.
+    pub tier: Option<MemoryTier>,
+    /// Restrict to a specific visibility scope.
+    pub scope: Option<MemoryScope>,
+    /// Restrict to a specific persona identifier.
+    pub persona_id: Option<String>,
+    /// Pre-built scope stack OR clause (set by `with_scope_stack`).
+    scope_stack_clause: Option<String>,
 }
 
 impl SearchFilter {
@@ -124,6 +132,40 @@ impl SearchFilter {
         self
     }
 
+    /// Set cognitive memory tier filter.
+    pub fn with_tier(mut self, tier: MemoryTier) -> Self {
+        self.tier = Some(tier);
+        self
+    }
+
+    /// Set visibility scope filter.
+    pub fn with_scope(mut self, scope: MemoryScope) -> Self {
+        self.scope = Some(scope);
+        self
+    }
+
+    /// Set persona identifier filter.
+    pub fn with_persona_id(mut self, id: &str) -> Self {
+        self.persona_id = Some(id.to_string());
+        self
+    }
+
+    /// Build scope-stack filter: Global OR (Workspace=W) OR (Persona=P).
+    ///
+    /// This generates an OR-clause that retrieves facts visible from the
+    /// given scope stack. Overrides individual `scope` / `persona_id` filters.
+    pub fn with_scope_stack(mut self, persona_id: Option<&str>, workspace: &str) -> Self {
+        let mut parts = vec![
+            "scope = 'global'".to_string(),
+            format!("(scope = 'workspace' AND workspace = '{workspace}')"),
+        ];
+        if let Some(pid) = persona_id {
+            parts.push(format!("(scope = 'persona' AND persona_id = '{pid}')"));
+        }
+        self.scope_stack_clause = Some(format!("({})", parts.join(" OR ")));
+        self
+    }
+
     // -- filter expression -------------------------------------------------
 
     /// Build a LanceDB (DataFusion SQL) filter expression.
@@ -176,6 +218,23 @@ impl SearchFilter {
 
         if let Some(ts) = self.created_before {
             clauses.push(format!("created_at <= {}", ts));
+        }
+
+        // If scope_stack_clause is set, use it (overrides individual scope/persona)
+        if let Some(ref clause) = self.scope_stack_clause {
+            clauses.push(clause.clone());
+        } else {
+            if let Some(ref scope) = self.scope {
+                clauses.push(format!("scope = '{}'", scope.as_str()));
+            }
+            if let Some(ref persona_id) = self.persona_id {
+                clauses.push(format!("persona_id = '{persona_id}'"));
+            }
+        }
+
+        // tier filter always applies (independent of scope stack)
+        if let Some(ref tier) = self.tier {
+            clauses.push(format!("tier = '{}'", tier.as_str()));
         }
 
         if clauses.is_empty() {
@@ -405,5 +464,53 @@ mod tests {
         };
         let sql = f.to_lance_filter().unwrap();
         assert_eq!(sql, "workspace = 'novel'");
+    }
+
+    #[test]
+    fn search_filter_supports_tier() {
+        let filter = SearchFilter::new().with_tier(MemoryTier::Core);
+        let sql = filter.to_lance_filter().unwrap();
+        assert!(sql.contains("tier = 'core'"));
+    }
+
+    #[test]
+    fn search_filter_supports_scope_and_persona() {
+        let filter = SearchFilter::new()
+            .with_scope(MemoryScope::Persona)
+            .with_persona_id("reviewer");
+        let sql = filter.to_lance_filter().unwrap();
+        assert!(sql.contains("scope = 'persona'"));
+        assert!(sql.contains("persona_id = 'reviewer'"));
+    }
+
+    #[test]
+    fn search_filter_scope_stack_generates_or_clause() {
+        let filter = SearchFilter::new()
+            .with_scope_stack(Some("reviewer"), "aleph");
+        let sql = filter.to_lance_filter().unwrap();
+        assert!(sql.contains("scope = 'global'"));
+        assert!(sql.contains("scope = 'workspace'"));
+        assert!(sql.contains("scope = 'persona'"));
+        assert!(sql.contains("persona_id = 'reviewer'"));
+    }
+
+    #[test]
+    fn search_filter_scope_stack_without_persona() {
+        let filter = SearchFilter::new()
+            .with_scope_stack(None, "aleph");
+        let sql = filter.to_lance_filter().unwrap();
+        assert!(sql.contains("scope = 'global'"));
+        assert!(sql.contains("scope = 'workspace'"));
+        assert!(!sql.contains("persona"));
+    }
+
+    #[test]
+    fn search_filter_tier_with_scope_stack() {
+        let filter = SearchFilter::new()
+            .with_tier(MemoryTier::Core)
+            .with_scope_stack(Some("reviewer"), "aleph");
+        let sql = filter.to_lance_filter().unwrap();
+        assert!(sql.contains("tier = 'core'"));
+        assert!(sql.contains("scope = 'global'"));
     }
 }
