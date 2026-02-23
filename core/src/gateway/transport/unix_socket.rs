@@ -151,8 +151,10 @@ impl UnixSocketTransport {
         max_retries: u32,
         retry_delay_ms: u64,
     ) -> Result<(), TransportError> {
-        // Guard against concurrent connect() calls spawning multiple read loops.
-        if self.connected.load(Ordering::Acquire) {
+        // Hold the writer lock for the entire connect sequence to prevent
+        // concurrent connect() calls from spawning multiple read loops.
+        let mut writer_guard = self.writer.lock().await;
+        if writer_guard.is_some() {
             return Ok(()); // already connected
         }
 
@@ -172,7 +174,7 @@ impl UnixSocketTransport {
             match UnixStream::connect(&self.socket_path).await {
                 Ok(stream) => {
                     let (reader, writer) = tokio::io::split(stream);
-                    *self.writer.lock().await = Some(writer);
+                    *writer_guard = Some(writer);
                     self.connected.store(true, Ordering::Release);
 
                     // Spawn the background read loop with Arc-cloned handles.
@@ -345,23 +347,29 @@ impl Transport for UnixSocketTransport {
 
         // Write to socket. On failure, remove the pending entry so the
         // caller doesn't leak a oneshot that will never be resolved.
-        {
+        // We drop the writer guard before acquiring pending lock to avoid
+        // holding both locks simultaneously.
+        let write_result = {
             let mut writer_guard = self.writer.lock().await;
             let writer = match writer_guard.as_mut() {
                 Some(w) => w,
                 None => {
+                    drop(writer_guard);
                     self.pending.lock().await.remove(&id);
                     return Err(TransportError::NotConnected);
                 }
             };
-            if let Err(e) = writer.write_all(payload.as_bytes()).await {
-                self.pending.lock().await.remove(&id);
-                return Err(TransportError::Io(e));
+            let r1 = writer.write_all(payload.as_bytes()).await;
+            if r1.is_ok() {
+                writer.flush().await
+            } else {
+                r1
             }
-            if let Err(e) = writer.flush().await {
-                self.pending.lock().await.remove(&id);
-                return Err(TransportError::Io(e));
-            }
+        }; // writer_guard dropped here
+
+        if let Err(e) = write_result {
+            self.pending.lock().await.remove(&id);
+            return Err(TransportError::Io(e));
         }
 
         // Wait for response with a 30-second timeout.
