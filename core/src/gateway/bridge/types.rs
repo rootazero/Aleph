@@ -38,7 +38,7 @@ impl fmt::Display for BridgeId {
 ///
 /// Describes the bridge plugin's metadata, runtime configuration,
 /// and declared capabilities.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BridgeDefinition {
     /// Manifest schema version (e.g. "1")
     pub spec_version: String,
@@ -77,7 +77,7 @@ pub struct BridgeDefinition {
 // ---------------------------------------------------------------------------
 
 /// How a bridge is executed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum BridgeRuntime {
     /// Bridge is compiled into the Aleph binary.
@@ -145,7 +145,7 @@ pub enum TransportType {
 ///
 /// Each field is a list of capability strings. The gateway uses these to
 /// validate link configurations and to advertise features to the agent.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BridgeCapabilities {
     /// Core messaging capabilities (e.g. "send_text", "send_image")
     #[serde(default)]

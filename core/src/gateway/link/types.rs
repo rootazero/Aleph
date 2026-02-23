@@ -41,7 +41,7 @@ impl fmt::Display for LinkId {
 ///
 /// Links bind a bridge to a specific account and define message routing
 /// policies (which agent handles DMs vs group messages, allowlists, etc.).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LinkConfig {
     /// Manifest schema version (e.g. "1")
     pub spec_version: String,
@@ -77,7 +77,7 @@ fn default_enabled() -> bool {
 // ---------------------------------------------------------------------------
 
 /// Routing policy for messages arriving on a link.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinkRoutingConfig {
     /// Which agent handles messages from this link (default: "main")
     #[serde(default = "default_agent")]
@@ -115,9 +115,9 @@ fn default_agent() -> String {
 #[serde(rename_all = "lowercase")]
 pub enum DmPolicyConfig {
     /// Accept DMs from anyone
-    #[default]
     Open,
-    /// Require a pairing handshake before accepting DMs
+    /// Require a pairing handshake before accepting DMs (secure default)
+    #[default]
     Pairing,
     /// Only accept DMs from users in an explicit allowlist
     Allowlist,
@@ -134,11 +134,11 @@ pub enum DmPolicyConfig {
 #[serde(rename_all = "lowercase")]
 pub enum GroupPolicyConfig {
     /// Accept messages from any group the bot is added to
-    #[default]
     Open,
     /// Only accept messages from groups in an explicit allowlist
     Allowlist,
-    /// Ignore all group messages
+    /// Ignore all group messages (secure default)
+    #[default]
     Disabled,
 }
 
@@ -198,8 +198,8 @@ name: Bare Link
         assert_eq!(cfg.bridge.as_str(), "signal");
         assert!(cfg.enabled); // default true
         assert_eq!(cfg.routing.agent, "main"); // default "main"
-        assert_eq!(cfg.routing.dm_policy, DmPolicyConfig::Open); // default
-        assert_eq!(cfg.routing.group_policy, GroupPolicyConfig::Open); // default
+        assert_eq!(cfg.routing.dm_policy, DmPolicyConfig::Pairing); // secure default
+        assert_eq!(cfg.routing.group_policy, GroupPolicyConfig::Disabled); // secure default
         assert_eq!(cfg.settings, serde_json::Value::Null); // default
     }
 
