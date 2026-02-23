@@ -22,6 +22,10 @@
 //! server.run().await?;
 //! ```
 
+// Social Connectivity: Bridge & Link data models (always compiled)
+pub mod bridge;
+pub mod link;
+
 #[cfg(feature = "gateway")]
 pub mod protocol;
 #[cfg(feature = "gateway")]
