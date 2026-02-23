@@ -208,7 +208,22 @@ impl ExecSecurityGate {
             }
             Some(ApprovalDecisionType::AllowAlways) => {
                 info!(cmd = %cmd, id = %record_id, "Danger command approved (always)");
-                // Optionally add to allowlist here in a future enhancement
+                // Add to allowlist for future auto-approval
+                let pattern = analysis.segments.first()
+                    .and_then(|s| s.resolution.as_ref())
+                    .map(|r| {
+                        r.resolved_path
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|| r.executable_name.clone())
+                    });
+                if let Some(ref p) = pattern {
+                    if let Err(e) = self.approval_manager.add_to_allowlist(&context.agent_id, p) {
+                        warn!(cmd = %cmd, pattern = %p, error = %e, "Failed to add to allowlist");
+                    } else {
+                        info!(cmd = %cmd, pattern = %p, "Added to allowlist");
+                    }
+                }
                 PreExecDecision::Allow { use_sandbox: false }
             }
             Some(ApprovalDecisionType::Deny) => {
