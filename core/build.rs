@@ -6,6 +6,8 @@
 fn main() {
     #[cfg(feature = "control-plane")]
     {
+        use std::path::Path;
+        use std::process::Command;
         println!("cargo:rerun-if-changed=ui/control_plane/src");
         println!("cargo:rerun-if-changed=ui/control_plane/Cargo.toml");
         println!("cargo:rerun-if-changed=ui/control_plane/index.html");
