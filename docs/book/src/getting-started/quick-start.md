@@ -67,4 +67,4 @@ aleph channels start discord
 
 - [Configuration](./configuration.md) - Customize your setup
 - [Gateway RPC](../gateway/protocol.md) - Learn the API
-- [Channels](../channels/overview.md) - Connect more platforms
+- [Interfaces](../interfaces/overview.md) - Connect more platforms

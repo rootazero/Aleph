@@ -8,12 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aleph_protocol::{
-    jsonrpc::TOOL_ERROR,
-    ClientCapabilities, ClientEnvironment, ClientManifest, ExecutionConstraints,
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, StreamEvent,
 };
 use futures_util::{SinkExt, StreamExt};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
@@ -24,22 +22,10 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::CliConfig;
 use crate::error::{CliError, CliResult};
-use crate::executor::LocalExecutor;
 
 /// Pending RPC request
 struct PendingRequest {
     tx: oneshot::Sender<Result<Value, JsonRpcError>>,
-}
-
-/// Server request parameters (tool.call)
-#[derive(Debug, Deserialize)]
-struct ToolCallRequest {
-    /// Tool name (Server uses "tool" field)
-    #[serde(alias = "tool_name")]
-    tool: String,
-    /// Tool arguments (Server uses "args" field)
-    #[serde(alias = "params")]
-    args: Value,
 }
 
 /// Type alias for WebSocket write half
@@ -212,23 +198,10 @@ impl AlephClient {
         }
     }
 
-    /// Handle a request from Server (e.g., tool.call)
+    /// Handle a request from Server
     async fn handle_server_request(request: &JsonRpcRequest, id: Value, write: &WsWriter) {
-        let response = match request.method.as_str() {
-            "tool.call" => {
-                Self::handle_tool_call(request.params.clone()).await
-            }
-            _ => {
-                warn!(method = %request.method, "Unknown method from Server");
-                Err(JsonRpcError::method_not_found(&request.method))
-            }
-        };
-
-        // Build response
-        let rpc_response = match response {
-            Ok(result) => JsonRpcResponse::success(id, result),
-            Err(error) => JsonRpcResponse::error(id, error),
-        };
+        warn!(method = %request.method, "Unknown method from Server");
+        let rpc_response = JsonRpcResponse::error(id, JsonRpcError::method_not_found(&request.method));
 
         // Send response
         let json = match serde_json::to_string(&rpc_response) {
@@ -243,34 +216,6 @@ impl AlephClient {
         let mut write_guard = write.lock().await;
         if let Err(e) = write_guard.send(Message::Text(json.into())).await {
             error!("Failed to send response: {}", e);
-        }
-    }
-
-    /// Handle tool.call request from Server
-    async fn handle_tool_call(params: Option<Value>) -> Result<Value, JsonRpcError> {
-        let params = params.ok_or_else(|| {
-            JsonRpcError::invalid_params("Missing params for tool.call")
-        })?;
-
-        let tool_req: ToolCallRequest = serde_json::from_value(params)
-            .map_err(|e| JsonRpcError::invalid_params(format!("Invalid tool.call params: {}", e)))?;
-
-        info!(tool = %tool_req.tool, "Executing local tool for Server");
-
-        // Execute the tool locally
-        match LocalExecutor::execute(&tool_req.tool, tool_req.args).await {
-            Ok(result) => {
-                info!(tool = %tool_req.tool, "Tool execution succeeded");
-                Ok(result)
-            }
-            Err(e) => {
-                error!(tool = %tool_req.tool, error = %e, "Tool execution failed");
-                Err(JsonRpcError::with_data(
-                    TOOL_ERROR,
-                    format!("Tool execution failed: {}", e),
-                    serde_json::json!({"tool": tool_req.tool}),
-                ))
-            }
         }
     }
 
@@ -383,29 +328,10 @@ impl AlephClient {
 
     /// Connect and authenticate with the server
     pub async fn authenticate(&self, config: &CliConfig) -> CliResult<String> {
-        // Build client manifest
-        let manifest = ClientManifest {
-            client_type: "cli".to_string(),
-            client_version: env!("CARGO_PKG_VERSION").to_string(),
-            capabilities: ClientCapabilities {
-                tool_categories: config.manifest.tool_categories.clone(),
-                specific_tools: config.manifest.specific_tools.clone(),
-                excluded_tools: config.manifest.excluded_tools.clone(),
-                constraints: ExecutionConstraints::default(),
-                granted_scopes: None,
-            },
-            environment: ClientEnvironment {
-                os: std::env::consts::OS.to_string(),
-                arch: std::env::consts::ARCH.to_string(),
-                sandbox: false,
-            },
-        };
-
         #[derive(Serialize)]
         struct ConnectParams {
             device_id: String,
             device_name: String,
-            manifest: ClientManifest,
             #[serde(skip_serializing_if = "Option::is_none")]
             token: Option<String>,
         }
@@ -413,14 +339,11 @@ impl AlephClient {
         #[derive(serde::Deserialize)]
         struct ConnectResult {
             token: String,
-            #[allow(dead_code)]
-            manifest_accepted: bool,
         }
 
         let params = ConnectParams {
             device_id: config.device_id.clone(),
             device_name: config.device_name.clone(),
-            manifest,
             token: config.auth_token.clone(),
         };
 

@@ -380,8 +380,8 @@ Define the `Transport` trait and extract `UnixSocketTransport` from the existing
 - Create: `core/src/gateway/transport/traits.rs`
 - Create: `core/src/gateway/transport/unix_socket.rs`
 - Modify: `core/src/gateway/mod.rs` (add `pub mod transport`)
-- Reference: `core/src/gateway/channels/whatsapp/rpc_client.rs` (extraction source)
-- Reference: `core/src/gateway/channels/whatsapp/bridge_protocol.rs` (event types)
+- Reference: `core/src/gateway/interfaces/whatsapp/rpc_client.rs` (extraction source)
+- Reference: `core/src/gateway/interfaces/whatsapp/bridge_protocol.rs` (event types)
 
 **Step 1: Write failing test for Transport trait**
 
@@ -532,7 +532,7 @@ pub use traits::*;
 
 **Step 3: Extract UnixSocketTransport from WhatsApp RPC client**
 
-This is the largest extraction. Read `core/src/gateway/channels/whatsapp/rpc_client.rs` and generalize it.
+This is the largest extraction. Read `core/src/gateway/interfaces/whatsapp/rpc_client.rs` and generalize it.
 
 In `core/src/gateway/transport/unix_socket.rs`:
 ```rust
@@ -1407,7 +1407,7 @@ Extract and generalize the WhatsApp BridgeManager into a supervisor that manages
 **Files:**
 - Create: `core/src/gateway/bridge/supervisor.rs`
 - Modify: `core/src/gateway/bridge/mod.rs`
-- Reference: `core/src/gateway/channels/whatsapp/bridge_manager.rs`
+- Reference: `core/src/gateway/interfaces/whatsapp/bridge_manager.rs`
 
 **Step 1: Write failing test**
 

@@ -52,15 +52,15 @@ cargo run -p alephcore --features gateway --bin aleph-gateway -- start -c /path/
 **Verification**:
 ```bash
 # Verify new structure
-ls -la clients/
-# Should show: cli/, macos/, desktop/, shared/
+ls -la apps/
+# Should show: cli/, macos/, desktop/
 
 # Verify old structure is gone
 ls -la platforms/
 # Should show: (empty or not exist)
 ```
 
-**Expected Result**: All client code moved from `platforms/` to `clients/`
+**Expected Result**: All client code moved from `platforms/` to `apps/`
 
 ---
 
@@ -117,7 +117,7 @@ cargo run -p aleph-cli -- --provider claude "Explain quantum computing"
 #### 3.1 Build Test
 
 ```bash
-cd clients/desktop
+cd apps/desktop
 
 # Install frontend dependencies
 pnpm install
@@ -134,7 +134,7 @@ cd src-tauri && cargo build
 #### 3.2 Development Mode Test
 
 ```bash
-cd clients/desktop
+cd apps/desktop
 
 # Run in dev mode (opens GUI)
 pnpm tauri dev
@@ -207,7 +207,7 @@ pnpm tauri dev
 #### 3.3 Production Build Test
 
 ```bash
-cd clients/desktop
+cd apps/desktop
 
 # Build production bundle
 pnpm tauri build
@@ -238,7 +238,7 @@ Test multiple clients connecting to the same Gateway simultaneously:
 
 3. **Connect Tauri Client**:
    ```bash
-   cd clients/desktop && pnpm tauri dev
+   cd apps/desktop && pnpm tauri dev
    ```
 
 4. **Verify**:
@@ -352,7 +352,7 @@ Verify that all features from the Fat Client still work in Thin Client:
 ### Warnings (Non-Critical)
 
 1. **Cocoa API Deprecation** (macOS only):
-   - Location: `clients/desktop/src-tauri/src/commands/mod.rs:49-56`
+   - Location: `apps/desktop/src-tauri/src/commands/mod.rs:49-56`
    - Impact: None (still functional)
    - Fix: Migrate to objc2-app-kit (future work)
 
@@ -363,7 +363,7 @@ Verify that all features from the Fat Client still work in Thin Client:
 ### Limitations
 
 1. **Frontend Dist Requirement**:
-   - Tauri requires `clients/desktop/dist/` to exist
+   - Tauri requires `apps/desktop/dist/` to exist
    - Placeholder created automatically
    - Real dist built by `pnpm build`
 
@@ -403,7 +403,7 @@ cargo run -p aleph-cli -- "Test"
 
 **Solution**:
 ```bash
-cd clients/desktop
+cd apps/desktop
 pnpm build
 ```
 
@@ -464,4 +464,4 @@ After successful testing:
 - [Phase 2 Progress Report](../PHASE2_PROGRESS.md)
 - [Phase 3 Progress Report](../PHASE3_PROGRESS.md)
 - [Gateway Documentation](GATEWAY.md)
-- [Client SDK Documentation](../clients/shared/README.md)
+- [Client SDK Documentation](../apps/shared/README.md)

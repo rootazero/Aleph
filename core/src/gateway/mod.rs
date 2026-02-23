@@ -74,7 +74,7 @@ pub mod channel;
 #[cfg(feature = "gateway")]
 pub mod channel_registry;
 #[cfg(feature = "gateway")]
-pub mod channels;
+pub mod interfaces;
 #[cfg(feature = "gateway")]
 pub mod device_store;
 #[cfg(feature = "gateway")]
@@ -104,11 +104,6 @@ pub mod run_event_bus;
 #[cfg(feature = "gateway")]
 pub mod workspace;
 #[cfg(feature = "gateway")]
-mod client_manifest;
-#[cfg(feature = "gateway")]
-mod reverse_rpc;
-
-#[cfg(feature = "gateway")]
 pub use server::GatewayServer;
 #[cfg(feature = "gateway")]
 pub use protocol::{JsonRpcRequest, JsonRpcResponse, JsonRpcError};
@@ -131,11 +126,11 @@ pub use mdns_broadcaster::MdnsBroadcaster;
 #[cfg(feature = "gateway")]
 pub use agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry, AgentState};
 #[cfg(feature = "gateway")]
-pub use config::{GatewayConfig, ToolRoutingConfig, PolicyOverride};
+pub use config::GatewayConfig;
 #[cfg(feature = "gateway")]
 pub use session_manager::{SessionManager, SessionManagerConfig};
 #[cfg(feature = "gateway")]
-pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus, SimpleExecutionEngine, ClientContext};
+pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus, SimpleExecutionEngine};
 #[cfg(feature = "gateway")]
 pub use loop_callback_adapter::{EventEmittingCallback, ResponseChunkEmitter, UserQuestion};
 #[cfg(feature = "gateway")]
@@ -199,7 +194,3 @@ pub use workspace::{
     Workspace, WorkspaceManager, WorkspaceManagerConfig, WorkspaceError,
     CacheState, UserActiveWorkspace,
 };
-#[cfg(feature = "gateway")]
-pub use client_manifest::{ClientManifest, ClientCapabilities, ClientEnvironment, ExecutionConstraints};
-#[cfg(feature = "gateway")]
-pub use reverse_rpc::{ReverseRpcManager, ReverseRpcError, PendingRequest};

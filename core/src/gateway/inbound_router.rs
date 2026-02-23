@@ -21,7 +21,7 @@ use super::router::{AgentRouter, SessionKey};
 use super::routing_config::{DmScope, RoutingConfig};
 
 #[cfg(target_os = "macos")]
-use super::channels::imessage::normalize_phone;
+use super::interfaces::imessage::normalize_phone;
 
 // Fallback for non-macOS platforms
 #[cfg(not(target_os = "macos"))]
@@ -131,9 +131,9 @@ impl Default for ChannelConfig {
 }
 
 #[cfg(target_os = "macos")]
-impl From<&super::channels::imessage::IMessageConfig> for ChannelConfig {
-    fn from(cfg: &super::channels::imessage::IMessageConfig) -> Self {
-        use super::channels::imessage::{IMessageDmPolicy, IMessageGroupPolicy};
+impl From<&super::interfaces::imessage::IMessageConfig> for ChannelConfig {
+    fn from(cfg: &super::interfaces::imessage::IMessageConfig) -> Self {
+        use super::interfaces::imessage::{IMessageDmPolicy, IMessageGroupPolicy};
 
         Self {
             dm_policy: match cfg.dm_policy {

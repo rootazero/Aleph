@@ -106,7 +106,7 @@ fn attachment_to_media_payload(attachment: &Attachment) -> Option<MediaPayload> 
 mod tests {
     use super::*;
     use crate::gateway::channel::OutboundMessage;
-    use crate::gateway::channels::whatsapp::bridge_protocol::MediaPayload;
+    use crate::gateway::interfaces::whatsapp::bridge_protocol::MediaPayload;
 
     #[test]
     fn test_bridge_message_to_inbound_simple() {

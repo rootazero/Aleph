@@ -65,10 +65,10 @@ This design addresses Phase 8 (Multi-Channel) by upgrading WhatsApp from stub to
 
 | Component | Location | Responsibility |
 |-----------|----------|---------------|
-| **BridgeManager** | `core/src/gateway/channels/whatsapp/bridge_manager.rs` | Go child process lifecycle: spawn, health check, auto-restart, graceful shutdown |
-| **BridgeRpcClient** | `core/src/gateway/channels/whatsapp/rpc_client.rs` | JSON-RPC client: connect Unix Socket, send commands, receive event stream |
-| **PairingStateMachine** | `core/src/gateway/channels/whatsapp/pairing.rs` | Fine-grained pairing lifecycle: 9 states, triggers EventBus broadcasts |
-| **WhatsAppChannel** | `core/src/gateway/channels/whatsapp/mod.rs` | Upgraded Channel trait impl, integrates above three components |
+| **BridgeManager** | `core/src/gateway/interfaces/whatsapp/bridge_manager.rs` | Go child process lifecycle: spawn, health check, auto-restart, graceful shutdown |
+| **BridgeRpcClient** | `core/src/gateway/interfaces/whatsapp/rpc_client.rs` | JSON-RPC client: connect Unix Socket, send commands, receive event stream |
+| **PairingStateMachine** | `core/src/gateway/interfaces/whatsapp/pairing.rs` | Fine-grained pairing lifecycle: 9 states, triggers EventBus broadcasts |
+| **WhatsAppChannel** | `core/src/gateway/interfaces/whatsapp/mod.rs` | Upgraded Channel trait impl, integrates above three components |
 | **whatsapp-bridge** | `bridges/whatsapp/` | Go binary, thin whatsmeow wrapper, exposes JSON-RPC interface |
 
 ---
@@ -347,7 +347,7 @@ Agent → ReplyEmitter → OutboundMessage → ChannelRegistry.send()
 ## 10. File Structure
 
 ```
-core/src/gateway/channels/whatsapp/
+core/src/gateway/interfaces/whatsapp/
 ├── mod.rs                 # WhatsAppChannel (upgraded)
 ├── config.rs              # WhatsAppConfig (existing)
 ├── bridge_manager.rs      # Child process lifecycle (new)
@@ -366,7 +366,7 @@ bridges/whatsapp/
 └── store/
     └── sqlite.go
 
-clients/dashboard/src/views/
+apps/dashboard/src/views/
 └── social_connections.rs  # Upgraded WhatsAppPanel
 ```
 
