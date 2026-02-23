@@ -317,6 +317,7 @@ pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifes
 // =============================================================================
 
 /// Legacy Claude plugin manifest structure
+// Deserialized from .claude-plugin/plugin.json external format
 #[derive(Debug, serde::Deserialize)]
 #[allow(dead_code)]
 struct LegacyClaudeManifest {
