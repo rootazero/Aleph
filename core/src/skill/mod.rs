@@ -8,9 +8,11 @@ pub mod manifest;
 pub mod prompt;
 pub mod registry;
 pub mod snapshot;
+pub mod status;
 
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
 pub use manifest::{parse_skill_content, parse_skill_file, SkillParseError};
 pub use prompt::build_skills_prompt_xml;
 pub use registry::SkillRegistry;
 pub use snapshot::SkillSnapshot;
+pub use status::SkillStatusReport;
