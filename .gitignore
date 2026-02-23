@@ -98,3 +98,9 @@ Aleph.dmg
 # Git worktrees
 .worktrees/
 .claude/worktrees/
+
+# Node.js
+node_modules/
+
+# Test scratch files
+core/test.txt
