@@ -55,6 +55,10 @@ pub struct PromptConfig {
     /// When true, adds guidance for structured reasoning output
     /// (Observation -> Analysis -> Planning -> Decision)
     pub thinking_transparency: bool,
+    /// Skill instructions injected from SkillSystem snapshot (XML format)
+    /// When set, these are appended to the system prompt to inform the LLM
+    /// about available skills from the SkillSystem v2
+    pub skill_instructions: Option<String>,
 }
 
 impl Default for PromptConfig {
@@ -69,6 +73,7 @@ impl Default for PromptConfig {
             tool_index: None,
             skill_mode: false,
             thinking_transparency: false,
+            skill_instructions: None,
         }
     }
 }
@@ -101,6 +106,7 @@ impl PromptBuilder {
         self.append_runtime_capabilities(&mut prompt);
         self.append_tools(&mut prompt, tools);
         self.append_generation_models(&mut prompt);
+        self.append_skill_instructions(&mut prompt);
         self.append_special_actions(&mut prompt);
         self.append_response_format(&mut prompt);
         self.append_guidelines(&mut prompt);
@@ -246,6 +252,9 @@ impl PromptBuilder {
 
         // Generation models
         self.append_generation_models(&mut prompt);
+
+        // Skill instructions from SkillSystem v2
+        self.append_skill_instructions(&mut prompt);
 
         // Special actions
         self.append_special_actions(&mut prompt);
@@ -469,6 +478,19 @@ impl PromptBuilder {
             prompt.push_str("- Images: via `generate_image` tool\n");
             prompt.push_str("- Merged outputs: `merged-*.json`, `full-*.mmd`\n\n");
             prompt.push_str("**If you output raw content instead of JSON action, you have FAILED.**\n\n");
+        }
+    }
+
+    /// Append skill instructions from SkillSystem v2 snapshot
+    fn append_skill_instructions(&self, prompt: &mut String) {
+        if let Some(ref instructions) = self.config.skill_instructions {
+            if !instructions.is_empty() {
+                prompt.push_str("## Available Skills\n\n");
+                prompt.push_str("You can invoke skills using the `skill` tool. ");
+                prompt.push_str("Skills provide specialized instructions for specific tasks.\n\n");
+                prompt.push_str(instructions);
+                prompt.push_str("\n\n");
+            }
         }
     }
 
