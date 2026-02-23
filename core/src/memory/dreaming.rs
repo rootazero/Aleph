@@ -2,7 +2,8 @@
 
 use crate::config::{DreamingConfig as ConfigDreamingConfig, GraphDecayPolicy, MemoryConfig, MemoryDecayPolicy};
 use crate::error::AlephError;
-use crate::memory::context::{FactType, MemoryEntry};
+use crate::memory::context::{FactType, MemoryEntry, MemoryFact, MemoryTier};
+use serde::{Deserialize, Serialize};
 use crate::memory::store::{DreamStore, MemoryBackend, MemoryStore, SessionStore};
 use crate::memory::decay::DecayConfig;
 use crate::memory::graph::{GraphDecayConfig, GraphDecayReport, GraphStore};
@@ -428,6 +429,45 @@ impl DreamDaemon {
     }
 }
 
+/// Configuration for the STM→LTM consolidation pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsolidationPipelineConfig {
+    /// Whether consolidation is enabled
+    pub enabled: bool,
+    /// STM facts need this strength to be considered for consolidation
+    pub strength_threshold: f32,
+    /// Facts below this strength are permanently deleted
+    pub pruning_threshold: f32,
+    /// Max facts to process per Dream cycle
+    pub max_facts_per_run: usize,
+    /// Minimum days between consolidation checks for the same fact
+    pub cooldown_days: u32,
+}
+
+impl Default for ConsolidationPipelineConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            strength_threshold: 0.6,
+            pruning_threshold: 0.1,
+            max_facts_per_run: 50,
+            cooldown_days: 1,
+        }
+    }
+}
+
+/// Check if a STM fact qualifies for consolidation into LTM.
+/// Only ShortTerm facts with sufficient strength are candidates.
+pub fn should_consolidate(fact: &MemoryFact, strength_threshold: f32) -> bool {
+    fact.tier == MemoryTier::ShortTerm && fact.strength >= strength_threshold
+}
+
+/// Check if a fact should be pruned (deleted permanently).
+/// Core tier facts are never pruned regardless of strength.
+pub fn should_prune(fact: &MemoryFact, pruning_threshold: f32) -> bool {
+    fact.tier != MemoryTier::Core && fact.strength < pruning_threshold
+}
+
 fn activity_detected(snapshot: i64) -> bool {
     last_activity_timestamp() > snapshot
 }
@@ -579,5 +619,77 @@ mod tests {
         let early = NaiveTime::from_hms_opt(4, 0, 0).unwrap();
         assert!(late >= start || late <= end);
         assert!(early >= start || early <= end);
+    }
+}
+
+#[cfg(test)]
+mod consolidation_tests {
+    use super::*;
+    use crate::memory::context::{FactType, MemoryFact, MemoryTier};
+
+    #[test]
+    fn test_should_consolidate_stm_high_strength() {
+        let mut fact = MemoryFact::new("test".into(), FactType::Learning, vec![]);
+        fact.tier = MemoryTier::ShortTerm;
+        fact.strength = 0.7;
+        assert!(should_consolidate(&fact, 0.6));
+    }
+
+    #[test]
+    fn test_should_not_consolidate_low_strength() {
+        let mut fact = MemoryFact::new("test".into(), FactType::Learning, vec![]);
+        fact.tier = MemoryTier::ShortTerm;
+        fact.strength = 0.4;
+        assert!(!should_consolidate(&fact, 0.6));
+    }
+
+    #[test]
+    fn test_should_not_consolidate_non_stm() {
+        let mut fact = MemoryFact::new("test".into(), FactType::Learning, vec![]);
+        fact.tier = MemoryTier::LongTerm;
+        fact.strength = 0.9;
+        assert!(!should_consolidate(&fact, 0.6));
+    }
+
+    #[test]
+    fn test_should_not_consolidate_core() {
+        let mut fact = MemoryFact::new("test".into(), FactType::Personal, vec![]);
+        fact.tier = MemoryTier::Core;
+        fact.strength = 0.9;
+        assert!(!should_consolidate(&fact, 0.6));
+    }
+
+    #[test]
+    fn test_should_prune_low_strength() {
+        let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        fact.tier = MemoryTier::ShortTerm;
+        fact.strength = 0.05;
+        assert!(should_prune(&fact, 0.1));
+    }
+
+    #[test]
+    fn test_should_not_prune_core() {
+        let mut fact = MemoryFact::new("test".into(), FactType::Personal, vec![]);
+        fact.tier = MemoryTier::Core;
+        fact.strength = 0.01;
+        assert!(!should_prune(&fact, 0.1));
+    }
+
+    #[test]
+    fn test_should_not_prune_above_threshold() {
+        let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        fact.tier = MemoryTier::ShortTerm;
+        fact.strength = 0.5;
+        assert!(!should_prune(&fact, 0.1));
+    }
+
+    #[test]
+    fn test_consolidation_pipeline_config_defaults() {
+        let config = ConsolidationPipelineConfig::default();
+        assert!(config.enabled);
+        assert!((config.strength_threshold - 0.6).abs() < f32::EPSILON);
+        assert!((config.pruning_threshold - 0.1).abs() < f32::EPSILON);
+        assert_eq!(config.max_facts_per_run, 50);
+        assert_eq!(config.cooldown_days, 1);
     }
 }
