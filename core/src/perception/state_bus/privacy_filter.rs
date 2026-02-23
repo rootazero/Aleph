@@ -65,6 +65,7 @@ impl Default for PrivacyFilterConfig {
 /// Privacy filter middleware.
 pub struct PrivacyFilter {
     config: PrivacyFilterConfig,
+    #[allow(dead_code)] // Will be used when credit card filtering is implemented
     credit_card_regex: Regex,
     ssn_regex: Regex,
     phone_regex: Regex,

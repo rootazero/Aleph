@@ -11,6 +11,7 @@ use tracing::{debug, warn};
 
 /// AX Observer - listens for Accessibility API notifications.
 pub struct AxObserver {
+    #[allow(dead_code)] // Sender kept alive to prevent channel closure
     event_tx: mpsc::UnboundedSender<AxEvent>,
 }
 
@@ -38,7 +39,7 @@ impl AxObserver {
 }
 
 /// Run the AX observer loop (blocking, runs in dedicated thread).
-fn run_ax_observer_loop(tx: mpsc::UnboundedSender<AxEvent>) -> Result<()> {
+fn run_ax_observer_loop(_tx: mpsc::UnboundedSender<AxEvent>) -> Result<()> {
     debug!("Starting AX observer loop");
 
     // TODO: Implement actual AX API integration

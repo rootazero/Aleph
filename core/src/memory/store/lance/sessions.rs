@@ -32,7 +32,7 @@ fn lance_err(msg: impl std::fmt::Display) -> AlephError {
 async fn collect_batches(
     stream: lancedb::arrow::SendableRecordBatchStream,
 ) -> Result<Vec<RecordBatch>, AlephError> {
-    stream.try_collect().await.map_err(|e| lance_err(e))
+    stream.try_collect().await.map_err(lance_err)
 }
 
 /// Insert a RecordBatch into a LanceDB table.
@@ -43,7 +43,7 @@ async fn add_batch(table: &lancedb::Table, batch: RecordBatch) -> Result<(), Ale
         .add(batches)
         .execute()
         .await
-        .map_err(|e| lance_err(e))?;
+        .map_err(lance_err)?;
     Ok(())
 }
 
@@ -64,7 +64,7 @@ async fn scan_memories(
 
     query = query.select(Select::All);
 
-    let stream = query.execute().await.map_err(|e| lance_err(e))?;
+    let stream = query.execute().await.map_err(lance_err)?;
     let batches = collect_batches(stream).await?;
 
     let mut entries = Vec::new();
@@ -82,7 +82,7 @@ async fn count_rows(table: &lancedb::Table) -> Result<usize, AlephError> {
         .select(Select::columns(&["id"]))
         .execute()
         .await
-        .map_err(|e| lance_err(e))?;
+        .map_err(lance_err)?;
     let batches = collect_batches(stream).await?;
     Ok(batches.iter().map(|b| b.num_rows()).sum())
 }
@@ -98,7 +98,7 @@ async fn count_rows_with_filter(
         .select(Select::columns(&["id"]))
         .execute()
         .await
-        .map_err(|e| lance_err(e))?;
+        .map_err(lance_err)?;
     let batches = collect_batches(stream).await?;
     Ok(batches.iter().map(|b| b.num_rows()).sum())
 }
@@ -128,7 +128,7 @@ fn read_distance(batch: &RecordBatch, row: usize) -> f32 {
 #[async_trait]
 impl SessionStore for LanceMemoryBackend {
     async fn insert_memory(&self, memory: &MemoryEntry) -> Result<(), AlephError> {
-        let batch = memories_to_record_batch(&[memory.clone()])?;
+        let batch = memories_to_record_batch(std::slice::from_ref(memory))?;
         add_batch(&self.memories_table, batch).await
     }
 
@@ -142,7 +142,7 @@ impl SessionStore for LanceMemoryBackend {
             .memories_table
             .query()
             .nearest_to(embedding)
-            .map_err(|e| lance_err(e))?
+            .map_err(lance_err)?
             .column("vec_384")
             .limit(limit);
 
@@ -150,7 +150,7 @@ impl SessionStore for LanceMemoryBackend {
             query = query.only_if(f);
         }
 
-        let stream = query.execute().await.map_err(|e| lance_err(e))?;
+        let stream = query.execute().await.map_err(lance_err)?;
         let batches = collect_batches(stream).await?;
 
         let mut results = Vec::new();
@@ -205,7 +205,7 @@ impl SessionStore for LanceMemoryBackend {
         self.memories_table
             .delete(&format!("id = '{}'", id))
             .await
-            .map_err(|e| lance_err(e))?;
+            .map_err(lance_err)?;
         Ok(())
     }
 
@@ -257,7 +257,7 @@ impl SessionStore for LanceMemoryBackend {
             self.memories_table
                 .delete(&filter)
                 .await
-                .map_err(|e| lance_err(e))?;
+                .map_err(lance_err)?;
         }
 
         Ok(count)
@@ -284,7 +284,7 @@ impl SessionStore for LanceMemoryBackend {
             self.memories_table
                 .delete(&filter)
                 .await
-                .map_err(|e| lance_err(e))?;
+                .map_err(lance_err)?;
         }
 
         Ok(count)

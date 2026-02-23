@@ -43,6 +43,7 @@ pub struct Cluster {
 
 /// Clustering service for grouping similar experiences
 pub struct ClusteringService {
+    #[allow(dead_code)]
     db: MemoryBackend,
     config: ClusteringConfig,
 }

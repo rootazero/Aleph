@@ -136,6 +136,7 @@ impl PerceptionHealth {
         }
     }
 
+    #[allow(dead_code)]
     fn unsupported() -> Self {
         Self {
             accessibility_enabled: false,

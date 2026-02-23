@@ -25,6 +25,7 @@ pub struct VisionConnector {
     monitors: Arc<RwLock<HashMap<String, MonitorSession>>>,
 }
 
+#[allow(dead_code)] // Fields populated for future monitoring implementation
 struct MonitorSession {
     bundle_id: String,
     last_capture: Instant,
@@ -91,6 +92,7 @@ impl VisionConnector {
     }
 
     /// Compute hash of state for change detection
+    #[allow(dead_code)]
     fn compute_state_hash(state: &AppState) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -112,6 +114,7 @@ impl VisionConnector {
     }
 
     /// Adjust polling interval based on activity
+    #[allow(dead_code)]
     fn adjust_poll_interval(&self, consecutive_no_change: u32) -> Duration {
         // Exponential backoff when no changes detected
         // 2s -> 4s -> 8s -> 16s (max)

@@ -33,6 +33,7 @@ impl Default for ExperienceReplayConfig {
 
 /// L1.5 Experience Replay Layer
 pub struct ExperienceReplayLayer {
+    #[allow(dead_code)]
     db: MemoryBackend,
     embedder: Arc<SmartEmbedder>,
     config: ExperienceReplayConfig,
@@ -62,7 +63,7 @@ impl ExperienceReplayLayer {
         info!("L1.5: Attempting to match intent: {}", intent);
 
         // Step 1: Generate intent embedding
-        let intent_vector = self.embedder.embed(intent).await.map_err(|e| {
+        let _intent_vector = self.embedder.embed(intent).await.map_err(|e| {
             AlephError::Other {
                 message: format!("Failed to embed intent: {}", e),
                 suggestion: None,

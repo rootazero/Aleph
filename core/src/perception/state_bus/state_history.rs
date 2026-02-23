@@ -59,6 +59,7 @@ struct IFrame {
 
 /// Incremental patch (P-Frame).
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields used when JSON Patch application is implemented
 struct PFrame {
     timestamp: u64,
     patches: Vec<JsonPatch>,
@@ -137,7 +138,7 @@ impl StateHistory {
             .find(|f| f.timestamp <= target_ts)?;
 
         // Clone base state
-        let mut state = iframe.state.clone();
+        let state = iframe.state.clone();
 
         // Apply all P-Frames between I-Frame and target
         for pframe in self.p_frames.iter() {

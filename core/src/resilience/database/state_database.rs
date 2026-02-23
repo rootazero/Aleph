@@ -14,6 +14,7 @@ pub const DEFAULT_EMBEDDING_DIM: u32 = 384;
 /// State database for resilience state management (agent events, tasks, traces, sessions)
 pub struct StateDatabase {
     pub(crate) conn: Arc<Mutex<Connection>>,
+    #[allow(dead_code)]
     pub(crate) db_path: PathBuf,
 }
 
@@ -716,13 +717,6 @@ impl StateDatabase {
         embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
     }
 
-    /// Deserialize embedding from bytes
-    pub(crate) fn deserialize_embedding(bytes: &[u8]) -> Vec<f32> {
-        bytes
-            .chunks_exact(4)
-            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-            .collect()
-    }
 }
 
 /// Memory database statistics

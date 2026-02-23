@@ -25,6 +25,7 @@ pub mod sessions;
 /// - `graph_edges` — knowledge graph relationships
 /// - `memories`    — raw conversation memory entries
 pub struct LanceMemoryBackend {
+    #[allow(dead_code)] // Connection must be kept alive for table handles
     pub(crate) db: Connection,
     pub(crate) facts_table: Table,
     pub(crate) nodes_table: Table,

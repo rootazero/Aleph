@@ -42,7 +42,7 @@ pub struct QueryStateResult {
 
 /// Handle system.state.subscribe RPC method.
 pub async fn handle_subscribe(
-    ctx: Arc<GatewayContext>,
+    _ctx: Arc<GatewayContext>,
     params: Value,
 ) -> Result<Value> {
     let params: SubscribeParams = serde_json::from_value(params)
@@ -71,7 +71,7 @@ pub async fn handle_subscribe(
 
 /// Handle system.state.unsubscribe RPC method.
 pub async fn handle_unsubscribe(
-    ctx: Arc<GatewayContext>,
+    _ctx: Arc<GatewayContext>,
     params: Value,
 ) -> Result<Value> {
     let params: UnsubscribeParams = serde_json::from_value(params)
@@ -86,7 +86,7 @@ pub async fn handle_unsubscribe(
 
 /// Handle system.state.query RPC method.
 pub async fn handle_query(
-    ctx: Arc<GatewayContext>,
+    _ctx: Arc<GatewayContext>,
     params: Value,
 ) -> Result<Value> {
     let params: QueryStateParams = serde_json::from_value(params)
@@ -107,7 +107,7 @@ pub async fn handle_query(
 
 /// Handle system.action.execute RPC method.
 pub async fn handle_execute_action(
-    ctx: Arc<GatewayContext>,
+    _ctx: Arc<GatewayContext>,
     params: Value,
 ) -> Result<Value> {
     let request: ActionRequest = serde_json::from_value(params)
