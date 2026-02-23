@@ -17,7 +17,7 @@ pub mod tools;
 
 pub use events::{AgentEvent, CriticalEvent, ImportantEvent, InfoEvent, EventTier, FileOperation};
 pub use bus::AgentMessageBus;
-pub use aggregator::{SemanticAggregator, IntelligenceLayer};
+pub use aggregator::{SemanticAggregator, IntelligenceLayer, SlidingWindow};
 pub use rules::{AggregationRule, EventPattern, RuleEngine};
 pub use context_injector::{ContextInjector, SwarmContextEntry};
 pub use collective_memory::{CollectiveMemory, TeamHistoryQuery};

@@ -200,11 +200,11 @@ impl EvaluationResult {
 /// Result of the entire workflow
 #[derive(Debug, Clone)]
 pub enum WorkflowResult {
-    /// Implementation succeeded
+    /// Implementation succeeded (fields boxed to reduce enum size disparity)
     Success {
-        spec: Spec,
+        spec: Box<Spec>,
         tests: Vec<TestCase>,
-        evaluation: EvaluationResult,
+        evaluation: Box<EvaluationResult>,
     },
     /// Needs another iteration
     NeedsIteration {

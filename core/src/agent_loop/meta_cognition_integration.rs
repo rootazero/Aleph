@@ -70,6 +70,11 @@ impl MetaCognitionIntegration {
     /// * `db` - Memory backend for storing failure experiences
     /// * `anchor_store` - Store for persisting behavioral anchors
     /// * `config` - Configuration for meta-cognition features
+    // Allow arc_with_non_send_sync: ReactiveReflector and AnchorRetriever contain
+    // rusqlite::Connection (not Sync) and dyn AiProvider. These are used within
+    // a single-threaded context via std::sync::RwLock; Arc is used for shared
+    // ownership, not cross-thread sharing.
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn new(
         db: MemoryBackend,
         anchor_store: Arc<RwLock<AnchorStore>>,

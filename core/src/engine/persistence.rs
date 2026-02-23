@@ -39,13 +39,13 @@ use rusqlite::{params, Connection, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 /// Persistence layer for learned rules
 pub struct Persistence {
-    /// Database connection
-    conn: Arc<RwLock<Connection>>,
+    /// Database connection (Mutex instead of RwLock because rusqlite::Connection is not Sync)
+    conn: Arc<Mutex<Connection>>,
 
     /// Database file path
     #[allow(dead_code)]
@@ -74,7 +74,7 @@ impl Persistence {
         info!(path = ?db_path, "Initialized persistence layer");
 
         Ok(Self {
-            conn: Arc::new(RwLock::new(conn)),
+            conn: Arc::new(Mutex::new(conn)),
             db_path,
         })
     }
@@ -161,7 +161,7 @@ impl Persistence {
         };
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self.conn.write().await;
+        let conn = self.conn.lock().await;
         conn.execute(
             "INSERT INTO learned_patterns (pattern, action_json, count, successes, failures, confidence, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -182,7 +182,7 @@ impl Persistence {
 
     /// Load all learned patterns
     pub async fn load_patterns(&self) -> SqliteResult<Vec<LearnedPattern>> {
-        let conn = self.conn.read().await;
+        let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
             "SELECT pattern, action_json, count, successes, failures, confidence
              FROM learned_patterns
@@ -220,7 +220,7 @@ impl Persistence {
         let total_samples = classifier.sample_count();
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self.conn.write().await;
+        let conn = self.conn.lock().await;
         conn.execute(
             "INSERT INTO classifier_state (id, state_json, total_samples, updated_at)
              VALUES (1, ?1, ?2, ?3)
@@ -238,7 +238,7 @@ impl Persistence {
 
     /// Load classifier state
     pub async fn load_classifier(&self) -> SqliteResult<Option<NaiveBayesClassifier>> {
-        let conn = self.conn.read().await;
+        let conn = self.conn.lock().await;
         let mut stmt = conn.prepare("SELECT state_json FROM classifier_state WHERE id = 1")?;
 
         let result = stmt.query_row([], |row| {
@@ -280,7 +280,7 @@ impl Persistence {
     ) -> SqliteResult<()> {
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self.conn.write().await;
+        let conn = self.conn.lock().await;
         conn.execute(
             "INSERT INTO rule_metadata (pattern, hit_count, miss_count, avg_latency_ms, last_hit_at, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -299,7 +299,7 @@ impl Persistence {
 
     /// Load rule metadata
     pub async fn load_rule_metadata(&self) -> SqliteResult<Vec<RuleMetadata>> {
-        let conn = self.conn.read().await;
+        let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
             "SELECT pattern, hit_count, miss_count, avg_latency_ms
              FROM rule_metadata
@@ -324,7 +324,7 @@ impl Persistence {
 
     /// Clear all learned data
     pub async fn clear_all(&self) -> SqliteResult<()> {
-        let conn = self.conn.write().await;
+        let conn = self.conn.lock().await;
         conn.execute("DELETE FROM learned_patterns", [])?;
         conn.execute("DELETE FROM classifier_state", [])?;
         conn.execute("DELETE FROM rule_metadata", [])?;
@@ -336,7 +336,7 @@ impl Persistence {
 
     /// Get database statistics
     pub async fn stats(&self) -> SqliteResult<PersistenceStats> {
-        let conn = self.conn.read().await;
+        let conn = self.conn.lock().await;
 
         let pattern_count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM learned_patterns",

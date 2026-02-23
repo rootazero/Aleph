@@ -44,6 +44,8 @@ pub fn init_extension_manager(
 /// Get the extension manager.
 ///
 /// Returns an error response if the manager hasn't been initialized.
+// JsonRpcResponse is 152+ bytes but boxing it would complicate all handler call sites
+#[allow(clippy::result_large_err)]
 pub fn get_extension_manager() -> Result<&'static Arc<ExtensionManager>, JsonRpcResponse> {
     EXTENSION_MANAGER.get().ok_or_else(|| {
         JsonRpcResponse::error(
