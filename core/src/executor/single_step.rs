@@ -270,8 +270,9 @@ impl<R: ToolRegistry + 'static> ActionExecutor for SingleStepExecutor<R> {
                                             retryable: false,
                                         };
                                     }
-                                    crate::executor::PreExecDecision::Allow { .. } => {
-                                        // Proceed to execution
+                                    crate::executor::PreExecDecision::Allow { use_sandbox: _ } => {
+                                        // TODO: route through SandboxManager when use_sandbox=true
+                                        // Currently executes directly — sandbox integration pending
                                     }
                                 }
                             }

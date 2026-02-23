@@ -116,6 +116,9 @@ impl ExecSecurityGate {
                     .map(|s| s.is_available())
                     .unwrap_or(false);
                 info!(cmd = %cmd, risk = ?risk, use_sandbox, "Shell command allowed");
+                // Note: use_sandbox is passed to the caller but actual sandbox routing
+                // is a TODO — the executor currently ignores this flag.
+                // See: docs/plans/2026-02-23-exec-security-integration-design.md (Future Work)
                 PreExecDecision::Allow { use_sandbox }
             }
         }
