@@ -89,6 +89,7 @@ pub mod debug;
 pub mod guests;
 pub mod workspace;
 pub mod state_bus;
+#[cfg(feature = "discord")]
 pub mod discord_panel;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};

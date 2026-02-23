@@ -36,7 +36,7 @@ use alephcore::gateway::pairing_store::SqlitePairingStore;
 use alephcore::gateway::handlers::session as session_handlers;
 #[cfg(feature = "gateway")]
 use alephcore::gateway::handlers::channel as channel_handlers;
-#[cfg(feature = "gateway")]
+#[cfg(all(feature = "gateway", feature = "discord"))]
 use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
 #[cfg(feature = "gateway")]
 use alephcore::gateway::handlers::config as config_handlers;
@@ -951,44 +951,46 @@ fn register_channel_handlers(
     });
 
     // ---- Discord Control Plane panel handlers ----
+    #[cfg(feature = "discord")]
+    {
+        // discord.validate_token (no registry needed)
+        server.handlers_mut().register("discord.validate_token", |req| async move {
+            discord_panel_handlers::handle_validate_token(req).await
+        });
 
-    // discord.validate_token (no registry needed)
-    server.handlers_mut().register("discord.validate_token", |req| async move {
-        discord_panel_handlers::handle_validate_token(req).await
-    });
+        // discord.save_config (no registry needed)
+        server.handlers_mut().register("discord.save_config", |req| async move {
+            discord_panel_handlers::handle_save_config(req).await
+        });
 
-    // discord.save_config (no registry needed)
-    server.handlers_mut().register("discord.save_config", |req| async move {
-        discord_panel_handlers::handle_save_config(req).await
-    });
+        // discord.list_guilds
+        let cr_discord_guilds = channel_registry.clone();
+        server.handlers_mut().register("discord.list_guilds", move |req| {
+            let cr = cr_discord_guilds.clone();
+            async move { discord_panel_handlers::handle_list_guilds(req, cr).await }
+        });
 
-    // discord.list_guilds
-    let cr_discord_guilds = channel_registry.clone();
-    server.handlers_mut().register("discord.list_guilds", move |req| {
-        let cr = cr_discord_guilds.clone();
-        async move { discord_panel_handlers::handle_list_guilds(req, cr).await }
-    });
+        // discord.list_channels
+        let cr_discord_channels = channel_registry.clone();
+        server.handlers_mut().register("discord.list_channels", move |req| {
+            let cr = cr_discord_channels.clone();
+            async move { discord_panel_handlers::handle_list_channels(req, cr).await }
+        });
 
-    // discord.list_channels
-    let cr_discord_channels = channel_registry.clone();
-    server.handlers_mut().register("discord.list_channels", move |req| {
-        let cr = cr_discord_channels.clone();
-        async move { discord_panel_handlers::handle_list_channels(req, cr).await }
-    });
+        // discord.audit_permissions
+        let cr_discord_audit = channel_registry.clone();
+        server.handlers_mut().register("discord.audit_permissions", move |req| {
+            let cr = cr_discord_audit.clone();
+            async move { discord_panel_handlers::handle_audit_permissions(req, cr).await }
+        });
 
-    // discord.audit_permissions
-    let cr_discord_audit = channel_registry.clone();
-    server.handlers_mut().register("discord.audit_permissions", move |req| {
-        let cr = cr_discord_audit.clone();
-        async move { discord_panel_handlers::handle_audit_permissions(req, cr).await }
-    });
-
-    // discord.update_allowlists
-    let cr_discord_allowlists = channel_registry.clone();
-    server.handlers_mut().register("discord.update_allowlists", move |req| {
-        let cr = cr_discord_allowlists.clone();
-        async move { discord_panel_handlers::handle_update_allowlists(req, cr).await }
-    });
+        // discord.update_allowlists
+        let cr_discord_allowlists = channel_registry.clone();
+        server.handlers_mut().register("discord.update_allowlists", move |req| {
+            let cr = cr_discord_allowlists.clone();
+            async move { discord_panel_handlers::handle_update_allowlists(req, cr).await }
+        });
+    }
 }
 
 #[cfg(feature = "gateway")]
