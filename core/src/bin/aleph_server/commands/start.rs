@@ -679,6 +679,26 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         println!();
     }
 
+    // ── Social Connectivity: LinkManager ──────────────────────────────────
+    // The LinkManager scans ~/.aleph/bridges/ for external bridge plugins
+    // and ~/.aleph/links/ for link instance configs, starting any enabled
+    // external bridge links alongside the builtin channels registered above.
+    {
+        use alephcore::gateway::link::LinkManager;
+        let base_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".aleph");
+        let link_manager = LinkManager::new(base_dir);
+        if let Err(e) = link_manager.start().await {
+            tracing::warn!("LinkManager startup encountered errors: {}", e);
+        }
+        if !args.daemon {
+            println!("LinkManager started (external bridge plugins)");
+            println!();
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     // Initialize PairingStore for InboundMessageRouter
     let pairing_store_path = dirs::home_dir()
         .map(|h| h.join(".aleph/pairing.db"))
