@@ -26,7 +26,7 @@ use crate::cli::Args;
 // ─── register_auth_handlers ──────────────────────────────────────────────────
 
 #[cfg(feature = "gateway")]
-pub fn register_auth_handlers(
+pub(in crate::commands::start) fn register_auth_handlers(
     server: &mut GatewayServer,
     auth_ctx: &Arc<auth_handlers::AuthContext>,
 ) {
@@ -76,7 +76,7 @@ pub fn register_auth_handlers(
 // ─── register_guest_handlers ─────────────────────────────────────────────────
 
 #[cfg(feature = "gateway")]
-pub fn register_guest_handlers(
+pub(in crate::commands::start) fn register_guest_handlers(
     server: &mut GatewayServer,
     invitation_manager: &Arc<alephcore::gateway::security::InvitationManager>,
     session_manager: &Arc<alephcore::gateway::security::GuestSessionManager>,
@@ -136,7 +136,7 @@ pub fn register_guest_handlers(
 // ─── register_session_handlers ───────────────────────────────────────────────
 
 #[cfg(feature = "gateway")]
-pub fn register_session_handlers(
+pub(in crate::commands::start) fn register_session_handlers(
     server: &mut GatewayServer,
     session_manager: &Arc<SessionManager>,
     daemon: bool,
@@ -182,7 +182,7 @@ pub fn register_session_handlers(
 // ─── register_channel_handlers ───────────────────────────────────────────────
 
 #[cfg(feature = "gateway")]
-pub fn register_channel_handlers(
+pub(in crate::commands::start) fn register_channel_handlers(
     server: &mut GatewayServer,
     channel_registry: &Arc<ChannelRegistry>,
 ) {
@@ -274,7 +274,7 @@ pub fn register_channel_handlers(
 // ─── setup_config_watcher ────────────────────────────────────────────────────
 
 #[cfg(feature = "gateway")]
-pub async fn setup_config_watcher(
+pub(in crate::commands::start) async fn setup_config_watcher(
     server: &mut GatewayServer,
     config_path: Option<PathBuf>,
     event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
@@ -422,7 +422,7 @@ pub async fn setup_config_watcher(
 // ─── start_webchat_server ────────────────────────────────────────────────────
 
 #[cfg(feature = "gateway")]
-pub async fn start_webchat_server(args: &Args, final_bind: &str, final_port: u16) {
+pub(in crate::commands::start) async fn start_webchat_server(args: &Args, final_bind: &str, final_port: u16) {
     use std::net::SocketAddr;
 
     let webchat_dir = args.webchat_dir.clone().or_else(|| {
@@ -475,7 +475,7 @@ pub async fn start_webchat_server(args: &Args, final_bind: &str, final_port: u16
 
 /// Start ControlPlane embedded web UI server
 #[cfg(all(feature = "gateway", feature = "control-plane"))]
-pub async fn start_control_plane_server(final_bind: &str, final_port: u16, daemon_mode: bool) {
+pub(in crate::commands::start) async fn start_control_plane_server(final_bind: &str, final_port: u16, daemon_mode: bool) {
     use std::net::SocketAddr;
     use alephcore::gateway::control_plane::create_control_plane_router;
 
@@ -514,7 +514,7 @@ pub async fn start_control_plane_server(final_bind: &str, final_port: u16, daemo
 // ─── register_config_handlers ────────────────────────────────────────────────
 
 #[cfg(feature = "gateway")]
-pub fn register_config_handlers(
+pub(in crate::commands::start) fn register_config_handlers(
     server: &mut GatewayServer,
     config: Arc<tokio::sync::RwLock<alephcore::Config>>,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,

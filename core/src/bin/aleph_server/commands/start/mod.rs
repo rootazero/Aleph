@@ -77,6 +77,7 @@ use alephcore::gateway::{
 use crate::cli::DEFAULT_LOG_FILE;
 use crate::server_init::{serve_webchat, handle_run_with_engine};
 
+#[cfg(feature = "gateway")]
 mod builder;
 #[cfg(feature = "gateway")]
 use builder::*;
