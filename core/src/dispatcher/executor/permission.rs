@@ -52,11 +52,11 @@ impl From<std::io::Error> for FileOpError {
 #[derive(Debug, Clone)]
 pub struct PathPermissionChecker {
     /// Allowed path patterns (glob patterns) - kept for debugging/display
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Retained for debugging and diagnostics
     allowed_paths: Vec<String>,
 
     /// Denied path patterns (glob patterns) - kept for debugging/display
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Retained for debugging and diagnostics
     denied_paths: Vec<String>,
 
     /// Maximum file size in bytes (0 = unlimited)

@@ -113,8 +113,7 @@ pub struct PriorityScheduler {
     config: PrioritySchedulerConfig,
 
     /// Underlying DAG scheduler for dependency resolution
-    #[allow(dead_code)]
-    dag_scheduler: DagScheduler,
+    _dag_scheduler: DagScheduler,
 
     /// Priority queues (one per tier)
     /// Index 0 = User, 1 = Financial, 2 = Background
@@ -139,7 +138,7 @@ impl PriorityScheduler {
     pub fn new(config: PrioritySchedulerConfig) -> Self {
         Self {
             config,
-            dag_scheduler: DagScheduler::new(),
+            _dag_scheduler: DagScheduler::new(),
             queues: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
             metadata: HashMap::new(),
             executing: HashSet::new(),
