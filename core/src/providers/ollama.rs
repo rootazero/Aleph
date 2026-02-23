@@ -111,7 +111,7 @@ struct GenerateOptions {
 #[derive(Debug, Deserialize)]
 struct GenerateResponse {
     response: String,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     done: bool,
 }
 
