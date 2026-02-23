@@ -46,6 +46,12 @@ impl SubAgentRunFact {
             embedding_model: String::new(),
             namespace: "owner".to_string(),
             workspace: "default".to_string(),
+            tier: crate::memory::context::MemoryTier::ShortTerm,
+            scope: crate::memory::context::MemoryScope::Global,
+            persona_id: None,
+            strength: 1.0,
+            access_count: 0,
+            last_accessed_at: None,
         }
     }
 

@@ -49,6 +49,12 @@ pub async fn create_workspace(db: &MemoryBackend, ws: &Workspace) -> Result<(), 
         embedding_model: String::new(),
         namespace: "owner".to_string(),
         workspace: DEFAULT_WORKSPACE.to_string(),
+        tier: crate::memory::context::MemoryTier::ShortTerm,
+        scope: crate::memory::context::MemoryScope::Global,
+        persona_id: None,
+        strength: 1.0,
+        access_count: 0,
+        last_accessed_at: None,
     };
 
     db.insert_fact(&fact).await

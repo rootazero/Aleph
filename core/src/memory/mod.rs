@@ -68,8 +68,8 @@ pub use compression::{
 };
 pub use context::{
     CompressionResult, CompressionSession, ContextAnchor, FactSource, FactSpecificity,
-    FactStats, FactType, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer, TemporalScope, compute_parent_path,
-    PRESET_PATHS,
+    FactStats, FactType, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer, MemoryScope,
+    MemoryTier, TemporalScope, compute_parent_path, PRESET_PATHS,
 };
 pub use decay::{DecayConfig, MemoryStrength};
 pub use dreaming::{DailyInsight, DreamStatus, MemoryDecayReport, ensure_dream_daemon, record_activity};
