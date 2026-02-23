@@ -198,6 +198,25 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
     }
     let src_ids_arr = src_ids_builder.finish();
 
+    // ACMA fields
+    let tier_arr = StringArray::from_iter_values(facts.iter().map(|f| f.tier.as_str()));
+    let scope_arr = StringArray::from_iter_values(facts.iter().map(|f| f.scope.as_str()));
+    let persona_id_arr = StringArray::from(
+        facts
+            .iter()
+            .map(|f| f.persona_id.as_deref())
+            .collect::<Vec<_>>(),
+    );
+    let strength_arr = Float32Array::from_iter_values(facts.iter().map(|f| f.strength));
+    let access_count_arr =
+        Int32Array::from_iter_values(facts.iter().map(|f| f.access_count as i32));
+    let last_accessed_at_arr = Int64Array::from(
+        facts
+            .iter()
+            .map(|f| f.last_accessed_at)
+            .collect::<Vec<_>>(),
+    );
+
     // Vector columns
     let embeddings_384: Vec<Option<&Vec<f32>>> = facts
         .iter()
@@ -257,9 +276,15 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
             Arc::new(updated_at_arr),            // 21 updated_at
             Arc::new(decay_invalidated_at_arr),  // 22 decay_invalidated_at
             Arc::new(version_arr),               // 23 version
-            Arc::new(vec_384),                   // 24 vec_384
-            Arc::new(vec_1024),                  // 25 vec_1024
-            Arc::new(vec_1536),                  // 26 vec_1536
+            Arc::new(tier_arr),                  // 24 tier
+            Arc::new(scope_arr),                 // 25 scope
+            Arc::new(persona_id_arr),            // 26 persona_id
+            Arc::new(strength_arr),              // 27 strength
+            Arc::new(access_count_arr),          // 28 access_count
+            Arc::new(last_accessed_at_arr),      // 29 last_accessed_at
+            Arc::new(vec_384),                   // 30 vec_384
+            Arc::new(vec_1024),                  // 31 vec_1024
+            Arc::new(vec_1536),                  // 32 vec_1536
         ],
     )
     .map_err(|e| conv_err(e))?;
@@ -297,6 +322,14 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
     let decay_invalidated_at_col = col::<Int64Array>(batch, "decay_invalidated_at")?;
     let src_ids_col = col::<ListArray>(batch, "source_memory_ids")?;
 
+    // ACMA columns (optional — backward compatible with old data).
+    let tier_col = col::<StringArray>(batch, "tier").ok();
+    let scope_col = col::<StringArray>(batch, "scope").ok();
+    let persona_id_col = col::<StringArray>(batch, "persona_id").ok();
+    let strength_col = col::<Float32Array>(batch, "strength").ok();
+    let access_count_col = col::<Int32Array>(batch, "access_count").ok();
+    let last_accessed_at_col = col::<Int64Array>(batch, "last_accessed_at").ok();
+
     // Vector columns (optional — may not all be present).
     let vec_384_col = col::<FixedSizeListArray>(batch, "vec_384").ok();
     let vec_1024_col = col::<FixedSizeListArray>(batch, "vec_1024").ok();
@@ -317,6 +350,22 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
             .and_then(|c| read_vector(c, i))
             .or_else(|| vec_1024_col.and_then(|c| read_vector(c, i)))
             .or_else(|| vec_1536_col.and_then(|c| read_vector(c, i)));
+
+        // ACMA fields with backward-compatible defaults
+        let tier = tier_col
+            .map(|c| MemoryTier::from_str_or_default(c.value(i)))
+            .unwrap_or(MemoryTier::ShortTerm);
+        let scope = scope_col
+            .map(|c| MemoryScope::from_str_or_default(c.value(i)))
+            .unwrap_or(MemoryScope::Global);
+        let persona_id = persona_id_col.and_then(|c| read_nullable_string(c, i));
+        let strength = strength_col
+            .map(|c| c.value(i))
+            .unwrap_or(1.0);
+        let access_count = access_count_col
+            .map(|c| c.value(i) as u32)
+            .unwrap_or(0);
+        let last_accessed_at = last_accessed_at_col.and_then(|c| read_nullable_i64(c, i));
 
         let fact = MemoryFact {
             id: id_col.value(i).to_string(),
@@ -346,12 +395,12 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
                 .unwrap_or_else(|| "default".to_string()),
             embedding,
             similarity_score: None,
-            tier: MemoryTier::ShortTerm,
-            scope: MemoryScope::Global,
-            persona_id: None,
-            strength: 1.0,
-            access_count: 0,
-            last_accessed_at: None,
+            tier,
+            scope,
+            persona_id,
+            strength,
+            access_count,
+            last_accessed_at,
         };
         facts.push(fact);
     }
@@ -959,5 +1008,24 @@ mod tests {
         assert_eq!(batch.num_rows(), 0);
         let recovered = record_batch_to_memories(&batch).expect("empty from_batch");
         assert!(recovered.is_empty());
+    }
+
+    #[test]
+    fn fact_roundtrip_preserves_acma_fields() {
+        let mut fact = MemoryFact::new("test acma".into(), FactType::Preference, vec![]);
+        fact.tier = MemoryTier::LongTerm;
+        fact.scope = MemoryScope::Persona;
+        fact.persona_id = Some("reviewer".to_string());
+        fact.strength = 0.75;
+        fact.access_count = 5;
+        fact.last_accessed_at = Some(1700000000);
+        let batch = facts_to_record_batch(&[fact.clone()]).unwrap();
+        let out = record_batch_to_facts(&batch).unwrap();
+        assert_eq!(out[0].tier, MemoryTier::LongTerm);
+        assert_eq!(out[0].scope, MemoryScope::Persona);
+        assert_eq!(out[0].persona_id, Some("reviewer".to_string()));
+        assert!((out[0].strength - 0.75).abs() < 0.001);
+        assert_eq!(out[0].access_count, 5);
+        assert_eq!(out[0].last_accessed_at, Some(1700000000));
     }
 }
