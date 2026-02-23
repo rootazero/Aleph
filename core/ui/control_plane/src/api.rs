@@ -733,6 +733,8 @@ pub struct GenerationProviderConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -824,6 +826,7 @@ impl GenerationProvidersApi {
         let params = serde_json::json!({
             "provider_type": provider_type,
             "api_key": api_key,
+            "secret_name": Option::<String>::None,
             "base_url": base_url,
             "model": model,
         });

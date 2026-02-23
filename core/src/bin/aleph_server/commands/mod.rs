@@ -11,6 +11,7 @@ pub mod channels;
 pub mod cron;
 pub mod start;
 pub mod audit;
+pub mod secret;
 
 // Re-export commonly used items
 pub use pairing::*;
@@ -22,3 +23,4 @@ pub use channels::*;
 pub use cron::*;
 pub use start::*;
 pub use audit::*;
+pub use secret::*;

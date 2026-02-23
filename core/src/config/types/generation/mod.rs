@@ -151,6 +151,7 @@ mod tests {
 
         assert!(config.provider_type.is_empty());
         assert!(config.api_key.is_none());
+        assert!(config.secret_name.is_none());
         assert!(config.base_url.is_none());
         assert!(config.model.is_none());
         assert!(config.enabled);

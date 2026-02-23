@@ -117,6 +117,11 @@ pub enum Command {
         #[command(subcommand)]
         action: AuditAction,
     },
+    /// Manage encrypted secrets
+    Secret {
+        #[command(subcommand)]
+        action: SecretAction,
+    },
 }
 
 /// Pairing subcommands
@@ -332,6 +337,34 @@ pub enum AuditAction {
         /// Maximum number of escalation records to show
         #[arg(long, short = 'l', default_value = "20")]
         limit: usize,
+    },
+}
+
+/// Secret subcommands
+#[derive(Subcommand, Debug)]
+pub enum SecretAction {
+    /// Initialize secret vault with current ALEPH_MASTER_KEY
+    Init,
+    /// Set a secret value (prompts when --value is omitted)
+    Set {
+        /// Secret name
+        name: String,
+
+        /// Secret value (avoid shell history by omitting and using prompt)
+        #[arg(long)]
+        value: Option<String>,
+    },
+    /// List stored secret names (never values)
+    List,
+    /// Delete a secret
+    Delete {
+        /// Secret name
+        name: String,
+    },
+    /// Verify a secret exists
+    Verify {
+        /// Secret name
+        name: String,
     },
 }
 
@@ -616,6 +649,48 @@ mod tests {
                 }
             }
             _ => panic!("Expected Audit command with Escalations action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_secret_set() {
+        let args = Args::try_parse_from([
+            "aleph-gateway",
+            "secret",
+            "set",
+            "openai.main",
+            "--value",
+            "sk-ant-test",
+        ]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Secret { action }) => {
+                if let SecretAction::Set { name, value } = action {
+                    assert_eq!(name, "openai.main");
+                    assert_eq!(value.as_deref(), Some("sk-ant-test"));
+                } else {
+                    panic!("Expected SecretAction::Set");
+                }
+            }
+            _ => panic!("Expected Secret command with Set action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_secret_verify() {
+        let args = Args::try_parse_from(["aleph-gateway", "secret", "verify", "wallet.main"]);
+        assert!(args.is_ok());
+        let args = args.unwrap();
+        match args.command {
+            Some(Command::Secret { action }) => {
+                if let SecretAction::Verify { name } = action {
+                    assert_eq!(name, "wallet.main");
+                } else {
+                    panic!("Expected SecretAction::Verify");
+                }
+            }
+            _ => panic!("Expected Secret command with Verify action"),
         }
     }
 }
