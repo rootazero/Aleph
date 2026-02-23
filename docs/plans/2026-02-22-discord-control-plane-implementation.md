@@ -15,12 +15,12 @@
 ## Task 1: Backend — Permission Audit Types
 
 **Files:**
-- Create: `core/src/gateway/channels/discord/permissions.rs`
-- Modify: `core/src/gateway/channels/discord/mod.rs` (add `pub mod permissions;`)
+- Create: `core/src/gateway/interfaces/discord/permissions.rs`
+- Modify: `core/src/gateway/interfaces/discord/mod.rs` (add `pub mod permissions;`)
 
 **Step 1: Write the types file**
 
-Create `core/src/gateway/channels/discord/permissions.rs`:
+Create `core/src/gateway/interfaces/discord/permissions.rs`:
 
 ```rust
 //! Discord permission audit types and logic.
@@ -232,7 +232,7 @@ mod tests {
 
 **Step 2: Wire the module**
 
-In `core/src/gateway/channels/discord/mod.rs`, add near the top with other module declarations:
+In `core/src/gateway/interfaces/discord/mod.rs`, add near the top with other module declarations:
 
 ```rust
 pub mod permissions;
@@ -247,7 +247,7 @@ Expected: All 4 tests pass.
 **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/channels/discord/permissions.rs core/src/gateway/channels/discord/mod.rs
+git add core/src/gateway/interfaces/discord/permissions.rs core/src/gateway/interfaces/discord/mod.rs
 git commit -m "discord: add permission audit types and logic"
 ```
 
@@ -256,14 +256,14 @@ git commit -m "discord: add permission audit types and logic"
 ## Task 2: Backend — Discord REST API Wrapper
 
 **Files:**
-- Create: `core/src/gateway/channels/discord/api.rs`
-- Modify: `core/src/gateway/channels/discord/mod.rs` (add `pub mod api;`)
+- Create: `core/src/gateway/interfaces/discord/api.rs`
+- Modify: `core/src/gateway/interfaces/discord/mod.rs` (add `pub mod api;`)
 
 This module wraps serenity's Http client to provide higher-level functions for the Control Plane RPC handlers.
 
 **Step 1: Write the API wrapper**
 
-Create `core/src/gateway/channels/discord/api.rs`:
+Create `core/src/gateway/interfaces/discord/api.rs`:
 
 ```rust
 //! Discord REST API wrapper for Control Plane operations.
@@ -463,7 +463,7 @@ pub async fn validate_token(_token: &str) -> Result<BotIdentity, String> {
 
 **Step 2: Wire the module**
 
-In `core/src/gateway/channels/discord/mod.rs`, add:
+In `core/src/gateway/interfaces/discord/mod.rs`, add:
 
 ```rust
 pub mod api;
@@ -478,7 +478,7 @@ Expected: Compiles without errors. Note: serenity API calls may need adjustment 
 **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/channels/discord/api.rs core/src/gateway/channels/discord/mod.rs
+git add core/src/gateway/interfaces/discord/api.rs core/src/gateway/interfaces/discord/mod.rs
 git commit -m "discord: add REST API wrapper for Control Plane"
 ```
 

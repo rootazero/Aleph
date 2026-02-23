@@ -17,13 +17,13 @@
 The pairing state machine is pure Rust with no external dependencies — ideal to build first with TDD.
 
 **Files:**
-- Create: `core/src/gateway/channels/whatsapp/pairing.rs`
-- Modify: `core/src/gateway/channels/whatsapp/mod.rs:24` (add `pub mod pairing;`)
+- Create: `core/src/gateway/interfaces/whatsapp/pairing.rs`
+- Modify: `core/src/gateway/interfaces/whatsapp/mod.rs:24` (add `pub mod pairing;`)
 
 **Step 1: Write the PairingState enum and transition tests**
 
 ```rust
-// core/src/gateway/channels/whatsapp/pairing.rs
+// core/src/gateway/interfaces/whatsapp/pairing.rs
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -332,7 +332,7 @@ mod tests {
 
 **Step 2: Register the module**
 
-Add `pub mod pairing;` to `core/src/gateway/channels/whatsapp/mod.rs` after line 24.
+Add `pub mod pairing;` to `core/src/gateway/interfaces/whatsapp/mod.rs` after line 24.
 
 **Step 3: Run tests**
 
@@ -343,7 +343,7 @@ Expected: All tests pass.
 **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/channels/whatsapp/pairing.rs core/src/gateway/channels/whatsapp/mod.rs
+git add core/src/gateway/interfaces/whatsapp/pairing.rs core/src/gateway/interfaces/whatsapp/mod.rs
 git commit -m "whatsapp: add PairingState enum and state machine with tests"
 ```
 
@@ -354,13 +354,13 @@ git commit -m "whatsapp: add PairingState enum and state machine with tests"
 Define the JSON-RPC message types used between Rust and Go.
 
 **Files:**
-- Create: `core/src/gateway/channels/whatsapp/bridge_protocol.rs`
-- Modify: `core/src/gateway/channels/whatsapp/mod.rs` (add `pub mod bridge_protocol;`)
+- Create: `core/src/gateway/interfaces/whatsapp/bridge_protocol.rs`
+- Modify: `core/src/gateway/interfaces/whatsapp/mod.rs` (add `pub mod bridge_protocol;`)
 
 **Step 1: Write protocol types and serialization tests**
 
 ```rust
-// core/src/gateway/channels/whatsapp/bridge_protocol.rs
+// core/src/gateway/interfaces/whatsapp/bridge_protocol.rs
 
 //! JSON-RPC protocol types for Rust <-> Go Bridge communication.
 
@@ -620,7 +620,7 @@ mod tests {
 
 **Step 2: Register the module**
 
-Add `pub mod bridge_protocol;` to `core/src/gateway/channels/whatsapp/mod.rs`.
+Add `pub mod bridge_protocol;` to `core/src/gateway/interfaces/whatsapp/mod.rs`.
 
 **Step 3: Run tests**
 
@@ -631,7 +631,7 @@ Expected: All tests pass.
 **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/channels/whatsapp/bridge_protocol.rs core/src/gateway/channels/whatsapp/mod.rs
+git add core/src/gateway/interfaces/whatsapp/bridge_protocol.rs core/src/gateway/interfaces/whatsapp/mod.rs
 git commit -m "whatsapp: add Bridge RPC protocol types with serialization tests"
 ```
 
@@ -642,13 +642,13 @@ git commit -m "whatsapp: add Bridge RPC protocol types with serialization tests"
 Manages the Go whatsapp-bridge child process: spawn, health check, auto-restart, graceful shutdown.
 
 **Files:**
-- Create: `core/src/gateway/channels/whatsapp/bridge_manager.rs`
-- Modify: `core/src/gateway/channels/whatsapp/mod.rs` (add `pub mod bridge_manager;`)
+- Create: `core/src/gateway/interfaces/whatsapp/bridge_manager.rs`
+- Modify: `core/src/gateway/interfaces/whatsapp/mod.rs` (add `pub mod bridge_manager;`)
 
 **Step 1: Write BridgeManager with tests**
 
 ```rust
-// core/src/gateway/channels/whatsapp/bridge_manager.rs
+// core/src/gateway/interfaces/whatsapp/bridge_manager.rs
 
 //! Go Bridge child process lifecycle manager.
 //!
@@ -939,7 +939,7 @@ mod tests {
 
 **Step 2: Register the module**
 
-Add `pub mod bridge_manager;` to `core/src/gateway/channels/whatsapp/mod.rs`.
+Add `pub mod bridge_manager;` to `core/src/gateway/interfaces/whatsapp/mod.rs`.
 
 **Step 3: Add `dirs` dependency if not already present**
 
@@ -954,7 +954,7 @@ Expected: All tests pass.
 **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/channels/whatsapp/bridge_manager.rs core/src/gateway/channels/whatsapp/mod.rs core/Cargo.toml
+git add core/src/gateway/interfaces/whatsapp/bridge_manager.rs core/src/gateway/interfaces/whatsapp/mod.rs core/Cargo.toml
 git commit -m "whatsapp: add BridgeManager for child process lifecycle"
 ```
 
@@ -965,13 +965,13 @@ git commit -m "whatsapp: add BridgeManager for child process lifecycle"
 Async JSON-RPC client connecting to the Go bridge via Unix socket.
 
 **Files:**
-- Create: `core/src/gateway/channels/whatsapp/rpc_client.rs`
-- Modify: `core/src/gateway/channels/whatsapp/mod.rs` (add `pub mod rpc_client;`)
+- Create: `core/src/gateway/interfaces/whatsapp/rpc_client.rs`
+- Modify: `core/src/gateway/interfaces/whatsapp/mod.rs` (add `pub mod rpc_client;`)
 
 **Step 1: Write the RPC client with tests**
 
 ```rust
-// core/src/gateway/channels/whatsapp/rpc_client.rs
+// core/src/gateway/interfaces/whatsapp/rpc_client.rs
 
 //! JSON-RPC client for communicating with the Go whatsapp-bridge
 //! over a Unix domain socket.
@@ -1295,7 +1295,7 @@ mod tests {
 
 **Step 2: Register the module**
 
-Add `pub mod rpc_client;` to `core/src/gateway/channels/whatsapp/mod.rs`.
+Add `pub mod rpc_client;` to `core/src/gateway/interfaces/whatsapp/mod.rs`.
 
 **Step 3: Run tests**
 
@@ -1306,7 +1306,7 @@ Expected: All tests pass.
 **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/channels/whatsapp/rpc_client.rs core/src/gateway/channels/whatsapp/mod.rs
+git add core/src/gateway/interfaces/whatsapp/rpc_client.rs core/src/gateway/interfaces/whatsapp/mod.rs
 git commit -m "whatsapp: add BridgeRpcClient for JSON-RPC over Unix Socket"
 ```
 
@@ -1317,13 +1317,13 @@ git commit -m "whatsapp: add BridgeRpcClient for JSON-RPC over Unix Socket"
 Convert between Bridge protocol messages and Aleph's `InboundMessage`/`OutboundMessage` types.
 
 **Files:**
-- Create: `core/src/gateway/channels/whatsapp/message.rs`
-- Modify: `core/src/gateway/channels/whatsapp/mod.rs` (add `pub mod message;`)
+- Create: `core/src/gateway/interfaces/whatsapp/message.rs`
+- Modify: `core/src/gateway/interfaces/whatsapp/mod.rs` (add `pub mod message;`)
 
 **Step 1: Write converter with tests**
 
 ```rust
-// core/src/gateway/channels/whatsapp/message.rs
+// core/src/gateway/interfaces/whatsapp/message.rs
 
 //! Message format conversion between Bridge protocol and Aleph types.
 
@@ -1507,14 +1507,14 @@ Check `core/Cargo.toml` for `base64` crate. If missing, add: `base64 = "0.22"`.
 
 **Step 3: Register the module and run tests**
 
-Add `pub mod message;` to `core/src/gateway/channels/whatsapp/mod.rs`.
+Add `pub mod message;` to `core/src/gateway/interfaces/whatsapp/mod.rs`.
 
 Run: `cd /Users/zouguojun/Workspace/Aleph && cargo test -p alephcore --lib gateway::channels::whatsapp::message`
 
 **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/channels/whatsapp/message.rs core/src/gateway/channels/whatsapp/mod.rs core/Cargo.toml
+git add core/src/gateway/interfaces/whatsapp/message.rs core/src/gateway/interfaces/whatsapp/mod.rs core/Cargo.toml
 git commit -m "whatsapp: add message converter between Bridge and Aleph types"
 ```
 
@@ -1525,12 +1525,12 @@ git commit -m "whatsapp: add message converter between Bridge and Aleph types"
 Replace the stub implementation with the real bridge-backed channel.
 
 **Files:**
-- Modify: `core/src/gateway/channels/whatsapp/mod.rs` (complete rewrite)
-- Modify: `core/src/gateway/channels/whatsapp/config.rs` (add bridge config fields)
+- Modify: `core/src/gateway/interfaces/whatsapp/mod.rs` (complete rewrite)
+- Modify: `core/src/gateway/interfaces/whatsapp/config.rs` (add bridge config fields)
 
 **Step 1: Update config with bridge settings**
 
-Add to `WhatsAppConfig` in `core/src/gateway/channels/whatsapp/config.rs`:
+Add to `WhatsAppConfig` in `core/src/gateway/interfaces/whatsapp/config.rs`:
 
 ```rust
     /// Path to the whatsapp-bridge binary (auto-detected if not set)
@@ -1548,7 +1548,7 @@ fn default_max_restarts() -> u32 {
 
 **Step 2: Rewrite WhatsAppChannel**
 
-Replace the entire `WhatsAppChannel` struct and impl in `core/src/gateway/channels/whatsapp/mod.rs` with the bridge-integrated version. Key changes:
+Replace the entire `WhatsAppChannel` struct and impl in `core/src/gateway/interfaces/whatsapp/mod.rs` with the bridge-integrated version. Key changes:
 
 - Add `BridgeManager` and `BridgeRpcClient` fields
 - Add `PairingState` tracking with `Arc<RwLock<PairingState>>`
@@ -1569,7 +1569,7 @@ Run: `cd /Users/zouguojun/Workspace/Aleph && cargo check -p alephcore`
 **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/channels/whatsapp/
+git add core/src/gateway/interfaces/whatsapp/
 git commit -m "whatsapp: integrate BridgeManager, RpcClient, PairingState into WhatsAppChannel"
 ```
 
@@ -1637,11 +1637,11 @@ git commit -m "whatsapp: add Go bridge binary wrapping whatsmeow"
 The dashboard model uses `QrCode { data: String }` but the server sends `QrCode(String)`.
 
 **Files:**
-- Modify: `clients/dashboard/src/models.rs`
+- Modify: `apps/dashboard/src/models.rs`
 
 **Step 1: Fix PairingData enum**
 
-In `clients/dashboard/src/models.rs`, change `PairingData::QrCode { data: String }` to `PairingData::QrCode(String)` to match the server's serialization format:
+In `apps/dashboard/src/models.rs`, change `PairingData::QrCode { data: String }` to `PairingData::QrCode(String)` to match the server's serialization format:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1655,7 +1655,7 @@ pub enum PairingData {
 
 **Step 2: Update WhatsAppPanel to use the new format**
 
-In `clients/dashboard/src/views/social_connections.rs`, change line 78:
+In `apps/dashboard/src/views/social_connections.rs`, change line 78:
 
 ```rust
 // Before:
@@ -1666,12 +1666,12 @@ PairingData::QrCode(data) => set_qr_code.set(Some(data)),
 
 **Step 3: Verify compilation**
 
-Run: `cd /Users/zouguojun/Workspace/Aleph/clients/dashboard && cargo check --target wasm32-unknown-unknown`
+Run: `cd /Users/zouguojun/Workspace/Aleph/apps/dashboard && cargo check --target wasm32-unknown-unknown`
 
 **Step 4: Commit**
 
 ```bash
-git add clients/dashboard/src/models.rs clients/dashboard/src/views/social_connections.rs
+git add apps/dashboard/src/models.rs apps/dashboard/src/views/social_connections.rs
 git commit -m "dashboard: fix PairingData serialization mismatch with server"
 ```
 
@@ -1682,11 +1682,11 @@ git commit -m "dashboard: fix PairingData serialization mismatch with server"
 Upgrade the WhatsAppPanel to support real-time pairing lifecycle display.
 
 **Files:**
-- Modify: `clients/dashboard/src/views/social_connections.rs`
+- Modify: `apps/dashboard/src/views/social_connections.rs`
 
 **Step 1: Add PairingState model to dashboard**
 
-Add to `clients/dashboard/src/models.rs`:
+Add to `apps/dashboard/src/models.rs`:
 
 ```rust
 /// Fine-grained pairing state (mirrors server's PairingState)
@@ -1722,12 +1722,12 @@ Replace the `WhatsAppPanel` component with an upgraded version that:
 
 **Step 3: Verify compilation**
 
-Run: `cd /Users/zouguojun/Workspace/Aleph/clients/dashboard && cargo check --target wasm32-unknown-unknown`
+Run: `cd /Users/zouguojun/Workspace/Aleph/apps/dashboard && cargo check --target wasm32-unknown-unknown`
 
 **Step 4: Commit**
 
 ```bash
-git add clients/dashboard/src/views/social_connections.rs clients/dashboard/src/models.rs
+git add apps/dashboard/src/views/social_connections.rs apps/dashboard/src/models.rs
 git commit -m "dashboard: upgrade WhatsApp panel with full pairing lifecycle UI"
 ```
 
