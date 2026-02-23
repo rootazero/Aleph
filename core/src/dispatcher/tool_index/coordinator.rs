@@ -8,7 +8,9 @@
 
 use crate::error::AlephError;
 use crate::mcp::manager::{McpManagerEvent, McpManagerHandle};
-use crate::memory::context::{FactSource, FactSpecificity, FactType, MemoryFact, TemporalScope};
+use crate::memory::context::{
+    FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
+};
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::skills::{SkillRegistryEvent, SkillsRegistry};
 use super::inference::SemanticPurposeInferrer;
@@ -178,12 +180,14 @@ impl ToolIndexCoordinator {
                 temporal_scope: TemporalScope::Permanent, // Tools are always available
                 similarity_score: None,
                 path: String::new(),
+                layer: MemoryLayer::L2Detail,
+                category: MemoryCategory::Patterns,
                 fact_source: FactSource::Extracted,
                 content_hash: String::new(),
                 parent_path: String::new(),
                 embedding_model: String::new(),
-            namespace: "owner".to_string(),
-            workspace: "default".to_string(),
+                namespace: "owner".to_string(),
+                workspace: "default".to_string(),
             };
 
             self.db.insert_fact(&fact).await?;

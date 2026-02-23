@@ -11,7 +11,8 @@ use crate::memory::namespace::NamespaceScope;
 use crate::memory::smart_embedder::SmartEmbedder;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::vfs::compute_directory_hash;
-use crate::memory::{FactSource, MemoryFact};
+use crate::memory::workspace::WorkspaceFilter;
+use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter};
 use crate::providers::AiProvider;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -124,17 +125,21 @@ impl L1Generator {
         Ok(updated)
     }
 
-    /// Retrieve L2 facts under `path`, excluding summaries and invalid facts.
-    ///
-    /// Uses `get_all_facts` with path-prefix filtering since the new trait
-    /// does not have a direct `get_facts_by_path_prefix` method.
+    /// Retrieve L2 facts under `path`, excluding summaries.
     async fn get_l2_facts(&self, path: &str) -> Result<Vec<MemoryFact>, AlephError> {
-        // TODO: Consider adding a dedicated `get_facts_by_path_prefix` method
-        // to MemoryStore for efficiency. For now, we use get_all_facts + filter in memory.
-        let all_facts = self.database.get_all_facts(false).await?;
-        Ok(all_facts
+        let filter = SearchFilter::new()
+            .with_valid_only()
+            .with_workspace(WorkspaceFilter::Single("default".to_string()))
+            .with_layer(MemoryLayer::L2Detail);
+
+        let facts = self
+            .database
+            .get_facts_by_path_prefix(path, &filter, 1000)
+            .await?;
+
+        Ok(facts
             .into_iter()
-            .filter(|f| f.path.starts_with(path) && f.fact_source != FactSource::Summary && f.is_valid)
+            .filter(|f| f.fact_source != FactSource::Summary)
             .collect())
     }
 
@@ -199,6 +204,13 @@ Format:
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::memory::store::lance::LanceMemoryBackend;
+    use crate::memory::MemoryFact;
+
+    use super::*;
+
     #[test]
     fn test_l1_prompt_format() {
         let path = "aleph://user/preferences/";
@@ -206,5 +218,50 @@ mod tests {
             .trim_start_matches("aleph://")
             .trim_end_matches('/');
         assert_eq!(path_display, "user/preferences");
+    }
+
+    #[tokio::test]
+    async fn test_l1_generator_uses_scoped_prefix_query() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let backend = LanceMemoryBackend::open_or_create(temp_dir.path())
+            .await
+            .unwrap();
+        let db: MemoryBackend = Arc::new(backend);
+
+        let mut target_l2 = MemoryFact::new("Target L2".into(), FactType::Preference, vec![])
+            .with_path("aleph://user/preferences/coding/rust".to_string())
+            .with_layer(MemoryLayer::L2Detail)
+            .with_fact_source(FactSource::Extracted);
+        target_l2.workspace = "default".to_string();
+
+        let mut target_non_l2 = MemoryFact::new("Target non-L2".into(), FactType::Preference, vec![])
+            .with_path("aleph://user/preferences/coding/overview".to_string())
+            .with_layer(MemoryLayer::L1Overview)
+            .with_fact_source(FactSource::Manual);
+        target_non_l2.workspace = "default".to_string();
+
+        let mut other_path_l2 = MemoryFact::new("Other path".into(), FactType::Preference, vec![])
+            .with_path("aleph://user/preferences/ui/theme".to_string())
+            .with_layer(MemoryLayer::L2Detail)
+            .with_fact_source(FactSource::Extracted);
+        other_path_l2.workspace = "default".to_string();
+
+        db.batch_insert_facts(&[target_l2.clone(), target_non_l2, other_path_l2])
+            .await
+            .unwrap();
+
+        let generator = L1Generator::new(
+            db,
+            crate::providers::create_mock_provider(),
+            SmartEmbedder::new(temp_dir.path().join("embed-cache"), 300),
+        );
+
+        let facts = generator
+            .get_l2_facts("aleph://user/preferences/coding/")
+            .await
+            .unwrap();
+
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].id, target_l2.id);
     }
 }

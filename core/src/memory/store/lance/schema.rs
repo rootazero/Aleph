@@ -37,7 +37,7 @@ fn string_list_field(name: &str, nullable: bool) -> Field {
 // Table schemas
 // ---------------------------------------------------------------------------
 
-/// Schema for the `facts` table (25 columns).
+/// Schema for the `facts` table (27 columns).
 pub fn facts_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -46,6 +46,8 @@ pub fn facts_schema() -> Arc<Schema> {
         Field::new("fact_source", DataType::Utf8, false),
         Field::new("specificity", DataType::Utf8, false),
         Field::new("temporal_scope", DataType::Utf8, false),
+        Field::new("layer", DataType::Utf8, false),
+        Field::new("category", DataType::Utf8, false),
         Field::new("path", DataType::Utf8, false),
         Field::new("parent_path", DataType::Utf8, false),
         Field::new("namespace", DataType::Utf8, false),
@@ -127,9 +129,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn facts_schema_has_25_columns() {
+    fn facts_schema_has_27_columns() {
         let schema = facts_schema();
-        assert_eq!(schema.fields().len(), 25);
+        assert_eq!(schema.fields().len(), 27);
+    }
+
+    #[test]
+    fn facts_schema_has_layer_and_category_columns() {
+        let schema = facts_schema();
+        assert!(schema.field_with_name("layer").is_ok());
+        assert!(schema.field_with_name("category").is_ok());
     }
 
     #[test]
@@ -213,7 +222,7 @@ mod tests {
         let schema = facts_schema();
         let required = [
             "id", "content", "fact_type", "fact_source", "specificity",
-            "temporal_scope", "path", "parent_path", "namespace",
+            "temporal_scope", "layer", "category", "path", "parent_path", "namespace",
             "content_hash", "workspace", "confidence", "decay_score", "is_valid",
             "embedding_model", "created_at", "updated_at", "version",
         ];

@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use crate::memory::{FactSource, FactSpecificity, FactType, MemoryFact, TemporalScope};
+use crate::memory::{
+    FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
+};
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::store::lance::LanceMemoryBackend;
 use crate::Result;
@@ -36,12 +38,14 @@ fn create_test_fact(id: &str, content: &str, confidence: f32) -> MemoryFact {
         temporal_scope: TemporalScope::Permanent,
         similarity_score: None,
         path: String::new(),
+        layer: MemoryLayer::L2Detail,
+        category: MemoryCategory::Preferences,
         fact_source: FactSource::Extracted,
         content_hash: String::new(),
         parent_path: String::new(),
         embedding_model: String::new(),
-            namespace: "owner".to_string(),
-            workspace: "default".to_string(),
+        namespace: "owner".to_string(),
+        workspace: "default".to_string(),
     }
 }
 
