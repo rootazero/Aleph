@@ -50,9 +50,12 @@
 
 // Submodules
 pub mod answer;
+pub mod builder;
 pub mod callback;
 pub mod config;
+pub mod context_provider;
 pub mod decision;
+pub mod events;
 pub mod guards;
 pub mod message_builder;
 pub mod meta_cognition_integration;
@@ -75,9 +78,12 @@ pub mod callback_cli;
 
 // Re-export public types
 pub use answer::UserAnswer;
+pub use builder::AgentLoopBuilder;
 pub use callback::{CollectingCallback, LoggingCallback, LoopCallback, LoopEvent, NoOpLoopCallback};
 pub use config::{CompressionConfig, LoopConfig, ModelRoutingConfig, ThinkRetryConfig};
+pub use context_provider::ContextProvider;
 pub use decision::{Action, ActionResult, Decision, LlmAction, LlmResponse};
+pub use events::{AgentLoopEvent, InsightSeverity};
 pub use question::{ChoiceOption, QuestionKind, TextValidation};
 pub use guards::{GuardViolation, LoopGuard};
 pub use message_builder::{Message, MessageBuilder, MessageBuilderConfig, ToolCall};
