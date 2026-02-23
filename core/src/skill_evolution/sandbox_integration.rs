@@ -58,6 +58,7 @@ pub fn infer_preset_from_purpose(purpose: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exec::sandbox::parameter_binding::RequiredCapabilities;
     use crate::skill_evolution::tool_generator::GenerationMetadata;
 
     #[test]

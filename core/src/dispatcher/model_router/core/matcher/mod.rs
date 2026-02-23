@@ -258,7 +258,7 @@ mod tests {
         // Should route to a model with LongContext capability
         assert!(
             profile.has_capability(Capability::LongContext)
-                || profile.max_context.map_or(false, |c| c >= 100_000)
+                || profile.max_context.is_some_and(|c| c >= 100_000)
         );
     }
 

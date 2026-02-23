@@ -205,6 +205,7 @@ mod tests {
     use super::*;
     use crate::exec::sandbox::presets::PresetRegistry;
     use crate::exec::sandbox::parameter_binding::CapabilityOverrides;
+    use crate::exec::sandbox::parameter_binding::FileSystemOverride;
 
     #[test]
     fn test_apply_overrides_filesystem() {

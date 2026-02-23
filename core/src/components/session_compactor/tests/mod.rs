@@ -422,7 +422,7 @@ use serde_json::json;
             .iter()
             .filter(|part| {
                 if let SessionPart::ToolCall(tc) = part {
-                    tc.output.as_ref().map_or(false, |o| o.contains("pruned"))
+                    tc.output.as_ref().is_some_and(|o| o.contains("pruned"))
                 } else {
                     false
                 }

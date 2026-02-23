@@ -135,8 +135,8 @@ impl FileOpsHandler {
     /// Update imports after moving a file
     async fn update_imports_after_move(
         &self,
-        old_path: &PathBuf,
-        new_path: &PathBuf,
+        old_path: &Path,
+        new_path: &Path,
     ) -> Result<Vec<PathBuf>> {
         let mut updated_files = Vec::new();
 

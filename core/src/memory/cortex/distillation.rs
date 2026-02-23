@@ -184,6 +184,7 @@ impl DistillationService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     async fn create_test_db() -> (MemoryBackend, TempDir) {

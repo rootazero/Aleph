@@ -558,8 +558,7 @@ impl P3IntelligentRouter {
         // Use model_override if present, otherwise use variant_id as model identifier
         let model_used = assignment
             .model_override
-            .as_ref()
-            .map(|s| s.as_str())
+            .as_deref()
             .unwrap_or_else(|| assignment.variant_id.as_str());
 
         let request_id = uuid::Uuid::new_v4().to_string();
