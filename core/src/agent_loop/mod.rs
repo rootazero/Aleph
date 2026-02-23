@@ -66,6 +66,7 @@ mod compaction_trigger;
 mod cortex_telemetry;
 mod loop_result;
 mod traits;
+#[allow(clippy::module_inception)]
 mod agent_loop;
 mod swarm_events;
 
