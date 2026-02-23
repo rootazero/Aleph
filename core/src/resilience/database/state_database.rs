@@ -14,7 +14,7 @@ pub const DEFAULT_EMBEDDING_DIM: u32 = 384;
 /// State database for resilience state management (agent events, tasks, traces, sessions)
 pub struct StateDatabase {
     pub(crate) conn: Arc<Mutex<Connection>>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Stored for diagnostics and test assertions (e.g. in_memory check)
     pub(crate) db_path: PathBuf,
 }
 

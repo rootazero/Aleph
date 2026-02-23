@@ -158,7 +158,7 @@ fn get_runtime_path(cmd: &str) -> Option<String> {
 }
 
 /// Check multiple runtimes at once
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn check_all_runtimes() -> Vec<RuntimeCheckResult> {
     vec![
         check_runtime(RuntimeKind::Node),

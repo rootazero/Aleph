@@ -296,13 +296,6 @@ impl InboundMessageRouter {
         Ok(())
     }
 
-    /// Build InboundContext from message (legacy, uses sync resolution)
-    #[allow(dead_code)]
-    fn build_context(&self, msg: &InboundMessage) -> InboundContext {
-        let agent_id = self.config.default_agent.clone();
-        self.build_context_with_agent(msg, &agent_id)
-    }
-
     /// Build InboundContext from message with pre-resolved agent ID
     fn build_context_with_agent(&self, msg: &InboundMessage, agent_id: &str) -> InboundContext {
         let reply_route = ReplyRoute::new(
@@ -403,12 +396,6 @@ impl InboundMessageRouter {
         });
 
         Ok(())
-    }
-
-    /// Resolve SessionKey for a message (legacy, uses config.default_agent)
-    #[allow(dead_code)]
-    fn resolve_session_key(&self, msg: &InboundMessage) -> SessionKey {
-        self.resolve_session_key_with_agent(msg, &self.config.default_agent)
     }
 
     /// Resolve SessionKey for a message with pre-resolved agent ID

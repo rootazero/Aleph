@@ -327,10 +327,10 @@ struct OpenAiError {
     #[serde(rename = "type")]
     error_type: String,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     param: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     code: Option<String>,
 }
 

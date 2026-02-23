@@ -172,7 +172,8 @@ pub struct GatewayServer {
     subscription_manager: Arc<SubscriptionManager>,
     /// Guest session manager for tracking guest connections
     guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
-    /// Protocol file watcher for hot-reload (None if watching disabled/failed)
+    /// Protocol file watcher for hot-reload (None if watching disabled/failed).
+    /// Held for ownership: dropping the Debouncer stops the watcher.
     #[allow(dead_code)]
     protocol_watcher: Option<Debouncer<RecommendedWatcher, FileIdMap>>,
 }

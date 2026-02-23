@@ -93,31 +93,6 @@ impl PromptTemplate {
     }
 }
 
-/// Standard prompt templates
-#[allow(dead_code)]
-pub mod standard {
-    use super::*;
-
-    /// Tool list template
-    pub fn tool_list_template() -> PromptTemplate {
-        PromptTemplate::new(
-            r#"## Available Tools
-
-{tool_list}"#,
-        )
-    }
-
-    /// Example template for few-shot prompting
-    pub fn example_template() -> PromptTemplate {
-        PromptTemplate::new(
-            r#"## Example
-
-User: {user_input}
-Assistant: {assistant_response}"#,
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

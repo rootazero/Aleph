@@ -46,6 +46,7 @@ pub struct WasmRuntime {
 #[cfg(feature = "plugin-wasm")]
 struct LoadedWasmPlugin {
     plugin: Plugin,
+    // Stored for future use: permission checks and manifest introspection
     #[allow(dead_code)]
     manifest: PluginManifest,
     #[allow(dead_code)]

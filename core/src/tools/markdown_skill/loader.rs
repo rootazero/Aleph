@@ -130,11 +130,6 @@ impl SkillLoader {
         }
     }
 
-    #[allow(dead_code)]
-    fn is_skill_file(&self, path: &Path) -> bool {
-        Self::is_skill_file_static(path)
-    }
-
     /// Load a single skill file
     async fn load_skill_file(&self, path: &Path) -> Result<MarkdownCliTool> {
         // Read file

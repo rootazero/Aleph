@@ -124,12 +124,9 @@ impl Default for LLMConfig {
 /// This component analyzes failures in real-time and generates corrective
 /// behavioral anchors with high priority (100) and confidence (0.8).
 pub struct ReactiveReflector {
-    #[allow(dead_code)]
-    db: MemoryBackend,
-    #[allow(dead_code)]
+    _db: MemoryBackend,
     anchor_store: Arc<RwLock<AnchorStore>>,
-    #[allow(dead_code)]
-    llm_config: LLMConfig,
+    _llm_config: LLMConfig,
     provider: Arc<dyn AiProvider>,
 }
 
@@ -149,9 +146,9 @@ impl ReactiveReflector {
         provider: Arc<dyn AiProvider>,
     ) -> Self {
         Self {
-            db,
+            _db: db,
             anchor_store,
-            llm_config,
+            _llm_config: llm_config,
             provider,
         }
     }

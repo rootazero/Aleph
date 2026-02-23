@@ -4,8 +4,9 @@ use crate::cli::{print_json, print_list_table, print_success, CliError, GatewayC
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+// Deserialized from JSON-RPC response; fields read via serde
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Deserialized from external JSON-RPC response
 struct CronJob {
     id: String,
     schedule: String,

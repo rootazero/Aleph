@@ -57,10 +57,6 @@ use tracing::{debug, error, info, warn};
 
 // === Constants ===
 
-/// Default API endpoint for T8Star
-#[allow(dead_code)]
-const DEFAULT_ENDPOINT: &str = "https://ai.t8star.cn";
-
 /// Default model for video generation
 const DEFAULT_MODEL: &str = "veo3.1-fast";
 
@@ -603,13 +599,13 @@ struct VeoSubmitResponse {
 #[derive(Debug, Deserialize)]
 struct VeoTaskResponse {
     /// Task ID
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     task_id: String,
     /// Platform (e.g., "google")
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     platform: Option<String>,
     /// Action type
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     action: Option<String>,
     /// Task status: NOT_START, IN_PROGRESS, SUCCESS, FAILURE
     status: String,
@@ -635,6 +631,9 @@ mod tests {
     use super::*;
 
     // === Constants tests ===
+
+    /// Default API endpoint for T8Star (test-only reference constant)
+    const DEFAULT_ENDPOINT: &str = "https://ai.t8star.cn";
 
     #[test]
     fn test_constants() {

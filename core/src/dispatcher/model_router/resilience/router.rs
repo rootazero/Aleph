@@ -290,12 +290,10 @@ pub struct OrchestratedRouter {
     budget_manager: Option<Arc<BudgetManager>>,
 
     /// Metrics collector
-    #[allow(dead_code)]
-    collector: Arc<dyn MetricsCollector + Send + Sync>,
+    _collector: Arc<dyn MetricsCollector + Send + Sync>,
 
     /// Dynamic scorer
-    #[allow(dead_code)]
-    scorer: Arc<DynamicScorer>,
+    _scorer: Arc<DynamicScorer>,
 
     /// Model profiles for failover chain building
     profiles: Arc<RwLock<HashMap<String, ModelProfile>>>,
@@ -334,8 +332,8 @@ impl OrchestratedRouter {
             health_manager,
             orchestrator,
             budget_manager: None,
-            collector,
-            scorer,
+            _collector: collector,
+            _scorer: scorer,
             profiles: Arc::new(RwLock::new(profiles)),
             event_tx,
         }

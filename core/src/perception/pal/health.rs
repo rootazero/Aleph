@@ -136,7 +136,7 @@ impl PerceptionHealth {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(any(target_os = "macos", target_os = "windows", target_os = "linux"), allow(dead_code))]
     fn unsupported() -> Self {
         Self {
             accessibility_enabled: false,

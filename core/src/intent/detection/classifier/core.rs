@@ -24,7 +24,7 @@ use crate::providers::AiProvider;
 /// Intent classifier with 3-level classification
 pub struct IntentClassifier {
     /// Confidence threshold for L2/L3 classification
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Architecture reserve: will gate L2/L3 classification results
     confidence_threshold: f32,
     /// Keyword index for enhanced L2 matching
     keyword_index: KeywordIndex,

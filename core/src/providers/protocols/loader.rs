@@ -43,7 +43,7 @@ use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileI
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 /// Protocol loader manages loading protocols from YAML files
 pub struct ProtocolLoader;
@@ -271,26 +271,6 @@ impl ProtocolLoader {
         });
     }
 
-    /// Unregister a protocol based on file path
-    #[allow(dead_code)]
-    fn unregister_protocol(path: &Path) {
-        // Extract protocol name from filename (without extension)
-        if let Some(file_stem) = path.file_stem() {
-            if let Some(name) = file_stem.to_str() {
-                info!(
-                    protocol_name = %name,
-                    path = ?path,
-                    "Unregistering protocol"
-                );
-                ProtocolRegistry::global().unregister(name);
-            } else {
-                warn!(
-                    path = ?path,
-                    "Failed to extract protocol name from file path"
-                );
-            }
-        }
-    }
 }
 
 #[cfg(test)]

@@ -10,7 +10,6 @@ use crate::error::Result;
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::AiProvider;
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector};
-use futures::stream::BoxStream;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -133,64 +132,6 @@ impl HttpProvider {
         Ok(response_text)
     }
 
-    /// Execute a streaming request
-    #[allow(dead_code)]
-    async fn execute_stream(
-        &self,
-        payload: RequestPayload<'_>,
-    ) -> Result<BoxStream<'static, Result<String>>> {
-        // PII filtering: filter outbound message before sending to API
-        let filtered_input;
-        let final_payload = if let Some(engine_lock) = crate::pii::PiiEngine::global() {
-            if let Ok(engine) = engine_lock.read() {
-                if !engine.is_provider_excluded(&self.name) {
-                    let result = engine.filter(payload.input);
-                    if result.has_detections() {
-                        filtered_input = result.text;
-                        RequestPayload {
-                            input: &filtered_input,
-                            system_prompt: payload.system_prompt,
-                            image: payload.image,
-                            attachments: payload.attachments,
-                            think_level: payload.think_level,
-                            force_standard_mode: payload.force_standard_mode,
-                        }
-                    } else {
-                        payload
-                    }
-                } else {
-                    payload
-                }
-            } else {
-                payload
-            }
-        } else {
-            // PII engine not initialized — pass through
-            payload
-        };
-
-        // Secret leak detection: scan outbound content
-        let detector = LeakDetector::new();
-        if let LeakDecision::Block { reason, .. } = detector.scan_outbound(final_payload.input) {
-            tracing::warn!(
-                provider = %self.name,
-                reason = %reason,
-                "Blocked outbound streaming request: secret leak detected"
-            );
-            return Err(crate::error::AlephError::PermissionDenied {
-                message: format!("Secret leak blocked: {}", reason),
-                suggestion: Some("Remove secret values from the input before sending.".into()),
-            });
-        }
-
-        let request = self
-            .adapter
-            .build_request(&final_payload, &self.config, true)?;
-        let response = request.send().await.map_err(|e| {
-            crate::error::AlephError::network(format!("Network error: {}", e))
-        })?;
-        self.adapter.parse_stream(response).await
-    }
 }
 
 impl AiProvider for HttpProvider {

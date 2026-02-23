@@ -25,12 +25,12 @@ pub struct VisionConnector {
     monitors: Arc<RwLock<HashMap<String, MonitorSession>>>,
 }
 
-#[allow(dead_code)] // Fields populated for future monitoring implementation
+/// Monitor session state (fields populated for future monitoring implementation)
 struct MonitorSession {
-    bundle_id: String,
-    last_capture: Instant,
-    last_state_hash: u64,
-    consecutive_no_change: u32,
+    _bundle_id: String,
+    _last_capture: Instant,
+    _last_state_hash: u64,
+    _consecutive_no_change: u32,
 }
 
 impl VisionConnector {
@@ -92,7 +92,7 @@ impl VisionConnector {
     }
 
     /// Compute hash of state for change detection
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn compute_state_hash(state: &AppState) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -114,7 +114,7 @@ impl VisionConnector {
     }
 
     /// Adjust polling interval based on activity
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn adjust_poll_interval(&self, consecutive_no_change: u32) -> Duration {
         // Exponential backoff when no changes detected
         // 2s -> 4s -> 8s -> 16s (max)
@@ -173,10 +173,10 @@ impl StateConnector for VisionConnector {
 
     async fn start_monitoring(&self, bundle_id: &str) -> Result<()> {
         let session = MonitorSession {
-            bundle_id: bundle_id.to_string(),
-            last_capture: Instant::now(),
-            last_state_hash: 0,
-            consecutive_no_change: 0,
+            _bundle_id: bundle_id.to_string(),
+            _last_capture: Instant::now(),
+            _last_state_hash: 0,
+            _consecutive_no_change: 0,
         };
 
         self.monitors

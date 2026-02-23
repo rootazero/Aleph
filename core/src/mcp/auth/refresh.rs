@@ -34,8 +34,7 @@ impl Default for TokenRefreshConfig {
 struct TrackedServer {
     client_id: String,
     metadata: OAuthServerMetadata,
-    #[allow(dead_code)]
-    last_refresh: Instant,
+    _last_refresh: Instant,
 }
 
 /// Manages automatic token refresh for multiple servers
@@ -70,7 +69,7 @@ impl TokenRefreshManager {
             TrackedServer {
                 client_id: client_id.to_string(),
                 metadata,
-                last_refresh: Instant::now(),
+                _last_refresh: Instant::now(),
             },
         );
         tracing::debug!(server = %server_name, "Registered server for token refresh");

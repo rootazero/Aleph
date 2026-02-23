@@ -3,12 +3,10 @@
 //! Contains Dispatcher Layer (Aleph Cortex) configuration:
 //! - DispatcherConfigToml: Multi-layer routing and confirmation settings
 //! - AgentConfigToml: L3 Agent (multi-step planning) settings
-//! - ModelRouterConfigToml: Model routing with retry/failover/budget settings (P1)
 
 mod backoff;
 mod budget;
 mod core;
-mod model_router;
 mod retry;
 
 // Re-export all types for backward compatibility
@@ -24,16 +22,6 @@ pub use retry::*;
 mod tests {
     use super::*;
     use super::backoff::BackoffConfigToml;
-    use super::model_router::ModelRouterConfigToml;
-
-    #[test]
-    fn test_model_router_config_default() {
-        let config = ModelRouterConfigToml::default();
-        assert!(config.enabled);
-        assert!(config.retry.enabled);
-        assert!(config.budget.enabled);
-        assert!(config.validate().is_ok());
-    }
 
     #[test]
     fn test_retry_config_default() {

@@ -118,12 +118,10 @@ pub struct FileOpsExecutor {
     permission_checker: PathPermissionChecker,
 
     /// Require confirmation for write operations (reserved for future UI integration)
-    #[allow(dead_code)]
-    require_confirmation_for_write: bool,
+    _require_confirmation_for_write: bool,
 
     /// Require confirmation for delete operations (reserved for future UI integration)
-    #[allow(dead_code)]
-    require_confirmation_for_delete: bool,
+    _require_confirmation_for_delete: bool,
 }
 
 impl FileOpsExecutor {
@@ -141,8 +139,8 @@ impl FileOpsExecutor {
                 denied_paths,
                 max_file_size,
             ),
-            require_confirmation_for_write,
-            require_confirmation_for_delete,
+            _require_confirmation_for_write: require_confirmation_for_write,
+            _require_confirmation_for_delete: require_confirmation_for_delete,
         }
     }
 

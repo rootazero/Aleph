@@ -203,34 +203,6 @@ pub fn normalize_phone(phone: &str) -> String {
     }
 }
 
-/// Check if a string looks like a phone number
-#[allow(dead_code)]
-pub fn is_phone_number(s: &str) -> bool {
-    let digits: usize = s.chars().filter(|c| c.is_ascii_digit()).count();
-    (10..=15).contains(&digits)
-}
-
-/// Check if a string looks like an email
-#[allow(dead_code)]
-pub fn is_email(s: &str) -> bool {
-    // Basic email validation:
-    // - Contains exactly one @
-    // - Has something before and after @
-    // - Has a . after @ but not immediately after
-    // - Doesn't end with .
-    if let Some(at_pos) = s.find('@') {
-        let before = &s[..at_pos];
-        let after = &s[at_pos + 1..];
-        !before.is_empty()
-            && !after.is_empty()
-            && after.contains('.')
-            && !after.starts_with('.')
-            && !s.ends_with('.')
-    } else {
-        false
-    }
-}
-
 /// Check if a sender is in the allowlist
 pub fn is_allowed_sender(sender: &str, allowlist: &[String]) -> bool {
     let normalized = normalize_phone(sender);
@@ -315,23 +287,6 @@ mod tests {
         assert_eq!(normalize_phone("(555) 123-4567"), "+15551234567");
         assert_eq!(normalize_phone("1-555-123-4567"), "+15551234567");
         assert_eq!(normalize_phone("+44 20 7946 0958"), "+442079460958");
-    }
-
-    #[test]
-    fn test_is_phone_number() {
-        assert!(is_phone_number("+15551234567"));
-        assert!(is_phone_number("555-123-4567"));
-        assert!(!is_phone_number("hello"));
-        assert!(!is_phone_number("123")); // Too short
-    }
-
-    #[test]
-    fn test_is_email() {
-        assert!(is_email("user@example.com"));
-        assert!(is_email("test.user@sub.domain.org"));
-        assert!(!is_email("not an email"));
-        assert!(!is_email("@invalid.com"));
-        assert!(!is_email("invalid@.com"));
     }
 
     #[test]

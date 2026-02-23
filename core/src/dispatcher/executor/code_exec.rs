@@ -221,8 +221,8 @@ impl CommandChecker {
 ///
 /// Note: Fields are currently unused as sandbox integration is pending.
 /// They will be used when sandbox-exec integration is completed.
+#[allow(dead_code)] // Architecture reserve: sandbox-exec integration pending
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct SandboxConfig {
     /// Whether sandbox is enabled
     pub enabled: bool,
@@ -256,8 +256,8 @@ impl SandboxConfig {
     /// Generate macOS sandbox-exec profile
     ///
     /// Note: Currently unused, will be integrated when sandbox execution is enabled.
+    #[allow(dead_code)] // Architecture reserve: sandbox-exec integration pending
     #[cfg(target_os = "macos")]
-    #[allow(dead_code)]
     pub fn generate_profile(&self) -> String {
         let mut profile = String::from("(version 1)\n(deny default)\n");
 
@@ -303,8 +303,8 @@ impl SandboxConfig {
         profile
     }
 
+    #[allow(dead_code)] // Architecture reserve: sandbox-exec integration pending
     #[cfg(not(target_os = "macos"))]
-    #[allow(dead_code)]
     pub fn generate_profile(&self) -> String {
         // Non-macOS platforms: return empty (sandbox not supported)
         String::new()
@@ -317,15 +317,13 @@ pub struct CodeExecutor {
     enabled: bool,
 
     /// Default runtime (reserved for future use when auto-selecting runtime)
-    #[allow(dead_code)]
-    default_runtime: String,
+    _default_runtime: String,
 
     /// Execution timeout in seconds
     timeout_seconds: u64,
 
     /// Sandbox configuration (reserved for sandbox-exec integration)
-    #[allow(dead_code)]
-    sandbox_config: SandboxConfig,
+    _sandbox_config: SandboxConfig,
 
     /// Allowed runtimes (empty = all)
     allowed_runtimes: Vec<String>,
@@ -375,9 +373,9 @@ impl CodeExecutor {
 
         Self {
             enabled,
-            default_runtime,
+            _default_runtime: default_runtime,
             timeout_seconds,
-            sandbox_config,
+            _sandbox_config: sandbox_config,
             allowed_runtimes,
             command_checker: CommandChecker::new(blocked_commands),
             permission_checker,
@@ -1009,7 +1007,7 @@ mod tests {
         );
 
         // Verify sandbox config is set correctly
-        assert!(executor.sandbox_config.enabled);
-        assert!(!executor.sandbox_config.allow_network);
+        assert!(executor._sandbox_config.enabled);
+        assert!(!executor._sandbox_config.allow_network);
     }
 }

@@ -93,7 +93,7 @@ pub struct BrowserService {
     /// Configuration
     config: BrowserConfig,
     /// Chrome process (when launched by us)
-    #[allow(dead_code)]
+    // Held for ownership: dropping kills the child process via Drop impl
     process: Option<Child>,
     /// CDP browser handle
     #[cfg(feature = "browser")]

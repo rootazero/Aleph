@@ -7,35 +7,27 @@ use super::config::TranscriptIndexerConfig;
 
 /// Near-realtime transcript indexer
 pub struct TranscriptIndexer {
-    #[allow(dead_code)]
-    database: MemoryBackend,
-    #[allow(dead_code)]
-    embedder: Arc<SmartEmbedder>,
     config: TranscriptIndexerConfig,
 }
 
 impl TranscriptIndexer {
     /// Create new indexer with default config
     pub fn new(
-        database: MemoryBackend,
-        embedder: Arc<SmartEmbedder>,
+        _database: MemoryBackend,
+        _embedder: Arc<SmartEmbedder>,
     ) -> Self {
         Self {
-            database,
-            embedder,
             config: TranscriptIndexerConfig::default(),
         }
     }
 
     /// Create with custom config
     pub fn with_config(
-        database: MemoryBackend,
-        embedder: Arc<SmartEmbedder>,
+        _database: MemoryBackend,
+        _embedder: Arc<SmartEmbedder>,
         config: TranscriptIndexerConfig,
     ) -> Self {
         Self {
-            database,
-            embedder,
             config,
         }
     }

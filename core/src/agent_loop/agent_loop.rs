@@ -17,7 +17,7 @@ use super::overflow::OverflowDetector;
 use super::session_sync::SessionSync;
 use super::state::{LoopState, LoopStep, RequestContext};
 use super::traits::{ActionExecutor, CompressorTrait, ThinkerTrait};
-use super::swarm_events::AgentLoopEvent;
+use super::events::AgentLoopEvent;
 
 /// Extract file paths from tool arguments
 fn extract_affected_files(arguments: &serde_json::Value) -> Vec<String> {
@@ -125,7 +125,7 @@ where
     /// Optional overflow detector for real-time overflow checking
     pub(crate) overflow_detector: Option<Arc<OverflowDetector>>,
     /// Optional SwarmCoordinator for swarm intelligence integration
-    swarm_coordinator: Option<Arc<crate::agents::swarm::coordinator::SwarmCoordinator>>,
+    pub(crate) swarm_coordinator: Option<Arc<crate::agents::swarm::coordinator::SwarmCoordinator>>,
 }
 
 impl<T, E, C> AgentLoop<T, E, C>
@@ -212,6 +212,29 @@ where
             compaction_trigger: OptionalCompactionTrigger::new(event_bus),
             overflow_detector,
             swarm_coordinator: None,
+        }
+    }
+
+    /// Create a new AgentLoop from builder components
+    ///
+    /// This is used by `AgentLoopBuilder` to construct a fully configured instance.
+    pub(crate) fn from_builder(
+        thinker: Arc<T>,
+        executor: Arc<E>,
+        compressor: Arc<C>,
+        config: LoopConfig,
+        event_bus: Option<Arc<EventBus>>,
+        overflow_detector: Option<Arc<OverflowDetector>>,
+        swarm_coordinator: Option<Arc<crate::agents::swarm::coordinator::SwarmCoordinator>>,
+    ) -> Self {
+        Self {
+            thinker,
+            executor,
+            compressor,
+            config,
+            compaction_trigger: OptionalCompactionTrigger::new(event_bus),
+            overflow_detector,
+            swarm_coordinator,
         }
     }
 

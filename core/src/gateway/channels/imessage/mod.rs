@@ -50,8 +50,6 @@ pub struct IMessageChannel {
     config: IMessageConfig,
     db: Arc<Mutex<Option<MessagesDb>>>,
     inbound_tx: mpsc::Sender<InboundMessage>,
-    #[allow(dead_code)]
-    inbound_rx: Option<mpsc::Receiver<InboundMessage>>,
     running: Arc<AtomicBool>,
     poll_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -59,7 +57,7 @@ pub struct IMessageChannel {
 impl IMessageChannel {
     /// Create a new iMessage channel
     pub fn new(config: IMessageConfig) -> Self {
-        let (tx, rx) = mpsc::channel(100);
+        let (tx, _rx) = mpsc::channel(100);
 
         let info = ChannelInfo {
             id: ChannelId::new("imessage"),
@@ -88,7 +86,6 @@ impl IMessageChannel {
             config,
             db: Arc::new(Mutex::new(None)),
             inbound_tx: tx,
-            inbound_rx: Some(rx),
             running: Arc::new(AtomicBool::new(false)),
             poll_handle: None,
         }

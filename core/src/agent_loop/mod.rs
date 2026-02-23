@@ -71,7 +71,6 @@ mod loop_result;
 mod traits;
 #[allow(clippy::module_inception)]
 mod agent_loop;
-mod swarm_events;
 
 #[cfg(feature = "cli")]
 pub mod callback_cli;
@@ -107,9 +106,6 @@ pub use traits::{ActionExecutor, CompressedHistory, CompressorTrait, ThinkerTrai
 
 // Re-export main agent loop
 pub use agent_loop::{AgentLoop, RunContext};
-
-// Re-export swarm events
-pub use swarm_events::{AgentLoopEvent, InsightSeverity};
 
 // Re-export CLI callback (when cli feature is enabled)
 #[cfg(feature = "cli")]

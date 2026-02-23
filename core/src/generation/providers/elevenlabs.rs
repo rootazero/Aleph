@@ -379,7 +379,7 @@ struct ElevenLabsErrorResponse {
 struct ElevenLabsErrorDetail {
     message: String,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from API response
     status: Option<String>,
 }
 

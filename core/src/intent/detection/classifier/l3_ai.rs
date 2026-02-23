@@ -1,6 +1,5 @@
 //! L3 AI-based classification (1-3s).
 
-use super::l2_keywords::intent_type_to_category;
 use super::types::ExecutableTask;
 use crate::intent::detection::ai_detector::AiIntentResult;
 use crate::intent::types::TaskCategory;
@@ -25,19 +24,3 @@ pub fn convert_ai_result(result: &AiIntentResult, input: &str) -> Option<Executa
     })
 }
 
-/// Convert AI intent string to TaskCategory using both formats
-#[allow(dead_code)]
-pub fn ai_intent_to_category(intent: &str) -> Option<TaskCategory> {
-    // Try snake_case format first (AI result format)
-    match intent {
-        "file_organize" => Some(TaskCategory::FileOrganize),
-        "file_cleanup" => Some(TaskCategory::FileCleanup),
-        "code_execution" => Some(TaskCategory::CodeExecution),
-        "file_transfer" => Some(TaskCategory::FileTransfer),
-        "document_generate" => Some(TaskCategory::DocumentGenerate),
-        _ => {
-            // Fall back to PascalCase format (keyword index format)
-            intent_type_to_category(intent)
-        }
-    }
-}

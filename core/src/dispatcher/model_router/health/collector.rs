@@ -234,8 +234,7 @@ pub struct InMemoryMetricsCollector {
     aggregated: Arc<RwLock<HashMap<String, MultiWindowMetrics>>>,
 
     /// Configuration
-    #[allow(dead_code)]
-    config: MetricsConfig,
+    _config: MetricsConfig,
 }
 
 impl InMemoryMetricsCollector {
@@ -244,7 +243,7 @@ impl InMemoryMetricsCollector {
         Self {
             records: Arc::new(RwLock::new(RingBuffer::new(config.buffer_size))),
             aggregated: Arc::new(RwLock::new(HashMap::new())),
-            config,
+            _config: config,
         }
     }
 
@@ -330,8 +329,7 @@ pub struct HybridMetricsCollector {
     command_tx: mpsc::Sender<CollectorCommand>,
 
     /// Configuration
-    #[allow(dead_code)]
-    config: MetricsConfig,
+    _config: MetricsConfig,
 }
 
 impl HybridMetricsCollector {
@@ -346,7 +344,7 @@ impl HybridMetricsCollector {
             records: records.clone(),
             aggregated: aggregated.clone(),
             command_tx,
-            config: config.clone(),
+            _config: config.clone(),
         };
 
         // Spawn background processor
