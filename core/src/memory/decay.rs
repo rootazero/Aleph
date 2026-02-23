@@ -4,7 +4,7 @@
 //! Facts that haven't been accessed in a long time decay in strength,
 //! while frequently accessed facts remain strong.
 
-use crate::memory::context::{FactType, TemporalScope};
+use crate::memory::context::{FactType, MemoryFact, TemporalScope};
 use serde::{Deserialize, Serialize};
 
 /// Memory strength tracking
@@ -182,6 +182,30 @@ impl DecayConfig {
     }
 }
 
+/// Update a fact's persistent strength using Ebbinghaus decay.
+/// Called by DreamDaemon in batch. Uses last_accessed_at for decay base.
+pub fn update_strength(fact: &mut MemoryFact, now: i64, half_life_days: f64) {
+    let age_days = (now - fact.created_at) as f64 / 86400.0;
+    let last_access_days = match fact.last_accessed_at {
+        Some(ts) => (now - ts) as f64 / 86400.0,
+        None => age_days,
+    };
+
+    // Ebbinghaus exponential decay: 0.5^(days/half_life)
+    let base = (-last_access_days * (2.0_f64.ln()) / half_life_days).exp();
+
+    // Logarithmic access boost (spaced repetition effect)
+    let access_boost = (fact.access_count as f64).ln_1p() * 0.15;
+
+    fact.strength = ((base as f32) + access_boost as f32).clamp(0.0, 1.0);
+}
+
+/// Record a retrieval hit on a fact.
+pub fn on_access(fact: &mut MemoryFact, now: i64) {
+    fact.access_count += 1;
+    fact.last_accessed_at = Some(now);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,6 +304,51 @@ mod tests {
 
         // After 1 year with no access, should be very weak
         assert!(old_strength.should_cleanup(&config, now));
+    }
+
+    #[test]
+    fn test_update_strength_fresh_fact() {
+        use crate::memory::context::MemoryFact;
+        let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        let now = fact.created_at;
+        update_strength(&mut fact, now, 30.0);
+        assert!(fact.strength > 0.95, "Fresh fact should be near 1.0, got {}", fact.strength);
+    }
+
+    #[test]
+    fn test_update_strength_decays_over_time() {
+        use crate::memory::context::MemoryFact;
+        let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        let now = fact.created_at + 30 * 86400; // 30 days, no access
+        update_strength(&mut fact, now, 30.0);
+        assert!(fact.strength < 0.6, "Should decay below 0.6, got {}", fact.strength);
+        assert!(fact.strength > 0.3, "Should be above 0.3, got {}", fact.strength);
+    }
+
+    #[test]
+    fn test_update_strength_access_boost() {
+        use crate::memory::context::MemoryFact;
+        let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        fact.access_count = 10;
+        fact.last_accessed_at = Some(fact.created_at + 29 * 86400); // accessed 1 day ago
+        let now = fact.created_at + 30 * 86400;
+        update_strength(&mut fact, now, 30.0);
+        assert!(fact.strength > 0.7, "Recently accessed + high count should boost, got {}", fact.strength);
+    }
+
+    #[test]
+    fn test_on_access_increments() {
+        use crate::memory::context::MemoryFact;
+        let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        assert_eq!(fact.access_count, 0);
+        assert!(fact.last_accessed_at.is_none());
+        let now = fact.created_at + 86400;
+        on_access(&mut fact, now);
+        assert_eq!(fact.access_count, 1);
+        assert_eq!(fact.last_accessed_at, Some(now));
+        on_access(&mut fact, now + 86400);
+        assert_eq!(fact.access_count, 2);
+        assert_eq!(fact.last_accessed_at, Some(now + 86400));
     }
 
     #[test]
