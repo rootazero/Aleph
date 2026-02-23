@@ -43,10 +43,6 @@ impl SkillStatusReport {
 impl Serialize for SkillStatusReport {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let eligible = self.is_eligible();
-        let reason_count = match &self.result {
-            EligibilityResult::Eligible => 0,
-            EligibilityResult::Ineligible(reasons) => reasons.len(),
-        };
 
         // 5 fields normally, +1 if ineligible (for "reasons" array)
         let field_count = if eligible { 5 } else { 6 };

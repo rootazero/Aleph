@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 
 use crate::domain::skill::{SkillId, SkillManifest};
-use crate::domain::Entity;
 use crate::skill::eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
 use crate::skill::prompt::build_skills_prompt_xml;
 use crate::skill::registry::SkillRegistry;

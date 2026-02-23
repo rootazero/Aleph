@@ -28,7 +28,6 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::domain::skill::{SkillId, SkillManifest, SkillSource};
-use crate::domain::Entity;
 
 // ---------------------------------------------------------------------------
 // Error type
