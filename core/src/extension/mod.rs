@@ -48,6 +48,7 @@ pub mod discovery;
 pub mod hooks;
 mod plugin_loader;
 pub mod runtime;
+pub mod skill_system;
 pub mod sync_api;
 
 mod channel_manager;
@@ -72,6 +73,7 @@ pub use plugin_loader::PluginLoader;
 pub use provider_adapter::PluginProviderAdapter;
 pub use registry::*;
 pub use service_manager::ServiceManager;
+pub use skill_system::{SkillEntry, SkillSnapshot, SkillSystem};
 pub use skill_tool::{build_skill_tool_description, check_skill_permission, request_skill_permission_async};
 pub use template::SkillTemplate;
 pub use types::*;
@@ -160,6 +162,9 @@ pub struct ExtensionManager {
 
     /// Service lifecycle manager
     service_manager: Arc<RwLock<ServiceManager>>,
+
+    /// Skill system for snapshot-based skill XML injection into LLM prompts
+    skill_system: SkillSystem,
 }
 
 impl ExtensionManager {
@@ -187,12 +192,15 @@ impl ExtensionManager {
             plugin_loader,
             plugin_registry,
             service_manager,
+            skill_system: SkillSystem::new(),
         })
     }
 
-    /// Create with default configuration
+    /// Create with default configuration and initialize the skill system
     pub async fn with_defaults() -> ExtensionResult<Self> {
-        Self::new(ExtensionConfig::default()).await
+        let manager = Self::new(ExtensionConfig::default()).await?;
+        manager.skill_system.init_from_defaults().await;
+        Ok(manager)
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -828,6 +836,13 @@ impl ExtensionManager {
             .as_ref()
             .map(|v| v.iter().map(|s| s.as_str()).collect())
             .unwrap_or_default()
+    }
+
+    // ── Skill System ──────────────────────────────────────────────────────────
+
+    /// Get the skill system for snapshot-based skill XML injection
+    pub fn skill_system(&self) -> &SkillSystem {
+        &self.skill_system
     }
 }
 
