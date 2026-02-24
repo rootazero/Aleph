@@ -18,8 +18,12 @@ pub mod web3_signer;
 pub use injection::{render_with_secrets, InjectedSecret};
 pub use leak_detector::{LeakDecision, LeakDetector};
 pub use placeholder::{extract_secret_refs, SecretRef};
-pub use types::{DecryptedSecret, SecretError};
+pub use types::{DecryptedSecret, EntryMetadata, SecretError};
 pub use vault::{resolve_master_key, SecretVault};
 pub use provider::{ProviderStatus, SecretMetadata, SecretProvider};
+pub use provider::local_vault::LocalVaultProvider;
 pub use router::{AsyncSecretResolver, SecretRouter};
 pub use web3_signer::{EvmSigner, SignIntent, SignedResult};
+
+// Re-export config types used in routing (so integration tests can access them)
+pub use crate::config::types::secrets::{SecretMapping, Sensitivity};
