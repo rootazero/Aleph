@@ -53,6 +53,7 @@ pub mod web_fetch;
 pub mod youtube;
 pub mod mcp_resource;
 pub mod mcp_prompt;
+pub mod desktop;
 
 pub use atomic_ops::{AtomicOpsArgs, AtomicOpsOutput, AtomicOpsTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};
@@ -78,6 +79,7 @@ pub use web_fetch::{WebFetchArgs, WebFetchTool};
 pub use youtube::{YouTubeArgs, YouTubeTool};
 pub use mcp_resource::{McpReadResourceArgs, McpReadResourceOutput, McpReadResourceTool};
 pub use mcp_prompt::{McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, PromptOutputMessage};
+pub use desktop::{DesktopArgs, DesktopOutput, DesktopTool};
 
 // Message tool re-exports
 pub use message::{

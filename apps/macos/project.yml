@@ -83,6 +83,8 @@ targets:
         LSMinimumSystemVersion: "15.0"
         LSUIElement: true
         NSAppleEventsUsageDescription: "Aleph needs to simulate keyboard input to paste AI responses into your applications and monitor global hotkeys for seamless AI integration."
+        NSAccessibilityUsageDescription: "Aleph needs accessibility access to read UI elements and interact with other applications on your behalf."
+        NSScreenCaptureUsageDescription: "Aleph needs screen recording access to capture what's on your screen."
         NSHumanReadableCopyright: "Copyright © 2025 Aleph. All rights reserved."
         NSPrincipalClass: NSApplication
     entitlements:
