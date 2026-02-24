@@ -52,7 +52,6 @@ pub mod scoring_pipeline;
 pub mod vfs;
 pub mod workspace;
 pub mod workspace_store;
-pub mod scoring_pipeline;
 
 #[cfg(test)]
 mod integration_tests;
