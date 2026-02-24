@@ -35,6 +35,7 @@ pub mod reranker;
 pub mod retrieval;
 pub mod scratchpad;
 pub mod smart_embedder;
+pub mod embedding_cache;
 pub mod embedding_provider;
 pub mod embedding_migration;
 pub mod cli;
@@ -91,6 +92,7 @@ pub use reranker::{NoOpReranker, Reranker, RerankResult};
 pub use retrieval::MemoryRetrieval;
 pub use scratchpad::{ScratchpadManager, ScratchpadConfig, SessionHistory};
 pub use smart_embedder::{SmartEmbedder, DEFAULT_MODEL_TTL_SECS, EMBEDDING_DIM};
+pub use embedding_cache::EmbeddingCache;
 pub use embedding_provider::{
     EmbeddingProvider, LocalEmbeddingProvider, RemoteEmbeddingProvider,
     create_embedding_provider, truncate_and_normalize,
