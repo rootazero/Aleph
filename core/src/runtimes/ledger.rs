@@ -215,6 +215,54 @@ impl CapabilityLedger {
 }
 
 // ---------------------------------------------------------------------------
+// Migration
+// ---------------------------------------------------------------------------
+
+/// Migrate from legacy manifest.json to ledger.json
+///
+/// If manifest.json exists but ledger.json doesn't, converts entries
+/// to Stale status (need re-probe to verify paths still valid).
+/// If ledger.json already exists, loads it directly.
+pub fn migrate_from_legacy(runtimes_dir: &Path) -> std::io::Result<CapabilityLedger> {
+    let legacy_path = runtimes_dir.join("manifest.json");
+    let ledger_path = runtimes_dir.join("ledger.json");
+
+    if legacy_path.exists() && !ledger_path.exists() {
+        tracing::info!("Migrating from legacy manifest.json to ledger.json");
+        let mut ledger = CapabilityLedger::new(ledger_path);
+
+        if let Ok(content) = std::fs::read_to_string(&legacy_path) {
+            // Parse legacy format: { "version": 1, "runtimes": { "id": { "version": "..." } } }
+            if let Ok(legacy) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(runtimes) = legacy.get("runtimes").and_then(|r| r.as_object()) {
+                    for (id, metadata) in runtimes {
+                        let version = metadata
+                            .get("version")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+
+                        ledger.update(CapabilityEntry {
+                            name: id.clone(),
+                            bin_path: PathBuf::new(), // Legacy didn't store paths
+                            version,
+                            status: CapabilityStatus::Stale, // Need re-probe
+                            source: CapabilitySource::AlephManaged,
+                            last_probed: 0,
+                        });
+                    }
+                }
+            }
+        }
+
+        ledger.persist()?;
+        Ok(ledger)
+    } else {
+        Ok(CapabilityLedger::load_or_create(ledger_path))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -369,5 +417,57 @@ mod tests {
             ledger.entries.is_empty(),
             "Corrupted JSON should yield an empty ledger"
         );
+    }
+
+    #[test]
+    fn test_migrate_from_legacy_manifest() {
+        let dir = TempDir::new().unwrap();
+        let runtimes_dir = dir.path();
+
+        // Write a legacy manifest.json
+        let legacy = serde_json::json!({
+            "version": 1,
+            "runtimes": {
+                "uv": {
+                    "installed_at": { "secs_since_epoch": 1700000000, "nanos_since_epoch": 0 },
+                    "version": "0.5.14",
+                    "last_update_check": null,
+                    "extra": {}
+                },
+                "ffmpeg": {
+                    "installed_at": { "secs_since_epoch": 1700000000, "nanos_since_epoch": 0 },
+                    "version": "6.1",
+                    "last_update_check": null,
+                    "extra": {}
+                }
+            }
+        });
+        std::fs::write(
+            runtimes_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        let ledger = migrate_from_legacy(runtimes_dir).unwrap();
+
+        // Migrated entries should be Stale (need re-probe)
+        assert_eq!(ledger.status("uv"), CapabilityStatus::Stale);
+        assert_eq!(ledger.status("ffmpeg"), CapabilityStatus::Stale);
+        // ledger.json should exist
+        assert!(runtimes_dir.join("ledger.json").exists());
+    }
+
+    #[test]
+    fn test_migrate_skips_if_ledger_exists() {
+        let dir = TempDir::new().unwrap();
+        let runtimes_dir = dir.path();
+
+        // Write both files
+        std::fs::write(runtimes_dir.join("manifest.json"), "{}").unwrap();
+        std::fs::write(runtimes_dir.join("ledger.json"), "{}").unwrap();
+
+        // Should load ledger, not migrate
+        let ledger = migrate_from_legacy(runtimes_dir).unwrap();
+        assert!(ledger.list_ready().is_empty());
     }
 }
