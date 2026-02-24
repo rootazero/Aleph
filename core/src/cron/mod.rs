@@ -52,7 +52,7 @@
 
 pub mod config;
 
-pub use config::{CronConfig, CronJob, JobRun, JobStatus};
+pub use config::{CronConfig, CronJob, JobRun, JobStatus, ScheduleKind, TriggerSource};
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
@@ -132,6 +132,7 @@ impl CronService {
         {
             let conn = Connection::open(&db_path)?;
             Self::init_schema(&conn)?;
+            Self::migrate_schema(&conn)?;
         }
 
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_jobs));
@@ -160,7 +161,30 @@ impl CronService {
                 timezone TEXT,
                 tags TEXT DEFAULT '[]',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                -- State-machine scheduling
+                next_run_at INTEGER,
+                running_at INTEGER,
+                last_run_at INTEGER,
+                -- Resilience
+                consecutive_failures INTEGER DEFAULT 0,
+                max_retries INTEGER DEFAULT 3,
+                priority INTEGER DEFAULT 5,
+                -- Schedule types
+                schedule_kind TEXT DEFAULT 'cron',
+                every_ms INTEGER,
+                at_time INTEGER,
+                delete_after_run INTEGER DEFAULT 0,
+                -- Job chaining
+                next_job_id_on_success TEXT,
+                next_job_id_on_failure TEXT,
+                -- Delivery
+                delivery_config TEXT,
+                -- Dynamic prompt
+                prompt_template TEXT,
+                context_vars TEXT,
+                -- Optimistic locking
+                version INTEGER DEFAULT 1
             );
 
             CREATE TABLE IF NOT EXISTS cron_runs (
@@ -172,13 +196,69 @@ impl CronService {
                 duration_ms INTEGER DEFAULT 0,
                 error TEXT,
                 response TEXT,
+                -- Extended fields
+                retry_count INTEGER DEFAULT 0,
+                trigger_source TEXT DEFAULT 'schedule',
+                delivery_status TEXT,
+                delivery_error TEXT,
                 FOREIGN KEY (job_id) REFERENCES cron_jobs(id) ON DELETE CASCADE
             );
 
             CREATE INDEX IF NOT EXISTS idx_runs_job_id ON cron_runs(job_id);
             CREATE INDEX IF NOT EXISTS idx_runs_started_at ON cron_runs(started_at);
+            CREATE INDEX IF NOT EXISTS idx_jobs_next_run ON cron_jobs(next_run_at) WHERE enabled = 1;
+            CREATE INDEX IF NOT EXISTS idx_jobs_running ON cron_jobs(running_at);
             "#,
         )?;
+        Ok(())
+    }
+
+    /// Migrate existing databases: add new columns if they don't exist.
+    /// Each ALTER TABLE ADD COLUMN will fail silently if the column already exists.
+    fn migrate_schema(conn: &Connection) -> CronResult<()> {
+        let job_columns = [
+            ("next_run_at", "INTEGER"),
+            ("running_at", "INTEGER"),
+            ("last_run_at", "INTEGER"),
+            ("consecutive_failures", "INTEGER DEFAULT 0"),
+            ("max_retries", "INTEGER DEFAULT 3"),
+            ("priority", "INTEGER DEFAULT 5"),
+            ("schedule_kind", "TEXT DEFAULT 'cron'"),
+            ("every_ms", "INTEGER"),
+            ("at_time", "INTEGER"),
+            ("delete_after_run", "INTEGER DEFAULT 0"),
+            ("next_job_id_on_success", "TEXT"),
+            ("next_job_id_on_failure", "TEXT"),
+            ("delivery_config", "TEXT"),
+            ("prompt_template", "TEXT"),
+            ("context_vars", "TEXT"),
+            ("version", "INTEGER DEFAULT 1"),
+        ];
+
+        for (col, col_type) in &job_columns {
+            let sql = format!("ALTER TABLE cron_jobs ADD COLUMN {} {}", col, col_type);
+            // Ignore "duplicate column name" errors
+            let _ = conn.execute_batch(&sql);
+        }
+
+        let run_columns = [
+            ("retry_count", "INTEGER DEFAULT 0"),
+            ("trigger_source", "TEXT DEFAULT 'schedule'"),
+            ("delivery_status", "TEXT"),
+            ("delivery_error", "TEXT"),
+        ];
+
+        for (col, col_type) in &run_columns {
+            let sql = format!("ALTER TABLE cron_runs ADD COLUMN {} {}", col, col_type);
+            let _ = conn.execute_batch(&sql);
+        }
+
+        // Create new indexes (IF NOT EXISTS handles idempotency)
+        let _ = conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_next_run ON cron_jobs(next_run_at) WHERE enabled = 1;
+             CREATE INDEX IF NOT EXISTS idx_jobs_running ON cron_jobs(running_at);",
+        );
+
         Ok(())
     }
 
@@ -203,11 +283,28 @@ impl CronService {
         tokio::task::spawn_blocking(move || {
             let conn = Connection::open(&db_path)?;
             let tags_json = serde_json::to_string(&job.tags).unwrap_or_else(|_| "[]".to_string());
+            let delivery_json = job.delivery_config.as_ref().and_then(|d| serde_json::to_string(d).ok());
 
             conn.execute(
                 r#"
-                INSERT INTO cron_jobs (id, name, schedule, agent_id, prompt, enabled, timezone, tags, created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                INSERT INTO cron_jobs (
+                    id, name, schedule, agent_id, prompt, enabled, timezone, tags,
+                    created_at, updated_at,
+                    next_run_at, running_at, last_run_at,
+                    consecutive_failures, max_retries, priority,
+                    schedule_kind, every_ms, at_time, delete_after_run,
+                    next_job_id_on_success, next_job_id_on_failure,
+                    delivery_config, prompt_template, context_vars, version
+                )
+                VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+                    ?9, ?10,
+                    ?11, ?12, ?13,
+                    ?14, ?15, ?16,
+                    ?17, ?18, ?19, ?20,
+                    ?21, ?22,
+                    ?23, ?24, ?25, ?26
+                )
                 "#,
                 params![
                     job.id,
@@ -220,6 +317,22 @@ impl CronService {
                     tags_json,
                     job.created_at,
                     job.updated_at,
+                    job.next_run_at,
+                    job.running_at,
+                    job.last_run_at,
+                    job.consecutive_failures,
+                    job.max_retries,
+                    job.priority,
+                    job.schedule_kind.as_str(),
+                    job.every_ms,
+                    job.at_time,
+                    job.delete_after_run as i32,
+                    job.next_job_id_on_success,
+                    job.next_job_id_on_failure,
+                    delivery_json,
+                    job.prompt_template,
+                    job.context_vars,
+                    job.version,
                 ],
             ).map_err(|e| {
                 if e.to_string().contains("UNIQUE constraint failed") {
@@ -255,12 +368,18 @@ impl CronService {
             let conn = Connection::open(&db_path)?;
             let tags_json = serde_json::to_string(&job.tags).unwrap_or_else(|_| "[]".to_string());
             let now = Utc::now().timestamp();
+            let delivery_json = job.delivery_config.as_ref().and_then(|d| serde_json::to_string(d).ok());
 
             let rows = conn.execute(
                 r#"
                 UPDATE cron_jobs
                 SET name = ?2, schedule = ?3, agent_id = ?4, prompt = ?5,
-                    enabled = ?6, timezone = ?7, tags = ?8, updated_at = ?9
+                    enabled = ?6, timezone = ?7, tags = ?8, updated_at = ?9,
+                    next_run_at = ?10, running_at = ?11, last_run_at = ?12,
+                    consecutive_failures = ?13, max_retries = ?14, priority = ?15,
+                    schedule_kind = ?16, every_ms = ?17, at_time = ?18, delete_after_run = ?19,
+                    next_job_id_on_success = ?20, next_job_id_on_failure = ?21,
+                    delivery_config = ?22, prompt_template = ?23, context_vars = ?24, version = ?25
                 WHERE id = ?1
                 "#,
                 params![
@@ -273,6 +392,22 @@ impl CronService {
                     job.timezone,
                     tags_json,
                     now,
+                    job.next_run_at,
+                    job.running_at,
+                    job.last_run_at,
+                    job.consecutive_failures,
+                    job.max_retries,
+                    job.priority,
+                    job.schedule_kind.as_str(),
+                    job.every_ms,
+                    job.at_time,
+                    job.delete_after_run as i32,
+                    job.next_job_id_on_success,
+                    job.next_job_id_on_failure,
+                    delivery_json,
+                    job.prompt_template,
+                    job.context_vars,
+                    job.version,
                 ],
             )?;
 
@@ -362,6 +497,55 @@ impl CronService {
         Ok(())
     }
 
+    /// Helper: map a row to CronJob. Columns must be selected in the standard order.
+    fn row_to_cron_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<CronJob> {
+        let tags_json: String = row.get(7)?;
+        let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+
+        let schedule_kind_str: String = row.get::<_, Option<String>>(16)?.unwrap_or_else(|| "cron".to_string());
+        let delivery_json: Option<String> = row.get(22)?;
+        let delivery_config = delivery_json.and_then(|j| serde_json::from_str(&j).ok());
+
+        Ok(CronJob {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            schedule: row.get(2)?,
+            agent_id: row.get(3)?,
+            prompt: row.get(4)?,
+            enabled: row.get::<_, i32>(5)? != 0,
+            timezone: row.get(6)?,
+            tags,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+            next_run_at: row.get(10)?,
+            running_at: row.get(11)?,
+            last_run_at: row.get(12)?,
+            consecutive_failures: row.get::<_, Option<u32>>(13)?.unwrap_or(0),
+            max_retries: row.get::<_, Option<u32>>(14)?.unwrap_or(3),
+            priority: row.get::<_, Option<u32>>(15)?.unwrap_or(5),
+            schedule_kind: ScheduleKind::from_str(&schedule_kind_str),
+            every_ms: row.get(17)?,
+            at_time: row.get(18)?,
+            delete_after_run: row.get::<_, Option<i32>>(19)?.unwrap_or(0) != 0,
+            next_job_id_on_success: row.get(20)?,
+            next_job_id_on_failure: row.get(21)?,
+            delivery_config,
+            prompt_template: row.get(23)?,
+            context_vars: row.get(24)?,
+            version: row.get::<_, Option<u32>>(25)?.unwrap_or(1),
+        })
+    }
+
+    /// The standard SELECT columns for cron_jobs
+    const JOBS_SELECT: &'static str =
+        "id, name, schedule, agent_id, prompt, enabled, timezone, tags, \
+         created_at, updated_at, \
+         next_run_at, running_at, last_run_at, \
+         consecutive_failures, max_retries, priority, \
+         schedule_kind, every_ms, at_time, delete_after_run, \
+         next_job_id_on_success, next_job_id_on_failure, \
+         delivery_config, prompt_template, context_vars, version";
+
     /// Get a job by ID
     pub async fn get_job(&self, job_id: &str) -> CronResult<CronJob> {
         let db_path = self.db_path.clone();
@@ -369,29 +553,14 @@ impl CronService {
 
         tokio::task::spawn_blocking(move || {
             let conn = Connection::open(&db_path)?;
-            let mut stmt = conn.prepare(
-                "SELECT id, name, schedule, agent_id, prompt, enabled, timezone, tags, created_at, updated_at FROM cron_jobs WHERE id = ?1",
-            )?;
+            let sql = format!(
+                "SELECT {} FROM cron_jobs WHERE id = ?1",
+                Self::JOBS_SELECT
+            );
+            let mut stmt = conn.prepare(&sql)?;
 
             let job = stmt
-                .query_row(params![job_id], |row| {
-                    let tags_json: String = row.get(7)?;
-                    let tags: Vec<String> =
-                        serde_json::from_str(&tags_json).unwrap_or_default();
-
-                    Ok(CronJob {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        schedule: row.get(2)?,
-                        agent_id: row.get(3)?,
-                        prompt: row.get(4)?,
-                        enabled: row.get::<_, i32>(5)? != 0,
-                        timezone: row.get(6)?,
-                        tags,
-                        created_at: row.get(8)?,
-                        updated_at: row.get(9)?,
-                    })
-                })
+                .query_row(params![job_id], Self::row_to_cron_job)
                 .map_err(|e| match e {
                     rusqlite::Error::QueryReturnedNoRows => CronError::NotFound(job_id.clone()),
                     _ => CronError::Database(e),
@@ -409,29 +578,14 @@ impl CronService {
 
         tokio::task::spawn_blocking(move || {
             let conn = Connection::open(&db_path)?;
-            let mut stmt = conn.prepare(
-                "SELECT id, name, schedule, agent_id, prompt, enabled, timezone, tags, created_at, updated_at FROM cron_jobs ORDER BY created_at DESC",
-            )?;
+            let sql = format!(
+                "SELECT {} FROM cron_jobs ORDER BY created_at DESC",
+                Self::JOBS_SELECT
+            );
+            let mut stmt = conn.prepare(&sql)?;
 
             let jobs: Vec<CronJob> = stmt
-                .query_map([], |row| {
-                    let tags_json: String = row.get(7)?;
-                    let tags: Vec<String> =
-                        serde_json::from_str(&tags_json).unwrap_or_default();
-
-                    Ok(CronJob {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        schedule: row.get(2)?,
-                        agent_id: row.get(3)?,
-                        prompt: row.get(4)?,
-                        enabled: row.get::<_, i32>(5)? != 0,
-                        timezone: row.get(6)?,
-                        tags,
-                        created_at: row.get(8)?,
-                        updated_at: row.get(9)?,
-                    })
-                })?
+                .query_map([], Self::row_to_cron_job)?
                 .collect::<Result<Vec<_>, _>>()?;
 
             Ok::<_, CronError>(jobs)
@@ -440,6 +594,41 @@ impl CronService {
         .map_err(|e| CronError::Internal(format!("Task join error: {}", e)))?
     }
 
+    /// Helper: map a row to JobRun
+    fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun> {
+        let status_str: String = row.get(2)?;
+        let status = match status_str.as_str() {
+            "pending" => JobStatus::Pending,
+            "running" => JobStatus::Running,
+            "success" => JobStatus::Success,
+            "failed" => JobStatus::Failed,
+            "skipped" => JobStatus::Skipped,
+            "timeout" => JobStatus::Timeout,
+            _ => JobStatus::Failed,
+        };
+        let trigger_str: String = row.get::<_, Option<String>>(9)?.unwrap_or_else(|| "schedule".to_string());
+
+        Ok(JobRun {
+            id: row.get(0)?,
+            job_id: row.get(1)?,
+            status,
+            started_at: row.get(3)?,
+            ended_at: row.get(4)?,
+            duration_ms: row.get(5)?,
+            error: row.get(6)?,
+            response: row.get(7)?,
+            retry_count: row.get::<_, Option<u32>>(8)?.unwrap_or(0),
+            trigger_source: TriggerSource::from_str(&trigger_str),
+            delivery_status: row.get(10)?,
+            delivery_error: row.get(11)?,
+        })
+    }
+
+    /// The standard SELECT columns for cron_runs
+    const RUNS_SELECT: &'static str =
+        "id, job_id, status, started_at, ended_at, duration_ms, error, response, \
+         retry_count, trigger_source, delivery_status, delivery_error";
+
     /// Get job run history
     pub async fn get_job_runs(&self, job_id: &str, limit: usize) -> CronResult<Vec<JobRun>> {
         let db_path = self.db_path.clone();
@@ -447,34 +636,14 @@ impl CronService {
 
         tokio::task::spawn_blocking(move || {
             let conn = Connection::open(&db_path)?;
-            let mut stmt = conn.prepare(
-                "SELECT id, job_id, status, started_at, ended_at, duration_ms, error, response FROM cron_runs WHERE job_id = ?1 ORDER BY started_at DESC LIMIT ?2",
-            )?;
+            let sql = format!(
+                "SELECT {} FROM cron_runs WHERE job_id = ?1 ORDER BY started_at DESC LIMIT ?2",
+                Self::RUNS_SELECT
+            );
+            let mut stmt = conn.prepare(&sql)?;
 
             let runs: Vec<JobRun> = stmt
-                .query_map(params![job_id, limit as i64], |row| {
-                    let status_str: String = row.get(2)?;
-                    let status = match status_str.as_str() {
-                        "pending" => JobStatus::Pending,
-                        "running" => JobStatus::Running,
-                        "success" => JobStatus::Success,
-                        "failed" => JobStatus::Failed,
-                        "skipped" => JobStatus::Skipped,
-                        "timeout" => JobStatus::Timeout,
-                        _ => JobStatus::Failed,
-                    };
-
-                    Ok(JobRun {
-                        id: row.get(0)?,
-                        job_id: row.get(1)?,
-                        status,
-                        started_at: row.get(3)?,
-                        ended_at: row.get(4)?,
-                        duration_ms: row.get(5)?,
-                        error: row.get(6)?,
-                        response: row.get(7)?,
-                    })
-                })?
+                .query_map(params![job_id, limit as i64], Self::row_to_job_run)?
                 .collect::<Result<Vec<_>, _>>()?;
 
             Ok::<_, CronError>(runs)
@@ -488,8 +657,11 @@ impl CronService {
         let conn = Connection::open(db_path)?;
         conn.execute(
             r#"
-            INSERT OR REPLACE INTO cron_runs (id, job_id, status, started_at, ended_at, duration_ms, error, response)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            INSERT OR REPLACE INTO cron_runs (
+                id, job_id, status, started_at, ended_at, duration_ms, error, response,
+                retry_count, trigger_source, delivery_status, delivery_error
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             "#,
             params![
                 run.id,
@@ -500,6 +672,10 @@ impl CronService {
                 run.duration_ms as i64,
                 run.error,
                 run.response,
+                run.retry_count,
+                run.trigger_source.as_str(),
+                run.delivery_status,
+                run.delivery_error,
             ],
         )?;
         Ok(())
@@ -603,28 +779,14 @@ impl CronService {
             let db_path = db_path.clone();
             tokio::task::spawn_blocking(move || {
                 let conn = Connection::open(&db_path)?;
-                let mut stmt = conn.prepare(
-                    "SELECT id, name, schedule, agent_id, prompt, enabled, timezone, tags, created_at, updated_at FROM cron_jobs WHERE enabled = 1",
-                )?;
+                let sql = format!(
+                    "SELECT {} FROM cron_jobs WHERE enabled = 1",
+                    Self::JOBS_SELECT
+                );
+                let mut stmt = conn.prepare(&sql)?;
 
                 let jobs: Vec<CronJob> = stmt
-                    .query_map([], |row| {
-                        let tags_json: String = row.get(7)?;
-                        let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-
-                        Ok(CronJob {
-                            id: row.get(0)?,
-                            name: row.get(1)?,
-                            schedule: row.get(2)?,
-                            agent_id: row.get(3)?,
-                            prompt: row.get(4)?,
-                            enabled: row.get::<_, i32>(5)? != 0,
-                            timezone: row.get(6)?,
-                            tags,
-                            created_at: row.get(8)?,
-                            updated_at: row.get(9)?,
-                        })
-                    })?
+                    .query_map([], Self::row_to_cron_job)?
                     .collect::<Result<Vec<_>, _>>()?;
 
                 Ok::<_, CronError>(jobs)
@@ -796,14 +958,14 @@ mod tests {
         let config = test_config();
         let service = CronService::new(config).unwrap();
 
-        let job = CronJob::new("Test Job", "0 * * * *", "main", "Test prompt");
+        let job = CronJob::new("Test Job", "0 0 * * * *", "main", "Test prompt");
         let job_id = job.id.clone();
 
         service.add_job(job).await.unwrap();
 
         let retrieved = service.get_job(&job_id).await.unwrap();
         assert_eq!(retrieved.name, "Test Job");
-        assert_eq!(retrieved.schedule, "0 * * * *");
+        assert_eq!(retrieved.schedule, "0 0 * * * *");
     }
 
     #[tokio::test]
@@ -811,8 +973,8 @@ mod tests {
         let config = test_config();
         let service = CronService::new(config).unwrap();
 
-        let job1 = CronJob::new("Job 1", "0 * * * *", "main", "Prompt 1");
-        let job2 = CronJob::new("Job 2", "30 * * * *", "main", "Prompt 2");
+        let job1 = CronJob::new("Job 1", "0 0 * * * *", "main", "Prompt 1");
+        let job2 = CronJob::new("Job 2", "0 30 * * * *", "main", "Prompt 2");
 
         service.add_job(job1).await.unwrap();
         service.add_job(job2).await.unwrap();
@@ -826,7 +988,7 @@ mod tests {
         let config = test_config();
         let service = CronService::new(config).unwrap();
 
-        let job = CronJob::new("Test Job", "0 * * * *", "main", "Test");
+        let job = CronJob::new("Test Job", "0 0 * * * *", "main", "Test");
         let job_id = job.id.clone();
         service.add_job(job).await.unwrap();
 
@@ -846,7 +1008,7 @@ mod tests {
         let config = test_config();
         let service = CronService::new(config).unwrap();
 
-        let job = CronJob::new("Test Job", "0 * * * *", "main", "Test");
+        let job = CronJob::new("Test Job", "0 0 * * * *", "main", "Test");
         let job_id = job.id.clone();
         service.add_job(job).await.unwrap();
 
@@ -854,5 +1016,25 @@ mod tests {
 
         let result = service.get_job(&job_id).await;
         assert!(matches!(result, Err(CronError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn test_schema_migration_new_fields() {
+        let config = test_config();
+        let service = CronService::new(config).unwrap();
+
+        let mut job = CronJob::new("Migration Test", "0 0 * * * *", "main", "test");
+        job.priority = 1;
+        job.schedule_kind = ScheduleKind::Every;
+        job.every_ms = Some(60_000);
+        let job_id = job.id.clone();
+
+        service.add_job(job).await.unwrap();
+
+        let ret = service.get_job(&job_id).await.unwrap();
+        assert_eq!(ret.priority, 1);
+        assert_eq!(ret.schedule_kind, ScheduleKind::Every);
+        assert_eq!(ret.every_ms, Some(60_000));
+        assert_eq!(ret.version, 1);
     }
 }
