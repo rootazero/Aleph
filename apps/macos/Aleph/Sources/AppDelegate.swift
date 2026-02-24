@@ -112,6 +112,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 self.checkAndRunFirstTimeInit()
             }
         }
+        // Start Desktop Bridge UDS server
+        DesktopBridgeServer.shared.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -138,6 +140,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Clean up Rust core (only if initialized)
         print("[Aleph] Application terminating")
+        // Stop Desktop Bridge UDS server
+        DesktopBridgeServer.shared.stop()
     }
 
     // MARK: - Main Menu Setup (for Edit shortcuts)
