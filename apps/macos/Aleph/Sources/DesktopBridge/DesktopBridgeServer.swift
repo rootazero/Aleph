@@ -237,13 +237,27 @@ final class DesktopBridgeServer: @unchecked Sendable {
             let windowId = params["window_id"] as? UInt32 ?? 0
             return runAsync { await Action.shared.focusWindow(id: windowId) }
 
-        // Canvas — stubs for now (Phase 4)
+        // Canvas — WKWebView overlay with A2UI patch protocol support
         case "desktop.canvas_show":
-            return .success(["stub": true, "message": "canvas_show not yet implemented"])
+            let html = params["html"] as? String ?? ""
+            let pos: CanvasPosition
+            if let posDict = params["position"] as? [String: Any],
+               let x = posDict["x"] as? Double,
+               let y = posDict["y"] as? Double,
+               let w = posDict["width"] as? Double,
+               let h = posDict["height"] as? Double {
+                pos = CanvasPosition(x: x, y: y, width: w, height: h)
+            } else {
+                pos = CanvasPosition(x: 100, y: 100, width: 800, height: 600)
+            }
+            return runAsync { await Canvas.shared.show(html: html, position: pos) }
+
         case "desktop.canvas_hide":
-            return .success(["stub": true, "message": "canvas_hide not yet implemented"])
+            return runAsync { await Canvas.shared.hide() }
+
         case "desktop.canvas_update":
-            return .success(["stub": true, "message": "canvas_update not yet implemented"])
+            let patch = params["patch"] ?? []
+            return runAsync { await Canvas.shared.update(patch: patch) }
 
         default:
             let err = NSError(
