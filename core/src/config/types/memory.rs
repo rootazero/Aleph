@@ -103,6 +103,47 @@ pub struct MemoryConfig {
     /// Memory fact decay policy
     #[serde(default)]
     pub memory_decay: MemoryDecayPolicy,
+
+    // ========================================
+    // Scoring, Retrieval Gate & Noise Filter
+    // ========================================
+    /// Scoring pipeline configuration.
+    #[serde(default)]
+    pub scoring_pipeline: crate::memory::scoring_pipeline::config::ScoringPipelineConfig,
+
+    /// Adaptive retrieval gate configuration.
+    #[serde(default)]
+    pub adaptive_retrieval: crate::memory::adaptive_retrieval::AdaptiveRetrievalConfig,
+
+    /// Noise filter configuration.
+    #[serde(default)]
+    pub noise_filter: crate::memory::noise_filter::NoiseFilterConfig,
+
+    // ========================================
+    // Storage & Cache
+    // ========================================
+    /// Storage deduplication similarity threshold (0.0-1.0).
+    #[serde(default = "default_dedup_similarity_threshold")]
+    pub dedup_similarity_threshold: f32,
+
+    /// Embedding cache maximum entries.
+    #[serde(default = "default_embedding_cache_max_size")]
+    pub embedding_cache_max_size: usize,
+
+    /// Embedding cache TTL in seconds.
+    #[serde(default = "default_embedding_cache_ttl_seconds")]
+    pub embedding_cache_ttl_seconds: u64,
+
+    // ========================================
+    // Backup
+    // ========================================
+    /// Enable automatic JSONL backup.
+    #[serde(default = "default_backup_enabled")]
+    pub backup_enabled: bool,
+
+    /// Maximum number of backup files to retain.
+    #[serde(default = "default_backup_max_files")]
+    pub backup_max_files: usize,
 }
 
 // =============================================================================
@@ -445,6 +486,13 @@ pub fn default_fts_tokenizer() -> String {
     "default".to_string()
 }
 
+
+// Scoring, retrieval gate, noise filter, cache & backup defaults
+fn default_dedup_similarity_threshold() -> f32 { 0.95 }
+fn default_embedding_cache_max_size() -> usize { 256 }
+fn default_embedding_cache_ttl_seconds() -> u64 { 1800 }
+fn default_backup_enabled() -> bool { true }
+fn default_backup_max_files() -> usize { 7 }
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
@@ -480,6 +528,17 @@ impl Default for MemoryConfig {
             dreaming: DreamingConfig::default(),
             graph_decay: GraphDecayPolicy::default(),
             memory_decay: MemoryDecayPolicy::default(),
+            // Scoring, retrieval gate & noise filter
+            scoring_pipeline: crate::memory::scoring_pipeline::config::ScoringPipelineConfig::default(),
+            adaptive_retrieval: crate::memory::adaptive_retrieval::AdaptiveRetrievalConfig::default(),
+            noise_filter: crate::memory::noise_filter::NoiseFilterConfig::default(),
+            // Storage & cache
+            dedup_similarity_threshold: default_dedup_similarity_threshold(),
+            embedding_cache_max_size: default_embedding_cache_max_size(),
+            embedding_cache_ttl_seconds: default_embedding_cache_ttl_seconds(),
+            // Backup
+            backup_enabled: default_backup_enabled(),
+            backup_max_files: default_backup_max_files(),
         }
     }
 }
