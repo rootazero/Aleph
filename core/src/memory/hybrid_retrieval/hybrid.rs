@@ -20,6 +20,9 @@ use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
 use crate::memory::store::types::{SearchFilter, ScoredFact};
 use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::scoring_pipeline::ScoringPipeline;
+use crate::memory::scoring_pipeline::config::ScoringPipelineConfig;
+use crate::memory::scoring_pipeline::context::ScoringContext;
 
 /// Hybrid search configuration
 ///
@@ -158,17 +161,45 @@ impl HybridSearchConfig {
 pub struct HybridRetrieval {
     config: HybridSearchConfig,
     database: MemoryBackend,
+    scoring_pipeline: Option<ScoringPipeline>,
 }
 
 impl HybridRetrieval {
     /// Create a new hybrid retrieval engine with the given configuration
-    pub fn new(config: HybridSearchConfig, database: MemoryBackend) -> Self {
-        Self { config, database }
+    ///
+    /// # Arguments
+    /// * `config` - Hybrid search configuration
+    /// * `database` - Memory backend instance
+    /// * `scoring_config` - Optional scoring pipeline configuration. If `Some`,
+    ///   a [`ScoringPipeline`] is built and applied after RRF fusion.
+    pub fn new(
+        config: HybridSearchConfig,
+        database: MemoryBackend,
+        scoring_config: Option<ScoringPipelineConfig>,
+    ) -> Self {
+        Self {
+            config,
+            database,
+            scoring_pipeline: scoring_config.map(|cfg| ScoringPipeline::from_config(&cfg)),
+        }
     }
 
     /// Create a new hybrid retrieval engine with default configuration
+    /// and the default scoring pipeline enabled.
     pub fn with_defaults(database: MemoryBackend) -> Self {
-        Self::new(HybridSearchConfig::default(), database)
+        Self::new(
+            HybridSearchConfig::default(),
+            database,
+            Some(ScoringPipelineConfig::default()),
+        )
+    }
+
+    /// Create a new hybrid retrieval engine without a scoring pipeline.
+    ///
+    /// Use this when you want raw RRF fusion scores without additional
+    /// re-ranking stages.
+    pub fn without_pipeline(config: HybridSearchConfig, database: MemoryBackend) -> Self {
+        Self::new(config, database, None)
     }
 
     /// Get the current configuration
@@ -221,6 +252,8 @@ impl HybridRetrieval {
             })
             .await?;
 
+        let scored = self.apply_pipeline(scored, query_embedding, query_text);
+
         Ok(Self::apply_min_score(scored, self.config.min_score))
     }
 
@@ -248,12 +281,41 @@ impl HybridRetrieval {
             })
             .await?;
 
+        let scored = self.apply_pipeline(scored, query_embedding, query_text);
+
         Ok(Self::apply_min_score(scored, self.config.min_score))
     }
 
     /// Get a reference to the underlying database
     pub fn database(&self) -> &MemoryBackend {
         &self.database
+    }
+
+
+    /// Apply the scoring pipeline (if configured) to re-rank candidates.
+    ///
+    /// When no pipeline is present the candidates are returned unchanged.
+    fn apply_pipeline(
+        &self,
+        scored: Vec<ScoredFact>,
+        query_embedding: &[f32],
+        query_text: &str,
+    ) -> Vec<ScoredFact> {
+        match self.scoring_pipeline {
+            Some(ref pipeline) => {
+                let ctx = ScoringContext {
+                    query: query_text.to_string(),
+                    query_embedding: Some(query_embedding.to_vec()),
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64,
+                    config: ScoringPipelineConfig::default(),
+                };
+                pipeline.run(scored, &ctx)
+            }
+            None => scored,
+        }
     }
 
     /// Post-filter scored results by minimum score and convert to MemoryFact.
@@ -423,7 +485,7 @@ mod tests {
     async fn test_hybrid_retrieval_custom_config() {
         let db = create_test_db().await;
         let config = HybridSearchConfig::with_weights(0.6, 0.4);
-        let retrieval = HybridRetrieval::new(config, db);
+        let retrieval = HybridRetrieval::new(config, db, None);
         assert!((retrieval.config().vector_weight - 0.6).abs() < 0.01);
     }
 
