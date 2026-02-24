@@ -3,7 +3,7 @@
 use alephcore::resilience::database::StateDatabase;
 use alephcore::memory::store::{LanceMemoryBackend, MemoryBackend};
 use alephcore::memory::{
-    ContextAnchor, FactSpecificity, FactType, MemoryCategory, MemoryEntry, MemoryFact,
+    ContextAnchor, FactSpecificity, FactType, MemoryEntry, MemoryFact,
     MemoryIngestion, MemoryLayer, MemoryRetrieval, MemoryScope, MemoryTier, PromptAugmenter,
     SmartEmbedder, TemporalScope, EMBEDDING_DIM,
 };
@@ -12,6 +12,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Memory context for BDD tests
+#[derive(Default)]
 pub struct MemoryContext {
     // === Facts Vector DB Testing ===
     /// Temporary directory for test database isolation
@@ -78,30 +79,6 @@ impl std::fmt::Debug for MemoryContext {
     }
 }
 
-impl Default for MemoryContext {
-    fn default() -> Self {
-        Self {
-            temp_dir: None,
-            db: None,
-            memory_backend: None,
-            facts: Vec::new(),
-            search_results: Vec::new(),
-            fts_query: None,
-            embedder: None,
-            config: None,
-            ingestion: None,
-            retrieval: None,
-            augmenter: None,
-            context_anchor: None,
-            memories: Vec::new(),
-            last_memory_id: None,
-            augmented_prompt: None,
-            memory_summary: None,
-            last_result: None,
-            db_stats: None,
-        }
-    }
-}
 
 impl MemoryContext {
     /// Create a test embedding with specified first values, rest filled with zeros

@@ -17,6 +17,7 @@ use tokio::task::JoinHandle;
 
 /// Daemon test context
 /// Note: Cannot derive Debug because ResourceGovernor doesn't implement Debug
+#[derive(Default)]
 pub struct DaemonContext {
     pub event_bus: Option<DaemonEventBus>,
     pub arc_event_bus: Option<Arc<DaemonEventBus>>,
@@ -57,37 +58,6 @@ pub struct DaemonContext {
     pub received_event: Option<DaemonEvent>,
 }
 
-impl Default for DaemonContext {
-    fn default() -> Self {
-        Self {
-            event_bus: None,
-            arc_event_bus: None,
-            receivers: Vec::new(),
-            last_events: Vec::new(),
-            governor: None,
-            governor_decision: None,
-            cli_parse_result: None,
-            ipc_server: None,
-            socket_path: None,
-            json_rpc_request: None,
-            json_rpc_json: None,
-            #[cfg(target_os = "macos")]
-            launchd_service: None,
-            #[cfg(target_os = "macos")]
-            plist_content: None,
-            daemon_config: None,
-            worldmodel: None,
-            worldmodel_config: None,
-            worldmodel_handle: None,
-            dispatcher: None,
-            dispatcher_config: None,
-            dispatcher_handle: None,
-            persistence_temp_dir: None,
-            persistence_state_path: None,
-            received_event: None,
-        }
-    }
-}
 
 impl std::fmt::Debug for DaemonContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -207,7 +207,7 @@ impl CapabilityLedger {
         }
 
         let content = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
 
         // Atomic write: write to temp file then rename
         let tmp_path = self.persist_path.with_extension("json.tmp");
@@ -275,7 +275,7 @@ pub fn migrate_from_legacy(runtimes_dir: &Path) -> std::io::Result<CapabilityLed
 /// Convenience for callers that don't have a ledger instance in memory.
 pub fn build_enhanced_path() -> std::io::Result<String> {
     let runtimes_dir = crate::runtimes::get_runtimes_dir()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
     let ledger_path = runtimes_dir.join("ledger.json");
     let ledger = CapabilityLedger::load_or_create(ledger_path);
     Ok(ledger.build_path())

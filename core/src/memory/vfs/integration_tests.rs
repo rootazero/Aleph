@@ -5,7 +5,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::memory::{MemoryFact, FactSource};
-    use crate::memory::context::{FactType, compute_parent_path};
+    use crate::memory::context::FactType;
     use crate::memory::namespace::NamespaceScope;
     use crate::memory::store::{MemoryBackend, MemoryStore};
     use crate::memory::store::lance::LanceMemoryBackend;

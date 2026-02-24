@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::exec::sandbox::presets::PresetRegistry;
-    use crate::exec::sandbox::parameter_binding::{CapabilityOverrides, ParameterBinding, ValidationRule, MappingType};
+    use crate::exec::sandbox::parameter_binding::CapabilityOverrides;
     use crate::exec::sandbox::capability_resolver::apply_overrides;
     use crate::exec::sandbox::capabilities::NetworkCapability;
     use crate::skill_evolution::sandbox_integration::resolve_tool_capabilities;

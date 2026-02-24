@@ -417,7 +417,7 @@ async fn when_create_unified_session_loop(w: &mut AlephWorld) {
     let event_bus = ctx.event_bus.clone();
     let detector = ctx.overflow_detector.clone();
 
-    let agent_loop =
+    let _agent_loop =
         AgentLoop::with_unified_session(thinker, executor, compressor, config.clone(), event_bus, detector);
 
     // Store config for assertions
@@ -425,7 +425,7 @@ async fn when_create_unified_session_loop(w: &mut AlephWorld) {
 
     // Verify loop has overflow detector by checking if usage_percent returns non-zero
     // when detector is configured
-    let test_state = LoopState::new(
+    let _test_state = LoopState::new(
         "test".to_string(),
         "test".to_string(),
         RequestContext::empty(),
@@ -642,7 +642,7 @@ async fn then_trigger_loop_continue_no_panic(w: &mut AlephWorld) {
 }
 
 #[then("triggering loop stop should not panic")]
-async fn then_trigger_loop_stop_no_panic(w: &mut AlephWorld) {
+async fn then_trigger_loop_stop_no_panic(_w: &mut AlephWorld) {
     // Create a new trigger and test it
     let trigger = OptionalCompactionTrigger::new(None);
     trigger.emit_loop_stop(StopReason::Completed).await;

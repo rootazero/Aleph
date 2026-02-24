@@ -182,7 +182,7 @@ fn levenshtein_distance(s1: &str, s2: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::cortex::{EvolutionStatus, ExperienceBuilder};
+    use crate::memory::cortex::ExperienceBuilder;
 
     #[tokio::test]
     async fn test_estimate_experience() {

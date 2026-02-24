@@ -42,7 +42,6 @@ async fn test_config_sync_roundtrip() {
         .clone();
     let config_map: HashMap<String, serde_json::Value> = config_json
         .into_iter()
-        .map(|(k, v)| (k, v))
         .collect();
     client_config.sync_from_server(config_map).await;
 

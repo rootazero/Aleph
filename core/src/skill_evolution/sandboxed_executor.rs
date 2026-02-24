@@ -208,13 +208,11 @@ mod tests {
     use super::*;
     use crate::skill_evolution::success_manifest::{
         SuccessManifest, SkillMetadata, AllowedOperations, ProhibitedOperations,
-        FileSystemOperations, ScriptExecution, DataProcessing, RecommendedTool,
+        FileSystemOperations, ScriptExecution, DataProcessing,
         NetworkRestrictions, FileSystemRestrictions, ProcessRestrictions,
     };
     use crate::skill_evolution::constraint_validator::ConstraintMismatch;
     use crate::exec::sandbox::capabilities::{Capabilities, NetworkCapability, FileSystemCapability};
-    use crate::exec::sandbox::parameter_binding::{RequiredCapabilities, CapabilityOverrides};
-    use crate::skill_evolution::tool_generator::GenerationMetadata;
 
     #[test]
     fn test_sandboxed_executor_structure() {

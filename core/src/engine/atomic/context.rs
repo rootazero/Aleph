@@ -88,7 +88,6 @@ impl ExecutorContext {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    use std::fs;
 
     #[test]
     fn test_resolve_relative_path() {

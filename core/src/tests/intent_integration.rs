@@ -3,7 +3,7 @@
 //! These tests verify the end-to-end intent classification and parameter resolution flow.
 
 use crate::intent::{
-    DefaultsResolver, ExecutableTask, ExecutionIntent, IntentClassifier, OrganizeMethod,
+    DefaultsResolver, ExecutionIntent, IntentClassifier, OrganizeMethod,
     ParameterSource, TaskCategory,
 };
 

@@ -529,13 +529,13 @@ async fn then_all_protocols_retrievable(w: &mut AlephWorld) {
 }
 
 #[then(expr = "the registry should contain {string}")]
-async fn then_registry_contains(w: &mut AlephWorld, name: String) {
+async fn then_registry_contains(_w: &mut AlephWorld, name: String) {
     let protocols = ProtocolRegistry::global().list_protocols();
     assert!(protocols.contains(&name), "Registry should contain {}", name);
 }
 
 #[then(expr = "the registry should not contain {string}")]
-async fn then_registry_not_contains(w: &mut AlephWorld, name: String) {
+async fn then_registry_not_contains(_w: &mut AlephWorld, name: String) {
     let protocols = ProtocolRegistry::global().list_protocols();
     assert!(!protocols.contains(&name), "Registry should not contain {}", name);
 }

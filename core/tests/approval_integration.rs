@@ -494,7 +494,7 @@ async fn test_audit_all_escalations() {
     let timestamp = chrono::Utc::now().timestamp();
 
     // Create multiple tools with escalations
-    let tools = vec!["tool_a", "tool_b", "tool_c"];
+    let tools = ["tool_a", "tool_b", "tool_c"];
 
     for (idx, tool_name) in tools.iter().enumerate() {
         // Insert escalations

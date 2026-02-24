@@ -915,7 +915,6 @@ mod tests {
     #[tokio::test]
     async fn test_skill_registry_subscribe() {
         use crate::skills::SkillsRegistry;
-        use std::path::PathBuf;
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();

@@ -172,7 +172,7 @@ async fn given_binding(w: &mut AlephWorld, pattern: String, agent_id: String) {
 #[when("I resolve the session key")]
 async fn when_resolve_session_key(w: &mut AlephWorld) {
     let ctx = w.gateway.as_mut().expect("Gateway context not initialized");
-    let router = ctx.router.as_ref().expect("Router not initialized");
+    let _router = ctx.router.as_ref().expect("Router not initialized");
     let msg = ctx.test_message.as_ref().expect("Test message not created");
 
     // Use the internal method via a workaround - we need to call resolve_session_key

@@ -79,8 +79,8 @@ async fn test_guest_invitation_and_permission_flow() {
 
     let invitation = manager.create_invitation(request).unwrap();
 
-    assert!(invitation.guest_id.len() > 0);
-    assert!(invitation.token.len() > 0);
+    assert!(!invitation.guest_id.is_empty());
+    assert!(!invitation.token.is_empty());
 
     // Step 2: Activate invitation to create IdentityContext
     let activated = manager.activate_invitation(&invitation.token).unwrap();

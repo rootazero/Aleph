@@ -434,7 +434,6 @@ mod tests {
     use super::*;
     use crate::wizard::{RpcPrompter, WizardStep};
     use async_trait::async_trait;
-    use tokio::sync::mpsc;
 
     struct TestFlow {
         name: String,

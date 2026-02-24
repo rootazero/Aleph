@@ -503,7 +503,6 @@ pub fn graph_kind_for_fact_type(fact_type: &FactType) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     // TODO: Tests need to be rewritten to use LanceMemoryBackend
     // The old tests used StateDatabase with SQLite

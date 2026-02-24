@@ -280,15 +280,13 @@ async fn then_threads_complete(w: &mut AlephWorld) {
 #[then("each thread should return a valid log level")]
 async fn then_valid_log_levels(w: &mut AlephWorld) {
     let ctx = w.logging.as_ref().expect("Logging context not initialized");
-    for result in &ctx.thread_results {
-        if let Ok(level_str) = result {
-            assert!(
-                level_str.contains("Debug") || level_str.contains("Info") ||
-                level_str.contains("Warn") || level_str.contains("Error") ||
-                level_str.contains("Trace"),
-                "Should be a valid log level: {}", level_str
-            );
-        }
+    for level_str in ctx.thread_results.iter().flatten() {
+        assert!(
+            level_str.contains("Debug") || level_str.contains("Info") ||
+            level_str.contains("Warn") || level_str.contains("Error") ||
+            level_str.contains("Trace"),
+            "Should be a valid log level: {}", level_str
+        );
     }
 }
 

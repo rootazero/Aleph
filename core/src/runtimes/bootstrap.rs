@@ -82,7 +82,7 @@ pub fn bootstrap(capability: &str) -> Result<BootstrapResult, AlephError> {
         .arg("-c")
         .arg(script)
         .output()
-        .map_err(|e| AlephError::runtime(capability, &format!("Failed to execute bootstrap: {}", e)))?;
+        .map_err(|e| AlephError::runtime(capability, format!("Failed to execute bootstrap: {}", e)))?;
 
     if output.status.success() {
         for expected in spec.expected_paths {

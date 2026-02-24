@@ -1,7 +1,6 @@
 //! Step definitions for Markdown Skills features
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cucumber::{given, then, when};
@@ -12,9 +11,8 @@ use tokio::time::sleep;
 use crate::world::{AlephWorld, SkillsContext};
 use alephcore::gateway::handlers::HandlerRegistry;
 use alephcore::gateway::protocol::JsonRpcRequest;
-use alephcore::skill_evolution::types::{SkillMetrics, SolidificationSuggestion};
 use alephcore::tools::markdown_skill::{
-    load_skills_from_dir, MarkdownSkillGenerator, MarkdownSkillGeneratorConfig, ReloadCallback,
+    load_skills_from_dir, MarkdownSkillGenerator, MarkdownSkillGeneratorConfig,
     SkillLoader, SkillWatcher, SkillWatcherConfig,
 };
 use alephcore::tools::AlephToolServer;
@@ -231,7 +229,7 @@ async fn given_watcher_config(w: &mut AlephWorld, debounce_ms: u64) {
 // =============================================================================
 
 #[when("I check registered markdown_skills handlers")]
-async fn when_check_registered_handlers(w: &mut AlephWorld) {
+async fn when_check_registered_handlers(_w: &mut AlephWorld) {
     // No action needed, assertions will check the registry
 }
 
@@ -939,13 +937,13 @@ async fn then_reload_count_0(w: &mut AlephWorld) {
 }
 
 #[then("the default watcher config debounce should be 500ms")]
-async fn then_default_debounce(w: &mut AlephWorld) {
+async fn then_default_debounce(_w: &mut AlephWorld) {
     let config = SkillWatcherConfig::default();
     assert_eq!(config.debounce_duration, Duration::from_millis(500));
 }
 
 #[then("the default watcher config emit_initial_events should be false")]
-async fn then_default_emit_initial(w: &mut AlephWorld) {
+async fn then_default_emit_initial(_w: &mut AlephWorld) {
     let config = SkillWatcherConfig::default();
     assert!(!config.emit_initial_events);
 }

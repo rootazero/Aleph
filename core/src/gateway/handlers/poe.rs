@@ -334,7 +334,7 @@ mod tests {
     use crate::gateway::event_bus::GatewayEventBus;
     use crate::poe::{
         worker::MockWorker,
-        ValidationRule, SuccessManifest, PoeOutcome, Verdict,
+        ValidationRule, SuccessManifest, PoeOutcome,
         CompositeValidator, PoeConfig,
         WorkerFactory, ValidatorFactory,
     };

@@ -322,7 +322,7 @@ fn guess_source(path: &Path) -> SkillSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::skill::{SkillContent, SkillSource};
+    use crate::domain::skill::SkillSource;
 
     #[test]
     fn clone_shares_state() {

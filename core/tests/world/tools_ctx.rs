@@ -32,6 +32,7 @@ use alephcore::gateway::router::SessionKey;
 use alephcore::tools::{AlephToolServer, AlephToolServerHandle, ToolUpdateInfo};
 
 /// Context for tool server tests
+#[derive(Default)]
 pub struct ToolsContext {
     /// Tool server instance
     pub server: Option<AlephToolServer>,
@@ -113,44 +114,6 @@ pub struct LatencyMeasurements {
     pub generate_index_us: Option<u128>,
 }
 
-impl Default for ToolsContext {
-    fn default() -> Self {
-        Self {
-            server: None,
-            handle: None,
-            tool_definition: None,
-            llm_context: None,
-            update_info: None,
-            call_result: None,
-            replacement_count: 0,
-            unified_tool: None,
-            index_entry: None,
-            tool_index: None,
-            tool_registry: None,
-            list_result: None,
-            schema_result: None,
-            prompt: None,
-            full_schema_size: None,
-            index_size: None,
-            latencies: LatencyMeasurements::default(),
-            delegate_json: None,
-            delegate_result: None,
-            merged_result: None,
-            execution_context: None,
-            sub_agent_request: None,
-            gateway_context: None,
-            tracking_adapter: None,
-            session_manager: None,
-            agent_registry: None,
-            current_session_key: None,
-            found_session_key: None,
-            sessions_list_result: None,
-            sessions_send_result: None,
-            temp_dir: None,
-            caller_agent_id: None,
-        }
-    }
-}
 
 impl std::fmt::Debug for ToolsContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

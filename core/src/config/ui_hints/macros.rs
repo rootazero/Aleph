@@ -118,7 +118,6 @@ macro_rules! define_hints {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_define_groups_with_icon() {
