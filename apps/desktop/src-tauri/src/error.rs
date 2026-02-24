@@ -15,9 +15,6 @@ pub enum AlephError {
     #[error("Provider error: {0}")]
     Provider(String),
 
-    #[error("MCP server error: {0}")]
-    McpServer(String),
-
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
 
@@ -27,33 +24,17 @@ pub enum AlephError {
     #[error("Config error: {0}")]
     Config(String),
 
-    #[error("Core error: {0}")]
-    Core(String),
-
     #[error("IO error: {0}")]
     Io(String),
 
     #[error("Serialization error: {0}")]
     Serialization(String),
 
+    #[error("Bridge error: {0}")]
+    Bridge(String),
+
     #[error("Unknown error: {0}")]
     Unknown(String),
-
-    // Gateway-specific errors
-    #[error("Connection error: {0}")]
-    Connection(String),
-
-    #[error("Authentication error: {0}")]
-    Auth(String),
-
-    #[error("RPC error: {0}")]
-    RPC(String),
-
-    #[error("Not initialized: {0}")]
-    NotInitialized(String),
-
-    #[error("Invalid response: {0}")]
-    InvalidResponse(String),
 }
 
 impl From<std::io::Error> for AlephError {
@@ -74,7 +55,6 @@ impl From<tauri::Error> for AlephError {
     }
 }
 
-// Convert to String for Tauri command returns
 impl From<AlephError> for String {
     fn from(e: AlephError) -> Self {
         serde_json::to_string(&e).unwrap_or_else(|_| e.to_string())
