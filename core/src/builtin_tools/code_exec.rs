@@ -222,7 +222,14 @@ Examples:
         // Set environment - clear and pass only allowed vars
         cmd.env_clear();
         for var in &self.pass_env {
-            if let Ok(value) = std::env::var(var) {
+            if var == "PATH" {
+                // Use enhanced PATH with Aleph runtime bin dirs prepended
+                if let Ok(enhanced) = crate::runtimes::ledger::build_enhanced_path() {
+                    cmd.env("PATH", enhanced);
+                } else if let Ok(value) = std::env::var("PATH") {
+                    cmd.env("PATH", value);
+                }
+            } else if let Ok(value) = std::env::var(var) {
                 cmd.env(var, value);
             }
         }
