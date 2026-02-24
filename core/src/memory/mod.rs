@@ -15,6 +15,7 @@
 //! - `DreamStore`, `AuditStore`, `CompressionStore`: Specialized operations
 
 // Public submodules
+pub mod adaptive_retrieval;
 pub mod ai_retrieval;
 pub mod audit;
 pub mod augmentation;
@@ -57,6 +58,7 @@ pub mod workspace_store;
 mod integration_tests;
 
 // Re-export commonly used types
+pub use adaptive_retrieval::{AdaptiveRetrievalConfig, AdaptiveRetrievalGate, RetrievalDecision};
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
 pub use audit::{
     AuditAction, AuditActor, AuditDetails, AuditEntry, AuditLogger,
