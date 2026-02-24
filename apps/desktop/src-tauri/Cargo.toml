@@ -22,6 +22,9 @@ tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-store = "2"
 
+# Aleph shared protocol
+aleph-protocol = { path = "../../../shared/protocol" }
+
 # Directories
 dirs = "5"
 
