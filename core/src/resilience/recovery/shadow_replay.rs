@@ -113,7 +113,7 @@ impl ShadowReplayEngine {
 
             // Track last tool call ID for checkpoint
             if let Some(ref calls) = message.tool_calls {
-                let tool_calls: &Vec<ToolCall> = calls;
+                let tool_calls: &[ToolCall] = calls;
                 if let Some(last_call) = tool_calls.last() {
                     last_tool_call_id = Some(last_call.id.clone());
                 }
@@ -161,7 +161,7 @@ impl ShadowReplayEngine {
             let message = self.trace_to_message(trace)?;
 
             if let Some(ref calls) = message.tool_calls {
-                let tool_calls: &Vec<ToolCall> = calls;
+                let tool_calls: &[ToolCall] = calls;
                 if let Some(last_call) = tool_calls.last() {
                     last_tool_call_id = Some(last_call.id.clone());
                 }
@@ -272,7 +272,7 @@ impl ShadowReplayEngine {
             };
             (TraceRole::Tool, content)
         } else {
-            let tool_calls: Option<Vec<SerializedToolCall>> = message.tool_calls.as_ref().map(|calls: &Vec<ToolCall>| {
+            let tool_calls: Option<Vec<SerializedToolCall>> = message.tool_calls.as_deref().map(|calls: &[ToolCall]| {
                 calls
                     .iter()
                     .map(|tc| SerializedToolCall {

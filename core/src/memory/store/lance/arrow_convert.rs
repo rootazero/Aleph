@@ -43,7 +43,7 @@ fn col<'a, T: 'static>(batch: &'a RecordBatch, name: &str) -> Result<&'a T, Alep
 
 /// Build a nullable `FixedSizeList(Float32, dim)` array from optional embeddings.
 fn build_vector_column(
-    embeddings: &[Option<&Vec<f32>>],
+    embeddings: &[Option<&[f32]>],
     dim: i32,
 ) -> Result<FixedSizeListArray, AlephError> {
     let dim_usize = dim as usize;
@@ -218,31 +218,31 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
     );
 
     // Vector columns
-    let embeddings_384: Vec<Option<&Vec<f32>>> = facts
+    let embeddings_384: Vec<Option<&[f32]>> = facts
         .iter()
         .map(|f| {
             f.embedding
-                .as_ref()
+                .as_deref()
                 .filter(|e| e.len() == 384)
         })
         .collect();
     let vec_384 = build_vector_column(&embeddings_384, 384)?;
 
-    let embeddings_1024: Vec<Option<&Vec<f32>>> = facts
+    let embeddings_1024: Vec<Option<&[f32]>> = facts
         .iter()
         .map(|f| {
             f.embedding
-                .as_ref()
+                .as_deref()
                 .filter(|e| e.len() == 1024)
         })
         .collect();
     let vec_1024 = build_vector_column(&embeddings_1024, 1024)?;
 
-    let embeddings_1536: Vec<Option<&Vec<f32>>> = facts
+    let embeddings_1536: Vec<Option<&[f32]>> = facts
         .iter()
         .map(|f| {
             f.embedding
-                .as_ref()
+                .as_deref()
                 .filter(|e| e.len() == 1536)
         })
         .collect();
@@ -619,9 +619,9 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
     let workspace_arr = StringArray::from_iter_values(memories.iter().map(|m| m.workspace.as_str()));
 
     // Vector column
-    let embeddings: Vec<Option<&Vec<f32>>> = memories
+    let embeddings: Vec<Option<&[f32]>> = memories
         .iter()
-        .map(|m| m.embedding.as_ref().filter(|e| e.len() == 384))
+        .map(|m| m.embedding.as_deref().filter(|e| e.len() == 384))
         .collect();
     let vec_384 = build_vector_column(&embeddings, 384)?;
 
