@@ -4,6 +4,8 @@
 //! - TTL-based lazy loading: model is loaded on demand and unloaded after idle period
 //! - Background cleanup: automatic memory reclamation when model is not in use
 //! - Thread-safe: uses tokio::sync::Mutex for async-safe access
+//! - Task-aware embedding: separate `embed_query` / `embed_passage` methods
+//!   that add the e5-style prefixes and leverage an LRU embedding cache
 //!
 //! ## Model Details
 //!
@@ -12,6 +14,7 @@
 //! - Size: ~470MB (downloaded on first use)
 
 use crate::error::AlephError;
+use crate::memory::embedding_cache::EmbeddingCache;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -57,6 +60,8 @@ pub struct SmartEmbedder {
     cancel_token: CancellationToken,
     /// Directory for model cache
     cache_dir: PathBuf,
+    /// LRU embedding cache with TTL
+    cache: Arc<EmbeddingCache>,
 }
 
 impl SmartEmbedder {
@@ -86,6 +91,7 @@ impl SmartEmbedder {
             state: Arc::clone(&state),
             cancel_token: cancel_token.clone(),
             cache_dir,
+            cache: Arc::new(EmbeddingCache::default()),
         };
 
         // Spawn background cleaner task only if we're in a tokio runtime
@@ -123,6 +129,14 @@ impl SmartEmbedder {
     ///
     /// A 384-dimensional embedding vector
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>, AlephError> {
+        self.embed_inner(text).await
+    }
+
+    /// Core embedding logic: loads model if needed and runs inference.
+    ///
+    /// This is the single place that touches fastembed. Both the public
+    /// `embed()` method and the task-aware helpers delegate here.
+    async fn embed_inner(&self, text: &str) -> Result<Vec<f32>, AlephError> {
         let mut state = self.state.lock().await;
         self.ensure_loaded(&mut state)?;
         state.last_used = Instant::now();
@@ -136,6 +150,41 @@ impl SmartEmbedder {
             .into_iter()
             .next()
             .ok_or_else(|| AlephError::config("No embedding returned"))
+    }
+
+    /// Embed text for retrieval query (prefixes "query: " for e5 models).
+    ///
+    /// Results are cached by (task_prefix="query", text) to avoid
+    /// redundant model calls for repeated queries.
+    pub async fn embed_query(&self, text: &str) -> Result<Vec<f32>, AlephError> {
+        if let Some(cached) = self.cache.get("query", text).await {
+            return Ok(cached);
+        }
+        let prefixed = format!("query: {}", text);
+        let result = self.embed_inner(&prefixed).await?;
+        self.cache.put("query", text, result.clone()).await;
+        Ok(result)
+    }
+
+    /// Embed text for storage/passage (prefixes "passage: " for e5 models).
+    ///
+    /// Results are cached by (task_prefix="passage", text) to avoid
+    /// redundant model calls for repeated passages.
+    pub async fn embed_passage(&self, text: &str) -> Result<Vec<f32>, AlephError> {
+        if let Some(cached) = self.cache.get("passage", text).await {
+            return Ok(cached);
+        }
+        let prefixed = format!("passage: {}", text);
+        let result = self.embed_inner(&prefixed).await?;
+        self.cache.put("passage", text, result.clone()).await;
+        Ok(result)
+    }
+
+    /// Get cache hit statistics.
+    ///
+    /// Returns `(hits, misses)`.
+    pub fn cache_stats(&self) -> (u64, u64) {
+        self.cache.stats()
     }
 
     /// Generate embeddings for multiple texts in batch
@@ -287,6 +336,18 @@ mod tests {
         assert_eq!(embedder.dimensions(), 384);
         assert_eq!(embedder.model_name(), "multilingual-e5-small");
         assert!(!embedder.is_loaded().await);
+
+        embedder.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_cache_stats_initial() {
+        let temp_dir = TempDir::new().unwrap();
+        let embedder = SmartEmbedder::new(temp_dir.path().to_path_buf(), 60);
+
+        let (hits, misses) = embedder.cache_stats();
+        assert_eq!(hits, 0);
+        assert_eq!(misses, 0);
 
         embedder.shutdown();
     }
