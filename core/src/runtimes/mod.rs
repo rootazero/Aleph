@@ -43,7 +43,7 @@ mod ytdlp;
 pub mod git_check;
 
 // Re-exports
-pub use capability::RuntimeCapability;
+pub use capability::{format_entries_for_prompt, RuntimeCapability};
 pub use ledger::{CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus};
 pub use manager::{RuntimeInfo, RuntimeManager, UpdateInfo};
 pub use probe::ProbeResult;
