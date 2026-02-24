@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use crate::builtin_tools::{
-    BashExecTool, CodeExecTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool,
+    BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool,
     ReadSkillTool, SearchTool, WebFetchTool, YouTubeTool,
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
@@ -95,6 +95,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "List all installed skills",
         requires_config: false,
     },
+    BuiltinToolDefinition {
+        name: "desktop",
+        description: "Control the macOS desktop: screenshots, OCR, UI automation, keyboard/mouse, app launch, canvas overlays",
+        requires_config: false,
+    },
     #[cfg(feature = "gateway")]
     BuiltinToolDefinition {
         name: "sessions_list",
@@ -150,6 +155,7 @@ pub fn create_tool_boxed(
         }
         "read_skill" => Some(Box::new(ReadSkillTool::default())),
         "list_skills" => Some(Box::new(SkillListTool::default())),
+        "desktop" => Some(Box::new(DesktopTool::new())),
         // Sessions tools require gateway_context and caller_agent_id at runtime,
         // so they cannot be created via create_tool_boxed. They are created
         // dynamically in BuiltinToolRegistry::execute_tool().
