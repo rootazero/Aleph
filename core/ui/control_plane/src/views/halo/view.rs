@@ -15,26 +15,24 @@ pub fn HaloView() -> impl IntoView {
     let halo = HaloState::new();
     provide_context(halo);
 
-    // Subscribe to run.* events on mount
-    let cleanup_id = StoredValue::new(None::<usize>);
-    Effect::new(move || {
+    // Subscribe to run.* events directly (no Effect — this is a one-shot mount action)
+    let sub_id = subscribe_run_events(&dashboard, halo);
+
+    // Tell the Gateway to start forwarding run.* events
+    spawn_local(async move {
         let dashboard = expect_context::<DashboardState>();
-        let halo = expect_context::<HaloState>();
-
-        spawn_local(async move {
-            if let Err(e) = dashboard.subscribe_topic("run.*").await {
-                web_sys::console::error_1(&format!("Failed to subscribe run events: {e}").into());
-            }
-        });
-
-        let id = subscribe_run_events(&dashboard, halo);
-        cleanup_id.set_value(Some(id));
+        if let Err(e) = dashboard.subscribe_topic("run.*").await {
+            web_sys::console::error_1(&format!("Failed to subscribe run events: {e}").into());
+        }
     });
 
     on_cleanup(move || {
-        if let Some(id) = cleanup_id.get_value() {
-            dashboard.unsubscribe_events(id);
-        }
+        dashboard.unsubscribe_events(sub_id);
+        // Tell the Gateway to stop forwarding run.* events
+        spawn_local(async move {
+            let dashboard = expect_context::<DashboardState>();
+            let _ = dashboard.unsubscribe_topic("run.*").await;
+        });
     });
 
     view! {
@@ -168,7 +166,8 @@ fn InputArea() -> impl IntoView {
     let is_sending = RwSignal::new(false);
 
     let send_message = move || {
-        let text = input_text.get().trim().to_string();
+        if is_sending.get_untracked() { return; }
+        let text = input_text.get_untracked().trim().to_string();
         if text.is_empty() { return; }
 
         is_sending.set(true);
