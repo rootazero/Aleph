@@ -589,9 +589,10 @@ impl SkillsRegistry {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
 
-    fn create_test_skill(dir: &PathBuf, name: &str, description: &str) {
+    fn create_test_skill(dir: &Path, name: &str, description: &str) {
         let skill_dir = dir.join(name);
         fs::create_dir_all(&skill_dir).unwrap();
 

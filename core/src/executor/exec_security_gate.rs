@@ -282,6 +282,7 @@ mod tests {
     use std::sync::Arc;
     use crate::exec::ExecApprovalManager;
 
+    #[allow(dead_code)]
     fn make_gate() -> ExecSecurityGate {
         let manager = Arc::new(ExecApprovalManager::new());
         ExecSecurityGate::new(manager, None)

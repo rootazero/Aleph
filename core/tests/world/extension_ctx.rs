@@ -1,6 +1,7 @@
 //! Extension system test context
 //!
 //! Contains state for extension plugin registry BDD tests.
+#![allow(dead_code)]
 
 use alephcore::extension::{
     DiagnosticLevel, ExtensionError, PluginManifest, PluginRegistry, RegistryStats, ServiceInfo,

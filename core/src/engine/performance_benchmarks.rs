@@ -4,6 +4,7 @@
 //! and token savings from incremental editing.
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod performance_benchmarks {
     use std::sync::Arc;
     use std::time::Instant;
@@ -97,14 +98,14 @@ mod performance_benchmarks {
         }
         std::fs::write(&test_file, &content).unwrap();
 
-        let engine = Arc::new(AtomicEngine::new(temp_dir.path().to_path_buf()));
+        let _engine = Arc::new(AtomicEngine::new(temp_dir.path().to_path_buf()));
 
         // Method 1: Full file write (baseline)
         let modified_content = content.replace("Line 500", "Modified Line 500");
         let full_write_tokens = modified_content.len(); // Approximate token count
 
         // Method 2: Incremental edit via patch
-        let patch = Patch::new(500, 500, "Line 500".to_string(), "Modified Line 500".to_string()).unwrap();
+        let _patch = Patch::new(500, 500, "Line 500".to_string(), "Modified Line 500".to_string()).unwrap();
         let patch_tokens = "Line 500".len() + "Modified Line 500".len() + 20; // Patch overhead
 
         let token_savings_percent = ((full_write_tokens - patch_tokens) as f64 / full_write_tokens as f64) * 100.0;

@@ -75,7 +75,7 @@ mod tests {
 
         // Verify we can receive all events
         let mut received = 0;
-        while let Ok(_) = receiver.try_recv() {
+        while receiver.try_recv().is_ok() {
             received += 1;
         }
 
@@ -91,7 +91,7 @@ mod tests {
 
         // Additional events should also be receivable
         let mut additional = 0;
-        while let Ok(_) = receiver.try_recv() {
+        while receiver.try_recv().is_ok() {
             additional += 1;
         }
 

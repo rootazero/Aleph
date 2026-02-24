@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn test_format_memories_multiple() {
         let augmenter = PromptAugmenter::new();
-        let memories = vec![
+        let memories = [
             create_test_memory("Q1", "A1", 1703419815, Some(0.9)),
             create_test_memory("Q2", "A2", 1703419915, Some(0.85)),
         ];

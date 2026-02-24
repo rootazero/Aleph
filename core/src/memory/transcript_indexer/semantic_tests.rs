@@ -22,7 +22,7 @@ async fn test_semantic_chunking_basic() {
     let chunks = chunker.chunk(text).await.unwrap();
 
     // Should create at least 2 chunks (Rust topic vs Python topic)
-    assert!(chunks.len() >= 1);
+    assert!(!chunks.is_empty());
 }
 
 #[tokio::test]
@@ -75,5 +75,5 @@ async fn test_semantic_chunking_config() {
     let chunks = chunker.chunk(text).await.unwrap();
 
     // With high threshold, should create fewer chunks
-    assert!(chunks.len() >= 1);
+    assert!(!chunks.is_empty());
 }

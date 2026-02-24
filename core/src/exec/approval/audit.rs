@@ -407,7 +407,7 @@ mod tests {
         assert_eq!(summary.risk_score, 120);
 
         // Check capabilities are present
-        assert!(summary.capabilities.len() > 0);
+        assert!(!summary.capabilities.is_empty());
         assert!(summary.capabilities.contains(&"filesystem.read_write".to_string()));
         assert!(summary.capabilities.contains(&"network.allow_all".to_string()));
         assert!(summary.capabilities.contains(&"process.exec".to_string()));

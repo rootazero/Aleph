@@ -370,7 +370,7 @@ mod tests {
 
         // Should expire in ~12 hours (default config)
         let expiry_hours = (pending.expires_at.unwrap() - Utc::now()).num_hours();
-        assert!(expiry_hours >= 11 && expiry_hours <= 12);
+        assert!((11..=12).contains(&expiry_hours));
     }
 
     #[tokio::test]
@@ -389,12 +389,12 @@ mod tests {
 
         // Should expire in ~24 hours (default config)
         let expiry_hours = (pending.expires_at.unwrap() - Utc::now()).num_hours();
-        assert!(expiry_hours >= 23 && expiry_hours <= 24);
+        assert!((23..=24).contains(&expiry_hours));
     }
 
     #[tokio::test]
     async fn test_policy_evaluation_integration() {
-        let (dispatcher, worldmodel, event_bus) = create_test_dispatcher().await;
+        let (dispatcher, _worldmodel, event_bus) = create_test_dispatcher().await;
 
         // Subscribe to the event bus first (needed to avoid "No active receivers" error)
         let _rx = event_bus.subscribe();

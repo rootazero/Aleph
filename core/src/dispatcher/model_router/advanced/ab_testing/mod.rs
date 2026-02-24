@@ -178,7 +178,7 @@ mod tests {
         // Should be approximately 10% (within 2% tolerance = 8-12%)
         let percentage = (in_experiment as f64 / total as f64) * 100.0;
         assert!(
-            percentage >= 8.0 && percentage <= 12.0,
+            (8.0..=12.0).contains(&percentage),
             "Expected ~10%, got {:.1}%",
             percentage
         );
@@ -213,12 +213,12 @@ mod tests {
 
         // Should be approximately 70/30 (within 5% tolerance)
         assert!(
-            a_pct >= 65.0 && a_pct <= 75.0,
+            (65.0..=75.0).contains(&a_pct),
             "Expected ~70% for A, got {:.1}%",
             a_pct
         );
         assert!(
-            b_pct >= 25.0 && b_pct <= 35.0,
+            (25.0..=35.0).contains(&b_pct),
             "Expected ~30% for B, got {:.1}%",
             b_pct
         );

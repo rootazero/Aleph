@@ -427,7 +427,7 @@ mod tests {
         ];
 
         for display in test_cases {
-            let parsed = parse_session_key(display).expect(&format!("Failed to parse: {}", display));
+            let parsed = parse_session_key(display).unwrap_or_else(|_| panic!("Failed to parse: {display}"));
             let reparsed = resolve_display_key(&parsed);
             assert_eq!(reparsed, display, "Roundtrip failed for: {}", display);
         }

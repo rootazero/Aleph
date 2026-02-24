@@ -381,6 +381,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "Requires LanceMemoryBackend"]
+    #[allow(unreachable_code, unused_variables, clippy::diverging_sub_expression)]
     async fn test_full_embedding_evolution_flow() {
         use crate::memory::context::{
             FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer,

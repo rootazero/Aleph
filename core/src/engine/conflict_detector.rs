@@ -425,7 +425,8 @@ mod tests {
         let conflicts = detector.detect(&reflex_layer);
 
         // Should detect some conflicts with default test inputs
-        assert!(conflicts.len() >= 0);
+        // conflicts.len() is usize, always >= 0
+        let _ = conflicts.len();
     }
 
     #[test]

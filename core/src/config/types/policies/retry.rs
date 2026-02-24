@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn test_backoff_cap() {
-        let mut policy = RetryPolicy {
+        let policy = RetryPolicy {
             max_backoff_ms: 5000,
             ..RetryPolicy::default()
         };

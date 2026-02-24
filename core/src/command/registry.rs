@@ -413,7 +413,7 @@ mod tests {
     use super::*;
 
     fn create_test_config() -> Config {
-        let config = Config {
+        Config {
             rules: vec![
                 RoutingRuleConfig {
                     regex: "^/search".to_string(),
@@ -440,8 +440,7 @@ mod tests {
                 },
             ],
             ..Config::default()
-        };
-        config
+        }
     }
 
     #[test]

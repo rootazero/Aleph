@@ -1,4 +1,5 @@
 //! Message Builder test context for BDD scenarios
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::sync::Arc;

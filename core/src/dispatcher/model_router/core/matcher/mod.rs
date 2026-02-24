@@ -433,7 +433,7 @@ mod tests {
         let matcher = create_matcher();
 
         // Test various task types
-        let tasks = vec![
+        let tasks = [
             // Code task -> claude-opus
             Task::new(
                 "t1",

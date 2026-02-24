@@ -370,7 +370,7 @@ async fn test_quota_remaining_capacity() {
 
     // Add some sessions
     for i in 0..3 {
-        let sess = SubagentSession::new(&format!("sess_{}", i), "explorer", "parent");
+        let sess = SubagentSession::new(format!("sess_{}", i), "explorer", "parent");
         db.insert_session(&sess).await.expect("Failed");
     }
 
@@ -420,12 +420,9 @@ fn test_quota_violation_display() {
         let msg = violation.to_string();
         assert!(!msg.is_empty());
         // Verify the message contains relevant numbers
-        match &violation {
-            QuotaViolation::MaxRunningExceeded { current, limit } => {
-                assert!(msg.contains(&current.to_string()));
-                assert!(msg.contains(&limit.to_string()));
-            }
-            _ => {}
+        if let QuotaViolation::MaxRunningExceeded { current, limit } = &violation {
+            assert!(msg.contains(&current.to_string()));
+            assert!(msg.contains(&limit.to_string()));
         }
     }
 }

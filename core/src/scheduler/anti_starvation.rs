@@ -111,6 +111,7 @@ impl Default for WaitTimeTracker {
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn current_time_ms() -> i64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

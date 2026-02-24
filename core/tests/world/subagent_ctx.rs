@@ -5,6 +5,7 @@
 //! - AuthProfileManager
 //! - SessionsSpawnTool
 //! - SubAgentRegistry lifecycle
+#![allow(dead_code)]
 
 use std::sync::Arc;
 

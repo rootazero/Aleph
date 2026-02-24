@@ -1,4 +1,5 @@
 //! Tools context for BDD tests
+#![allow(dead_code)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

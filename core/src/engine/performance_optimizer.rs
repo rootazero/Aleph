@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn test_cache_expiration() {
-        let optimizer = PerformanceOptimizer::new(100);
+        let _optimizer = PerformanceOptimizer::new(100);
 
         // Create expired cache entry
         let mut cached = CachedResult {

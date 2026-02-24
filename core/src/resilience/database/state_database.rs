@@ -934,7 +934,7 @@ mod tests {
         // This test verifies compiler enforcement of namespace parameter
         // The real test is compile-time: search_facts() requires NamespaceScope
         let _valid_call = "db.search_facts(embedding, NamespaceScope::Owner, 10, false)";
-        assert!(true); // Placeholder - real test is compile-time
+        // Placeholder - real test is compile-time
     }
 
     #[test]

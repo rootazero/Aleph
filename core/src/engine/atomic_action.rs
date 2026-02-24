@@ -434,9 +434,9 @@ mod tests {
     #[test]
     fn test_file_filters() {
         let code = FileFilter::Code;
-        let text = FileFilter::Text;
+        let _text = FileFilter::Text;
         let ext = FileFilter::Extension("rs".to_string());
-        let exclude = FileFilter::Exclude("*.tmp".to_string());
+        let _exclude = FileFilter::Exclude("*.tmp".to_string());
 
         // Test serialization
         let json = serde_json::to_string(&code).unwrap();

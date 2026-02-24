@@ -157,7 +157,7 @@ fn test_schema_and_hints_consistency() {
     assert!(schema.is_object(), "Schema should be a JSON object");
 
     // For each field hint, verify path is structurally valid
-    for (path, _hint) in &hints.fields {
+    for path in hints.fields.keys() {
         if path.contains('*') {
             // Skip wildcard paths - they're templates
             continue;

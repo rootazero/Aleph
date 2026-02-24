@@ -247,7 +247,7 @@ use serde_json::json;
         // 100000 * (1 - 0.2) = 80000 (allow for floating point precision)
         let threshold1 = limit.compaction_threshold();
         assert!(
-            threshold1 >= 79990 && threshold1 <= 80010,
+            (79990..=80010).contains(&threshold1),
             "Expected ~80000, got {}",
             threshold1
         );
@@ -256,7 +256,7 @@ use serde_json::json;
         // 200000 * (1 - 0.1) = 180000 (allow for floating point precision)
         let threshold2 = limit2.compaction_threshold();
         assert!(
-            threshold2 >= 179990 && threshold2 <= 180010,
+            (179990..=180010).contains(&threshold2),
             "Expected ~180000, got {}",
             threshold2
         );

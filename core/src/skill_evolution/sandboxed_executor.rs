@@ -222,8 +222,7 @@ mod tests {
 
     #[test]
     fn test_sandboxed_executor_structure() {
-        // Basic structure test
-        assert!(true);
+        // Basic structure test - compile-time verification
     }
 
     #[test]

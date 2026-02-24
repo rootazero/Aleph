@@ -928,7 +928,7 @@ mod tests {
     async fn test_infer_language_multiple_languages() {
         let wm = create_test_worldmodel().await;
 
-        let paths = vec![
+        let paths = [
             PathBuf::from("file1.rs"),
             PathBuf::from("file2.rs"),
             PathBuf::from("file3.rs"),
@@ -946,7 +946,7 @@ mod tests {
     async fn test_infer_language_typescript() {
         let wm = create_test_worldmodel().await;
 
-        let paths = vec![PathBuf::from("app.ts"), PathBuf::from("component.tsx")];
+        let paths = [PathBuf::from("app.ts"), PathBuf::from("component.tsx")];
         let path_refs: Vec<&PathBuf> = paths.iter().collect();
 
         let language = wm.infer_language(&path_refs);

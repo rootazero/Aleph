@@ -348,7 +348,7 @@ mod tests {
         let event_bus = Arc::new(GatewayEventBus::new());
 
         // Worker factory - creates a new MockWorker for each run
-        let worker_factory: WorkerFactory<MockWorker> = Arc::new(|| MockWorker::new());
+        let worker_factory: WorkerFactory<MockWorker> = Arc::new(MockWorker::new);
 
         // Validator factory - creates a new CompositeValidator for each run
         let validator_factory: ValidatorFactory = Arc::new(|| {

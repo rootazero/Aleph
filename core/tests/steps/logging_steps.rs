@@ -10,7 +10,7 @@ use alephcore::logging::{
 use cucumber::{given, then, when};
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tempfile::TempDir;
 use tracing::info;
@@ -19,7 +19,7 @@ use tracing_subscriber::layer::SubscriberExt;
 // ═══ Helper Functions ═══
 
 /// Create a log file with specific timestamp
-fn create_test_log_file(dir: &PathBuf, filename: &str, days_old: u64) -> PathBuf {
+fn create_test_log_file(dir: &Path, filename: &str, days_old: u64) -> PathBuf {
     let log_file = dir.join(filename);
     let mut file = File::create(&log_file).expect("Failed to create log file");
     writeln!(file, "Test log content").expect("Failed to write log file");

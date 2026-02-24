@@ -86,7 +86,7 @@ mod tests {
     async fn test_tool_creation() {
         let bus = Arc::new(AgentMessageBus::new());
         let memory = Arc::new(CollectiveMemory::new(bus));
-        let tool = GetTeamActivityTool::new(memory);
+        let _tool = GetTeamActivityTool::new(memory);
 
         assert_eq!(GetTeamActivityTool::NAME, "get_team_activity");
         assert!(!GetTeamActivityTool::DESCRIPTION.is_empty());

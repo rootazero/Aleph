@@ -353,7 +353,7 @@ mod tests {
 
         // Verify MessageBuilder was created (no providers since no swarm)
         // This is a basic smoke test to ensure the method works
-        assert!(message_builder.has_compactor() == false);
+        assert!(!message_builder.has_compactor());
     }
 
     #[tokio::test]
@@ -372,6 +372,6 @@ mod tests {
         // Verify MessageBuilder was created
         // In the real implementation with actual SwarmCoordinator,
         // this would verify that SwarmContextProvider was added
-        assert!(message_builder.has_compactor() == false);
+        assert!(!message_builder.has_compactor());
     }
 }

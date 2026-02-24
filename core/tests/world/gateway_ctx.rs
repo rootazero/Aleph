@@ -1,6 +1,7 @@
 //! Gateway Context for BDD tests
 //!
 //! Provides shared state for testing InboundMessageRouter and related Gateway components.
+#![allow(dead_code)]
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
