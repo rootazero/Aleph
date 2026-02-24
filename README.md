@@ -158,7 +158,7 @@ Aleph uses a **server-centric architecture** where the Server is the brain and h
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-For detailed architecture documentation, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
+For detailed architecture documentation, see [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md).
 
 ---
 
@@ -253,7 +253,7 @@ Aleph stores its configuration at `~/.config/aleph/`:
 └── logs/                # Gateway logs
 ```
 
-For detailed setup instructions, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
+For detailed setup instructions, see [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md).
 
 ---
 
@@ -261,14 +261,14 @@ For detailed setup instructions, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 | Document | Description |
 |----------|-------------|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Complete system architecture and design |
-| [AGENT_SYSTEM.md](docs/AGENT_SYSTEM.md) | Agent Loop, Thinker, Dispatcher details |
-| [GATEWAY.md](docs/GATEWAY.md) | WebSocket protocol and RPC methods |
-| [TOOL_SYSTEM.md](docs/TOOL_SYSTEM.md) | Tool development and built-in tools |
-| [MEMORY_SYSTEM.md](docs/MEMORY_SYSTEM.md) | Facts DB and vector search |
-| [EXTENSION_SYSTEM.md](docs/EXTENSION_SYSTEM.md) | Plugin development guide |
-| [SECURITY.md](docs/SECURITY.md) | Execution approval and security |
-| [AGENT_DESIGN_PHILOSOPHY.md](docs/AGENT_DESIGN_PHILOSOPHY.md) | POE architecture and design thinking |
+| [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) | Complete system architecture and design |
+| [AGENT_SYSTEM.md](docs/reference/AGENT_SYSTEM.md) | Agent Loop, Thinker, Dispatcher details |
+| [GATEWAY.md](docs/reference/GATEWAY.md) | WebSocket protocol and RPC methods |
+| [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) | Tool development and built-in tools |
+| [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) | Facts DB and vector search |
+| [EXTENSION_SYSTEM.md](docs/reference/EXTENSION_SYSTEM.md) | Plugin development guide |
+| [SECURITY.md](docs/reference/SECURITY.md) | Execution approval and security |
+| [AGENT_DESIGN_PHILOSOPHY.md](docs/reference/AGENT_DESIGN_PHILOSOPHY.md) | POE architecture and design thinking |
 
 ---
 
