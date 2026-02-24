@@ -128,6 +128,57 @@ fn handle_secret_verify(name: String) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn handle_secret_providers() -> Result<(), Box<dyn Error>> {
+    use alephcore::secrets::provider::onepassword::OnePasswordProvider;
+    use alephcore::secrets::provider::SecretProvider;
+    use alephcore::secrets::ProviderStatus;
+
+    let config = alephcore::Config::load().unwrap_or_default();
+
+    println!("{:<15} {:<15} {}", "KEY", "TYPE", "STATUS");
+    println!("{}", "-".repeat(55));
+
+    // Always show built-in local vault
+    println!("{:<15} {:<15} {}", "local", "local_vault", "Ready (built-in)");
+
+    // Show configured external providers
+    for (key, provider_config) in &config.secret_providers {
+        match provider_config.provider_type.as_str() {
+            "local_vault" => {
+                println!("{:<15} {:<15} {}", key, "local_vault", "Ready (built-in)");
+            }
+            "1password" => {
+                let token = provider_config
+                    .service_account_token_env
+                    .as_ref()
+                    .and_then(|env_name| std::env::var(env_name).ok());
+                let op = OnePasswordProvider::new(provider_config.account.clone(), token);
+
+                let rt = tokio::runtime::Runtime::new()?;
+                match rt.block_on(op.health_check()) {
+                    Ok(ProviderStatus::Ready) => {
+                        println!("{:<15} {:<15} {}", key, "1password", "Ready");
+                    }
+                    Ok(ProviderStatus::NeedsAuth { message }) => {
+                        println!("{:<15} {:<15} Needs Auth: {}", key, "1password", message);
+                    }
+                    Ok(ProviderStatus::Unavailable { reason }) => {
+                        println!("{:<15} {:<15} Unavailable: {}", key, "1password", reason);
+                    }
+                    Err(e) => {
+                        println!("{:<15} {:<15} Error: {}", key, "1password", e);
+                    }
+                }
+            }
+            other => {
+                println!("{:<15} {:<15} {}", key, other, "Unknown type");
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Handle secret subcommands.
 pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>> {
     match action {
@@ -136,6 +187,7 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
         SecretAction::List => handle_secret_list(),
         SecretAction::Delete { name } => handle_secret_delete(name),
         SecretAction::Verify { name } => handle_secret_verify(name),
+        SecretAction::Providers => handle_secret_providers(),
     }
 }
 
