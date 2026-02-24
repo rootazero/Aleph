@@ -1,3 +1,5 @@
+pub mod chat;
+
 // API layer for Gateway RPC methods
 // Provides type-safe interfaces for interacting with the Gateway
 
