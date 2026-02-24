@@ -216,4 +216,17 @@ mod tests {
         assert!(result.is_ok(), "ping failed: {:?}", result.err());
         assert_eq!(result.unwrap(), serde_json::json!("pong"));
     }
+
+    #[tokio::test]
+    #[ignore = "requires macOS App running"]
+    async fn test_ping() {
+        let client = DesktopBridgeClient::new();
+        if !client.is_available() {
+            eprintln!("Skipping: macOS App not running");
+            return;
+        }
+        let result = client.send(DesktopRequest::Ping).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!("pong"));
+    }
 }
