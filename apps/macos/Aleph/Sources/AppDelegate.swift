@@ -28,7 +28,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Halo overlay window
     private var haloWindow: HaloWindow?
 
-    // Settings window removed - all configuration now in Control Panel Dashboard
+    // Settings window controller (WebView loading Control Plane)
+    private var settingsWindowController = SettingsWindowController()
 
     // Permission gate active state (backward compatibility - synced with permissionCoordinator.isActive)
     private var isPermissionGateActive: Bool = false
@@ -272,6 +273,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             target: self,
             showAboutAction: #selector(showAbout),
             showConversationAction: #selector(showConversation),
+            showSettingsAction: #selector(showSettings),
             quitAction: #selector(quit),
             debugActions: debugActions
         )
@@ -284,6 +286,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             message: L("alert.about.message", "0.1.0 (Phase 2)"),
             autoDismiss: true
         )
+    }
+
+    /// Open settings window (WebView loading Control Plane)
+    @objc private func showSettings() {
+        settingsWindowController.showSettings()
     }
 
     /// Show or bring conversation window to front

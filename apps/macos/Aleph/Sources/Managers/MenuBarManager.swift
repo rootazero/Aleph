@@ -27,8 +27,7 @@ final class MenuBarManager {
     /// The status item in the menu bar
     private(set) var statusItem: NSStatusItem?
 
-    /// Settings menu item (for enable/disable control) - REMOVED
-    // Settings functionality has been moved to Control Panel Dashboard
+    // Settings window uses WebView loading Control Plane (Leptos/WASM)
 
     /// Default provider menu item
     private(set) var defaultProviderMenuItem: NSMenuItem?
@@ -45,13 +44,14 @@ final class MenuBarManager {
     ///   - target: Target for menu item actions
     ///   - showAboutAction: Selector for "About" action
     ///   - showConversationAction: Selector for "Show Conversation" action
-    ///   - showSettingsAction: Selector for "Settings" action - REMOVED
+    ///   - showSettingsAction: Selector for "Settings" action (opens Control Plane WebView)
     ///   - quitAction: Selector for "Quit" action
     ///   - debugActions: Optional debug action selectors
     func setup(
         target: AnyObject,
         showAboutAction: Selector,
         showConversationAction: Selector,
+        showSettingsAction: Selector,
         quitAction: Selector,
         debugActions: [(title: String, action: Selector, keyEquivalent: String)]? = nil
     ) {
@@ -105,7 +105,16 @@ final class MenuBarManager {
 
         menu.addItem(NSMenuItem.separator())
 
-        // Settings menu item removed - all configuration now in Control Panel Dashboard
+        // Settings — opens WebView with Control Plane (Leptos/WASM)
+        let settingsItem = NSMenuItem(
+            title: L("menu.settings"),
+            action: showSettingsAction,
+            keyEquivalent: ","
+        )
+        settingsItem.target = target
+        menu.addItem(settingsItem)
+
+        menu.addItem(NSMenuItem.separator())
 
         // Debug menu items (only in DEBUG builds)
         #if DEBUG
@@ -178,7 +187,7 @@ final class MenuBarManager {
 
     // MARK: - Menu Item Management
 
-    // setSettingsEnabled method removed - Settings menu no longer exists
+    // Settings window managed by SettingsWindowController via WebView
 
     /// Rebuild the providers submenu
     ///
