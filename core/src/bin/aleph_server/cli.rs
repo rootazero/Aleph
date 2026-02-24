@@ -366,6 +366,8 @@ pub enum SecretAction {
         /// Secret name
         name: String,
     },
+    /// List configured secret providers and their status
+    Providers,
 }
 
 #[cfg(test)]
