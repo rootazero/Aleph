@@ -337,106 +337,24 @@ impl InitializationCoordinator {
     // =========================================================================
 
     async fn install_runtimes(&self) -> Result<(), InitError> {
-        use crate::runtimes::RuntimeRegistry;
-        use std::time::Duration;
+        use crate::runtimes::ledger::migrate_from_legacy;
 
-        info!("Installing runtimes in parallel...");
+        info!("Initializing runtime ledger (zero-install)...");
 
-        // Create registry
-        let registry = RuntimeRegistry::new()
-            .map_err(|e| InitError::new("runtimes", format!("Failed to create registry: {}", e)))?;
+        let runtimes_dir = crate::utils::paths::get_runtimes_dir()
+            .map_err(|e| InitError::new("runtimes", format!("Failed to get runtimes dir: {}", e)))?;
 
-        let runtime_ids = ["ffmpeg", "yt-dlp", "uv", "fnm"];
-
-        // Report start
-        if let Some(h) = &self.handler {
-            h.on_phase_progress(
-                "runtimes".to_string(),
-                0.0,
-                format!("Installing {} runtimes...", runtime_ids.len()),
-            );
+        // Create directory if needed
+        if !runtimes_dir.exists() {
+            std::fs::create_dir_all(&runtimes_dir)
+                .map_err(|e| InitError::new("runtimes", format!("Failed to create runtimes dir: {}", e)))?;
         }
 
-        // Install all runtimes in parallel
-        let mut handles = Vec::new();
+        // Migrate from legacy manifest.json or create fresh ledger
+        let _ledger = migrate_from_legacy(&runtimes_dir)
+            .map_err(|e| InitError::new("runtimes", format!("Failed to initialize ledger: {}", e)))?;
 
-        for id in runtime_ids {
-            let runtime = registry
-                .get(id)
-                .ok_or_else(|| InitError::new("runtimes", format!("Unknown runtime: {}", id)))?;
-
-            let handler = self.handler.clone();
-            let runtime_id = id.to_string();
-
-            let handle = tokio::spawn(async move {
-                // Report individual runtime start
-                if let Some(h) = &handler {
-                    h.on_phase_progress(
-                        "runtimes".to_string(),
-                        0.0,
-                        format!("Installing {}...", runtime_id),
-                    );
-                }
-
-                let result = if runtime.is_installed() {
-                    debug!(runtime_id = %runtime_id, "Runtime already installed, skipping");
-                    Ok(())
-                } else {
-                    info!(runtime_id = %runtime_id, "Installing runtime...");
-                    // 5 minute timeout for each runtime installation
-                    match tokio::time::timeout(Duration::from_secs(300), runtime.install()).await {
-                        Ok(install_result) => install_result,
-                        Err(_) => Err(crate::error::AlephError::runtime(
-                            &runtime_id,
-                            "Installation timed out after 5 minutes",
-                        )),
-                    }
-                };
-
-                // Report completion
-                if let Some(h) = &handler {
-                    h.on_phase_progress(
-                        "runtimes".to_string(),
-                        0.0,
-                        format!("{} installed", runtime_id),
-                    );
-                }
-
-                (runtime_id, result)
-            });
-
-            handles.push(handle);
-        }
-
-        // Wait for all to complete
-        let results = futures::future::join_all(handles).await;
-
-        // Collect failures
-        let mut failures = Vec::new();
-        for result in results {
-            match result {
-                Ok((id, Ok(()))) => {
-                    info!(runtime_id = %id, "Runtime installed successfully");
-                }
-                Ok((id, Err(e))) => {
-                    warn!(runtime_id = %id, error = %e, "Runtime installation failed");
-                    failures.push(format!("{}: {}", id, e));
-                }
-                Err(e) => {
-                    warn!(error = %e, "Runtime task panicked");
-                    failures.push(format!("task panic: {}", e));
-                }
-            }
-        }
-
-        if !failures.is_empty() {
-            return Err(InitError::new(
-                "runtimes",
-                format!("Failed to install runtimes: {}", failures.join(", ")),
-            ));
-        }
-
-        info!("All runtimes installed successfully");
+        info!("Runtime ledger initialized (no downloads, runtimes provisioned on-demand)");
         Ok(())
     }
 
