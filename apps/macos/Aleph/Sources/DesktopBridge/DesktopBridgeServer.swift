@@ -211,19 +211,31 @@ final class DesktopBridgeServer: @unchecked Sendable {
             let bundleId = params["app_bundle_id"] as? String
             return runAsync { await Perception.shared.axTree(appBundleId: bundleId) }
 
-        // Action — stubs for now (Phase 3)
+        // Action — real implementations via Action.swift
         case "desktop.click":
-            return .success(["stub": true, "message": "click not yet implemented"])
+            let x = params["x"] as? Double ?? 0
+            let y = params["y"] as? Double ?? 0
+            let button = params["button"] as? String ?? "left"
+            return runAsync { await Action.shared.click(x: x, y: y, button: button) }
+
         case "desktop.type_text":
-            return .success(["stub": true, "message": "type_text not yet implemented"])
+            let text = params["text"] as? String ?? ""
+            return runAsync { await Action.shared.typeText(text) }
+
         case "desktop.key_combo":
-            return .success(["stub": true, "message": "key_combo not yet implemented"])
+            let keys = params["keys"] as? [String] ?? []
+            return runAsync { await Action.shared.keyCombo(keys: keys) }
+
         case "desktop.launch_app":
-            return .success(["stub": true, "message": "launch_app not yet implemented"])
+            let bundleId = params["bundle_id"] as? String ?? ""
+            return runAsync { await Action.shared.launchApp(bundleId: bundleId) }
+
         case "desktop.window_list":
-            return .success(["stub": true, "windows": [] as [Any]])
+            return runAsync { await Action.shared.windowList() }
+
         case "desktop.focus_window":
-            return .success(["stub": true, "message": "focus_window not yet implemented"])
+            let windowId = params["window_id"] as? UInt32 ?? 0
+            return runAsync { await Action.shared.focusWindow(id: windowId) }
 
         // Canvas — stubs for now (Phase 4)
         case "desktop.canvas_show":
