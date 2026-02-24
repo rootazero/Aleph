@@ -4,8 +4,6 @@
 //! This allows the AI to understand which runtimes are available and how to use them.
 
 use super::ledger::CapabilityEntry;
-use super::registry::RuntimeRegistry;
-use super::RuntimeInfo;
 use std::path::PathBuf;
 
 /// Runtime capability description for AI system prompt injection
@@ -26,42 +24,6 @@ pub struct RuntimeCapability {
 }
 
 impl RuntimeCapability {
-    /// Create capability from RuntimeInfo and executable path
-    pub fn from_info(info: &RuntimeInfo, executable_path: PathBuf) -> Self {
-        Self {
-            id: info.id.to_string(),
-            name: info.name.to_string(),
-            description: info.description.to_string(),
-            executable_path: if info.installed {
-                Some(executable_path)
-            } else {
-                None
-            },
-            installed: info.installed,
-            version: info.version.clone(),
-        }
-    }
-
-    /// Get all installed runtime capabilities from the registry
-    ///
-    /// Returns only the runtimes that are currently installed.
-    pub fn get_installed_from_registry(registry: &RuntimeRegistry) -> Vec<RuntimeCapability> {
-        let runtimes = registry.list();
-        let mut capabilities = Vec::new();
-
-        for info in runtimes {
-            if info.installed {
-                // Get executable path from the runtime
-                if let Some(runtime) = registry.get(info.id) {
-                    let capability = RuntimeCapability::from_info(&info, runtime.executable_path());
-                    capabilities.push(capability);
-                }
-            }
-        }
-
-        capabilities
-    }
-
     /// Format runtime capabilities for system prompt injection
     ///
     /// Generates a markdown-formatted section describing available runtimes.
@@ -115,7 +77,7 @@ fn get_usage_hints(runtime_id: &str) -> String {
              - Install packages: `uv pip install <package>`\n"
                 .to_string()
         }
-        "fnm" => {
+        "fnm" | "node" => {
             "- Use for Node.js/JavaScript execution\n\
              - Run scripts with `node` command\n\
              - Install packages with `npm install`\n"
@@ -197,7 +159,7 @@ mod tests {
     #[test]
     fn test_usage_hints() {
         assert!(RuntimeCapability::get_usage_hints("uv").contains("Python"));
-        assert!(RuntimeCapability::get_usage_hints("fnm").contains("Node.js"));
+        assert!(RuntimeCapability::get_usage_hints("node").contains("Node.js"));
         assert!(RuntimeCapability::get_usage_hints("ffmpeg").contains("audio/video"));
         assert!(RuntimeCapability::get_usage_hints("yt-dlp").contains("YouTube"));
         assert!(RuntimeCapability::get_usage_hints("unknown").is_empty());

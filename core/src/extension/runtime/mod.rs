@@ -11,7 +11,7 @@
 //! ┌─────────────────┐    ┌─────────────────┐    ┌────────────────┐
 //! │  WasmRuntime    │    │  NpmInstaller   │    │  PluginRuntime │
 //! │                 │    │                 │    │                │
-//! │  - Extism       │    │  - fnm/node     │    │  - Load .ts/.js│
+//! │  - Extism       │    │  - node/npm     │    │  - Load .ts/.js│
 //! │  - Sandboxed    │    │  - npm install  │    │  - IPC (JSON)  │
 //! └─────────────────┘    └─────────────────┘    └────────────────┘
 //! ```
@@ -22,16 +22,14 @@
 //!
 //! ```rust,ignore
 //! use alephcore::extension::runtime::{NpmInstaller, PluginRuntime};
-//! use alephcore::runtimes::RuntimeRegistry;
 //!
-//! let registry = RuntimeRegistry::new(runtimes_dir)?;
-//! let installer = NpmInstaller::new(registry);
+//! let installer = NpmInstaller::new(install_dir)?;
 //!
 //! // Install an npm package
 //! installer.install("@anthropic/aleph-plugin@1.0.0").await?;
 //!
 //! // Run a JS plugin
-//! let runtime = PluginRuntime::new(&registry)?;
+//! let runtime = PluginRuntime::new(working_dir)?;
 //! runtime.load_plugin("file:///path/to/plugin.ts").await?;
 //! ```
 //!
@@ -70,7 +68,7 @@ pub use wasm::{PermissionChecker, WasmRuntime, WasmToolInput, WasmToolOutput};
 pub use nodejs::{HostScript, JsonRpcRequest, JsonRpcResponse, NodeJsRuntime, NodeProcess};
 
 use crate::extension::ExtensionError;
-use crate::runtimes::{get_runtimes_dir, FnmRuntime, RuntimeManager};
+use crate::runtimes::probe;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -87,10 +85,80 @@ const NPM_TIMEOUT_SECS: u64 = 300;
 /// Default timeout for IPC operations (300 seconds)
 const IPC_TIMEOUT_SECS: u64 = 300;
 
-/// npm package installer using Aleph's fnm/Node.js runtime
+// ---------------------------------------------------------------------------
+// Node.js path helpers — uses the probe system to find node/npm
+// ---------------------------------------------------------------------------
+
+/// Resolved Node.js paths (node binary + npm binary)
+struct NodePaths {
+    node: PathBuf,
+    npm: PathBuf,
+}
+
+/// Detect node and npm paths using the probe system.
+///
+/// npm is derived as a sibling of the node binary (same bin directory).
+fn detect_node_paths() -> Result<NodePaths, ExtensionError> {
+    let result = probe::probe("node");
+    if !result.found {
+        return Err(ExtensionError::Runtime(
+            "Node.js not found. Install Node.js (>= 18) or run `aleph init` to bootstrap it."
+                .to_string(),
+        ));
+    }
+
+    let node_path = result.bin_path.unwrap();
+    let npm_path = derive_npm_path(&node_path)?;
+
+    Ok(NodePaths {
+        node: node_path,
+        npm: npm_path,
+    })
+}
+
+/// Derive npm path from a known node binary path.
+///
+/// npm is expected to be a sibling binary in the same directory as node.
+fn derive_npm_path(node_path: &Path) -> Result<PathBuf, ExtensionError> {
+    let bin_dir = node_path.parent().ok_or_else(|| {
+        ExtensionError::Runtime(format!(
+            "Cannot determine bin directory from node path: {}",
+            node_path.display()
+        ))
+    })?;
+
+    #[cfg(unix)]
+    let npm = bin_dir.join("npm");
+    #[cfg(windows)]
+    let npm = bin_dir.join("npm.cmd");
+
+    if npm.exists() {
+        Ok(npm)
+    } else {
+        // Fallback: try to find npm on PATH
+        let output = std::process::Command::new("which")
+            .arg("npm")
+            .output()
+            .ok();
+        if let Some(output) = output {
+            if output.status.success() {
+                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path_str.is_empty() {
+                    return Ok(PathBuf::from(path_str));
+                }
+            }
+        }
+        Err(ExtensionError::Runtime(format!(
+            "npm not found. Expected at {} or on system PATH.",
+            npm.display()
+        )))
+    }
+}
+
+/// npm package installer using system or Aleph-managed Node.js
 pub struct NpmInstaller {
-    /// fnm runtime
-    fnm: FnmRuntime,
+    /// Resolved node paths (lazy-detected)
+    node_paths: Option<NodePaths>,
     /// Installation directory (e.g., ~/.aleph/plugins/node_modules/)
     install_dir: PathBuf,
 }
@@ -98,17 +166,10 @@ pub struct NpmInstaller {
 impl NpmInstaller {
     /// Create a new npm installer
     pub fn new(install_dir: PathBuf) -> Result<Self, ExtensionError> {
-        let runtimes_dir = get_runtimes_dir().map_err(|e| {
-            ExtensionError::Runtime(format!("Failed to get runtimes directory: {}", e))
-        })?;
-        let fnm = FnmRuntime::new(runtimes_dir);
-        Ok(Self { fnm, install_dir })
-    }
-
-    /// Create with explicit runtimes directory
-    pub fn with_runtimes_dir(runtimes_dir: PathBuf, install_dir: PathBuf) -> Self {
-        let fnm = FnmRuntime::new(runtimes_dir);
-        Self { fnm, install_dir }
+        Ok(Self {
+            node_paths: None,
+            install_dir,
+        })
     }
 
     /// Get the node_modules directory
@@ -116,16 +177,12 @@ impl NpmInstaller {
         self.install_dir.join("node_modules")
     }
 
-    /// Ensure Node.js is installed via fnm
-    async fn ensure_node(&self) -> Result<&FnmRuntime, ExtensionError> {
-        if !self.fnm.is_installed() {
-            info!("Node.js not installed, installing via fnm...");
-            self.fnm.install().await.map_err(|e| {
-                ExtensionError::Runtime(format!("Failed to install Node.js: {}", e))
-            })?;
+    /// Ensure Node.js is available (probe on first call, cache result)
+    fn ensure_node(&mut self) -> Result<&NodePaths, ExtensionError> {
+        if self.node_paths.is_none() {
+            self.node_paths = Some(detect_node_paths()?);
         }
-
-        Ok(&self.fnm)
+        Ok(self.node_paths.as_ref().unwrap())
     }
 
     /// Install an npm package
@@ -134,8 +191,8 @@ impl NpmInstaller {
     /// - `package-name` (latest)
     /// - `package-name@version`
     /// - `@scope/package@version`
-    pub async fn install(&self, package: &str) -> Result<PathBuf, ExtensionError> {
-        let fnm = self.ensure_node().await?;
+    pub async fn install(&mut self, package: &str) -> Result<PathBuf, ExtensionError> {
+        let npm_path = self.ensure_node()?.npm.clone();
         let (name, version) = parse_package_spec(package);
 
         info!("Installing npm package: {}@{}", name, version);
@@ -161,7 +218,7 @@ impl NpmInstaller {
             format!("{}@{}", name, version)
         };
 
-        let mut cmd = Command::new(fnm.npm_path());
+        let mut cmd = Command::new(&npm_path);
         cmd.current_dir(&self.install_dir)
             .args(["install", "--save", &package_spec])
             .stdin(Stdio::null())
@@ -214,8 +271,8 @@ impl NpmInstaller {
     }
 
     /// Uninstall a package
-    pub async fn uninstall(&self, package: &str) -> Result<(), ExtensionError> {
-        let fnm = self.ensure_node().await?;
+    pub async fn uninstall(&mut self, package: &str) -> Result<(), ExtensionError> {
+        let npm_path = self.ensure_node()?.npm.clone();
         let (name, _) = parse_package_spec(package);
 
         if !self.is_installed(&name) {
@@ -224,7 +281,7 @@ impl NpmInstaller {
 
         info!("Uninstalling npm package: {}", name);
 
-        let mut cmd = Command::new(fnm.npm_path());
+        let mut cmd = Command::new(&npm_path);
         cmd.current_dir(&self.install_dir)
             .args(["uninstall", &name])
             .stdin(Stdio::null())
@@ -249,14 +306,14 @@ impl NpmInstaller {
     }
 
     /// List installed packages
-    pub async fn list_installed(&self) -> Result<Vec<InstalledPackage>, ExtensionError> {
-        let fnm = self.ensure_node().await?;
+    pub async fn list_installed(&mut self) -> Result<Vec<InstalledPackage>, ExtensionError> {
+        let npm_path = self.ensure_node()?.npm.clone();
 
         if !self.node_modules_dir().exists() {
             return Ok(Vec::new());
         }
 
-        let mut cmd = Command::new(fnm.npm_path());
+        let mut cmd = Command::new(&npm_path);
         cmd.current_dir(&self.install_dir)
             .args(["list", "--json", "--depth=0"])
             .stdin(Stdio::null())
@@ -336,8 +393,8 @@ pub fn parse_package_spec(spec: &str) -> (String, String) {
 /// Manages a Node.js child process that hosts JS plugins and communicates
 /// via JSON-RPC over stdin/stdout.
 pub struct PluginRuntime {
-    /// fnm runtime
-    fnm: FnmRuntime,
+    /// Path to the node binary
+    node_path: PathBuf,
     /// Plugin host process (if running)
     host: Mutex<Option<PluginHost>>,
     /// Working directory for the host
@@ -347,22 +404,18 @@ pub struct PluginRuntime {
 impl PluginRuntime {
     /// Create a new plugin runtime
     pub fn new(working_dir: PathBuf) -> Result<Self, ExtensionError> {
-        let runtimes_dir = get_runtimes_dir().map_err(|e| {
-            ExtensionError::Runtime(format!("Failed to get runtimes directory: {}", e))
-        })?;
-        let fnm = FnmRuntime::new(runtimes_dir);
+        let paths = detect_node_paths()?;
         Ok(Self {
-            fnm,
+            node_path: paths.node,
             host: Mutex::new(None),
             working_dir,
         })
     }
 
-    /// Create with explicit runtimes directory
-    pub fn with_runtimes_dir(runtimes_dir: PathBuf, working_dir: PathBuf) -> Self {
-        let fnm = FnmRuntime::new(runtimes_dir);
+    /// Create with an explicit node binary path
+    pub fn with_node_path(node_path: PathBuf, working_dir: PathBuf) -> Self {
         Self {
-            fnm,
+            node_path,
             host: Mutex::new(None),
             working_dir,
         }
@@ -382,9 +435,9 @@ impl PluginRuntime {
             return Ok(()); // Already running
         }
 
-        if !self.fnm.is_installed() {
+        if !self.node_path.exists() {
             return Err(ExtensionError::Runtime(
-                "Node.js not installed. Run initialization first.".to_string(),
+                "Node.js not found. Run initialization first.".to_string(),
             ));
         }
 
@@ -398,7 +451,7 @@ impl PluginRuntime {
         })?;
 
         // Start Node.js with the host script
-        let mut child = Command::new(self.fnm.node_path())
+        let mut child = Command::new(&self.node_path)
             .arg(&script_path)
             .current_dir(&self.working_dir)
             .stdin(Stdio::piped())
