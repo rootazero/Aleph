@@ -65,7 +65,13 @@ final class Canvas: NSObject {
         }
 
         let script = "if (typeof window.alephApplyPatch === 'function') { window.alephApplyPatch(\(patchJson)); }"
-        _ = try? await webView.evaluateJavaScript(script)
+        do {
+            try await webView.evaluateJavaScript(script)
+        } catch {
+            // JS evaluation errors are non-fatal (e.g. page still loading, alephApplyPatch not yet injected).
+            // Log for debuggability but report success since the JS guard handles the not-ready case.
+            print("[Canvas] evaluateJavaScript error: \(error)")
+        }
 
         return .success(["patched": true] as [String: Any])
     }

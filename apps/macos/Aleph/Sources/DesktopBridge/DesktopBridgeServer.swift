@@ -174,6 +174,9 @@ final class DesktopBridgeServer: @unchecked Sendable {
     // Use DispatchSemaphore to bridge async Perception calls into this synchronous context.
 
     private func runAsync<T>(_ work: @escaping () async -> T) -> T {
+        // PRECONDITION: Must be called from a background thread.
+        // Calling from the main thread while work() awaits @MainActor code will deadlock.
+        assert(!Thread.isMainThread, "runAsync must not be called from the main thread")
         let semaphore = DispatchSemaphore(value: 0)
         var resultValue: T!
         Task {
