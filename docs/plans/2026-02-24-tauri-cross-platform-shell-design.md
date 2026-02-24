@@ -296,3 +296,45 @@ No invoke_handler needed — Leptos UI communicates directly with Gateway via We
 **Phase 4 — Screenshot MVP**: Implement `desktop.screenshot` with platform-specific backends.
 
 **Phase 5 — Integration**: Wire bridge server startup into `lib.rs` setup. Verify with manual UDS test.
+
+## Implementation Result
+
+> Date: 2026-02-24
+> Status: Implemented & Verified
+
+### Changes Summary
+
+- **14 files changed, 306 insertions(+), 1,611 deletions(-)**
+- Net reduction: 1,305 lines of code
+
+### Commits
+
+```
+c355a6c5 chore(desktop): remove unused anyhow and uuid dependencies
+1b1e83b8 fix(desktop): use ERR_NOT_IMPLEMENTED for stubbed methods, add debug logging
+1c308342 feat(desktop): add DesktopBridge UDS server with ping support
+63d8b1e1 feat(protocol): add desktop_bridge types for cross-platform Bridge
+1a96f3bd refactor(desktop): delete RPC proxy commands and clean up dead code (~1600 lines)
+```
+
+### Verification Tests (2026-02-24)
+
+All tests performed via Python UDS client against running Tauri app.
+
+| Test | Request | Response | Status |
+|------|---------|----------|--------|
+| Ping | `{"method":"desktop.ping"}` | `{"result":"pong"}` | PASS |
+| Stubbed method | `{"method":"desktop.screenshot"}` | `{"error":{"code":-32000,"message":"desktop.screenshot not implemented on this platform"}}` | PASS |
+| Unknown method | `{"method":"desktop.does_not_exist"}` | `{"error":{"code":-32601,"message":"Method not found: desktop.does_not_exist"}}` | PASS |
+| Parse error | `not json at all` | `{"error":{"code":-32700,"message":"Parse error: ..."}}` | PASS |
+
+Error code semantics verified:
+- **-32000** (`ERR_NOT_IMPLEMENTED`): known method, not yet implemented on this platform
+- **-32601** (`ERR_METHOD_NOT_FOUND`): unknown method
+- **-32700** (`ERR_PARSE`): invalid JSON
+
+### Remaining Work
+
+1. Implement `desktop.screenshot` with platform-specific backends (windows-rs, x11-dl)
+2. Implement remaining desktop capabilities (OCR, AXTree, click, typeText, etc.)
+3. Add `#[cfg(unix)]` guard for Windows compatibility (named pipes fallback)
