@@ -163,21 +163,31 @@ mod tests {
     }
 
     #[test]
-    fn default_pipeline_passthrough_with_stubs() {
-        // Since all stages are stubs (passthrough), the output should equal input.
+    fn default_pipeline_processes_high_score_candidates() {
+        // Stages are real now — high-scoring, recent, short facts survive
+        // the full pipeline (no query_embedding so cosine rerank is a no-op).
         let pipeline = ScoringPipeline::default();
+
+        let mut fact_a = MemoryFact::new("alpha".to_string(), FactType::Other, vec![]);
+        fact_a.created_at = 1700000000; // same as ctx timestamp
+        fact_a.confidence = 1.0;
+        let mut fact_b = MemoryFact::new("beta".to_string(), FactType::Other, vec![]);
+        fact_b.created_at = 1700000000;
+        fact_b.confidence = 1.0;
+
         let candidates = vec![
-            scored("alpha", 0.95),
-            scored("beta", 0.80),
-            scored("gamma", 0.60),
+            ScoredFact { fact: fact_a, score: 0.95 },
+            ScoredFact { fact: fact_b, score: 0.80 },
         ];
         let ctx = default_ctx();
         let result = pipeline.run(candidates, &ctx);
 
-        assert_eq!(result.len(), 3);
-        assert!((result[0].score - 0.95).abs() < f32::EPSILON);
-        assert!((result[1].score - 0.80).abs() < f32::EPSILON);
-        assert!((result[2].score - 0.60).abs() < f32::EPSILON);
+        // Both should survive hard_min_score (default 0.35)
+        assert_eq!(result.len(), 2);
+        // Scores will be adjusted by importance weight and time decay
+        // but both should remain well above threshold
+        assert!(result[0].score > 0.5);
+        assert!(result[1].score > 0.5);
     }
 
     #[test]
@@ -198,5 +208,85 @@ mod tests {
         let ctx = default_ctx();
         let result = pipeline.run(vec![], &ctx);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_full_pipeline_end_to_end() {
+        // Create 3 candidates:
+        //   1. recent + important (high confidence, just created)
+        //   2. old + verbose (long content, created 365 days ago)
+        //   3. low-score (should be filtered by hard_min_score)
+
+        let now = 1700000000_i64;
+
+        // Candidate 1: recent + important
+        let mut fact1 = MemoryFact::new(
+            "User prefers Rust.".to_string(),
+            FactType::Preference,
+            vec![],
+        );
+        fact1.created_at = now; // brand new
+        fact1.confidence = 1.0; // max confidence
+
+        // Candidate 2: old + verbose
+        let mut fact2 = MemoryFact::new(
+            "x".repeat(2000), // very long content
+            FactType::Other,
+            vec![],
+        );
+        fact2.created_at = now - 365 * 86400; // 1 year old
+        fact2.confidence = 0.5;
+
+        // Candidate 3: low starting score — will be filtered
+        let mut fact3 = MemoryFact::new(
+            "marginal fact".to_string(),
+            FactType::Other,
+            vec![],
+        );
+        fact3.created_at = now - 180 * 86400;
+        fact3.confidence = 0.3;
+
+        let candidates = vec![
+            ScoredFact { fact: fact1, score: 0.90 },
+            ScoredFact { fact: fact2, score: 0.70 },
+            ScoredFact { fact: fact3, score: 0.30 }, // below default hard_min_score of 0.35
+        ];
+
+        let ctx = ScoringContext {
+            query: "What language does the user prefer?".to_string(),
+            query_embedding: None,
+            timestamp: now,
+            config: ScoringPipelineConfig::default(),
+        };
+
+        let pipeline = ScoringPipeline::from_config(&ctx.config);
+        let result = pipeline.run(candidates, &ctx);
+
+        // low-score candidate should be filtered out
+        // (starts at 0.30, then gets multiplied by importance weight ≈ 0.79,
+        //  then time decay ≈ 0.68 → ~0.16 < 0.35 threshold)
+        assert!(
+            result.iter().all(|r| r.fact.content != "marginal fact"),
+            "low-score candidate should have been filtered out"
+        );
+
+        // recent+important candidate should rank first
+        assert_eq!(
+            result[0].fact.content, "User prefers Rust.",
+            "recent + important fact should rank first"
+        );
+
+        // We should have at most 2 survivors
+        assert!(result.len() <= 2, "expected at most 2 results, got {}", result.len());
+
+        // First result should have a meaningfully higher score than second
+        if result.len() == 2 {
+            assert!(
+                result[0].score > result[1].score,
+                "first result ({}) should outscore second ({})",
+                result[0].score,
+                result[1].score
+            );
+        }
     }
 }
