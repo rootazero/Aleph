@@ -1,7 +1,8 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A rectangular region on screen (pixels).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScreenRegion {
     pub x: f64,
     pub y: f64,
@@ -9,7 +10,7 @@ pub struct ScreenRegion {
     pub height: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum MouseButton {
     Left,
@@ -18,7 +19,7 @@ pub enum MouseButton {
 }
 
 /// Position and size of a canvas overlay window (pixels).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CanvasPosition {
     pub x: f64,
     pub y: f64,
