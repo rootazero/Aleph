@@ -462,8 +462,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
             None => None,
         };
+        // Load runtime capabilities from the ledger for prompt injection
+        let runtime_capabilities = {
+            use crate::runtimes::ledger::CapabilityLedger;
+            use crate::runtimes::format_entries_for_prompt;
+
+            crate::utils::paths::get_runtimes_dir().ok().and_then(|dir| {
+                let ledger = CapabilityLedger::load_or_create(dir.join("ledger.json"));
+                let ready = ledger.list_ready();
+                if ready.is_empty() { None } else { Some(format_entries_for_prompt(&ready)) }
+            })
+        };
+
         let thinker_config = ThinkerConfig {
-            prompt: PromptConfig { skill_instructions, ..PromptConfig::default() },
+            prompt: PromptConfig { skill_instructions, runtime_capabilities, ..PromptConfig::default() },
             ..ThinkerConfig::default()
         };
         let thinker = Arc::new(Thinker::new(thinker_registry, thinker_config));
