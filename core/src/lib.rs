@@ -47,6 +47,7 @@ pub mod compressor;
 mod config;
 pub mod conversation;
 mod core;
+pub mod desktop;
 pub mod discovery;
 pub mod dispatcher;
 pub mod domain;
