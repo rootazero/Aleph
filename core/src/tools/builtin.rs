@@ -163,5 +163,19 @@ impl AlephToolServer {
     ) -> Self {
         self.tool(McpGetPromptTool::new(mcp_handle))
     }
+
+    /// Register the desktop bridge tool (requires macOS App running).
+    ///
+    /// When the macOS App is not running, all tool calls return a friendly
+    /// message instead of an error, allowing the agent to degrade gracefully.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let server = AlephToolServer::new()
+    ///     .with_desktop();
+    /// ```
+    pub fn with_desktop(self) -> Self {
+        self.tool(DesktopTool::new())
+    }
 }
 
