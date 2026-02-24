@@ -18,21 +18,18 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-store = "2"
 
+# Aleph shared protocol
+aleph-protocol = { path = "../../../shared/protocol" }
+
 # Directories
 dirs = "5"
 
-# Aleph SDK (replaces alephcore)
-aleph-protocol = { path = "../../../shared/protocol" }
-# aleph-sdk = { path = "../../shared", features = ["client", "native-tls", "tracing"] }
-
 # Async
 tokio = { version = "1", features = ["full"] }
-async-trait = "0.1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -40,15 +37,10 @@ serde_json = "1"
 
 # Error handling
 thiserror = "1"
-anyhow = "1"
 
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Utilities
-uuid = { version = "1.7", features = ["v4"] }
-base64 = "0.22"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
