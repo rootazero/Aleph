@@ -11,13 +11,41 @@ import Vision
 final class Perception: @unchecked Sendable {
     static let shared = Perception()
 
+    // MARK: - Internal helpers
+
+    /// Captures the primary display as a CGImage without any encoding step.
+    /// Shared by `screenshot` and `ocr` to avoid a PNG round-trip when no
+    /// caller-supplied image is present.
+    private func captureCurrentScreen() async -> Result<CGImage, Error> {
+        do {
+            let content = try await SCShareableContent.current
+            guard let display = content.displays.first else {
+                throw NSError(domain: "Perception", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "No display found"])
+            }
+            let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+            let config = SCStreamConfiguration()
+            config.pixelFormat = kCVPixelFormatType_32BGRA
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter,
+                                                                   configuration: config)
+            return .success(image)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private func imageToBase64PNG(_ image: CGImage) -> String? {
+        let nsImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        guard let tiff = nsImage.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let pngData = bitmap.representation(using: .png, properties: [:])
+        else { return nil }
+        return pngData.base64EncodedString()
+    }
+
     // MARK: - Screenshot
 
     func screenshot(region: ScreenRegion?) async -> Result<Any, Error> {
-        return await screenshotSCK(region: region)
-    }
-
-    private func screenshotSCK(region: ScreenRegion?) async -> Result<Any, Error> {
         do {
             let content = try await SCShareableContent.current
             guard let display = content.displays.first else {
@@ -50,40 +78,25 @@ final class Perception: @unchecked Sendable {
         }
     }
 
-    private func imageToBase64PNG(_ image: CGImage) -> String? {
-        let nsImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
-        guard let tiff = nsImage.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let pngData = bitmap.representation(using: .png, properties: [:])
-        else { return nil }
-        return pngData.base64EncodedString()
-    }
-
     // MARK: - OCR
 
     func ocr(imageBase64: String?) async -> Result<Any, Error> {
-        let imageData: Data?
+        let cgImage: CGImage
         if let b64 = imageBase64 {
-            imageData = Data(base64Encoded: b64)
-        } else {
-            // Capture current screen first
-            let result = await screenshot(region: nil)
-            switch result {
-            case .success(let dict):
-                let d = dict as? [String: Any]
-                let b64 = d?["image_base64"] as? String
-                imageData = b64.flatMap { Data(base64Encoded: $0) }
-            case .failure(let e):
-                return .failure(e)
+            guard let data = Data(base64Encoded: b64),
+                  let nsImage = NSImage(data: data),
+                  let cg = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            else {
+                return .failure(NSError(domain: "Perception", code: 5,
+                                       userInfo: [NSLocalizedDescriptionKey: "Invalid image data"]))
             }
-        }
-
-        guard let data = imageData,
-              let nsImage = NSImage(data: data),
-              let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil)
-        else {
-            return .failure(NSError(domain: "Perception", code: 5,
-                                   userInfo: [NSLocalizedDescriptionKey: "Invalid image data"]))
+            cgImage = cg
+        } else {
+            // Capture screen directly as CGImage — no Base64 round-trip
+            switch await captureCurrentScreen() {
+            case .success(let img): cgImage = img
+            case .failure(let err): return .failure(err)
+            }
         }
 
         return await recognizeText(in: cgImage)
