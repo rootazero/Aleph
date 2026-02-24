@@ -58,7 +58,12 @@ pub mod scheduler;
 pub mod template;
 pub mod webhook_target;
 
-pub use config::{CronConfig, CronJob, JobRun, JobStatus, ScheduleKind, TriggerSource};
+pub use config::{
+    CronConfig, CronJob, DeliveryConfig, DeliveryMode, DeliveryOutcome,
+    DeliveryTargetConfig, JobRun, JobStatus, ScheduleKind, TriggerSource,
+};
+pub use delivery::{DeliveryEngine, DeliveryTarget};
+pub use scheduler::{compute_backoff_ms, compute_next_run_at};
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
@@ -1250,5 +1255,85 @@ mod tests {
         let retrieved = service.get_job(&job_id).await.unwrap();
         assert!(retrieved.next_run_at.is_some());
         assert_eq!(retrieved.schedule_kind, ScheduleKind::Every);
+    }
+
+    #[tokio::test]
+    async fn test_full_job_lifecycle() {
+        use crate::cron::config::DeliveryConfig;
+
+        let config = test_config();
+        let service = CronService::new(config).unwrap();
+
+        // 1. Add a job with delivery config
+        let mut job = CronJob::new("Lifecycle Test", "0 0 * * * *", "main", "Do work");
+        job.priority = 2;
+        job.max_retries = 5;
+        job.delivery_config = Some(DeliveryConfig {
+            mode: crate::cron::config::DeliveryMode::None,
+            targets: vec![],
+            fallback_target: None,
+        });
+        let job_id = job.id.clone();
+        service.add_job(job).await.unwrap();
+
+        // 2. Verify next_run_at computed and delivery config stored
+        let ret = service.get_job(&job_id).await.unwrap();
+        assert!(ret.next_run_at.is_some());
+        assert_eq!(ret.priority, 2);
+        assert_eq!(ret.max_retries, 5);
+        assert!(ret.delivery_config.is_some());
+
+        // 3. Update the job
+        let mut updated = ret;
+        updated.prompt = "Updated prompt".to_string();
+        service.update_job(updated).await.unwrap();
+        let ret = service.get_job(&job_id).await.unwrap();
+        assert_eq!(ret.prompt, "Updated prompt");
+
+        // 4. Verify template rendering works
+        let rendered = crate::cron::template::render_template(
+            "Job {{job_name}} run #{{run_count}}",
+            &ret,
+            None,
+            42,
+        );
+        assert_eq!(rendered, "Job Lifecycle Test run #42");
+
+        // 5. Verify chain cycle detection (no chain configured, so no cycle)
+        let conn = rusqlite::Connection::open(&service.db_path).unwrap();
+        let has_cycle = crate::cron::chain::detect_cycle_sync(&conn, &job_id, "nonexistent").unwrap();
+        assert!(!has_cycle);
+
+        // 6. Disable and re-enable
+        service.disable_job(&job_id).await.unwrap();
+        let ret = service.get_job(&job_id).await.unwrap();
+        assert!(!ret.enabled);
+
+        service.enable_job(&job_id).await.unwrap();
+        let ret = service.get_job(&job_id).await.unwrap();
+        assert!(ret.enabled);
+
+        // 7. Delete
+        service.delete_job(&job_id).await.unwrap();
+        assert!(matches!(service.get_job(&job_id).await, Err(CronError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn test_add_oneshot_job() {
+        let config = test_config();
+        let service = CronService::new(config).unwrap();
+
+        let mut job = CronJob::new("One-Shot", "unused", "main", "Do once");
+        job.schedule_kind = ScheduleKind::At;
+        job.at_time = Some(Utc::now().timestamp_millis() + 3_600_000);
+        job.delete_after_run = true;
+
+        let job_id = job.id.clone();
+        service.add_job(job).await.unwrap();
+
+        let ret = service.get_job(&job_id).await.unwrap();
+        assert_eq!(ret.schedule_kind, ScheduleKind::At);
+        assert!(ret.next_run_at.is_some());
+        assert!(ret.delete_after_run);
     }
 }
