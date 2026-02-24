@@ -169,7 +169,7 @@ final class Action: @unchecked Sendable {
         }
 
         let app = NSRunningApplication(processIdentifier: pid)
-        app?.activate(options: .activateIgnoringOtherApps)
+        app?.activate()
 
         return .success(["focused": id] as [String: Any])
     }
