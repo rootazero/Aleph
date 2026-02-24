@@ -51,6 +51,10 @@
 //! ```
 
 pub mod config;
+pub mod chain;
+pub mod resource;
+pub mod scheduler;
+pub mod template;
 
 pub use config::{CronConfig, CronJob, JobRun, JobStatus, ScheduleKind, TriggerSource};
 
