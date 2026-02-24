@@ -135,17 +135,17 @@ fn handle_secret_providers() -> Result<(), Box<dyn Error>> {
 
     let config = alephcore::Config::load().unwrap_or_default();
 
-    println!("{:<15} {:<15} {}", "KEY", "TYPE", "STATUS");
+    println!("{:<15} {:<15} STATUS", "KEY", "TYPE");
     println!("{}", "-".repeat(55));
 
     // Always show built-in local vault
-    println!("{:<15} {:<15} {}", "local", "local_vault", "Ready (built-in)");
+    println!("{:<15} {:<15} Ready (built-in)", "local", "local_vault");
 
     // Show configured external providers
     for (key, provider_config) in &config.secret_providers {
         match provider_config.provider_type.as_str() {
             "local_vault" => {
-                println!("{:<15} {:<15} {}", key, "local_vault", "Ready (built-in)");
+                println!("{:<15} {:<15} Ready (built-in)", key, "local_vault");
             }
             "1password" => {
                 let token = provider_config
@@ -157,7 +157,7 @@ fn handle_secret_providers() -> Result<(), Box<dyn Error>> {
                 let rt = tokio::runtime::Runtime::new()?;
                 match rt.block_on(op.health_check()) {
                     Ok(ProviderStatus::Ready) => {
-                        println!("{:<15} {:<15} {}", key, "1password", "Ready");
+                        println!("{:<15} {:<15} Ready", key, "1password");
                     }
                     Ok(ProviderStatus::NeedsAuth { message }) => {
                         println!("{:<15} {:<15} Needs Auth: {}", key, "1password", message);
@@ -171,7 +171,7 @@ fn handle_secret_providers() -> Result<(), Box<dyn Error>> {
                 }
             }
             other => {
-                println!("{:<15} {:<15} {}", key, other, "Unknown type");
+                println!("{:<15} {:<15} Unknown type", key, other);
             }
         }
     }
