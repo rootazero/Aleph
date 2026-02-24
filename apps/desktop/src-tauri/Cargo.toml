@@ -26,7 +26,7 @@ tauri-plugin-store = "2"
 aleph-protocol = { path = "../../../shared/protocol" }
 
 # Directories
-dirs = "5"
+dirs = "6"
 
 # Async
 tokio = { version = "1", features = ["full"] }
@@ -36,7 +36,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Error handling
-thiserror = "1"
+thiserror = "2"
 
 # Logging
 tracing = "0.1"
@@ -44,7 +44,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Screen capture
 xcap = "0.8"
-base64 = "0.21"
+base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
