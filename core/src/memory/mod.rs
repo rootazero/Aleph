@@ -51,6 +51,7 @@ pub mod store;
 pub mod vfs;
 pub mod workspace;
 pub mod workspace_store;
+pub mod scoring_pipeline;
 
 #[cfg(test)]
 mod integration_tests;
@@ -125,3 +126,4 @@ pub use store::lance::LanceMemoryBackend;
 pub use store::types::{SearchFilter, ScoredFact, MemoryFilter};
 pub use store::MemoryBackend;
 pub use workspace::{Workspace, WorkspaceConfig, WorkspaceContext, WorkspaceFilter, DEFAULT_WORKSPACE};
+pub use scoring_pipeline::{ScoringPipeline, ScoringPipelineConfig, ScoringContext};
