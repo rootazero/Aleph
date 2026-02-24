@@ -29,6 +29,7 @@ mod download;
 pub mod ledger;
 mod manager;
 mod manifest;
+pub mod probe;
 mod registry;
 
 // Runtime implementations
@@ -44,6 +45,7 @@ pub mod git_check;
 pub use capability::RuntimeCapability;
 pub use ledger::{CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus};
 pub use manager::{RuntimeInfo, RuntimeManager, UpdateInfo};
+pub use probe::ProbeResult;
 pub use manifest::Manifest;
 pub use registry::RuntimeRegistry;
 
