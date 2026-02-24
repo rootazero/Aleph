@@ -263,6 +263,20 @@ pub fn migrate_from_legacy(runtimes_dir: &Path) -> std::io::Result<CapabilityLed
 }
 
 // ---------------------------------------------------------------------------
+// Convenience functions
+// ---------------------------------------------------------------------------
+
+/// Build enhanced PATH from the persisted ledger on disk.
+/// Convenience for callers that don't have a ledger instance in memory.
+pub fn build_enhanced_path() -> std::io::Result<String> {
+    let runtimes_dir = crate::runtimes::get_runtimes_dir()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    let ledger_path = runtimes_dir.join("ledger.json");
+    let ledger = CapabilityLedger::load_or_create(ledger_path);
+    Ok(ledger.build_path())
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
