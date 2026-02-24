@@ -25,7 +25,8 @@ pub fn needs_initialization() -> Result<bool> {
 
     // Check essential markers
     let has_config = config_dir.join("config.toml").exists();
-    let has_manifest = config_dir.join("runtimes").join("manifest.json").exists();
+    let has_manifest = config_dir.join("runtimes").join("manifest.json").exists()
+        || config_dir.join("runtimes").join("ledger.json").exists();
 
     Ok(!has_config || !has_manifest)
 }

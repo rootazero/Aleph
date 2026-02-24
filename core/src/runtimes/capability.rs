@@ -3,8 +3,7 @@
 //! Provides runtime capability descriptions for injection into AI system prompts.
 //! This allows the AI to understand which runtimes are available and how to use them.
 
-use super::registry::RuntimeRegistry;
-use super::RuntimeInfo;
+use super::ledger::CapabilityEntry;
 use std::path::PathBuf;
 
 /// Runtime capability description for AI system prompt injection
@@ -25,42 +24,6 @@ pub struct RuntimeCapability {
 }
 
 impl RuntimeCapability {
-    /// Create capability from RuntimeInfo and executable path
-    pub fn from_info(info: &RuntimeInfo, executable_path: PathBuf) -> Self {
-        Self {
-            id: info.id.to_string(),
-            name: info.name.to_string(),
-            description: info.description.to_string(),
-            executable_path: if info.installed {
-                Some(executable_path)
-            } else {
-                None
-            },
-            installed: info.installed,
-            version: info.version.clone(),
-        }
-    }
-
-    /// Get all installed runtime capabilities from the registry
-    ///
-    /// Returns only the runtimes that are currently installed.
-    pub fn get_installed_from_registry(registry: &RuntimeRegistry) -> Vec<RuntimeCapability> {
-        let runtimes = registry.list();
-        let mut capabilities = Vec::new();
-
-        for info in runtimes {
-            if info.installed {
-                // Get executable path from the runtime
-                if let Some(runtime) = registry.get(info.id) {
-                    let capability = RuntimeCapability::from_info(&info, runtime.executable_path());
-                    capabilities.push(capability);
-                }
-            }
-        }
-
-        capabilities
-    }
-
     /// Format runtime capabilities for system prompt injection
     ///
     /// Generates a markdown-formatted section describing available runtimes.
@@ -98,31 +61,69 @@ impl RuntimeCapability {
 
     /// Get usage hints for specific runtimes
     fn get_usage_hints(runtime_id: &str) -> String {
-        match runtime_id {
-            "uv" => {
-                "- Use for Python script execution and package management\n\
-                 - Install packages: `uv pip install <package>`\n"
-                    .to_string()
-            }
-            "fnm" => {
-                "- Use for Node.js/JavaScript execution\n\
-                 - Run scripts with `node` command\n\
-                 - Install packages with `npm install`\n"
-                    .to_string()
-            }
-            "ffmpeg" => {
-                "- Use for audio/video processing and conversion\n\
-                 - Supports most media formats\n"
-                    .to_string()
-            }
-            "yt-dlp" => {
-                "- Use for downloading videos from YouTube and other sites\n\
-                 - Can extract audio, subtitles, and metadata\n"
-                    .to_string()
-            }
-            _ => String::new(),
-        }
+        get_usage_hints(runtime_id)
     }
+}
+
+/// Get usage hints for a runtime by its identifier.
+///
+/// Returns markdown-formatted hints describing how to use the runtime.
+/// Standalone function so it can be called from both `RuntimeCapability`
+/// methods and `format_entries_for_prompt`.
+fn get_usage_hints(runtime_id: &str) -> String {
+    match runtime_id {
+        "uv" => {
+            "- Use for Python script execution and package management\n\
+             - Install packages: `uv pip install <package>`\n"
+                .to_string()
+        }
+        "fnm" | "node" => {
+            "- Use for Node.js/JavaScript execution\n\
+             - Run scripts with `node` command\n\
+             - Install packages with `npm install`\n"
+                .to_string()
+        }
+        "ffmpeg" => {
+            "- Use for audio/video processing and conversion\n\
+             - Supports most media formats\n"
+                .to_string()
+        }
+        "yt-dlp" => {
+            "- Use for downloading videos from YouTube and other sites\n\
+             - Can extract audio, subtitles, and metadata\n"
+                .to_string()
+        }
+        _ => String::new(),
+    }
+}
+
+/// Format capability entries for AI system prompt injection.
+///
+/// Takes a slice of `&CapabilityEntry` references (as returned by
+/// `CapabilityLedger::list_ready()`) and produces markdown text
+/// suitable for inclusion in the system prompt.
+pub fn format_entries_for_prompt(entries: &[&CapabilityEntry]) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::new();
+    for entry in entries {
+        output.push_str(&format!("**{}**\n", entry.name));
+        if !entry.version.is_empty() {
+            output.push_str(&format!("- Version: {}\n", entry.version));
+        }
+        if !entry.bin_path.as_os_str().is_empty() {
+            output.push_str(&format!("- Executable: {}\n", entry.bin_path.display()));
+        }
+        // Reuse existing usage hints
+        let hints = get_usage_hints(&entry.name);
+        if !hints.is_empty() {
+            output.push_str(&hints);
+        }
+        output.push('\n');
+    }
+    output
 }
 
 #[cfg(test)]
@@ -158,9 +159,73 @@ mod tests {
     #[test]
     fn test_usage_hints() {
         assert!(RuntimeCapability::get_usage_hints("uv").contains("Python"));
-        assert!(RuntimeCapability::get_usage_hints("fnm").contains("Node.js"));
+        assert!(RuntimeCapability::get_usage_hints("node").contains("Node.js"));
         assert!(RuntimeCapability::get_usage_hints("ffmpeg").contains("audio/video"));
         assert!(RuntimeCapability::get_usage_hints("yt-dlp").contains("YouTube"));
         assert!(RuntimeCapability::get_usage_hints("unknown").is_empty());
+    }
+
+    // -- format_entries_for_prompt tests -----------------------------------
+
+    #[test]
+    fn test_format_entries_for_prompt_empty() {
+        let entries: Vec<&CapabilityEntry> = vec![];
+        let result = format_entries_for_prompt(&entries);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_format_entries_for_prompt_single() {
+        let entry = CapabilityEntry {
+            name: "uv".to_string(),
+            bin_path: PathBuf::from("/home/user/.aleph/runtimes/uv/bin/uv"),
+            version: "0.5.14".to_string(),
+            status: super::super::ledger::CapabilityStatus::Ready,
+            source: super::super::ledger::CapabilitySource::AlephManaged,
+            last_probed: 0,
+        };
+        let entries: Vec<&CapabilityEntry> = vec![&entry];
+        let result = format_entries_for_prompt(&entries);
+
+        assert!(result.contains("**uv**"), "should contain bold name");
+        assert!(result.contains("Version: 0.5.14"), "should contain version");
+        assert!(result.contains("/home/user/.aleph/runtimes/uv/bin/uv"), "should contain bin path");
+        assert!(result.contains("Python"), "should contain usage hints for uv");
+    }
+
+    #[test]
+    fn test_format_entries_for_prompt_no_version() {
+        let entry = CapabilityEntry {
+            name: "ffmpeg".to_string(),
+            bin_path: PathBuf::from("/usr/bin/ffmpeg"),
+            version: String::new(),
+            status: super::super::ledger::CapabilityStatus::Ready,
+            source: super::super::ledger::CapabilitySource::System,
+            last_probed: 0,
+        };
+        let entries: Vec<&CapabilityEntry> = vec![&entry];
+        let result = format_entries_for_prompt(&entries);
+
+        assert!(result.contains("**ffmpeg**"));
+        assert!(!result.contains("Version:"), "empty version should be omitted");
+        assert!(result.contains("audio/video"), "should contain usage hints for ffmpeg");
+    }
+
+    #[test]
+    fn test_format_entries_for_prompt_unknown_runtime() {
+        let entry = CapabilityEntry {
+            name: "custom-tool".to_string(),
+            bin_path: PathBuf::from("/opt/bin/custom-tool"),
+            version: "2.0".to_string(),
+            status: super::super::ledger::CapabilityStatus::Ready,
+            source: super::super::ledger::CapabilitySource::System,
+            last_probed: 0,
+        };
+        let entries: Vec<&CapabilityEntry> = vec![&entry];
+        let result = format_entries_for_prompt(&entries);
+
+        assert!(result.contains("**custom-tool**"));
+        assert!(result.contains("Version: 2.0"));
+        // No usage hints for unknown runtimes — just name/version/path
     }
 }
