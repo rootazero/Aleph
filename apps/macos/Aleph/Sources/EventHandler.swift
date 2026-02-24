@@ -99,7 +99,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            self.haloWindow?.showProcessingWithAI(providerName: nil)
+            // Window is visible — WebView handles processing display via Gateway events
             self.haloWindow?.showAtCurrentPosition()
         }
     }
@@ -112,8 +112,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            // Show processing state with tool name
-            self.haloWindow?.showProcessing(streamingText: "Using \(toolName)...")
+            // Window is visible — WebView handles tool display via Gateway events
             self.haloWindow?.showAtCurrentPosition()
         }
     }
@@ -126,12 +125,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
         print("[EventHandler] Tool result: \(toolName) - \(result.prefix(100))...")
         currentToolName = nil
         handleSnapshotPermissionToast(toolName: toolName, result: result)
-
-        Task { @MainActor [weak self] in
-            guard let self = self else { return }
-            // Update state to show tool completed
-            self.haloWindow?.showProcessing(streamingText: "Completed: \(toolName)")
-        }
+        // WebView handles tool result display via Gateway events
     }
 
     private func handleSnapshotPermissionToast(toolName: String, result: String) {
@@ -145,16 +139,11 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
         }
         lastScreenRecordingToastAt = now
 
-        showToast(
-            type: .warning,
-            title: L("permission.screen_recording.title"),
-            message: L("permission.screen_recording.description"),
-            autoDismiss: false,
-            actionTitle: L("permission.open_settings"),
-            onAction: {
-                PermissionChecker.openSystemSettings(for: .screenRecording)
-            }
-        )
+        // Toast display is now handled by WebView — log and open settings
+        NSLog("[EventHandler] Screen recording permission required")
+        Task { @MainActor in
+            PermissionChecker.openSystemSettings(for: .screenRecording)
+        }
     }
 
     /// Called for each streaming response chunk
@@ -169,11 +158,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
         if isFirstOrLargeChange {
             print("[EventHandler] Stream chunk (delta): \(text.prefix(80))... (delta: \(text.count) chars, total: \(accumulatedText.count) chars)")
         }
-
-        Task { @MainActor [weak self] in
-            guard let self = self else { return }
-            self.haloWindow?.showProcessing(streamingText: self.accumulatedText)
-        }
+        // WebView handles streaming display via Gateway events
     }
 
     /// Called when processing completes successfully
@@ -187,11 +172,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-
-            // Show success state then auto-hide
-            self.haloWindow?.showSuccess(message: nil)
-
-            // Auto-hide after brief display
+            // WebView handles completion display — auto-hide after brief delay
             try? await Task.sleep(seconds: 0.8)
             self.haloWindow?.hide()
         }
@@ -294,18 +275,12 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
                 userInfo: ["updates": updates]
             )
 
-            // Show toast notification about available updates
+            // Log runtime update notification (toast display handled by WebView)
             if !updates.isEmpty {
                 let message = updates.count == 1
                     ? L("notification.runtime_update_single", updates[0].runtimeId, updates[0].latestVersion)
                     : L("notification.runtime_updates_multiple", String(updates.count))
-
-                self.showToast(
-                    type: .info,
-                    title: L("notification.runtime_updates_title"),
-                    message: message,
-                    autoDismiss: true
-                )
+                NSLog("[EventHandler] Runtime updates: %@", message)
             }
         }
     }
@@ -333,8 +308,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
                 userInfo: ["sessionId": sessionId]
             )
 
-            // Show processing state
-            self.haloWindow?.showProcessingWithAI(providerName: L("halo.agentic_session"))
+            // Ensure window is visible — WebView handles processing display
             self.haloWindow?.showAtCurrentPosition()
         }
     }
@@ -363,21 +337,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
                 ]
             )
 
-            // Update Halo to show tool execution
-            if self.isInAgenticSession {
-                // Show agent progress with current tool
-                let progress = self.currentPlanSteps.isEmpty ? 0.0 :
-                    Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
-                self.haloWindow?.showAgentProgress(
-                    planId: self.currentAgenticSessionId ?? "",
-                    progress: progress,
-                    currentOperation: toolName,
-                    completedCount: self.completedStepCount,
-                    totalCount: self.currentPlanSteps.count
-                )
-            } else {
-                self.haloWindow?.showProcessing(streamingText: "🔧 \(toolName)")
-            }
+            // WebView handles tool execution display via Gateway events
         }
     }
 
@@ -409,17 +369,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
                 ]
             )
 
-            // Update progress
-            if self.isInAgenticSession && !self.currentPlanSteps.isEmpty {
-                let progress = Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
-                self.haloWindow?.showAgentProgress(
-                    planId: self.currentAgenticSessionId ?? "",
-                    progress: progress,
-                    currentOperation: "✓ \(toolName)",
-                    completedCount: self.completedStepCount,
-                    totalCount: self.currentPlanSteps.count
-                )
-            }
+            // WebView handles progress display via Gateway events
         }
     }
 
@@ -450,19 +400,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
                 ]
             )
 
-            // Show error in progress (if retryable, indicate retry)
-            if self.isInAgenticSession {
-                let statusText = isRetryable ? "⟳ \(toolName) (retrying...)" : "✗ \(toolName)"
-                let progress = self.currentPlanSteps.isEmpty ? 0.0 :
-                    Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
-                self.haloWindow?.showAgentProgress(
-                    planId: self.currentAgenticSessionId ?? "",
-                    progress: progress,
-                    currentOperation: statusText,
-                    completedCount: self.completedStepCount,
-                    totalCount: self.currentPlanSteps.count
-                )
-            }
+            // WebView handles error display via Gateway events
         }
     }
 
@@ -490,18 +428,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
                 ]
             )
 
-            // Update Halo with iteration info
-            if self.isInAgenticSession {
-                let progress = self.currentPlanSteps.isEmpty ? 0.0 :
-                    Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
-                self.haloWindow?.showAgentProgress(
-                    planId: sessionId,
-                    progress: progress,
-                    currentOperation: status,
-                    completedCount: self.completedStepCount,
-                    totalCount: self.currentPlanSteps.count
-                )
-            }
+            // WebView handles progress display via Gateway events
         }
     }
 
@@ -531,28 +458,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
                 ]
             )
 
-            // Show plan progress view
-            let stepProgress = steps.enumerated().map { index, description in
-                PlanStepProgressInfo(
-                    index: UInt32(index + 1),
-                    toolName: "",
-                    description: description,
-                    status: .pending,
-                    resultPreview: nil,
-                    errorMessage: nil
-                )
-            }
-
-            self.haloWindow?.showPlanProgress(progressInfo: PlanProgressInfo(
-                planId: sessionId,
-                description: L("halo.executing_plan"),
-                totalSteps: UInt32(steps.count),
-                currentStep: 0,
-                currentStepName: steps.first ?? "",
-                stepProgress: stepProgress,
-                status: .running,
-                errorMessage: nil
-            ))
+            // WebView handles plan progress display via Gateway events
             self.haloWindow?.showAtCurrentPosition()
         }
     }
@@ -584,11 +490,9 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
                 ]
             )
 
-            // Show success toast if we were tracking this session
+            // Auto-hide after brief display if we were tracking this session
             if wasInSession {
-                self.haloWindow?.showSuccess(message: summary)
-
-                // Auto-hide after brief display
+                // WebView handles completion display — auto-hide after delay
                 try? await Task.sleep(seconds: 1.5)
                 self.haloWindow?.hide()
             }
@@ -616,18 +520,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
                 ]
             )
 
-            // Show sub-agent indicator in progress
-            if self.isInAgenticSession {
-                let progress = self.currentPlanSteps.isEmpty ? 0.0 :
-                    Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
-                self.haloWindow?.showAgentProgress(
-                    planId: parentSessionId,
-                    progress: progress,
-                    currentOperation: "🤖 \(agentId)",
-                    completedCount: self.completedStepCount,
-                    totalCount: self.currentPlanSteps.count
-                )
-            }
+            // WebView handles sub-agent display via Gateway events
         }
     }
 
@@ -652,20 +545,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
                 ]
             )
 
-            // Update progress with sub-agent result
-            if self.isInAgenticSession {
-                let statusIcon = success ? "✓" : "✗"
-                let truncatedSummary = summary.count > 30 ? String(summary.prefix(30)) + "..." : summary
-                let progress = self.currentPlanSteps.isEmpty ? 0.0 :
-                    Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
-                self.haloWindow?.showAgentProgress(
-                    planId: self.currentAgenticSessionId ?? "",
-                    progress: progress,
-                    currentOperation: "\(statusIcon) \(truncatedSummary)",
-                    completedCount: self.completedStepCount,
-                    totalCount: self.currentPlanSteps.count
-                )
-            }
+            // WebView handles sub-agent completion display via Gateway events
         }
     }
 
@@ -897,21 +777,13 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
     // MARK: - Error Notification
 
     private func showErrorNotification(message: String) {
-        // Use error state in Halo
+        // Error display is now handled by WebView — log the error
+        NSLog("[EventHandler] Error: %@", message)
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            self.haloWindow?.showError(
-                ErrorContext(
-                    type: .unknown,
-                    message: message
-                ),
-                onRetry: nil,
-                onDismiss: { [weak self] in
-                    Task { @MainActor in
-                        self?.haloWindow?.hide()
-                    }
-                }
-            )
+            // Auto-hide after brief delay
+            try? await Task.sleep(seconds: 2.0)
+            self.haloWindow?.hide()
         }
     }
 
@@ -1008,12 +880,17 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
     /// Timer for auto-dismissing toasts
     private var toastDismissTimer: Timer?
 
+    /// Toast type enumeration (lightweight replacement for deleted HaloState.ToastType)
+    enum ToastType {
+        case info
+        case warning
+        case error
+    }
+
     /// Show a toast notification to the user
-    /// - Parameters:
-    ///   - type: The toast type (info, warning, error)
-    ///   - title: Toast title
-    ///   - message: Toast message
-    ///   - autoDismiss: Whether to auto-dismiss (default: true for info)
+    ///
+    /// Toast display is now handled by the WebView Halo UI.
+    /// This method logs the toast and shows/hides the window as a fallback.
     func showToast(
         type: ToastType,
         title: String,
@@ -1022,7 +899,7 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
         actionTitle: String? = nil,
         onAction: (() -> Void)? = nil
     ) {
-        print("[EventHandler] Showing toast: \(type) - \(title)")
+        NSLog("[EventHandler] Toast: %@ - %@ - %@", String(describing: type), title, message)
 
         // Cancel any existing dismiss timer
         toastDismissTimer?.invalidate()
@@ -1030,27 +907,12 @@ class EventHandler: AlephEventHandler, @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            // Update Halo state using legacy bridge
-            let shouldAutoDismiss = autoDismiss && type == .info && actionTitle == nil
-            self.haloWindow?.showToast(
-                type: type,
-                title: title,
-                message: message,
-                autoDismiss: shouldAutoDismiss,
-                actionTitle: actionTitle
-            )
 
-            // Set dismiss callback
-            self.haloWindow?.viewModel.callbacks.onDismiss = { [weak self] in
-                self?.dismissToast()
-            }
-            // Note: Action handling simplified for V2 model
-            // TODO: Add proper action support in V2 if needed
-
-            // Show at screen center
+            // Show window centered — WebView will handle toast display in future
             self.haloWindow?.showCentered()
 
-            // Set auto-dismiss timer for info toasts
+            // Auto-dismiss for info toasts
+            let shouldAutoDismiss = autoDismiss && type == .info && actionTitle == nil
             if shouldAutoDismiss {
                 self.toastDismissTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
                     self?.dismissToast()

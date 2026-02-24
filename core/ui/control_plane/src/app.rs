@@ -7,6 +7,7 @@ use crate::views::system_status::SystemStatus;
 use crate::views::agent_trace::AgentTrace;
 use crate::views::memory::Memory;
 use crate::views::settings::*;
+use crate::views::halo::HaloView;
 use crate::components::Sidebar;
 use crate::context::{DashboardContext, DashboardState};
 
@@ -64,6 +65,7 @@ fn AppContent() -> impl IntoView {
                         <Route path=path!("/status") view=SystemStatus />
                         <Route path=path!("/trace") view=AgentTrace />
                         <Route path=path!("/memory") view=Memory />
+                        <Route path=path!("/halo") view=HaloView />
 
                         // Settings routes (promoted to top-level)
                         <Route path=path!("/settings") view=Settings />
