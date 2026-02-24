@@ -30,7 +30,7 @@
       {
         "label": "settings",
         "title": "Aleph Settings",
-        "url": "/settings.html",
+        "url": "http://127.0.0.1:18790/settings",
         "width": 900,
         "height": 650,
         "minWidth": 700,
@@ -42,7 +42,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: https:; connect-src 'self' https://*.openai.com https://*.anthropic.com https://*.googleapis.com"
+      "csp": "default-src 'self' http://127.0.0.1:18790; style-src 'self' 'unsafe-inline' http://127.0.0.1:18790; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline' http://127.0.0.1:18790; img-src 'self' data: https: http://127.0.0.1:18790; connect-src 'self' http://127.0.0.1:18790 ws://127.0.0.1:18789 https://*.openai.com https://*.anthropic.com https://*.googleapis.com; frame-src http://127.0.0.1:18790"
     }
   },
   "bundle": {
