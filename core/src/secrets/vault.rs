@@ -168,32 +168,32 @@ pub fn resolve_master_key() -> Result<String, SecretError> {
     std::env::var("ALEPH_MASTER_KEY").map_err(|_| SecretError::MasterKeyMissing)
 }
 
-/// Resolve secret_name references in provider configs.
+/// Resolve secret_name references in provider configs using an async resolver.
 ///
-/// For each provider with a secret_name, decrypts the secret from vault
+/// For each provider with a secret_name, resolves the secret via the resolver
 /// and populates the in-memory api_key field. The config.toml file is
 /// never modified — this is a runtime-only operation.
-pub fn resolve_provider_secrets(
+pub async fn resolve_provider_secrets(
     config: &mut Config,
-    vault: &SecretVault,
+    resolver: &dyn super::router::AsyncSecretResolver,
 ) -> Result<(), SecretError> {
     for (name, provider) in config.providers.iter_mut() {
         if let Some(ref secret_name) = provider.secret_name {
             if provider.api_key.is_none() {
-                match vault.get(secret_name) {
+                match resolver.resolve(secret_name).await {
                     Ok(secret) => {
                         provider.api_key = Some(secret.expose().to_string());
                         debug!(
                             provider = %name,
                             secret_name = %secret_name,
-                            "Resolved API key from vault"
+                            "Resolved API key from secret provider"
                         );
                     }
                     Err(SecretError::NotFound(ref s)) => {
                         warn!(
                             provider = %name,
                             secret_name = %s,
-                            "Secret not found in vault, provider will fail on use"
+                            "Secret not found, provider will fail on use"
                         );
                     }
                     Err(e) => return Err(e),
@@ -386,28 +386,25 @@ mod tests {
         assert_eq!(meta.provider.as_deref(), Some("anthropic"));
     }
 
-    #[test]
-    fn test_resolve_provider_secrets() {
+    #[tokio::test]
+    async fn test_resolve_provider_secrets() {
         let dir = TempDir::new().unwrap();
         let vault_path = dir.path().join("test.vault");
         let mut vault = SecretVault::open(&vault_path, "master").unwrap();
 
-        // Store a secret
         vault
             .set("anthropic_key", "sk-ant-real-key", EntryMetadata::default())
             .unwrap();
 
-        // Create config with secret_name reference
         let mut config = Config::default();
         let mut provider = ProviderConfig::test_config("claude-sonnet");
         provider.api_key = None;
         provider.secret_name = Some("anthropic_key".into());
         config.providers.insert("claude".into(), provider);
 
-        // Resolve
-        resolve_provider_secrets(&mut config, &vault).unwrap();
+        // SecretVault implements AsyncSecretResolver
+        resolve_provider_secrets(&mut config, &vault).await.unwrap();
 
-        // api_key should now be populated
         assert_eq!(
             config.providers.get("claude").unwrap().api_key.as_deref(),
             Some("sk-ant-real-key")

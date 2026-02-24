@@ -550,7 +550,7 @@ fn initialize_auth(
 
 /// Load and return the application config, running secrets vault migration if needed.
 #[cfg(feature = "gateway")]
-fn load_app_config() -> alephcore::Config {
+async fn load_app_config() -> alephcore::Config {
     use tracing::{info, warn, debug};
     use alephcore::secrets::{SecretVault, resolve_master_key};
     use alephcore::secrets::migration::{needs_migration, migrate_api_keys, save_migrated_config};
@@ -579,7 +579,7 @@ fn load_app_config() -> alephcore::Config {
                         Err(e) => warn!(error = %e, "Failed to migrate API keys to vault"),
                     }
                 }
-                if let Err(e) = resolve_provider_secrets(&mut config, &vault) {
+                if let Err(e) = resolve_provider_secrets(&mut config, &vault).await {
                     warn!(error = %e, "Failed to resolve provider secrets from vault");
                 }
             }
@@ -804,7 +804,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
 
     // App config loading and handler registration
-    let app_config = Arc::new(tokio::sync::RwLock::new(load_app_config()));
+    let app_config = Arc::new(tokio::sync::RwLock::new(load_app_config().await));
     register_config_handlers(&mut server, app_config, event_bus.clone(), auth_bundle.device_store.clone());
 
     register_session_handlers(&mut server, &session_manager, args.daemon);
