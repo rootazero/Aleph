@@ -8,6 +8,7 @@ use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::dreaming::{ensure_dream_daemon, record_activity};
 use crate::memory::smart_embedder::SmartEmbedder;
 use crate::memory::store::{MemoryBackend, SessionStore};
+use crate::memory::noise_filter::NoiseFilter;
 use crate::utils::pii::scrub_pii;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -19,6 +20,7 @@ pub struct MemoryIngestion {
     database: MemoryBackend,
     embedder: Arc<SmartEmbedder>,
     config: Arc<MemoryConfig>,
+    noise_filter: NoiseFilter,
 }
 
 impl MemoryIngestion {
@@ -29,10 +31,12 @@ impl MemoryIngestion {
         config: Arc<MemoryConfig>,
     ) -> Self {
         ensure_dream_daemon(database.clone(), Arc::clone(&config));
+        let noise_filter = NoiseFilter::new(config.noise_filter.clone());
         Self {
             database,
             embedder,
             config,
+            noise_filter,
         }
     }
 
@@ -80,6 +84,12 @@ impl MemoryIngestion {
                 "App is excluded from memory: {}",
                 context.app_bundle_id
             )));
+        }
+
+        // 2.5 Noise filter: reject noisy content before embedding
+        if !self.noise_filter.should_store(user_input) {
+            tracing::debug!("Noise filter rejected user input");
+            return Err(AlephError::config("Content filtered as noise".to_string()));
         }
 
         // 3. Scrub PII from input and output (using shared utility)
@@ -144,6 +154,7 @@ impl MemoryIngestion {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::noise_filter::NoiseFilterConfig;
 
     // Helper to create test database
     fn create_test_db() -> MemoryBackend {
@@ -326,5 +337,14 @@ mod tests {
         // Verify all were stored
         let stats = db.get_stats().await.unwrap();
         assert_eq!(stats.total_memories, 5); // StoreStats field
+    }
+
+    #[test]
+    fn test_noise_filter_field_exists() {
+        // Just verify the NoiseFilter can be created with default config
+        let config = NoiseFilterConfig::default();
+        let filter = NoiseFilter::new(config);
+        assert!(filter.should_store("This is valid content for memory storage"));
+        assert!(!filter.should_store("hi"));
     }
 }
