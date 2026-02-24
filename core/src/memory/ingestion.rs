@@ -7,11 +7,18 @@ use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::dreaming::{ensure_dream_daemon, record_activity};
 use crate::memory::smart_embedder::SmartEmbedder;
-use crate::memory::store::{MemoryBackend, SessionStore};
+use crate::memory::smart_embedder::EMBEDDING_DIM;
+use crate::memory::store::types::SearchFilter;
+use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
 use crate::utils::pii::scrub_pii;
 use std::sync::Arc;
 use tracing::{debug, info};
 use uuid::Uuid;
+
+/// Check if a similarity score indicates a duplicate.
+fn is_duplicate_score(score: f32, threshold: f32) -> bool {
+    score >= threshold
+}
 
 /// Memory ingestion service for storing new interactions
 #[derive(Clone)]
@@ -43,6 +50,7 @@ impl MemoryIngestion {
     /// 2. Check if app is excluded
     /// 3. Apply PII scrubbing
     /// 4. Generate embedding
+    /// 4b. Dedup check (skip if near-identical fact exists)
     /// 5. Insert into database
     ///
     /// # Arguments
@@ -112,6 +120,24 @@ impl MemoryIngestion {
             embedding_dim = embedding.len(),
             "Embedding generated successfully"
         );
+
+        // 4b. Dedup check: skip if near-identical memory already exists as a fact
+        let dedup_filter = SearchFilter::new().with_valid_only();
+        let existing = self
+            .database
+            .vector_search(&embedding, EMBEDDING_DIM as u32, &dedup_filter, 1)
+            .await
+            .unwrap_or_default();
+        if let Some(top) = existing.first() {
+            if is_duplicate_score(top.score, 0.95) {
+                tracing::debug!(
+                    existing_id = %top.fact.id,
+                    score = top.score,
+                    "skipping duplicate memory"
+                );
+                return Ok(top.fact.id.clone());
+            }
+        }
 
         // 5. Create memory entry
         let memory_id = Uuid::new_v4().to_string();
@@ -326,5 +352,12 @@ mod tests {
         // Verify all were stored
         let stats = db.get_stats().await.unwrap();
         assert_eq!(stats.total_memories, 5); // StoreStats field
+    }
+
+    #[test]
+    fn test_is_duplicate_score() {
+        assert!(is_duplicate_score(0.96, 0.95));
+        assert!(!is_duplicate_score(0.94, 0.95));
+        assert!(is_duplicate_score(0.95, 0.95)); // at threshold
     }
 }
