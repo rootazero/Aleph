@@ -16,9 +16,9 @@ pub enum ProviderStatus {
     /// Provider is ready to serve secrets.
     Ready,
     /// Provider requires authentication before use.
-    NeedsAuth,
+    NeedsAuth { message: String },
     /// Provider is not available (e.g., network down, CLI missing).
-    Unavailable,
+    Unavailable { reason: String },
 }
 
 /// Metadata about a secret entry within a provider.
@@ -132,10 +132,14 @@ mod tests {
         let ready = MockProvider::new(ProviderStatus::Ready);
         assert_eq!(ready.health_check().await.unwrap(), ProviderStatus::Ready);
 
-        let needs_auth = MockProvider::new(ProviderStatus::NeedsAuth);
+        let needs_auth = MockProvider::new(ProviderStatus::NeedsAuth {
+            message: "Run `op signin`".into(),
+        });
         assert_eq!(
             needs_auth.health_check().await.unwrap(),
-            ProviderStatus::NeedsAuth
+            ProviderStatus::NeedsAuth {
+                message: "Run `op signin`".into(),
+            }
         );
     }
 
