@@ -106,25 +106,25 @@ pub trait InternalEventHandler: Send + Sync {
     fn on_state_changed(&self, state: ProcessingState);
 
     /// Called when an error occurs
-    fn on_error(&self, message: String, suggestion: Option<String>);
+    fn on_error(&self, message: &str, suggestion: Option<&str>);
 
     /// Called when AI response chunk arrives (for streaming display)
-    fn on_response_chunk(&self, text: String);
+    fn on_response_chunk(&self, text: &str);
 
     /// Called when typed error occurs with error type
-    fn on_error_typed(&self, error_type: ErrorType, message: String);
+    fn on_error_typed(&self, error_type: ErrorType, message: &str);
 
     /// Called when progress update is available
     fn on_progress(&self, percent: f32);
 
     /// Called when AI processing starts with provider information (Phase 7 - Task 7.4)
-    fn on_ai_processing_started(&self, provider_name: String, provider_color: String);
+    fn on_ai_processing_started(&self, provider_name: &str, provider_color: &str);
 
     /// Called when AI response is received with response preview (Phase 7 - Task 7.4)
-    fn on_ai_response_received(&self, response_preview: String);
+    fn on_ai_response_received(&self, response_preview: &str);
 
     /// Called when primary provider fails and fallback is attempted (Phase 10 - Task 10.2)
-    fn on_provider_fallback(&self, from_provider: String, to_provider: String);
+    fn on_provider_fallback(&self, from_provider: &str, to_provider: &str);
 
     /// Called when config file changes externally (Phase 6 - Task 6.1)
     fn on_config_changed(&self);
@@ -151,7 +151,7 @@ pub trait InternalEventHandler: Send + Sync {
     ///
     /// # Arguments
     /// * `session_id` - Unique identifier for the conversation session
-    fn on_conversation_started(&self, session_id: String);
+    fn on_conversation_started(&self, session_id: &str);
 
     /// Called when a conversation turn is completed.
     ///
@@ -169,7 +169,7 @@ pub trait InternalEventHandler: Send + Sync {
     /// # Arguments
     /// * `session_id` - The ID of the ended session
     /// * `total_turns` - Total number of turns in the conversation
-    fn on_conversation_ended(&self, session_id: String, total_turns: u32);
+    fn on_conversation_ended(&self, session_id: &str, total_turns: u32);
 
     // ========================================================================
     // Async Confirmation Callbacks (async-confirmation-flow)
@@ -189,7 +189,7 @@ pub trait InternalEventHandler: Send + Sync {
     ///
     /// # Arguments
     /// * `confirmation_id` - ID of the expired confirmation
-    fn on_confirmation_expired(&self, confirmation_id: String);
+    fn on_confirmation_expired(&self, confirmation_id: &str);
 
     // ========================================================================
     // Tool Registry Callbacks (unify-tool-registry)
@@ -248,7 +248,7 @@ pub trait InternalEventHandler: Send + Sync {
     /// * `plan_id` - Unique identifier for the plan
     /// * `total_steps` - Total number of steps in the plan
     /// * `description` - Human-readable description of the plan
-    fn on_agent_started(&self, plan_id: String, total_steps: u32, description: String);
+    fn on_agent_started(&self, plan_id: &str, total_steps: u32, description: &str);
 
     /// Called when agent starts executing a tool.
     ///
@@ -259,10 +259,10 @@ pub trait InternalEventHandler: Send + Sync {
     /// * `tool_description` - Human-readable description of the tool
     fn on_agent_tool_started(
         &self,
-        plan_id: String,
+        plan_id: &str,
         step_index: u32,
-        tool_name: String,
-        tool_description: String,
+        tool_name: &str,
+        tool_description: &str,
     );
 
     /// Called when agent tool execution completes (success or failure).
@@ -275,11 +275,11 @@ pub trait InternalEventHandler: Send + Sync {
     /// * `result_preview` - Preview of the result (truncated if long)
     fn on_agent_tool_completed(
         &self,
-        plan_id: String,
+        plan_id: &str,
         step_index: u32,
-        tool_name: String,
+        tool_name: &str,
         success: bool,
-        result_preview: String,
+        result_preview: &str,
     );
 
     /// Called when agent loop completes (success or failure).
@@ -291,10 +291,10 @@ pub trait InternalEventHandler: Send + Sync {
     /// * `final_response` - Final response text (may be empty on failure)
     fn on_agent_completed(
         &self,
-        plan_id: String,
+        plan_id: &str,
         success: bool,
         total_duration_ms: u64,
-        final_response: String,
+        final_response: &str,
     );
 }
 
@@ -551,25 +551,25 @@ impl InternalEventHandler for MockEventHandler {
             .push(state);
     }
 
-    fn on_error(&self, message: String, _suggestion: Option<String>) {
+    fn on_error(&self, message: &str, _suggestion: Option<&str>) {
         self.errors
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(message);
+            .push(message.to_owned());
     }
 
-    fn on_response_chunk(&self, text: String) {
+    fn on_response_chunk(&self, text: &str) {
         self.response_chunks
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(text);
+            .push(text.to_owned());
     }
 
-    fn on_error_typed(&self, error_type: ErrorType, message: String) {
+    fn on_error_typed(&self, error_type: ErrorType, message: &str) {
         self.typed_errors
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push((error_type, message));
+            .push((error_type, message.to_owned()));
     }
 
     fn on_progress(&self, percent: f32) {
@@ -579,25 +579,25 @@ impl InternalEventHandler for MockEventHandler {
             .push(percent);
     }
 
-    fn on_ai_processing_started(&self, provider_name: String, provider_color: String) {
+    fn on_ai_processing_started(&self, provider_name: &str, provider_color: &str) {
         self.ai_processing_started
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push((provider_name, provider_color));
+            .push((provider_name.to_owned(), provider_color.to_owned()));
     }
 
-    fn on_ai_response_received(&self, response_preview: String) {
+    fn on_ai_response_received(&self, response_preview: &str) {
         self.ai_responses
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(response_preview);
+            .push(response_preview.to_owned());
     }
 
-    fn on_provider_fallback(&self, from_provider: String, to_provider: String) {
+    fn on_provider_fallback(&self, from_provider: &str, to_provider: &str) {
         self.provider_fallbacks
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push((from_provider, to_provider));
+            .push((from_provider.to_owned(), to_provider.to_owned()));
     }
 
     fn on_config_changed(&self) {
@@ -638,11 +638,11 @@ impl InternalEventHandler for MockEventHandler {
             .unwrap_or_else(ClarificationResult::cancelled)
     }
 
-    fn on_conversation_started(&self, session_id: String) {
+    fn on_conversation_started(&self, session_id: &str) {
         self.conversation_started
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(session_id);
+            .push(session_id.to_owned());
     }
 
     fn on_conversation_turn_completed(&self, turn: crate::conversation::ConversationTurn) {
@@ -660,11 +660,11 @@ impl InternalEventHandler for MockEventHandler {
         *count += 1;
     }
 
-    fn on_conversation_ended(&self, session_id: String, total_turns: u32) {
+    fn on_conversation_ended(&self, session_id: &str, total_turns: u32) {
         self.conversation_ended
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push((session_id, total_turns));
+            .push((session_id.to_owned(), total_turns));
     }
 
     fn on_confirmation_needed(&self, confirmation: PendingConfirmationInfo) {
@@ -674,11 +674,11 @@ impl InternalEventHandler for MockEventHandler {
             .push(confirmation);
     }
 
-    fn on_confirmation_expired(&self, confirmation_id: String) {
+    fn on_confirmation_expired(&self, confirmation_id: &str) {
         self.confirmations_expired
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(confirmation_id);
+            .push(confirmation_id.to_owned());
     }
 
     fn on_tools_changed(&self, tool_count: u32) {
@@ -703,51 +703,51 @@ impl InternalEventHandler for MockEventHandler {
             .push(report);
     }
 
-    fn on_agent_started(&self, plan_id: String, total_steps: u32, description: String) {
+    fn on_agent_started(&self, plan_id: &str, total_steps: u32, description: &str) {
         self.agent_started
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push((plan_id, total_steps, description));
+            .push((plan_id.to_owned(), total_steps, description.to_owned()));
     }
 
     fn on_agent_tool_started(
         &self,
-        plan_id: String,
+        plan_id: &str,
         step_index: u32,
-        tool_name: String,
-        tool_description: String,
+        tool_name: &str,
+        tool_description: &str,
     ) {
         self.agent_tool_started
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push((plan_id, step_index, tool_name, tool_description));
+            .push((plan_id.to_owned(), step_index, tool_name.to_owned(), tool_description.to_owned()));
     }
 
     fn on_agent_tool_completed(
         &self,
-        plan_id: String,
+        plan_id: &str,
         step_index: u32,
-        tool_name: String,
+        tool_name: &str,
         success: bool,
-        result_preview: String,
+        result_preview: &str,
     ) {
         self.agent_tool_completed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push((plan_id, step_index, tool_name, success, result_preview));
+            .push((plan_id.to_owned(), step_index, tool_name.to_owned(), success, result_preview.to_owned()));
     }
 
     fn on_agent_completed(
         &self,
-        plan_id: String,
+        plan_id: &str,
         success: bool,
         total_duration_ms: u64,
-        final_response: String,
+        final_response: &str,
     ) {
         self.agent_completed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push((plan_id, success, total_duration_ms, final_response));
+            .push((plan_id.to_owned(), success, total_duration_ms, final_response.to_owned()));
     }
 }
 
@@ -770,8 +770,8 @@ mod tests {
     #[test]
     fn test_mock_handler_errors() {
         let handler = MockEventHandler::new();
-        handler.on_error("error 1".to_string(), None);
-        handler.on_error("error 2".to_string(), Some("Try again".to_string()));
+        handler.on_error("error 1", None);
+        handler.on_error("error 2", Some("Try again"));
 
         let errors = handler.get_errors();
         assert_eq!(errors.len(), 2);
