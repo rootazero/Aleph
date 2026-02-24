@@ -160,7 +160,7 @@ impl CodeExecConfigToml {
             permission_checker,
             working_dir,
             self.pass_env.clone(),
-            None, // aleph_path will be set later when RuntimeRegistry is available
+            None, // aleph_path will be set later from CapabilityLedger
         )
     }
 }

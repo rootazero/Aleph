@@ -1,62 +1,33 @@
-//! Runtime Manager Module
+//! Runtime capability management — lightweight ledger + shell bootstrap
 //!
-//! Unified management of external runtimes (uv, fnm, yt-dlp, etc.) for Aleph.
-//! All runtimes are stored under `~/.aleph/runtimes/` with lazy installation.
+//! Manages external tool capabilities (python, node, uv, ffmpeg, yt-dlp, etc.)
+//! using a three-phase approach:
 //!
-//! # Architecture
-//!
-//! - `RuntimeManager` trait: Common interface for all runtime implementations
-//! - `RuntimeRegistry`: Central registry that manages all known runtimes
-//! - `Manifest`: Persists runtime metadata (versions, install dates, update checks)
+//! 1. **Probe** — detect what's already installed (system PATH + Aleph-managed)
+//! 2. **Bootstrap** — install missing tools via shell scripts
+//! 3. **Ledger** — persist capability status to `~/.aleph/runtimes/ledger.json`
 //!
 //! # Usage
 //!
 //! ```rust,ignore
-//! use alephcore::runtimes::RuntimeRegistry;
+//! use alephcore::runtimes::{ensure_capability, CapabilityLedger};
 //!
-//! let registry = RuntimeRegistry::new()?;
-//!
-//! // Get yt-dlp, auto-install if needed
-//! let ytdlp = registry.require("yt-dlp").await?;
-//! let executable = ytdlp.executable_path();
-//!
-//! // List all runtimes
-//! let runtimes = registry.list();
+//! let ledger = Arc::new(RwLock::new(CapabilityLedger::load_or_create(path)));
+//! let bin_path = ensure_capability("python", &ledger).await?;
 //! ```
 
 pub mod bootstrap;
 mod capability;
-mod download;
 pub mod ensure;
 pub mod ledger;
-mod manager;
-mod manifest;
+mod manifest; // kept for legacy migration
 pub mod probe;
-mod registry;
-
-// Runtime implementations
-mod ffmpeg;
-mod fnm;
-mod uv;
-mod ytdlp;
-
-// Git availability checker (not a RuntimeManager)
-pub mod git_check;
 
 // Re-exports
 pub use capability::{format_entries_for_prompt, RuntimeCapability};
 pub use ensure::ensure_capability;
 pub use ledger::{CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus};
-pub use manager::{RuntimeInfo, RuntimeManager, UpdateInfo};
 pub use probe::ProbeResult;
-pub use manifest::Manifest;
-pub use registry::RuntimeRegistry;
-
-// Runtime implementations (for direct access if needed)
-pub use ffmpeg::FfmpegRuntime;
-pub use fnm::FnmRuntime;
-pub use uv::UvRuntime;
-pub use ytdlp::YtDlpRuntime;
 
 use crate::error::Result;
 use std::path::PathBuf;
@@ -68,51 +39,4 @@ use std::path::PathBuf;
 /// - Windows: `%USERPROFILE%\.aleph\runtimes\`
 pub fn get_runtimes_dir() -> Result<PathBuf> {
     crate::utils::paths::get_runtimes_dir()
-}
-
-/// Build Aleph-prioritized PATH environment variable
-///
-/// Constructs a PATH string where Aleph runtimes take priority over
-/// system PATH, allowing both Aleph-managed tools and system tools
-/// to be accessible.
-///
-/// # Returns
-/// A PATH string with Aleph runtime bin directories prepended to system PATH.
-///
-/// # Example
-/// ```ignore
-/// // Result on Unix:
-/// // "~/.aleph/runtimes/uv/envs/default/bin:~/.aleph/runtimes/fnm/versions/default/bin:/usr/local/bin:/usr/bin"
-/// let path = build_aleph_path(&registry);
-/// ```
-pub fn build_aleph_path(registry: &RuntimeRegistry) -> String {
-    let mut paths: Vec<PathBuf> = Vec::new();
-
-    // Add Aleph runtime bin directories (installed runtimes only)
-    if registry.is_installed("uv") {
-        if let Some(rt) = registry.get("uv") {
-            paths.push(rt.bin_dir());
-        }
-    }
-
-    if registry.is_installed("fnm") {
-        if let Some(rt) = registry.get("fnm") {
-            paths.push(rt.bin_dir());
-        }
-    }
-
-    // Note: yt-dlp and ffmpeg are single binaries, not bin directories
-    // They're accessed directly via executable_path(), not through PATH
-
-    // Append system PATH
-    if let Ok(system_path) = std::env::var("PATH") {
-        for p in std::env::split_paths(&system_path) {
-            paths.push(p);
-        }
-    }
-
-    // Join paths into PATH string
-    std::env::join_paths(&paths)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default()
 }
