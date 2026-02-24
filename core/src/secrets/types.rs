@@ -110,6 +110,18 @@ pub enum SecretError {
 
     #[error("Migration failed for provider '{provider}': {reason}")]
     MigrationFailed { provider: String, reason: String },
+
+    #[error("Provider '{provider}' requires authentication: {message}")]
+    ProviderAuthRequired { provider: String, message: String },
+
+    #[error("Provider '{provider}' error: {message}")]
+    ProviderError { provider: String, message: String },
+
+    #[error("Access denied for secret '{name}': {reason}")]
+    AccessDenied { name: String, reason: String },
+
+    #[error("Provider '{provider}' not configured")]
+    ProviderNotFound { provider: String },
 }
 
 #[cfg(test)]
@@ -180,5 +192,41 @@ mod tests {
         let decoded: EncryptedEntry = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.ciphertext, vec![1, 2, 3]);
         assert_eq!(decoded.created_at, 1000);
+    }
+
+    #[test]
+    fn test_provider_auth_required_error() {
+        let err = SecretError::ProviderAuthRequired {
+            provider: "1password".into(),
+            message: "Session expired".into(),
+        };
+        assert!(format!("{}", err).contains("1password"));
+        assert!(format!("{}", err).contains("authentication"));
+    }
+
+    #[test]
+    fn test_provider_error() {
+        let err = SecretError::ProviderError {
+            provider: "1password".into(),
+            message: "item not found".into(),
+        };
+        assert!(format!("{}", err).contains("1password"));
+    }
+
+    #[test]
+    fn test_access_denied_error() {
+        let err = SecretError::AccessDenied {
+            name: "bank_password".into(),
+            reason: "User denied".into(),
+        };
+        assert!(format!("{}", err).contains("bank_password"));
+    }
+
+    #[test]
+    fn test_provider_not_found_error() {
+        let err = SecretError::ProviderNotFound {
+            provider: "bitwarden".into(),
+        };
+        assert!(format!("{}", err).contains("bitwarden"));
     }
 }
