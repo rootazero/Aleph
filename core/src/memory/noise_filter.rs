@@ -91,6 +91,7 @@ impl Default for NoiseFilterConfig {
 /// entering the memory store. At **retrieval time**, `filter_results()` removes
 /// noisy entries from search results (e.g., facts stored before the filter was
 /// enabled or with relaxed settings).
+#[derive(Clone)]
 pub struct NoiseFilter {
     config: NoiseFilterConfig,
 }
