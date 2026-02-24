@@ -15,6 +15,7 @@
 //! - [`discovery`] - Service discovery types
 
 pub mod auth;
+pub mod desktop_bridge;
 pub mod discovery;
 pub mod events;
 pub mod invitation;
@@ -33,3 +34,7 @@ pub use invitation::{
 };
 pub use jsonrpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallContext, ToolCallParams, ToolCallResult};
 pub use thinking::{ConfidenceLevel, ReasoningStepType};
+pub use desktop_bridge::{
+    BridgeRequest, BridgeSuccessResponse, BridgeErrorResponse, BridgeRpcError,
+    ScreenRegion, CanvasPosition,
+};
