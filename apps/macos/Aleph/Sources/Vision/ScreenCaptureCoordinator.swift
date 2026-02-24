@@ -460,11 +460,11 @@ final class ScreenCaptureCoordinator: ObservableObject {
         }
 
         debugLog("[Halo] Showing processing spinner")
-        haloWindow.updateState(.streaming(StreamingContext(runId: "ocr-processing", phase: .thinking)))
+        // WebView handles processing display — just ensure window is visible
         haloWindow.showCentered()
     }
 
-    /// Show HaloWindow success checkmark ✅ then auto-hide
+    /// Show HaloWindow success checkmark then auto-hide
     private func showHaloSuccess() {
         guard let appDelegate = NSApplication.shared.delegate as? AppDelegate,
               let haloWindow = appDelegate.getHaloWindow()
@@ -473,11 +473,9 @@ final class ScreenCaptureCoordinator: ObservableObject {
             return
         }
 
-        debugLog("[Halo] Showing success checkmark")
-        haloWindow.updateState(.result(ResultContext(
-            runId: "ocr-success",
-            summary: .success(message: L("ocr.success"), toolsExecuted: 1, durationMs: 0, finalResponse: "")
-        )))
+        debugLog("[Halo] Showing success state")
+        // WebView handles success display — just ensure window is visible briefly
+        haloWindow.showCentered()
 
         // Auto-hide after 0.8 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
@@ -502,20 +500,8 @@ final class ScreenCaptureCoordinator: ObservableObject {
 
     /// Show permission required error and open System Settings
     private func showPermissionRequiredError() {
-        guard let appDelegate = NSApplication.shared.delegate as? AppDelegate,
-              let haloWindow = appDelegate.getHaloWindow()
-        else {
-            return
-        }
-
-        // Show error toast with guidance
-        haloWindow.showToast(
-            type: .error,
-            title: L("ocr.permission_required_title"),
-            message: L("ocr.permission_required_message"),
-            autoDismiss: false,  // Keep visible so user can read
-            actionTitle: nil
-        )
+        // Log the permission error (toast display handled by WebView in future)
+        NSLog("[ScreenCapture] Screen recording permission required")
 
         // Open System Settings to Screen Recording permission page
         PermissionChecker.openSystemSettings(for: .screenRecording)

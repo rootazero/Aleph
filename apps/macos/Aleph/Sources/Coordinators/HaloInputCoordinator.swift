@@ -12,7 +12,16 @@
 //
 
 import AppKit
-import SwiftUI
+
+// MARK: - CommandItem (Lightweight replacement for deleted HaloStreamingTypes.CommandItem)
+
+/// Represents a command/skill item for the command list
+struct CommandItem: Identifiable {
+    let id: String
+    let name: String
+    let description: String
+    let icon: String
+}
 
 // MARK: - HaloInputCoordinator
 
@@ -79,8 +88,7 @@ final class HaloInputCoordinator {
 
         print("[HaloInputCoordinator] Clipboard content: \(currentInput.prefix(50))...")
 
-        // Show Halo in listening state
-        haloWindow?.updateState(.listening)
+        // Show Halo — WebView handles listening state display
         haloWindow?.showAtCurrentPosition()
 
         // Process input after brief delay (allows user to see listening state)
@@ -118,7 +126,7 @@ final class HaloInputCoordinator {
         if haloWindow?.isVisible == true {
             haloWindow?.orderFrontRegardless()
         } else {
-            haloWindow?.updateState(.listening)
+            // WebView handles state display
             haloWindow?.showCentered()
         }
     }
@@ -145,14 +153,8 @@ final class HaloInputCoordinator {
     private func showHistoryList(query: String = "") {
         print("[HaloInputCoordinator] Showing history list with query: \(query)")
 
-        // For now, show empty history list
-        // TODO: Fetch actual history from conversation store
-        let context = HistoryListContext(
-            topics: [],
-            searchQuery: query
-        )
-
-        haloWindow?.updateState(.historyList(context))
+        // TODO: Send history list command to WebView via Gateway
+        // For now, just show the window
         haloWindow?.showCentered()
     }
 
@@ -164,27 +166,13 @@ final class HaloInputCoordinator {
     private func showCommandList(query: String = "") {
         print("[HaloInputCoordinator] Showing command list with query: \(query)")
 
-        // Fetch skills from Gateway if available
+        // TODO: Send command list to WebView via Gateway
+        // For now, just show the window
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-
             let commands = await self.fetchCommands()
-            let context = CommandListContext(
-                commands: commands,
-                searchQuery: query
-            )
-
-            // Note: commandList state will be added to HaloState in Task 2
-            // For now, show as streaming with the command info
-            let streamingContext = StreamingContext(
-                runId: UUID().uuidString,
-                text: "Commands: \(commands.count) skills available",
-                phase: .thinking
-            )
-            self.haloWindow?.updateState(.streaming(streamingContext))
+            print("[HaloInputCoordinator] Found \(commands.count) commands")
             self.haloWindow?.showCentered()
-
-            // TODO: Update to use .commandList(context) when HaloState is extended
         }
     }
 
@@ -237,13 +225,7 @@ final class HaloInputCoordinator {
 
         isProcessing = true
 
-        // Show streaming state
-        let streamingContext = StreamingContext(
-            runId: UUID().uuidString,
-            text: "",
-            phase: .thinking
-        )
-        haloWindow?.updateState(.streaming(streamingContext))
+        // WebView handles streaming display via Gateway events
 
         // Process via Gateway or FFI
         if GatewayManager.shared.isReady {
@@ -263,13 +245,8 @@ final class HaloInputCoordinator {
             } catch {
                 print("[HaloInputCoordinator] Gateway processing failed: \(error)")
                 self?.isProcessing = false
-
-                // Show error
-                let errorContext = ErrorContext(
-                    type: .provider,
-                    message: error.localizedDescription
-                )
-                self?.haloWindow?.updateState(.error(errorContext))
+                // WebView handles error display — log for diagnostics
+                NSLog("[HaloInputCoordinator] Error: %@", error.localizedDescription)
             }
         }
     }
@@ -279,12 +256,7 @@ final class HaloInputCoordinator {
         guard let core = core else {
             print("[HaloInputCoordinator] Core not available for FFI processing")
             isProcessing = false
-
-            let errorContext = ErrorContext(
-                type: .unknown,
-                message: L("error.core_not_initialized")
-            )
-            haloWindow?.updateState(.error(errorContext))
+            NSLog("[HaloInputCoordinator] Error: Core not initialized")
             return
         }
 
@@ -303,12 +275,7 @@ final class HaloInputCoordinator {
         } catch {
             print("[HaloInputCoordinator] FFI processing failed: \(error)")
             isProcessing = false
-
-            let errorContext = ErrorContext(
-                type: .unknown,
-                message: error.localizedDescription
-            )
-            haloWindow?.updateState(.error(errorContext))
+            NSLog("[HaloInputCoordinator] Error: %@", error.localizedDescription)
         }
     }
 
