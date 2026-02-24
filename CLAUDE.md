@@ -330,6 +330,23 @@ plugin-wasm = ["extism"]
 - Xcode build cache cleanup: rm -rf ~/Library/Developer/Xcode/DerivedData/(Aleph)-*
 - This project uses XcodeGen to manage the Xcode project. See docs/XCODEGEN_README.md for detailed workflow instructions.
 
+### Git Worktree 操作规范
+
+**⚠️ 致命陷阱：删除 worktree 前必须先切回主仓库目录**
+
+`EnterWorktree` 会将 Shell CWD 切到 worktree 目录。如果直接执行 `git worktree remove`，该目录被删除后 Shell 的 CWD 失效，**所有后续 Bash 命令都会 exit 1 且无法恢复**，只能重启会话。
+
+```bash
+# ✅ 正确顺序
+cd /Volumes/TBU4/Workspace/Aleph          # 1. 先回主仓库
+git worktree remove .claude/worktrees/xxx  # 2. 再删 worktree
+git branch -D worktree-xxx                 # 3. 删分支
+git worktree prune                         # 4. 清理残留
+
+# ❌ 错误 — 会导致 Shell 永久损坏
+git worktree remove .claude/worktrees/xxx  # CWD 就在这个目录里！
+```
+
 ### 分支策略
 
 **单分支开发模式**：所有开发工作直接在 main 分支进行。
