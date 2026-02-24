@@ -27,6 +27,7 @@
 pub mod bootstrap;
 mod capability;
 mod download;
+pub mod ensure;
 pub mod ledger;
 mod manager;
 mod manifest;
@@ -44,6 +45,7 @@ pub mod git_check;
 
 // Re-exports
 pub use capability::{format_entries_for_prompt, RuntimeCapability};
+pub use ensure::ensure_capability;
 pub use ledger::{CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus};
 pub use manager::{RuntimeInfo, RuntimeManager, UpdateInfo};
 pub use probe::ProbeResult;
