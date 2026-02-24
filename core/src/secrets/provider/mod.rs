@@ -4,6 +4,7 @@
 //! (local vault, 1Password, AWS Secrets Manager, etc.).
 
 pub mod local_vault;
+pub mod onepassword;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
