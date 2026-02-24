@@ -19,6 +19,11 @@ pub fn subscribe_run_events(dashboard: &DashboardState, halo: HaloState) -> usiz
         let event_type = data.get("type").and_then(|t| t.as_str()).unwrap_or("");
         let run_id = data.get("run_id").and_then(|r| r.as_str()).unwrap_or("");
 
+        // Guard: most events require a valid run_id to associate with a message
+        if run_id.is_empty() && event_type != "reasoning" {
+            return;
+        }
+
         match event_type {
             "run_accepted" => {
                 if let Some(sk) = data.get("session_key").and_then(|s| s.as_str()) {
