@@ -71,6 +71,9 @@ final class DesktopBridgeServer: @unchecked Sendable {
             return
         }
 
+        // Restrict socket file to owner-only access (rwx------)
+        chmod(socketPath, 0o700)
+
         guard listen(serverFd, 5) == 0 else {
             print("[DesktopBridge] Failed to listen: \(errno)")
             Darwin.close(serverFd)
