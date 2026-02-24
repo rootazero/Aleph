@@ -52,18 +52,12 @@ node_modules/
 # ML model cache
 **/.fastembed_cache/
 
-# Platform build artifacts
+# Platform build artifacts (legacy paths)
 platforms/macos/Aleph/Frameworks/*.dylib
 platforms/macos/Aleph/Frameworks/*.dylib.*
-platforms/macos/Aether/Frameworks/*.dylib
-platforms/macos/Aether/Frameworks/*.dylib.*
-platforms/windows/Aleph/libs/*.dll
-platforms/macos/.build/
-platforms/macos/build/
 
 # Claude Code
 **/.claude/
-.claude/homunculus/observations.jsonl
 
 # Git worktrees
 .worktrees/
@@ -76,5 +70,5 @@ _bmad/bmm/testarch/knowledge/log.md
 # Misc
 agentstructure/
 icons/
-!platforms/tauri/src-tauri/icons/
+!apps/desktop/src-tauri/icons/
 Aleph.dmg
