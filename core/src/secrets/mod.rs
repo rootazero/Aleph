@@ -3,6 +3,7 @@
 //! Provides encrypted storage for sensitive credentials (API keys, tokens).
 //! Uses AES-256-GCM with per-entry HKDF-SHA256 key derivation.
 
+pub mod cache;
 pub mod crypto;
 pub mod injection;
 pub mod leak_detector;
