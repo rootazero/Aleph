@@ -107,7 +107,7 @@ pub struct CronJob {
     /// Human-readable job name
     pub name: String,
 
-    /// Cron expression (e.g., "0 9 * * *" for 9am daily)
+    /// Cron expression (e.g., "0 0 9 * * *" for 9am daily)
     pub schedule: String,
 
     /// Agent ID to invoke
@@ -135,6 +135,96 @@ pub struct CronJob {
     /// Last modified timestamp (Unix seconds)
     #[serde(default)]
     pub updated_at: i64,
+
+    // --- State-machine scheduling ---
+
+    /// Pre-computed next run time (Unix seconds)
+    #[serde(default)]
+    pub next_run_at: Option<i64>,
+
+    /// Timestamp when job started running (Unix seconds)
+    #[serde(default)]
+    pub running_at: Option<i64>,
+
+    /// Timestamp of last completed run (Unix seconds)
+    #[serde(default)]
+    pub last_run_at: Option<i64>,
+
+    // --- Resilience ---
+
+    /// Number of consecutive failures
+    #[serde(default)]
+    pub consecutive_failures: u32,
+
+    /// Maximum retries before disabling
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+
+    /// Job priority (1=highest, 10=lowest)
+    #[serde(default = "default_priority")]
+    pub priority: u32,
+
+    // --- Schedule types ---
+
+    /// Kind of schedule: cron, every, at
+    #[serde(default)]
+    pub schedule_kind: ScheduleKind,
+
+    /// Interval in milliseconds (for ScheduleKind::Every)
+    #[serde(default)]
+    pub every_ms: Option<i64>,
+
+    /// One-shot timestamp (for ScheduleKind::At)
+    #[serde(default)]
+    pub at_time: Option<i64>,
+
+    /// Delete the job after a successful run (for one-shot jobs)
+    #[serde(default)]
+    pub delete_after_run: bool,
+
+    // --- Job chaining ---
+
+    /// Job ID to trigger on success
+    #[serde(default)]
+    pub next_job_id_on_success: Option<String>,
+
+    /// Job ID to trigger on failure
+    #[serde(default)]
+    pub next_job_id_on_failure: Option<String>,
+
+    // --- Delivery ---
+
+    /// Delivery configuration for job results
+    #[serde(default)]
+    pub delivery_config: Option<DeliveryConfig>,
+
+    // --- Dynamic prompt ---
+
+    /// Template with {{var}} placeholders
+    #[serde(default)]
+    pub prompt_template: Option<String>,
+
+    /// JSON-encoded context variables
+    #[serde(default)]
+    pub context_vars: Option<String>,
+
+    // --- Optimistic locking ---
+
+    /// Version for optimistic concurrency control
+    #[serde(default = "default_version")]
+    pub version: u32,
+}
+
+fn default_max_retries() -> u32 {
+    3
+}
+
+fn default_priority() -> u32 {
+    5
+}
+
+fn default_version() -> u32 {
+    1
 }
 
 impl CronJob {
@@ -157,6 +247,29 @@ impl CronJob {
             tags: Vec::new(),
             created_at: now,
             updated_at: now,
+            // State-machine scheduling
+            next_run_at: None,
+            running_at: None,
+            last_run_at: None,
+            // Resilience
+            consecutive_failures: 0,
+            max_retries: default_max_retries(),
+            priority: default_priority(),
+            // Schedule types
+            schedule_kind: ScheduleKind::default(),
+            every_ms: None,
+            at_time: None,
+            delete_after_run: false,
+            // Job chaining
+            next_job_id_on_success: None,
+            next_job_id_on_failure: None,
+            // Delivery
+            delivery_config: None,
+            // Dynamic prompt
+            prompt_template: None,
+            context_vars: None,
+            // Optimistic locking
+            version: default_version(),
         }
     }
 
@@ -209,6 +322,125 @@ impl std::fmt::Display for JobStatus {
     }
 }
 
+// --- New types for extended scheduling ---
+
+/// Kind of schedule expression
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScheduleKind {
+    Cron,
+    Every,
+    At,
+}
+
+impl Default for ScheduleKind {
+    fn default() -> Self {
+        Self::Cron
+    }
+}
+
+impl ScheduleKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Cron => "cron",
+            Self::Every => "every",
+            Self::At => "at",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "every" => Self::Every,
+            "at" => Self::At,
+            _ => Self::Cron,
+        }
+    }
+}
+
+/// What triggered a job run
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TriggerSource {
+    Schedule,
+    Chain,
+    Manual,
+    Catchup,
+}
+
+impl Default for TriggerSource {
+    fn default() -> Self {
+        Self::Schedule
+    }
+}
+
+impl TriggerSource {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Schedule => "schedule",
+            Self::Chain => "chain",
+            Self::Manual => "manual",
+            Self::Catchup => "catchup",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "chain" => Self::Chain,
+            "manual" => Self::Manual,
+            "catchup" => Self::Catchup,
+            _ => Self::Schedule,
+        }
+    }
+}
+
+/// Configuration for delivering job results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryConfig {
+    pub mode: DeliveryMode,
+    pub targets: Vec<DeliveryTargetConfig>,
+    #[serde(default)]
+    pub fallback_target: Option<DeliveryTargetConfig>,
+}
+
+/// Delivery mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeliveryMode {
+    None,
+    Primary,
+    Broadcast,
+}
+
+/// Delivery target configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum DeliveryTargetConfig {
+    Gateway {
+        channel: String,
+        chat_id: String,
+        #[serde(default)]
+        format: Option<String>,
+    },
+    Memory {
+        #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default)]
+        importance: Option<f32>,
+    },
+    Webhook {
+        url: String,
+        #[serde(default)]
+        method: Option<String>,
+        #[serde(default)]
+        headers: Option<std::collections::HashMap<String, String>>,
+    },
+}
+
+/// Outcome of a delivery attempt
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DeliveryOutcome {
+    pub target_kind: String,
+    pub success: bool,
+    pub message: Option<String>,
+}
+
 /// Job execution record
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRun {
@@ -235,6 +467,22 @@ pub struct JobRun {
 
     /// Agent response (truncated)
     pub response: Option<String>,
+
+    /// Number of retry attempts for this run
+    #[serde(default)]
+    pub retry_count: u32,
+
+    /// What triggered this run
+    #[serde(default)]
+    pub trigger_source: TriggerSource,
+
+    /// JSON summary of delivery outcomes
+    #[serde(default)]
+    pub delivery_status: Option<String>,
+
+    /// Delivery error message
+    #[serde(default)]
+    pub delivery_error: Option<String>,
 }
 
 impl JobRun {
@@ -249,7 +497,17 @@ impl JobRun {
             duration_ms: 0,
             error: None,
             response: None,
+            retry_count: 0,
+            trigger_source: TriggerSource::default(),
+            delivery_status: None,
+            delivery_error: None,
         }
+    }
+
+    /// Set the trigger source
+    pub fn with_trigger(mut self, source: TriggerSource) -> Self {
+        self.trigger_source = source;
+        self
     }
 
     /// Mark as success
@@ -315,9 +573,9 @@ mod tests {
 
     #[test]
     fn test_cron_job_new() {
-        let job = CronJob::new("Daily Report", "0 9 * * *", "main", "Generate daily report");
+        let job = CronJob::new("Daily Report", "0 0 9 * * *", "main", "Generate daily report");
         assert_eq!(job.name, "Daily Report");
-        assert_eq!(job.schedule, "0 9 * * *");
+        assert_eq!(job.schedule, "0 0 9 * * *");
         assert!(job.enabled);
     }
 
@@ -340,5 +598,59 @@ mod tests {
     fn test_truncate_string() {
         assert_eq!(truncate_string("hello", 10), "hello");
         assert_eq!(truncate_string("hello world!", 8), "hello...");
+    }
+
+    #[test]
+    fn test_schedule_kind_default() {
+        assert_eq!(ScheduleKind::default(), ScheduleKind::Cron);
+    }
+
+    #[test]
+    fn test_schedule_kind_roundtrip() {
+        assert_eq!(ScheduleKind::from_str("cron"), ScheduleKind::Cron);
+        assert_eq!(ScheduleKind::from_str("every"), ScheduleKind::Every);
+        assert_eq!(ScheduleKind::from_str("at"), ScheduleKind::At);
+        assert_eq!(ScheduleKind::from_str("invalid"), ScheduleKind::Cron);
+    }
+
+    #[test]
+    fn test_delivery_config_serde() {
+        let config = DeliveryConfig {
+            mode: DeliveryMode::Primary,
+            targets: vec![DeliveryTargetConfig::Webhook {
+                url: "https://x.com".into(),
+                method: None,
+                headers: None,
+            }],
+            fallback_target: None,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: DeliveryConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.targets.len(), 1);
+    }
+
+    #[test]
+    fn test_trigger_source_roundtrip() {
+        for (s, v) in [
+            ("schedule", TriggerSource::Schedule),
+            ("chain", TriggerSource::Chain),
+            ("manual", TriggerSource::Manual),
+            ("catchup", TriggerSource::Catchup),
+        ] {
+            assert_eq!(TriggerSource::from_str(s), v);
+            assert_eq!(v.as_str(), s);
+        }
+    }
+
+    #[test]
+    fn test_cron_job_extended_defaults() {
+        let job = CronJob::new("T", "0 0 * * * *", "main", "p");
+        assert_eq!(job.schedule_kind, ScheduleKind::Cron);
+        assert_eq!(job.priority, 5);
+        assert_eq!(job.max_retries, 3);
+        assert_eq!(job.consecutive_failures, 0);
+        assert!(job.next_run_at.is_none());
+        assert!(job.running_at.is_none());
+        assert_eq!(job.version, 1);
     }
 }
