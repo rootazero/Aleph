@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::error::{AlephError, Result};
 
 /// Complete settings structure matching frontend types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Settings {
     pub general: GeneralSettings,
     pub shortcuts: ShortcutSettings,
@@ -61,7 +61,7 @@ pub struct ProviderConfig {
     pub is_default: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProvidersSettings {
     pub providers: Vec<ProviderConfig>,
     pub default_provider_id: String,
@@ -91,7 +91,7 @@ pub struct GenerationProviderConfig {
     pub is_default: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GenerationProvidersSettings {
     pub providers: Vec<GenerationProviderConfig>,
     pub default_image_provider_id: String,
@@ -118,7 +118,7 @@ pub struct McpServer {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct McpSettings {
     pub servers: Vec<McpServer>,
 }
@@ -150,7 +150,7 @@ pub struct Skill {
     pub trigger_keywords: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillsSettings {
     pub skills: Vec<Skill>,
 }
@@ -257,26 +257,6 @@ pub struct PoliciesSettings {
     pub allow_analytics: bool,
 }
 
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            general: GeneralSettings::default(),
-            shortcuts: ShortcutSettings::default(),
-            behavior: BehaviorSettings::default(),
-            providers: ProvidersSettings::default(),
-            generation: GenerationSettings::default(),
-            generation_providers: GenerationProvidersSettings::default(),
-            memory: MemorySettings::default(),
-            mcp: McpSettings::default(),
-            plugins: PluginsSettings::default(),
-            skills: SkillsSettings::default(),
-            agent: AgentSettings::default(),
-            search: SearchSettings::default(),
-            policies: PoliciesSettings::default(),
-        }
-    }
-}
-
 impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
@@ -311,15 +291,6 @@ impl Default for BehaviorSettings {
     }
 }
 
-impl Default for ProvidersSettings {
-    fn default() -> Self {
-        Self {
-            providers: vec![],
-            default_provider_id: String::new(),
-        }
-    }
-}
-
 impl Default for GenerationSettings {
     fn default() -> Self {
         Self {
@@ -329,17 +300,6 @@ impl Default for GenerationSettings {
             frequency_penalty: 0.0,
             presence_penalty: 0.0,
             streaming: true,
-        }
-    }
-}
-
-impl Default for GenerationProvidersSettings {
-    fn default() -> Self {
-        Self {
-            providers: vec![],
-            default_image_provider_id: String::new(),
-            default_video_provider_id: String::new(),
-            default_audio_provider_id: String::new(),
         }
     }
 }
@@ -356,24 +316,12 @@ impl Default for MemorySettings {
     }
 }
 
-impl Default for McpSettings {
-    fn default() -> Self {
-        Self { servers: vec![] }
-    }
-}
-
 impl Default for PluginsSettings {
     fn default() -> Self {
         Self {
             plugins: vec![],
             auto_update: true,
         }
-    }
-}
-
-impl Default for SkillsSettings {
-    fn default() -> Self {
-        Self { skills: vec![] }
     }
 }
 
@@ -462,7 +410,7 @@ impl Default for PoliciesSettings {
 /// ├── plugins/             # Installed plugins
 /// ├── cache/               # Temporary cache
 /// └── logs/                # Application logs
-
+///
 /// Get the base Aleph directory (~/.config/aleph)
 pub fn get_aleph_base_dir() -> Result<PathBuf> {
     let home = dirs::home_dir()

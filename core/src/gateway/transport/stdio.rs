@@ -125,7 +125,8 @@ pub struct StdioTransport {
     pending: Arc<Mutex<PendingMap>>,
     /// Monotonically increasing request id counter.
     next_id: AtomicU64,
-    /// Sender side of the event channel (used by the read loop).
+    /// Sender side of the event channel (kept alive for the read loop).
+    #[allow(dead_code)]
     event_tx: mpsc::Sender<BridgeEvent>,
     /// Receiver side of the event channel (consumed by `next_event`).
     event_rx: Mutex<Option<mpsc::Receiver<BridgeEvent>>>,

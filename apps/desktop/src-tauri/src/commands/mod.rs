@@ -46,15 +46,18 @@ pub fn get_cursor_position() -> Result<Position> {
 
     #[cfg(target_os = "macos")]
     {
-        use cocoa::appkit::NSEvent;
-        use cocoa::base::nil;
-        use cocoa::foundation::NSPoint;
+        #[allow(deprecated)] // cocoa crate deprecated in favor of objc2-app-kit
+        {
+            use cocoa::appkit::NSEvent;
+            use cocoa::base::nil;
+            use cocoa::foundation::NSPoint;
 
-        let location: NSPoint = unsafe { NSEvent::mouseLocation(nil) };
-        Ok(Position {
-            x: location.x as i32,
-            y: location.y as i32,
-        })
+            let location: NSPoint = unsafe { NSEvent::mouseLocation(nil) };
+            Ok(Position {
+                x: location.x as i32,
+                y: location.y as i32,
+            })
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -226,9 +229,8 @@ pub async fn save_window_position<R: Runtime>(
             height: size.height,
         };
 
-        match window_name.as_str() {
-            "settings" => state.settings = Some(window_pos),
-            _ => {}
+        if window_name.as_str() == "settings" {
+            state.settings = Some(window_pos);
         }
 
         settings::save_window_state(&state)?;

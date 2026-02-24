@@ -40,7 +40,7 @@ use tracing::{debug, error, info, warn};
 use crate::gateway::bridge::types::{BridgeRuntime, TransportType};
 use crate::gateway::link::LinkId;
 use crate::gateway::transport::unix_socket::UnixSocketTransport;
-use crate::gateway::transport::{StdioTransport, Transport, TransportError};
+use crate::gateway::transport::{StdioTransport, Transport};
 
 // ---------------------------------------------------------------------------
 // ManagedProcessConfig
@@ -274,11 +274,9 @@ impl BridgeSupervisor {
 
         // 2. Compute socket path and clean up stale socket.
         let socket_path = self.run_dir.join(format!("{}.sock", link_id.as_str()));
-        if config.transport_type == TransportType::UnixSocket {
-            if socket_path.exists() {
-                let _ = tokio::fs::remove_file(&socket_path).await;
-                debug!(path = %socket_path.display(), "Removed stale socket");
-            }
+        if config.transport_type == TransportType::UnixSocket && socket_path.exists() {
+            let _ = tokio::fs::remove_file(&socket_path).await;
+            debug!(path = %socket_path.display(), "Removed stale socket");
         }
 
         // 3. Validate the binary exists.
