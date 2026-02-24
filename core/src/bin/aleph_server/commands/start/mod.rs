@@ -579,8 +579,53 @@ async fn load_app_config() -> alephcore::Config {
                         Err(e) => warn!(error = %e, "Failed to migrate API keys to vault"),
                     }
                 }
-                if let Err(e) = resolve_provider_secrets(&mut config, &vault).await {
-                    warn!(error = %e, "Failed to resolve provider secrets from vault");
+                // Build SecretRouter with providers from config
+                use alephcore::secrets::provider::local_vault::LocalVaultProvider;
+                use alephcore::secrets::provider::onepassword::OnePasswordProvider;
+                use alephcore::secrets::provider::SecretProvider;
+                use alephcore::secrets::router::SecretRouter;
+                use std::sync::Arc;
+
+                let mut providers: std::collections::HashMap<String, Arc<dyn SecretProvider>> = std::collections::HashMap::new();
+
+                // Always register local vault as default "local" provider
+                providers.insert(
+                    "local".into(),
+                    Arc::new(LocalVaultProvider::new(vault)) as Arc<dyn SecretProvider>,
+                );
+
+                // Register external providers from config.secret_providers
+                for (key, provider_config) in &config.secret_providers {
+                    match provider_config.provider_type.as_str() {
+                        "local_vault" => {
+                            debug!(key = key.as_str(), "Local vault provider already registered as 'local'");
+                        }
+                        "1password" => {
+                            let token = provider_config
+                                .service_account_token_env
+                                .as_ref()
+                                .and_then(|env_name| std::env::var(env_name).ok());
+                            let op = OnePasswordProvider::new(
+                                provider_config.account.clone(),
+                                token,
+                            );
+                            providers.insert(key.clone(), Arc::new(op) as Arc<dyn SecretProvider>);
+                            info!(key = key.as_str(), "Registered 1Password secret provider");
+                        }
+                        other => {
+                            warn!(key = key.as_str(), provider_type = other, "Unknown secret provider type, skipping");
+                        }
+                    }
+                }
+
+                let router = SecretRouter::new(
+                    config.secrets.clone(),
+                    providers,
+                    config.secrets_config.default_provider.clone(),
+                );
+
+                if let Err(e) = resolve_provider_secrets(&mut config, &router).await {
+                    warn!(error = %e, "Failed to resolve provider secrets");
                 }
             }
             Err(e) => warn!(error = %e, "Failed to open secret vault"),
