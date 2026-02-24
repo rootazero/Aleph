@@ -275,11 +275,19 @@ impl CronService {
 
     /// Add a new job
     pub async fn add_job(&self, job: CronJob) -> CronResult<String> {
-        // Validate schedule
+        // Validate schedule (only for Cron kind)
         #[cfg(feature = "cron")]
         {
-            Schedule::from_str(&job.schedule)
-                .map_err(|e| CronError::InvalidSchedule(format!("{}", e)))?;
+            if job.schedule_kind == ScheduleKind::Cron {
+                Schedule::from_str(&job.schedule)
+                    .map_err(|e| CronError::InvalidSchedule(format!("{}", e)))?;
+            }
+        }
+
+        // Compute initial next_run_at
+        let mut job = job;
+        if job.next_run_at.is_none() && job.enabled {
+            job.next_run_at = scheduler::compute_next_run_at(&job, Utc::now());
         }
 
         let db_path = self.db_path.clone();
@@ -359,11 +367,13 @@ impl CronService {
 
     /// Update an existing job
     pub async fn update_job(&self, job: CronJob) -> CronResult<()> {
-        // Validate schedule
+        // Validate schedule (only for Cron kind)
         #[cfg(feature = "cron")]
         {
-            Schedule::from_str(&job.schedule)
-                .map_err(|e| CronError::InvalidSchedule(format!("{}", e)))?;
+            if job.schedule_kind == ScheduleKind::Cron {
+                Schedule::from_str(&job.schedule)
+                    .map_err(|e| CronError::InvalidSchedule(format!("{}", e)))?;
+            }
         }
 
         let db_path = self.db_path.clone();
@@ -687,6 +697,57 @@ impl CronService {
         Ok(())
     }
 
+    /// Finalize a job after execution: update state, handle backoff, trigger chains.
+    fn finalize_job_sync(db_path: &Path, job_id: &str, job: &CronJob, success: bool) -> CronResult<()> {
+        let conn = Connection::open(db_path)?;
+        let now = Utc::now();
+        let now_ms = now.timestamp_millis();
+
+        if success {
+            // Reset failures, compute next run time
+            let next_run = scheduler::compute_next_run_at(job, now);
+            conn.execute(
+                "UPDATE cron_jobs SET running_at = NULL, last_run_at = ?1, consecutive_failures = 0, next_run_at = ?2 WHERE id = ?3",
+                params![now_ms, next_run, job_id],
+            )?;
+
+            // Trigger on_success chain
+            if let Some(ref next_id) = job.next_job_id_on_success {
+                let _ = chain::trigger_chain_job_sync(&conn, next_id, now_ms);
+            }
+
+            // Delete completed one-shot if configured
+            if job.delete_after_run && job.schedule_kind == ScheduleKind::At {
+                conn.execute("DELETE FROM cron_jobs WHERE id = ?1", params![job_id])?;
+            }
+        } else {
+            let failures = job.consecutive_failures + 1;
+
+            if failures <= job.max_retries {
+                // Retry with backoff
+                let backoff = scheduler::compute_backoff_ms(failures);
+                let next_run = Some(now_ms + backoff as i64);
+                conn.execute(
+                    "UPDATE cron_jobs SET running_at = NULL, last_run_at = ?1, consecutive_failures = ?2, next_run_at = ?3 WHERE id = ?4",
+                    params![now_ms, failures, next_run, job_id],
+                )?;
+            } else {
+                // Max retries exceeded: compute normal next_run and trigger failure chain
+                let next_run = scheduler::compute_next_run_at(job, now);
+                conn.execute(
+                    "UPDATE cron_jobs SET running_at = NULL, last_run_at = ?1, consecutive_failures = 0, next_run_at = ?2 WHERE id = ?3",
+                    params![now_ms, next_run, job_id],
+                )?;
+
+                if let Some(ref next_id) = job.next_job_id_on_failure {
+                    let _ = chain::trigger_chain_job_sync(&conn, next_id, now_ms);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Get next run time for a job
     #[cfg(feature = "cron")]
     pub fn get_next_run(&self, job: &CronJob) -> Option<DateTime<Utc>> {
@@ -720,12 +781,18 @@ impl CronService {
         let semaphore = self.semaphore.clone();
         let check_interval = self.config.check_interval_secs;
         let job_timeout = self.config.job_timeout_secs;
+        let max_concurrent = self.config.max_concurrent_jobs;
 
         tracing::info!(
             "Starting cron service (check interval: {}s, max concurrent: {})",
             check_interval,
-            self.config.max_concurrent_jobs
+            max_concurrent
         );
+
+        // Run startup catch-up before entering main loop
+        if let Err(e) = Self::startup_catchup(&self.db_path).await {
+            tracing::error!("Startup catch-up failed: {}", e);
+        }
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(check_interval));
@@ -733,13 +800,13 @@ impl CronService {
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        // Check for due jobs
                         if let Err(e) = Self::check_and_run_jobs(
                             db_path.clone(),
                             executor.clone(),
                             running_jobs.clone(),
                             semaphore.clone(),
                             job_timeout,
+                            max_concurrent,
                         ).await {
                             tracing::error!("Error checking cron jobs: {}", e);
                         }
@@ -769,7 +836,10 @@ impl CronService {
         }
     }
 
-    /// Check for due jobs and run them
+    /// Scheduler tick: acquire due jobs and execute them.
+    ///
+    /// Uses state-machine approach: jobs with `next_run_at <= now` and `running_at IS NULL`
+    /// are atomically acquired via BEGIN IMMEDIATE transaction.
     #[cfg(feature = "cron")]
     async fn check_and_run_jobs(
         db_path: PathBuf,
@@ -777,93 +847,132 @@ impl CronService {
         running_jobs: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>,
         semaphore: Arc<Semaphore>,
         job_timeout: u64,
+        max_concurrent: usize,
     ) -> CronResult<()> {
-        let now = Utc::now();
+        let now_ms = Utc::now().timestamp_millis();
 
-        // Get enabled jobs (in blocking context)
-        let jobs = {
-            let db_path = db_path.clone();
+        // Phase 1: Clear stuck jobs (running for > STUCK_THRESHOLD)
+        {
+            let db = db_path.clone();
+            let stuck_cutoff = now_ms - scheduler::STUCK_THRESHOLD_MS;
             tokio::task::spawn_blocking(move || {
-                let conn = Connection::open(&db_path)?;
+                let conn = Connection::open(&db)?;
+                let cleared = conn.execute(
+                    "UPDATE cron_jobs SET running_at = NULL WHERE running_at IS NOT NULL AND running_at < ?1",
+                    params![stuck_cutoff],
+                )?;
+                if cleared > 0 {
+                    tracing::warn!("Cleared {} stuck cron jobs", cleared);
+                }
+                Ok::<_, CronError>(())
+            })
+            .await
+            .map_err(|e| CronError::Internal(format!("Task join error: {}", e)))??;
+        }
+
+        // Phase 2: Determine effective concurrency based on CPU load
+        let effective_max = resource::resolve_effective_concurrency(
+            max_concurrent,
+            semaphore.available_permits(),
+        );
+
+        // Phase 3: Atomic acquire due jobs
+        let jobs_select = Self::JOBS_SELECT;
+        let acquired = {
+            let db = db_path.clone();
+            tokio::task::spawn_blocking(move || {
+                let conn = Connection::open(&db)?;
+                conn.execute_batch("BEGIN IMMEDIATE")?;
+
                 let sql = format!(
-                    "SELECT {} FROM cron_jobs WHERE enabled = 1",
-                    Self::JOBS_SELECT
+                    "SELECT {} FROM cron_jobs WHERE next_run_at <= ?1 AND running_at IS NULL AND enabled = 1 ORDER BY priority ASC LIMIT ?2",
+                    jobs_select
                 );
                 let mut stmt = conn.prepare(&sql)?;
-
                 let jobs: Vec<CronJob> = stmt
-                    .query_map([], Self::row_to_cron_job)?
+                    .query_map(params![now_ms, effective_max as i64], Self::row_to_cron_job)?
                     .collect::<Result<Vec<_>, _>>()?;
 
+                // Mark acquired jobs as running
+                for job in &jobs {
+                    conn.execute(
+                        "UPDATE cron_jobs SET running_at = ?1 WHERE id = ?2",
+                        params![now_ms, job.id],
+                    )?;
+                }
+
+                conn.execute_batch("COMMIT")?;
                 Ok::<_, CronError>(jobs)
             })
             .await
             .map_err(|e| CronError::Internal(format!("Task join error: {}", e)))??
         };
 
-        for job in jobs {
-            // Parse schedule
-            let schedule = match Schedule::from_str(&job.schedule) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!("Invalid schedule for job {}: {}", job.id, e);
-                    continue;
-                }
-            };
-
-            // Check if job should run now (within the check interval)
-            let should_run = schedule
-                .upcoming(Utc)
-                .take(1)
-                .any(|next| {
-                    let diff = (next - now).num_seconds().abs();
-                    diff < 60 // Within 1 minute window
-                });
-
-            if !should_run {
-                continue;
-            }
-
-            // Check if already running
-            {
-                let running = running_jobs.read().await;
-                if running.contains_key(&job.id) {
-                    tracing::debug!("Job {} is already running, skipping", job.id);
-                    continue;
-                }
-            }
-
-            // Try to acquire semaphore
+        // Phase 4: Spawn execution for each acquired job
+        for job in acquired {
             let permit = match semaphore.clone().try_acquire_owned() {
                 Ok(p) => p,
                 Err(_) => {
-                    tracing::debug!("Max concurrent jobs reached, deferring {}", job.id);
+                    // Release the running_at marker since we can't run it now
+                    let db = db_path.clone();
+                    let jid = job.id.clone();
+                    let _ = tokio::task::spawn_blocking(move || -> Option<()> {
+                        let conn = Connection::open(&db).ok()?;
+                        conn.execute(
+                            "UPDATE cron_jobs SET running_at = NULL WHERE id = ?1",
+                            params![jid],
+                        ).ok()?;
+                        Some(())
+                    }).await;
                     continue;
                 }
             };
 
             tracing::info!("Running cron job: {} ({})", job.name, job.id);
 
-            // Spawn job execution
             let job_id = job.id.clone();
             let job_id_for_track = job_id.clone();
             let job_name = job.name.clone();
             let agent_id = job.agent_id.clone();
-            let prompt = job.prompt.clone();
+
+            // Resolve prompt: use template if available, otherwise use raw prompt
+            let runs_select = Self::RUNS_SELECT;
+            let prompt = if let Some(ref tpl) = job.prompt_template {
+                let db = db_path.clone();
+                let jid = job.id.clone();
+                let tpl = tpl.clone();
+                let job_for_tpl = job.clone();
+                let last_run = tokio::task::spawn_blocking(move || -> Option<JobRun> {
+                    let conn = Connection::open(&db).ok()?;
+                    let sql = format!(
+                        "SELECT {} FROM cron_runs WHERE job_id = ?1 ORDER BY started_at DESC LIMIT 1",
+                        runs_select
+                    );
+                    let mut stmt = conn.prepare(&sql).ok()?;
+                    stmt.query_row(params![jid], Self::row_to_job_run).ok()
+                })
+                .await
+                .unwrap_or(None);
+                template::render_template(&tpl, &job_for_tpl, last_run.as_ref(), 0)
+            } else {
+                job.prompt.clone()
+            };
+
             let executor = executor.clone();
             let db_path_for_task = db_path.clone();
             let running_jobs_for_task = running_jobs.clone();
+            let job_clone = job.clone();
 
             let handle = tokio::spawn(async move {
-                let _permit = permit; // Hold permit until done
+                let _permit = permit;
                 let mut run = JobRun::new(&job_id);
 
                 // Save initial run state
                 {
-                    let db_path = db_path_for_task.clone();
+                    let db = db_path_for_task.clone();
                     let run_clone = run.clone();
                     let _ = tokio::task::spawn_blocking(move || {
-                        Self::save_run_sync(&db_path, &run_clone)
+                        Self::save_run_sync(&db, &run_clone)
                     }).await;
                 }
 
@@ -874,6 +983,7 @@ impl CronService {
                 )
                 .await;
 
+                let success = matches!(&result, Ok(Ok(_)));
                 run = match result {
                     Ok(Ok(response)) => {
                         tracing::info!("Job {} completed successfully", job_name);
@@ -889,19 +999,28 @@ impl CronService {
                     }
                 };
 
-                // Update run state
+                // Save final run state
                 {
-                    let db_path = db_path_for_task.clone();
+                    let db = db_path_for_task.clone();
+                    let run_clone = run.clone();
                     let _ = tokio::task::spawn_blocking(move || {
-                        Self::save_run_sync(&db_path, &run)
+                        Self::save_run_sync(&db, &run_clone)
                     }).await;
                 }
 
-                // Remove from running jobs
+                // Finalize: update job state (next_run_at, failures, chains)
+                {
+                    let db = db_path_for_task.clone();
+                    let jid = job_id.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        Self::finalize_job_sync(&db, &jid, &job_clone, success)
+                    }).await;
+                }
+
+                // Remove from running jobs map
                 running_jobs_for_task.write().await.remove(&job_id);
             });
 
-            // Track running job
             running_jobs.write().await.insert(job_id_for_track, handle);
         }
 
@@ -915,6 +1034,7 @@ impl CronService {
         _running_jobs: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>,
         _semaphore: Arc<Semaphore>,
         _job_timeout: u64,
+        _max_concurrent: usize,
     ) -> CronResult<()> {
         Ok(())
     }
@@ -943,6 +1063,63 @@ impl CronService {
         }
 
         Ok(rows)
+    }
+
+    /// Run startup catch-up: clear stale markers and recompute schedules.
+    async fn startup_catchup(db_path: &Path) -> CronResult<()> {
+        let db_path = db_path.to_path_buf();
+        let jobs_select = Self::JOBS_SELECT;
+
+        tokio::task::spawn_blocking(move || {
+            let conn = Connection::open(&db_path)?;
+            let now = Utc::now();
+            let now_ms = now.timestamp_millis();
+
+            // Phase 1: Clear all running_at markers (stale from previous shutdown)
+            let cleared = conn.execute(
+                "UPDATE cron_jobs SET running_at = NULL WHERE running_at IS NOT NULL",
+                [],
+            )?;
+            if cleared > 0 {
+                tracing::info!("Startup: cleared {} stale running markers", cleared);
+            }
+
+            // Phase 2: Recompute next_run_at for all enabled jobs
+            let sql = format!(
+                "SELECT {} FROM cron_jobs WHERE enabled = 1",
+                jobs_select
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let jobs: Vec<CronJob> = stmt
+                .query_map([], CronService::row_to_cron_job)?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let mut catchup_count = 0;
+            for job in &jobs {
+                if scheduler::is_completed_oneshot(job) {
+                    continue;
+                }
+
+                let next = scheduler::compute_next_run_at(job, now);
+
+                // If next_run_at is in the past (missed), set it to now for immediate catchup
+                let effective_next = match next {
+                    Some(t) if t < now_ms => Some(now_ms),
+                    other => other,
+                };
+
+                conn.execute(
+                    "UPDATE cron_jobs SET next_run_at = ?1 WHERE id = ?2",
+                    params![effective_next, job.id],
+                )?;
+                catchup_count += 1;
+            }
+
+            tracing::info!("Startup: recomputed next_run_at for {} jobs", catchup_count);
+            Ok::<_, CronError>(())
+        })
+        .await
+        .map_err(|e| CronError::Internal(format!("Task join error: {}", e)))?
     }
 }
 
@@ -1042,5 +1219,36 @@ mod tests {
         assert_eq!(ret.schedule_kind, ScheduleKind::Every);
         assert_eq!(ret.every_ms, Some(60_000));
         assert_eq!(ret.version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_startup_computes_next_run() {
+        let config = test_config();
+        let service = CronService::new(config).unwrap();
+
+        let job = CronJob::new("Hourly Job", "0 0 * * * *", "main", "Do work");
+        let job_id = job.id.clone();
+        service.add_job(job).await.unwrap();
+
+        let retrieved = service.get_job(&job_id).await.unwrap();
+        assert!(retrieved.next_run_at.is_some(), "next_run_at should be set after add");
+        assert!(retrieved.next_run_at.unwrap() > chrono::Utc::now().timestamp_millis());
+    }
+
+    #[tokio::test]
+    async fn test_add_every_job() {
+        let config = test_config();
+        let service = CronService::new(config).unwrap();
+
+        let mut job = CronJob::new("Interval Job", "unused", "main", "Do work");
+        job.schedule_kind = ScheduleKind::Every;
+        job.every_ms = Some(60_000);
+
+        let job_id = job.id.clone();
+        service.add_job(job).await.unwrap();
+
+        let retrieved = service.get_job(&job_id).await.unwrap();
+        assert!(retrieved.next_run_at.is_some());
+        assert_eq!(retrieved.schedule_kind, ScheduleKind::Every);
     }
 }
