@@ -114,6 +114,9 @@ impl AsyncSecretResolver for SecretRouter {
                     Ok(secret)
                 }
                 Sensitivity::High => {
+                    // TODO(jit-approval): Integrate with SecretApprovalManager
+                    // to require user confirmation before each use of
+                    // high-sensitivity secrets. See design doc Section 4.3.
                     tracing::debug!(
                         secret = name,
                         provider = %mapping.provider,

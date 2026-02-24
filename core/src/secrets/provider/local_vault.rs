@@ -17,6 +17,10 @@ use crate::secrets::vault::SecretVault;
 ///
 /// Wraps a `SecretVault` in an `RwLock` so it can be shared across
 /// async tasks while satisfying the `Send + Sync` bounds of `SecretProvider`.
+///
+/// Uses `std::sync::RwLock` rather than `tokio::sync::RwLock` because all
+/// `SecretVault` operations are in-memory (data loaded at open time).
+/// Lock hold times are sub-microsecond HashMap lookups.
 pub struct LocalVaultProvider {
     vault: RwLock<SecretVault>,
 }
