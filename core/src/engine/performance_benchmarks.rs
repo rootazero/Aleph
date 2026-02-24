@@ -5,12 +5,11 @@
 
 #[cfg(test)]
 mod performance_benchmarks {
-    use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Instant;
     use tempfile::TempDir;
 
-    use crate::engine::{AtomicAction, AtomicEngine, Patch, WriteMode};
+    use crate::engine::{AtomicAction, AtomicEngine, Patch};
 
     #[tokio::test]
     async fn bench_l1_routing_performance() {

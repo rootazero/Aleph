@@ -5,7 +5,6 @@
 
 #[cfg(test)]
 mod integration_tests {
-    use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Instant;
     use tempfile::TempDir;

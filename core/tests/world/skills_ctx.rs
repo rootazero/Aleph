@@ -7,8 +7,7 @@ use alephcore::gateway::handlers::HandlerRegistry;
 use alephcore::gateway::protocol::JsonRpcResponse;
 use alephcore::skill_evolution::types::{SkillMetrics, SolidificationSuggestion};
 use alephcore::tools::markdown_skill::{
-    MarkdownCliTool, MarkdownSkillGenerator, MarkdownSkillGeneratorConfig, ReloadCallback,
-    SkillLoader, SkillWatcher, SkillWatcherConfig,
+    MarkdownCliTool, MarkdownSkillGenerator, ReloadCallback, SkillWatcherConfig,
 };
 use alephcore::tools::AlephToolServer;
 use tempfile::TempDir;

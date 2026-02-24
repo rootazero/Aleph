@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-use alephcore::tools::markdown_skill::{MarkdownCliTool, SandboxMode};
+use alephcore::tools::markdown_skill::MarkdownCliTool;
 use alephcore::tools::AlephToolServer;
 
 /// Context for security/sandbox tests

@@ -437,7 +437,6 @@ impl SkillCompiler {
 mod tests {
     use super::*;
     use crate::skill_evolution::types::SkillMetrics;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn create_test_compiler() -> (SkillCompiler, TempDir) {

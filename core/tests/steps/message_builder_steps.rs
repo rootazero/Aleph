@@ -369,21 +369,21 @@ async fn then_message_count(w: &mut AlephWorld, count: i32) {
 #[then(expr = "message {int} should have role {string}")]
 async fn then_message_has_role(w: &mut AlephWorld, index: i32, role: String) {
     let ctx = w.message_builder.as_ref().expect("MessageBuilder context not initialized");
-    let msg = ctx.get_message(index as usize).expect(&format!("No message at index {}", index));
+    let msg = ctx.get_message(index as usize).unwrap_or_else(|| panic!("No message at index {}", index));
     assert_eq!(msg.role, role, "Message {} role mismatch", index);
 }
 
 #[then(expr = "message {int} should have content {string}")]
 async fn then_message_has_content(w: &mut AlephWorld, index: i32, content: String) {
     let ctx = w.message_builder.as_ref().expect("MessageBuilder context not initialized");
-    let msg = ctx.get_message(index as usize).expect(&format!("No message at index {}", index));
+    let msg = ctx.get_message(index as usize).unwrap_or_else(|| panic!("No message at index {}", index));
     assert_eq!(msg.content, content, "Message {} content mismatch", index);
 }
 
 #[then(expr = "message {int} should contain {string}")]
 async fn then_message_contains(w: &mut AlephWorld, index: i32, text: String) {
     let ctx = w.message_builder.as_ref().expect("MessageBuilder context not initialized");
-    let msg = ctx.get_message(index as usize).expect(&format!("No message at index {}", index));
+    let msg = ctx.get_message(index as usize).unwrap_or_else(|| panic!("No message at index {}", index));
     assert!(
         msg.content.contains(&text),
         "Message {} should contain '{}', but was: {}",
@@ -396,7 +396,7 @@ async fn then_message_contains(w: &mut AlephWorld, index: i32, text: String) {
 #[then(expr = "message {int} should not contain {string}")]
 async fn then_message_not_contains(w: &mut AlephWorld, index: i32, text: String) {
     let ctx = w.message_builder.as_ref().expect("MessageBuilder context not initialized");
-    let msg = ctx.get_message(index as usize).expect(&format!("No message at index {}", index));
+    let msg = ctx.get_message(index as usize).unwrap_or_else(|| panic!("No message at index {}", index));
     assert!(
         !msg.content.contains(&text),
         "Message {} should NOT contain '{}', but was: {}",
@@ -409,21 +409,21 @@ async fn then_message_not_contains(w: &mut AlephWorld, index: i32, text: String)
 #[then(expr = "message {int} should not have tool_call_id")]
 async fn then_message_no_tool_call_id(w: &mut AlephWorld, index: i32) {
     let ctx = w.message_builder.as_ref().expect("MessageBuilder context not initialized");
-    let msg = ctx.get_message(index as usize).expect(&format!("No message at index {}", index));
+    let msg = ctx.get_message(index as usize).unwrap_or_else(|| panic!("No message at index {}", index));
     assert!(msg.tool_call_id.is_none(), "Message {} should not have tool_call_id", index);
 }
 
 #[then(expr = "message {int} should not have tool_calls")]
 async fn then_message_no_tool_calls(w: &mut AlephWorld, index: i32) {
     let ctx = w.message_builder.as_ref().expect("MessageBuilder context not initialized");
-    let msg = ctx.get_message(index as usize).expect(&format!("No message at index {}", index));
+    let msg = ctx.get_message(index as usize).unwrap_or_else(|| panic!("No message at index {}", index));
     assert!(msg.tool_calls.is_none(), "Message {} should not have tool_calls", index);
 }
 
 #[then(expr = "message {int} should have tool_call_id {string}")]
 async fn then_message_has_tool_call_id(w: &mut AlephWorld, index: i32, id: String) {
     let ctx = w.message_builder.as_ref().expect("MessageBuilder context not initialized");
-    let msg = ctx.get_message(index as usize).expect(&format!("No message at index {}", index));
+    let msg = ctx.get_message(index as usize).unwrap_or_else(|| panic!("No message at index {}", index));
     assert_eq!(
         msg.tool_call_id,
         Some(id.clone()),
@@ -435,7 +435,7 @@ async fn then_message_has_tool_call_id(w: &mut AlephWorld, index: i32, id: Strin
 #[then(expr = "message {int} should have a tool call with id {string} and name {string}")]
 async fn then_message_has_tool_call(w: &mut AlephWorld, index: i32, id: String, name: String) {
     let ctx = w.message_builder.as_ref().expect("MessageBuilder context not initialized");
-    let msg = ctx.get_message(index as usize).expect(&format!("No message at index {}", index));
+    let msg = ctx.get_message(index as usize).unwrap_or_else(|| panic!("No message at index {}", index));
     let tool_calls = msg.tool_calls.as_ref().expect("Message should have tool_calls");
     assert!(!tool_calls.is_empty(), "Tool calls should not be empty");
     assert_eq!(tool_calls[0].id, id, "Tool call id mismatch");

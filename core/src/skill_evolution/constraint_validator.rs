@@ -365,11 +365,6 @@ impl std::error::Error for ConstraintMismatch {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skill_evolution::success_manifest::{
-        AllowedOperations, DataProcessing, FileSystemOperations, FileSystemRestrictions,
-        NetworkRestrictions, ProcessRestrictions, ProhibitedOperations, ScriptExecution,
-    };
-
     #[test]
     fn test_network_constraint_match() {
         let mut manifest = SuccessManifest::new("test", "test");

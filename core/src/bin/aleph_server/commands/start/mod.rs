@@ -28,18 +28,11 @@ use alephcore::gateway::{
     GatewayConfig as FullGatewayConfig,
     SessionManager, SessionManagerConfig,
     ChannelRegistry, InboundMessageRouter, RoutingConfig,
-    ConfigWatcher, ConfigWatcherConfig, ConfigEvent,
 };
 #[cfg(feature = "gateway")]
 use alephcore::gateway::pairing_store::SqlitePairingStore;
-#[cfg(feature = "gateway")]
-use alephcore::gateway::handlers::session as session_handlers;
-#[cfg(feature = "gateway")]
-use alephcore::gateway::handlers::channel as channel_handlers;
 #[cfg(all(feature = "gateway", feature = "discord"))]
 use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
-#[cfg(feature = "gateway")]
-use alephcore::gateway::handlers::config as config_handlers;
 #[cfg(feature = "gateway")]
 use alephcore::gateway::handlers::auth as auth_handlers;
 #[cfg(feature = "gateway")]
@@ -47,13 +40,7 @@ use alephcore::gateway::security::{TokenManager, PairingManager};
 #[cfg(feature = "gateway")]
 use alephcore::gateway::device_store::DeviceStore;
 #[cfg(all(feature = "gateway", target_os = "macos"))]
-use alephcore::gateway::channels::imessage::{IMessageChannel, IMessageConfig};
-#[cfg(all(feature = "gateway", feature = "telegram"))]
-use alephcore::gateway::channels::telegram::{TelegramChannel, TelegramConfig};
-#[cfg(all(feature = "gateway", feature = "discord"))]
-use alephcore::gateway::channels::discord::{DiscordChannel, DiscordConfig};
-#[cfg(all(feature = "gateway", feature = "whatsapp"))]
-use alephcore::gateway::channels::whatsapp::{WhatsAppChannel, WhatsAppConfig};
+use alephcore::gateway::interfaces::{IMessageChannel, IMessageConfig};
 #[cfg(feature = "gateway")]
 use alephcore::executor::BuiltinToolRegistry;
 #[cfg(feature = "gateway")]
@@ -75,7 +62,7 @@ use alephcore::gateway::{
 };
 
 use crate::cli::DEFAULT_LOG_FILE;
-use crate::server_init::{serve_webchat, handle_run_with_engine};
+use crate::server_init::handle_run_with_engine;
 
 #[cfg(feature = "gateway")]
 mod builder;

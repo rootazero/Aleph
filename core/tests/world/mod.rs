@@ -30,7 +30,7 @@ pub use daemon_ctx::DaemonContext;
 pub use dispatcher_ctx::DispatcherContext;
 pub use e2e_ctx::{E2eContext, BatchLoadResult};
 pub use extension_ctx::ExtensionContext;
-pub use gateway_ctx::{GatewayContext, TrackingExecutionAdapter, TestEmitter, make_test_message};
+pub use gateway_ctx::{GatewayContext, TestEmitter};
 pub use logging_ctx::LoggingContext;
 pub use memory_ctx::MemoryContext;
 pub use message_builder_ctx::MessageBuilderContext;

@@ -339,7 +339,7 @@ impl CortexDreamingService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::cortex::{DistillationConfig, ExperienceBuilder};
+    use crate::memory::cortex::DistillationConfig;
     use tempfile::TempDir;
 
     async fn create_test_db() -> (MemoryBackend, TempDir) {

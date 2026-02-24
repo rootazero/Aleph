@@ -162,7 +162,6 @@ impl CleanupService {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     // TODO: Tests need to be rewritten to use LanceMemoryBackend instead of StateDatabase.
     // The old tests created StateDatabase from a file path; the new MemoryBackend

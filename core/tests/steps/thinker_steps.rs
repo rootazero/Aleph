@@ -88,7 +88,7 @@ async fn given_recent_step(w: &mut AlephWorld, action: String, result: String) {
             action_type: action,
             action_args: r#"{"query": "rust"}"#.to_string(),
             result_summary: result.clone(),
-            result_output: format!(r#"{{"results": 10, "items": []}}"#),
+            result_output: r#"{"results": 10, "items": []}"#.to_string(),
             success: true,
         });
         obs.current_step = obs.recent_steps.len();
@@ -179,8 +179,8 @@ async fn then_section_appears_before(w: &mut AlephWorld, first: String, second: 
     let ctx = w.thinker.as_ref().expect("Thinker context not initialized");
     let prompt = ctx.system_prompt.as_ref().expect("No system prompt built");
 
-    let first_pos = prompt.find(&first).expect(&format!("'{}' not found in prompt", first));
-    let second_pos = prompt.find(&second).expect(&format!("'{}' not found in prompt", second));
+    let first_pos = prompt.find(&first).unwrap_or_else(|| panic!("'{}' not found in prompt", first));
+    let second_pos = prompt.find(&second).unwrap_or_else(|| panic!("'{}' not found in prompt", second));
 
     assert!(
         first_pos < second_pos,
@@ -866,7 +866,7 @@ async fn then_step_n_type(w: &mut AlephWorld, step_num: i32, expected_type: Stri
     let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
     let steps = thinking.steps.as_ref().expect("No steps");
     let step = steps.get((step_num - 1) as usize)
-        .expect(&format!("No step {}", step_num));
+        .unwrap_or_else(|| panic!("No step {}", step_num));
     let actual_type = format!("{:?}", step.step_type);
     assert!(
         actual_type.contains(&expected_type),

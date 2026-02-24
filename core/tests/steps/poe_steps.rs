@@ -14,7 +14,6 @@ use cucumber::{given, then, when};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use tempfile::tempdir;
 use tokio::fs;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -275,7 +274,7 @@ async fn given_poe_task_impossible_stuck_window(w: &mut AlephWorld, window: i32)
 
 #[given("a POE task with no constraints")]
 async fn given_poe_task_no_constraints(w: &mut AlephWorld) {
-    let ctx = w.poe.get_or_insert_with(PoeContext::new);
+    let _ctx = w.poe.get_or_insert_with(PoeContext::new);
     // No constraints added
 }
 

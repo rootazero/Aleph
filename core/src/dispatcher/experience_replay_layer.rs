@@ -242,8 +242,6 @@ struct ExperienceWithScore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::cortex::{ExperienceBuilder, ParameterConfig};
-    use std::collections::HashMap;
     use tempfile::TempDir;
 
     async fn create_test_db() -> (MemoryBackend, TempDir) {

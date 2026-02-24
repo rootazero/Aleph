@@ -103,7 +103,6 @@ impl Default for ProtocolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::protocols::{AnthropicProtocol, GeminiProtocol, OpenAiProtocol};
 
     #[test]
     fn test_register_and_get_builtin() {

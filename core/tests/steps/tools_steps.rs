@@ -341,7 +341,7 @@ async fn given_register_realistic_mix(
 
     // Builtin tools
     let builtin_names = ["search", "file_ops", "code_exec", "web_fetch", "youtube"];
-    for (i, name) in builtin_names.iter().take(builtin_count).enumerate() {
+    for name in builtin_names.iter().take(builtin_count) {
         let tool = UnifiedTool::new(
             format!("builtin:{}", name),
             *name,
@@ -430,7 +430,7 @@ async fn given_register_realistic_mix(
         "generate-tests", "explain-code", "fix-bugs", "optimize",
         "document", "format", "refactor", "analyze",
     ];
-    for (i, name) in skills.iter().take(skill_count).enumerate() {
+    for name in skills.iter().take(skill_count) {
         let tool = UnifiedTool::new(
             format!("skill:{}", name),
             *name,
@@ -677,7 +677,7 @@ async fn given_multiple_task_sessions(w: &mut AlephWorld, count: usize, agent: S
     let ctx = w.tools.as_mut().expect("Tools context not initialized");
     let session_manager = ctx.session_manager.as_ref().expect("Session manager not initialized");
     for i in 0..count {
-        let key = SessionKey::task(&agent, &kind, &format!("task-{}", i));
+        let key = SessionKey::task(&agent, &kind, format!("task-{}", i));
         session_manager.get_or_create(&key).await.unwrap();
     }
 }

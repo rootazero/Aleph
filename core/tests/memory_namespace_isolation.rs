@@ -8,7 +8,6 @@
 //! field but the trait-level search filters need namespace support to be wired up.
 
 use alephcore::memory::context::{FactType, MemoryFact};
-use alephcore::memory::NamespaceScope;
 use alephcore::memory::store::lance::LanceMemoryBackend;
 use alephcore::memory::store::MemoryStore;
 use std::sync::Arc;

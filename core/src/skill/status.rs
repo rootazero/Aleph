@@ -69,7 +69,7 @@ impl Serialize for SkillStatusReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::skill::{EligibilitySpec, SkillContent, SkillManifest, SkillSource};
+    use crate::domain::skill::{SkillContent, SkillManifest, SkillSource};
     use crate::skill::eligibility::IneligibilityReason;
 
     fn make_manifest(name: &str) -> SkillManifest {

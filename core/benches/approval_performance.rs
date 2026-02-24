@@ -27,11 +27,11 @@ fn benchmark_path_escalation(c: &mut Criterion) {
         params.insert("file_path".to_string(), "/tmp/output.txt".to_string());
 
         bencher.iter(|| {
-            let result = check_path_escalation(
+            
+            check_path_escalation(
                 black_box(&params),
                 black_box(&approved_paths),
-            );
-            result
+            )
         });
     });
 
@@ -48,11 +48,11 @@ fn benchmark_path_escalation(c: &mut Criterion) {
         params.insert("log_path".to_string(), "/var/log/app.log".to_string());
 
         bencher.iter(|| {
-            let result = check_path_escalation(
+            
+            check_path_escalation(
                 black_box(&params),
                 black_box(&approved_paths),
-            );
-            result
+            )
         });
     });
 
@@ -62,11 +62,11 @@ fn benchmark_path_escalation(c: &mut Criterion) {
         params.insert("file_path".to_string(), "/Users/test/.ssh/id_rsa".to_string());
 
         bencher.iter(|| {
-            let result = check_path_escalation(
+            
+            check_path_escalation(
                 black_box(&params),
                 black_box(&approved_paths),
-            );
-            result
+            )
         });
     });
 
@@ -74,8 +74,8 @@ fn benchmark_path_escalation(c: &mut Criterion) {
         let path = PathBuf::from("/Users/test/.ssh/id_rsa");
 
         bencher.iter(|| {
-            let result = is_sensitive_directory(black_box(&path));
-            result
+            
+            is_sensitive_directory(black_box(&path))
         });
     });
 }
@@ -95,11 +95,11 @@ fn benchmark_risk_score(c: &mut Criterion) {
         };
 
         bencher.iter(|| {
-            let score = AuditQuery::calculate_risk_score(
+            
+            AuditQuery::calculate_risk_score(
                 black_box(&caps),
                 black_box(0),
-            );
-            score
+            )
         });
     });
 
@@ -123,11 +123,11 @@ fn benchmark_risk_score(c: &mut Criterion) {
         };
 
         bencher.iter(|| {
-            let score = AuditQuery::calculate_risk_score(
+            
+            AuditQuery::calculate_risk_score(
                 black_box(&caps),
                 black_box(2),
-            );
-            score
+            )
         });
     });
 
@@ -151,11 +151,11 @@ fn benchmark_risk_score(c: &mut Criterion) {
         };
 
         bencher.iter(|| {
-            let score = AuditQuery::calculate_risk_score(
+            
+            AuditQuery::calculate_risk_score(
                 black_box(&caps),
                 black_box(5),
-            );
-            score
+            )
         });
     });
 }
@@ -170,11 +170,11 @@ fn benchmark_binding_validation(c: &mut Criterion) {
         declared_bindings.insert("output_file".to_string(), "/tmp/output.txt".to_string());
 
         bencher.iter(|| {
-            let result = check_binding_compliance(
+            
+            check_binding_compliance(
                 black_box(&runtime_params),
                 black_box(&declared_bindings),
-            );
-            result
+            )
         });
     });
 
@@ -188,11 +188,11 @@ fn benchmark_binding_validation(c: &mut Criterion) {
         declared_bindings.insert("output_file".to_string(), "/tmp/**/*.json".to_string());
 
         bencher.iter(|| {
-            let result = check_binding_compliance(
+            
+            check_binding_compliance(
                 black_box(&runtime_params),
                 black_box(&declared_bindings),
-            );
-            result
+            )
         });
     });
 
@@ -206,11 +206,11 @@ fn benchmark_binding_validation(c: &mut Criterion) {
         declared_bindings.insert("timeout".to_string(), "10-60".to_string());
 
         bencher.iter(|| {
-            let result = check_binding_compliance(
+            
+            check_binding_compliance(
                 black_box(&runtime_params),
                 black_box(&declared_bindings),
-            );
-            result
+            )
         });
     });
 
@@ -230,11 +230,11 @@ fn benchmark_binding_validation(c: &mut Criterion) {
         declared_bindings.insert("max_workers".to_string(), "1-8".to_string());
 
         bencher.iter(|| {
-            let result = check_binding_compliance(
+            
+            check_binding_compliance(
                 black_box(&runtime_params),
                 black_box(&declared_bindings),
-            );
-            result
+            )
         });
     });
 }

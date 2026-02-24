@@ -163,6 +163,7 @@ fn request_to_jsonrpc(request: &DesktopRequest) -> (&'static str, serde_json::Va
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desktop::ScreenRegion;
 
     #[test]
     fn test_request_to_jsonrpc_ping() {

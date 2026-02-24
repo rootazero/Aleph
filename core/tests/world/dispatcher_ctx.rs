@@ -72,7 +72,7 @@ impl ExecutionCallback for CollectingCallback {
     }
 
     async fn on_confirmation_required(&self, _plan: &DagTaskPlan) -> UserDecision {
-        self.confirmation_decision.clone()
+        self.confirmation_decision
     }
 
     async fn on_task_start(&self, _task_id: &str, _task_name: &str) {
@@ -99,6 +99,7 @@ impl ExecutionCallback for CollectingCallback {
 }
 
 /// Dispatcher context for BDD tests
+#[derive(Default)]
 pub struct DispatcherContext {
     // === Security Pipeline ===
     /// Security pipeline instance
@@ -175,38 +176,6 @@ impl std::fmt::Debug for DispatcherContext {
     }
 }
 
-impl Default for DispatcherContext {
-    fn default() -> Self {
-        Self {
-            // Security Pipeline
-            pipeline: None,
-            sanitize_ctx: SanitizeContext::default(),
-            pipeline_result: None,
-            // JSON Stream Parsing
-            json_detector: None,
-            json_fragments: Vec::new(),
-            // Decision Flow
-            decision_config: None,
-            decision_action: None,
-            decision_test_results: Vec::new(),
-            // DAG Scheduler
-            risk_evaluator: None,
-            last_risk_level: None,
-            task_context: None,
-            last_prompt_context: None,
-            task_graph: None,
-            task_plan: None,
-            task_info: None,
-            task_display_status: None,
-            mock_executor: None,
-            collecting_callback: None,
-            execution_result: None,
-            graph_has_high_risk: None,
-            noop_callback_completed: false,
-            noop_confirmation_result: None,
-        }
-    }
-}
 
 impl DispatcherContext {
     /// Create a security pipeline with all standard rules

@@ -275,11 +275,7 @@ async fn then_pwd_sandboxed(w: &mut AlephWorld) {
 #[then("sandbox directories should not accumulate")]
 async fn then_sandboxes_not_accumulate(w: &mut AlephWorld) {
     let ctx = w.security.as_ref().expect("Security context not initialized");
-    let diff = if ctx.sandbox_count_after >= ctx.sandbox_count_before {
-        ctx.sandbox_count_after - ctx.sandbox_count_before
-    } else {
-        0
-    };
+    let diff = ctx.sandbox_count_after.saturating_sub(ctx.sandbox_count_before);
     assert!(
         diff < 3,
         "Sandbox directories should be cleaned up (before: {}, after: {})",

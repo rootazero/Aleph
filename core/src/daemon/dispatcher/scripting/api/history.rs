@@ -68,7 +68,7 @@ mod tests {
     use super::*;
     use crate::daemon::worldmodel::WorldModelConfig;
     use crate::daemon::event_bus::DaemonEventBus;
-    use crate::daemon::events::{DaemonEvent, RawEvent, ProcessEventType};
+    use crate::daemon::events::DaemonEvent;
     use crate::daemon::worldmodel::state::ActivityType;
     use chrono::Utc;
     use tokio;

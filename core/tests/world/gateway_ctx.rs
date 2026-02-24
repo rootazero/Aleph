@@ -10,10 +10,8 @@ use chrono::Utc;
 use tempfile::TempDir;
 
 use alephcore::gateway::{
-    AgentInstance, AgentInstanceConfig, AgentRegistry, AgentRouter,
-    ChannelConfig as RouterChannelConfig, ChannelId, ChannelRegistry, ConversationId,
-    DmScope, ExecutionAdapter, InboundContext, InboundMessage, InboundMessageRouter,
-    MessageId, ReplyRoute, RoutingConfig, RunRequest, RunStatus, SimpleExecutionEngine,
+    AgentInstance, AgentRegistry, AgentRouter, ChannelId, ChannelRegistry, ConversationId, ExecutionAdapter, InboundContext, InboundMessage, InboundMessageRouter,
+    MessageId, ReplyRoute, RoutingConfig, RunRequest, RunStatus,
     SqlitePairingStore, UserId,
 };
 use alephcore::gateway::router::SessionKey;

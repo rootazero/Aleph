@@ -13,11 +13,10 @@ use tokio::sync::broadcast;
 
 use alephcore::agents::sub_agents::{SubAgentRegistry, SubAgentRun};
 use alephcore::gateway::run_event_bus::{
-    ActiveRunHandle, RunEndResult, RunEvent, RunStatus,
+    ActiveRunHandle, RunEndResult, RunEvent,
 };
 use alephcore::gateway::router::SessionKey;
 use alephcore::providers::profile_manager::AuthProfileManager;
-use alephcore::routing::SessionKey as RoutingSessionKey;
 
 #[cfg(feature = "gateway")]
 use alephcore::builtin_tools::sessions::{
