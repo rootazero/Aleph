@@ -48,6 +48,7 @@ pub mod consolidation;
 pub mod performance_monitor;
 pub mod cortex;
 pub mod store;
+pub mod scoring_pipeline;
 pub mod vfs;
 pub mod workspace;
 pub mod workspace_store;
