@@ -34,6 +34,10 @@
 "user_input.title" = "Input Required";
 "user_input.placeholder" = "Enter your response...";
 
+// MARK: - Settings Window - Server Status
+"settings.server_unavailable.title" = "Aleph Server Not Running";
+"settings.server_unavailable.message" = "The Control Plane is not available. Please start the Aleph Server first.";
+
 // MARK: - Settings Window - Sidebar
 "settings.sidebar.title" = "Aleph";
 
