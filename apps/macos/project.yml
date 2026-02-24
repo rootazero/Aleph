@@ -125,6 +125,7 @@ targets:
         embed: true
         link: true
       - package: GRDB
+      - sdk: WebKit.framework
     postCompileScripts:
       - name: "SwiftLint"
         script: |
