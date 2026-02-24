@@ -42,6 +42,11 @@ thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Screen capture
+xcap = "0.8"
+base64 = "0.21"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2"

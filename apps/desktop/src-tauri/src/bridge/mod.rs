@@ -4,6 +4,7 @@
 //! Listens on ~/.aleph/desktop.sock, dispatches JSON-RPC requests
 //! to perception/action handlers.
 
+mod perception;
 pub mod protocol;
 
 use aleph_protocol::desktop_bridge::{self, ERR_METHOD_NOT_FOUND, ERR_NOT_IMPLEMENTED};
@@ -104,13 +105,14 @@ async fn handle_connection(stream: tokio::net::UnixStream) {
 }
 
 /// Dispatch a method call to the appropriate handler
-fn dispatch(method: &str, _params: serde_json::Value) -> Result<serde_json::Value, (i32, String)> {
+fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value, (i32, String)> {
     match method {
         desktop_bridge::METHOD_PING => Ok(json!("pong")),
 
+        desktop_bridge::METHOD_SCREENSHOT => perception::handle_screenshot(params),
+
         // All other methods return "not implemented" for MVP
-        desktop_bridge::METHOD_SCREENSHOT
-        | desktop_bridge::METHOD_OCR
+        desktop_bridge::METHOD_OCR
         | desktop_bridge::METHOD_AX_TREE
         | desktop_bridge::METHOD_CLICK
         | desktop_bridge::METHOD_TYPE_TEXT
