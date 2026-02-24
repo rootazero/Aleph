@@ -179,7 +179,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn create_test_skill(
-        dir: &std::path::PathBuf,
+        dir: &std::path::Path,
         name: &str,
         description: &str,
         instructions: &str,

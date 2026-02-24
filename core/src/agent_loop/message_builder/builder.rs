@@ -96,6 +96,7 @@ impl MessageBuilder {
 
     /// Check if overflow detector is set (for testing)
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn has_overflow_detector(&self) -> bool {
         self.overflow_detector.is_some()
     }

@@ -570,7 +570,7 @@ mod tests {
     #[async_trait]
     impl CapabilityStrategy for MockStrategy {
         fn capability_type(&self) -> Capability {
-            self.capability.clone()
+            self.capability
         }
 
         fn priority(&self) -> u32 {

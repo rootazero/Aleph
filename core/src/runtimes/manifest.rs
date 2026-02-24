@@ -11,13 +11,16 @@ use std::time::{Duration, SystemTime};
 use tracing::{debug, warn};
 
 /// Manifest file version for future migrations
+#[allow(dead_code)]
 const MANIFEST_VERSION: u32 = 1;
 
 /// Minimum interval between update checks (24 hours)
+#[allow(dead_code)]
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Metadata for a single runtime
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct RuntimeMetadata {
     /// When the runtime was installed
     pub installed_at: SystemTime,
@@ -31,6 +34,7 @@ pub struct RuntimeMetadata {
     pub extra: HashMap<String, String>,
 }
 
+#[allow(dead_code)]
 impl RuntimeMetadata {
     /// Create new metadata for a freshly installed runtime
     pub fn new(version: String) -> Self {
@@ -56,6 +60,7 @@ impl RuntimeMetadata {
 
 /// Manifest storing metadata for all runtimes
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Manifest {
     /// Manifest format version
     pub version: u32,
@@ -66,6 +71,7 @@ pub struct Manifest {
     path: PathBuf,
 }
 
+#[allow(dead_code)]
 impl Manifest {
     /// Load manifest from disk, or create a new one if it doesn't exist
     pub fn load_or_default(runtimes_dir: &Path) -> Result<Self> {

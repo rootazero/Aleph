@@ -144,6 +144,6 @@ async fn test_batch_scoring_with_llm() {
 
     assert_eq!(scores.len(), 2);
     for score in scores {
-        assert!(score >= 0.0 && score <= 1.0);
+        assert!((0.0..=1.0).contains(&score));
     }
 }

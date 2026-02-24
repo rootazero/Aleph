@@ -10,6 +10,7 @@
 pub mod workspace_isolation;
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod integration_tests {
     use crate::memory::{
         context_comptroller::{ComptrollerConfig, RetentionMode},

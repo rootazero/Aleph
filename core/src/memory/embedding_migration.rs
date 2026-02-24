@@ -166,6 +166,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "Requires LanceMemoryBackend"]
+    #[allow(unreachable_code, unused_variables, clippy::diverging_sub_expression)]
     async fn test_migration_on_empty_database() {
         // TODO: Migrate test to use LanceMemoryBackend
         let db: MemoryBackend = unimplemented!("Migrate test");

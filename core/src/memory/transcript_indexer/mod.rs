@@ -207,6 +207,6 @@ mod tests {
     }
 
     fn estimate_tokens_helper(text: &str) -> usize {
-        (text.len() + 3) / 4  // 4 chars per token, round up
+        text.len().div_ceil(4)  // 4 chars per token, round up
     }
 }

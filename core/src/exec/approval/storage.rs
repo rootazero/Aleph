@@ -354,7 +354,7 @@ mod tests {
 
         // Get capabilities
         let capabilities = storage.get_tool_capabilities("test_tool").await.unwrap();
-        assert!(capabilities.len() > 0);
+        assert!(!capabilities.is_empty());
         assert!(capabilities.contains(&"filesystem.read_write".to_string()));
         assert!(capabilities.contains(&"network.allow_all".to_string()));
         assert!(capabilities.contains(&"process.exec".to_string()));

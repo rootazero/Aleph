@@ -76,7 +76,7 @@ mod tests {
         SkillManifest::new(
             name,
             name,
-            &format!("{} description", name),
+            format!("{} description", name),
             SkillContent::new("content"),
             SkillSource::Bundled,
         )

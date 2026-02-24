@@ -1,4 +1,5 @@
 //! POE test context
+#![allow(dead_code)]
 
 use tempfile::TempDir;
 use std::path::PathBuf;

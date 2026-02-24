@@ -3,6 +3,7 @@
 //! This module provides end-to-end integration tests that validate the complete
 //! meta-cognition flow from failure detection to behavioral anchor injection.
 
+#![allow(clippy::arc_with_non_send_sync)]
 use super::*;
 use crate::memory::cortex::types::{Experience, EvolutionStatus};
 use crate::memory::store::{LanceMemoryBackend, MemoryBackend};
@@ -258,7 +259,7 @@ async fn test_conflict_detection_flow() {
 
     // Act: Detect conflicts
     let conflicts = detector
-        .detect_semantic_conflicts(&anchor2, &[anchor1.clone()])
+        .detect_semantic_conflicts(&anchor2, std::slice::from_ref(&anchor1))
         .await;
 
     // Assert: Conflict is detected
@@ -395,14 +396,9 @@ fn test_dynamic_injection_flow() {
     let second_duration = start.elapsed();
 
     // Note: Cache effectiveness may vary, so we just verify both succeed
-    assert!(
-        first_duration.as_millis() >= 0,
-        "First retrieval should complete"
-    );
-    assert!(
-        second_duration.as_millis() >= 0,
-        "Second retrieval should complete"
-    );
+    // Durations are always >= 0 (u128), just confirm they were captured
+    let _ = first_duration.as_millis();
+    let _ = second_duration.as_millis();
 }
 
 // ============================================================================

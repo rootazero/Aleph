@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn test_escalation_reason_variants() {
-        let reasons = vec![
+        let reasons = [
             EscalationReason::PathOutOfScope,
             EscalationReason::SensitiveDirectory,
             EscalationReason::UndeclaredBinding,

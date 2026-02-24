@@ -600,7 +600,8 @@ async fn then_lane_should_have_priority_boost(
 
     // For now, we just verify the lane exists and has stats
     // The actual priority boost is tracked internally in LaneState
-    assert!(lane_stats.queued >= 0, "Lane should have valid stats");
+    // Verify the lane exists and has valid stats (queued is usize, always >= 0)
+    let _ = lane_stats.queued;
 
     // Note: In a real implementation, we'd expose priority_boost through stats
     // For now, we verify the boost count was correct

@@ -308,7 +308,7 @@ mod tests {
         let dirs = scanner.get_all_directories().unwrap();
 
         // Should have Aleph global + project .claude
-        assert!(dirs.len() >= 1);
+        assert!(!dirs.is_empty());
         assert!(dirs.iter().any(|d| d.source == DiscoverySource::AlephGlobal));
     }
 
@@ -335,7 +335,7 @@ mod tests {
         let skills = scanner.discover_component("skills").unwrap();
 
         // Should find my-skill and project-skill
-        assert!(skills.len() >= 1);
+        assert!(!skills.is_empty());
         assert!(skills.iter().any(|s| s.name == "my-skill"));
     }
 

@@ -46,7 +46,7 @@ mod tests {
 
     #[test]
     fn test_generation_config_get_default_provider() {
-        let mut config = GenerationConfig {
+        let config = GenerationConfig {
             default_image_provider: Some("dalle".to_string()),
             default_speech_provider: Some("elevenlabs".to_string()),
             ..Default::default()
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_generation_config_output_dir_expansion() {
-        let mut config = GenerationConfig {
+        let config = GenerationConfig {
             output_dir: PathBuf::from("~/test-output"),
             ..Default::default()
         };

@@ -91,6 +91,7 @@ impl PodcastTask {
 impl ResilientTask for PodcastTask {
     type Output = PodcastResult;
 
+    #[allow(clippy::needless_return)]
     fn execute<'a>(
         &'a self,
         _ctx: &'a TaskContext,

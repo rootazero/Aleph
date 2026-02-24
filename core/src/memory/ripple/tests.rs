@@ -103,7 +103,7 @@ async fn test_ripple_single_hop() -> Result<()> {
     assert_eq!(result.seed_facts[0].id, "fact_a");
 
     // Should find fact_b and fact_c (both similar enough)
-    assert!(result.expanded_facts.len() >= 1);
+    assert!(!result.expanded_facts.is_empty());
 
     Ok(())
 }
@@ -137,7 +137,7 @@ async fn test_ripple_multi_hop() -> Result<()> {
     let result = ripple.explore(vec![fact_a.clone()]).await?;
 
     // Should find multiple facts through multi-hop exploration
-    assert!(result.expanded_facts.len() >= 1);
+    assert!(!result.expanded_facts.is_empty());
 
     Ok(())
 }

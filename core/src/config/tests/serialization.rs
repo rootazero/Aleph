@@ -263,14 +263,14 @@ fn test_atomic_write_overwrites_existing_file() {
     let path = temp_file.path();
 
     // Write first config
-    let mut config1 = Config {
+    let config1 = Config {
         default_hotkey: "Command+A".to_string(),
         ..Config::default()
     };
     config1.save_to_file(path).unwrap();
 
     // Overwrite with second config
-    let mut config2 = Config {
+    let config2 = Config {
         default_hotkey: "Command+B".to_string(),
         ..Config::default()
     };

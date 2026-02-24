@@ -530,8 +530,8 @@ mod tests {
 
         let result = gate.validate(&suggestion);
         // May be blocked or dangerous depending on patterns
-        if result.is_err() {
-            assert!(result.unwrap_err().contains("blocked"));
+        if let Err(e) = result {
+            assert!(e.contains("blocked"));
         }
     }
 

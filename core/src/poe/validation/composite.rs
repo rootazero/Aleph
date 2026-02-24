@@ -513,7 +513,7 @@ mod tests {
     fn test_summarize_hard_failures() {
         let validator = create_test_validator("");
 
-        let failures = vec![
+        let failures = [
             RuleResult::fail(
                 ValidationRule::FileExists {
                     path: PathBuf::from("/a.txt"),
@@ -541,7 +541,7 @@ mod tests {
     fn test_suggest_hard_fix() {
         let validator = create_test_validator("");
 
-        let failures = vec![
+        let failures = [
             RuleResult::fail(
                 ValidationRule::FileExists {
                     path: PathBuf::from("/missing.txt"),

@@ -335,6 +335,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::missing_transmute_annotations)]
     fn test_migrate_add_experience_replays_idempotent() {
         // Register sqlite-vec extension BEFORE opening connection
         unsafe {

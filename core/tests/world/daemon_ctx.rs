@@ -1,4 +1,5 @@
 //! Daemon test context
+#![allow(dead_code)]
 
 use alephcore::daemon::{
     DaemonConfig, DaemonEvent, DaemonEventBus, GovernorDecision, IpcServer, JsonRpcRequest,

@@ -1,4 +1,5 @@
 //! Dispatcher Cortex test context for security pipeline, JSON parsing, decision flow, and DAG scheduling
+#![allow(dead_code)]
 
 use alephcore::dispatcher::cortex::{
     parser::{JsonFragment, JsonStreamDetector},

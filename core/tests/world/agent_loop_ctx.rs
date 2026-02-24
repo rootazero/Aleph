@@ -1,4 +1,5 @@
 //! Agent loop test context
+#![allow(dead_code)]
 
 use alephcore::agent_loop::{
     callback::LoopEvent,

@@ -233,7 +233,6 @@ mod tests {
     fn test_sampling_handler_creation() {
         let handler = SamplingHandler::new();
         // Should create without panicking
-        assert!(true);
         drop(handler);
     }
 

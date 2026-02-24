@@ -4,6 +4,7 @@
 //! with the existing Agent Loop architecture.
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod integration_tests {
     use std::sync::Arc;
     use std::time::Instant;

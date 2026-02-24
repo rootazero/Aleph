@@ -1,4 +1,5 @@
 //! Thinker test context for BDD scenarios
+#![allow(dead_code)]
 
 use alephcore::agent_loop::{Observation, StructuredThinking, ThinkingParser, ToolInfo};
 use alephcore::thinker::prompt_builder::SystemPromptPart;

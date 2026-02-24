@@ -302,6 +302,7 @@ pub trait InternalEventHandler: Send + Sync {
 ///
 /// Records all callback invocations for assertion in tests
 #[cfg(test)]
+#[allow(clippy::type_complexity)]
 pub struct MockEventHandler {
     pub state_changes: std::sync::Arc<std::sync::Mutex<Vec<ProcessingState>>>,
     pub errors: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
@@ -336,6 +337,13 @@ pub struct MockEventHandler {
     pub agent_tool_completed:
         std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String, bool, String)>>>, // (plan_id, step_index, tool_name, success, result_preview)
     pub agent_completed: std::sync::Arc<std::sync::Mutex<Vec<(String, bool, u64, String)>>>, // (plan_id, success, duration_ms, response)
+}
+
+#[cfg(test)]
+impl Default for MockEventHandler {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]

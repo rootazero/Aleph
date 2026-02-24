@@ -9,6 +9,7 @@ mod perception_integration;
 mod integration_tests;
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use super::super::*;
 

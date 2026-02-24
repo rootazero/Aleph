@@ -219,7 +219,7 @@ mod tests {
         // This test depends on environment, just verify the function works
         let result = can_create_provider_from_env();
         // Result depends on whether ANTHROPIC_API_KEY or OPENAI_API_KEY is set
-        assert!(result == true || result == false);
+        let _ = result;
     }
 
     #[test]

@@ -111,7 +111,7 @@ mod tests {
         assert!(visible.is_model_visible());
 
         // Only include model-visible skills
-        let all = vec![&disabled, &model_disabled, &visible];
+        let all = [&disabled, &model_disabled, &visible];
         let visible_only: Vec<&&SkillManifest> =
             all.iter().filter(|s| s.is_model_visible()).collect();
         assert_eq!(visible_only.len(), 1);

@@ -751,7 +751,7 @@ mod tests {
     #[test]
     fn test_fact_roundtrip() {
         let original = make_fact_with_embedding();
-        let batch = facts_to_record_batch(&[original.clone()]).expect("to_batch");
+        let batch = facts_to_record_batch(std::slice::from_ref(&original)).expect("to_batch");
         assert_eq!(batch.num_rows(), 1);
 
         let recovered = record_batch_to_facts(&batch).expect("from_batch");
@@ -785,7 +785,7 @@ mod tests {
     #[test]
     fn test_fact_roundtrip_no_embedding() {
         let original = make_fact_no_embedding();
-        let batch = facts_to_record_batch(&[original.clone()]).expect("to_batch");
+        let batch = facts_to_record_batch(std::slice::from_ref(&original)).expect("to_batch");
         assert_eq!(batch.num_rows(), 1);
 
         let recovered = record_batch_to_facts(&batch).expect("from_batch");
@@ -810,7 +810,7 @@ mod tests {
         original.layer = MemoryLayer::L1Overview;
         original.category = MemoryCategory::Patterns;
 
-        let batch = facts_to_record_batch(&[original.clone()]).expect("to_batch");
+        let batch = facts_to_record_batch(std::slice::from_ref(&original)).expect("to_batch");
         let recovered = record_batch_to_facts(&batch).expect("from_batch");
 
         assert_eq!(recovered.len(), 1);
@@ -854,7 +854,7 @@ mod tests {
             workspace: "default".to_string(),
         };
 
-        let batch = graph_nodes_to_record_batch(&[node.clone()]).expect("to_batch");
+        let batch = graph_nodes_to_record_batch(std::slice::from_ref(&node)).expect("to_batch");
         assert_eq!(batch.num_rows(), 1);
 
         let recovered = record_batch_to_graph_nodes(&batch).expect("from_batch");
@@ -885,7 +885,7 @@ mod tests {
             workspace: "default".to_string(),
         };
 
-        let batch = graph_nodes_to_record_batch(&[node.clone()]).expect("to_batch");
+        let batch = graph_nodes_to_record_batch(std::slice::from_ref(&node)).expect("to_batch");
         let recovered = record_batch_to_graph_nodes(&batch).expect("from_batch");
         assert_eq!(recovered.len(), 1);
         assert!(recovered[0].aliases.is_empty());
@@ -909,7 +909,7 @@ mod tests {
             workspace: "default".to_string(),
         };
 
-        let batch = graph_edges_to_record_batch(&[edge.clone()]).expect("to_batch");
+        let batch = graph_edges_to_record_batch(std::slice::from_ref(&edge)).expect("to_batch");
         assert_eq!(batch.num_rows(), 1);
 
         let recovered = record_batch_to_graph_edges(&batch).expect("from_batch");
@@ -956,7 +956,7 @@ mod tests {
             similarity_score: None,
         };
 
-        let batch = memories_to_record_batch(&[entry.clone()]).expect("to_batch");
+        let batch = memories_to_record_batch(std::slice::from_ref(&entry)).expect("to_batch");
         assert_eq!(batch.num_rows(), 1);
 
         let recovered = record_batch_to_memories(&batch).expect("from_batch");
@@ -995,7 +995,7 @@ mod tests {
             similarity_score: None,
         };
 
-        let batch = memories_to_record_batch(&[entry.clone()]).expect("to_batch");
+        let batch = memories_to_record_batch(std::slice::from_ref(&entry)).expect("to_batch");
         let recovered = record_batch_to_memories(&batch).expect("from_batch");
         assert_eq!(recovered.len(), 1);
         assert!(recovered[0].embedding.is_none());
@@ -1019,7 +1019,7 @@ mod tests {
         fact.strength = 0.75;
         fact.access_count = 5;
         fact.last_accessed_at = Some(1700000000);
-        let batch = facts_to_record_batch(&[fact.clone()]).unwrap();
+        let batch = facts_to_record_batch(std::slice::from_ref(&fact)).unwrap();
         let out = record_batch_to_facts(&batch).unwrap();
         assert_eq!(out[0].tier, MemoryTier::LongTerm);
         assert_eq!(out[0].scope, MemoryScope::Persona);

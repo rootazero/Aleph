@@ -310,7 +310,7 @@ async fn test_session_counting() {
 
     // Create multiple sessions
     for i in 0..5 {
-        let session = SubagentSession::new(&format!("sess_{}", i), "explorer", "parent_001");
+        let session = SubagentSession::new(format!("sess_{}", i), "explorer", "parent_001");
         db.insert_session(&session).await.expect("Failed to insert");
     }
 

@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn test_core_state_serialization() {
         // Create a CoreState with some data
-        let mut state = CoreState {
+        let state = CoreState {
             activity: ActivityType::Programming {
                 language: Some("rust".to_string()),
                 project: Some("/path/to/project".to_string()),

@@ -6,6 +6,7 @@
 //! - SemanticPurposeInferrer inference levels
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use crate::dispatcher::tool_index::{
         HydrationLevel, HydratedTool, SemanticPurposeInferrer, ToolIndexCoordinator, ToolMeta,

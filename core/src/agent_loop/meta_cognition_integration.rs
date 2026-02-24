@@ -373,6 +373,7 @@ impl MetaCognitionIntegration {
 }
 
 #[cfg(test)]
+#[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
     use crate::memory::cortex::meta_cognition::types::{AnchorScope, AnchorSource};
@@ -380,6 +381,7 @@ mod tests {
     use rusqlite::Connection;
     use tempfile::TempDir;
 
+    #[allow(clippy::arc_with_non_send_sync)]
     async fn setup_integration() -> Result<MetaCognitionIntegration, AlephError> {
         // Create temporary directory for memory backend
         let temp_dir = TempDir::new().map_err(|e| AlephError::config(e.to_string()))?;

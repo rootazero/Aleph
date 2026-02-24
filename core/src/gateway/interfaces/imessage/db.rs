@@ -344,7 +344,7 @@ mod tests {
     fn test_apple_timestamp_conversion() {
         // Test a known timestamp: 2024-01-01 00:00:00 UTC
         // Apple timestamp: (2024-01-01 - 2001-01-01) in nanoseconds
-        let apple_ts: i64 = 725846400_000_000_000; // Approximate
+        let apple_ts: i64 = 725_846_400_000_000_000; // Approximate
         let dt = apple_timestamp_to_datetime(apple_ts);
 
         // Should be around 2024

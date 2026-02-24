@@ -81,7 +81,7 @@ mod tests {
         let mut m = SkillManifest::new(
             id,
             name,
-            &format!("{} description", name),
+            format!("{} description", name),
             SkillContent::new("content"),
             SkillSource::Bundled,
         );

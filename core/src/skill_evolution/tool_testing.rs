@@ -555,6 +555,7 @@ mod tests {
     use crate::skill_evolution::SolidificationSuggestion;
     use tempfile::TempDir;
 
+    #[allow(dead_code)]
     fn create_test_suggestion() -> SolidificationSuggestion {
         SolidificationSuggestion {
             pattern_id: "test-pattern".to_string(),

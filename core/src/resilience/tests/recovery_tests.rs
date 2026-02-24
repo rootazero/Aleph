@@ -200,7 +200,7 @@ async fn test_recovery_summary() {
     // Create various interrupted tasks with traces
     for i in 0..3 {
         let task = AgentTask::new(
-            &format!("task_low_{}", i),
+            format!("task_low_{}", i),
             "sess",
             "agent",
             "Low risk task",
@@ -211,13 +211,13 @@ async fn test_recovery_summary() {
             .await
             .expect("Failed");
         // Add trace so task is recoverable
-        let trace = TaskTrace::new(&format!("task_low_{}", i), 0, TraceRole::Assistant, "{}");
+        let trace = TaskTrace::new(format!("task_low_{}", i), 0, TraceRole::Assistant, "{}");
         db.insert_trace(&trace).await.expect("Failed");
     }
 
     for i in 0..2 {
         let task = AgentTask::new(
-            &format!("task_high_{}", i),
+            format!("task_high_{}", i),
             "sess",
             "agent",
             "High risk task",
@@ -228,7 +228,7 @@ async fn test_recovery_summary() {
             .await
             .expect("Failed");
         // Add trace so task is recoverable
-        let trace = TaskTrace::new(&format!("task_high_{}", i), 0, TraceRole::Assistant, "{}");
+        let trace = TaskTrace::new(format!("task_high_{}", i), 0, TraceRole::Assistant, "{}");
         db.insert_trace(&trace).await.expect("Failed");
     }
 

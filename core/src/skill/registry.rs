@@ -87,7 +87,7 @@ mod tests {
         SkillManifest::new(
             SkillId::new(name),
             name,
-            &format!("{} description", name),
+            format!("{} description", name),
             SkillContent::new("content"),
             source,
         )

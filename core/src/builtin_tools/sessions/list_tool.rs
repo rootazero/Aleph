@@ -475,7 +475,7 @@ mod tests {
         // Create multiple sessions
         let session_manager = context.session_manager();
         for i in 0..5 {
-            let key = crate::gateway::router::SessionKey::task("main", "cron", &format!("task-{}", i));
+            let key = crate::gateway::router::SessionKey::task("main", "cron", format!("task-{}", i));
             session_manager.get_or_create(&key).await.unwrap();
         }
 

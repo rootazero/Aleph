@@ -60,9 +60,9 @@ fn test_encoded_path_traversal() {
     let trigger = check_path_escalation(&params, &approved_paths);
     // Note: Current implementation may not decode URLs
     // This test documents expected behavior for future enhancement
-    if trigger.is_some() {
+    if let Some(t) = trigger {
         assert_eq!(
-            trigger.unwrap().reason,
+            t.reason,
             EscalationReason::PathOutOfScope,
             "Encoded path traversal should be detected after decoding"
         );
@@ -170,8 +170,8 @@ fn test_double_encoded_traversal() {
 
     let trigger = check_path_escalation(&params, &approved_paths);
     // This should be detected after proper decoding
-    if trigger.is_some() {
-        assert_eq!(trigger.unwrap().reason, EscalationReason::PathOutOfScope);
+    if let Some(t) = trigger {
+        assert_eq!(t.reason, EscalationReason::PathOutOfScope);
     }
 }
 
