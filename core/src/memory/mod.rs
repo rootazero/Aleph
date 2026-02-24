@@ -18,6 +18,7 @@
 pub mod adaptive_retrieval;
 pub mod ai_retrieval;
 pub mod audit;
+pub mod backup;
 pub mod augmentation;
 pub mod cleanup;
 pub mod composer;
@@ -62,6 +63,7 @@ mod integration_tests;
 // Re-export commonly used types
 pub use adaptive_retrieval::{AdaptiveRetrievalConfig, AdaptiveRetrievalGate, RetrievalDecision};
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
+pub use backup::MemoryBackupService;
 pub use audit::{
     AuditAction, AuditActor, AuditDetails, AuditEntry, AuditLogger,
     ExplainedEvent, FactExplanation, ForgettingExplanation,
