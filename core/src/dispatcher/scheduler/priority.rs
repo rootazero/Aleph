@@ -17,8 +17,7 @@ use std::time::SystemTime;
 use super::dag::DagScheduler;
 
 /// Task priority tier
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum PriorityTier {
     /// Immediate user actions (highest priority, preemptive)
     User = 0,
@@ -29,10 +28,8 @@ pub enum PriorityTier {
     Background = 2,
 }
 
-
 /// Risk level for browser tasks
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RiskLevel {
     /// Read-only operations (safe)
     #[default]
@@ -42,7 +39,6 @@ pub enum RiskLevel {
     /// Financial transactions, data modification (high risk)
     High,
 }
-
 
 /// Task metadata for priority scheduling
 #[derive(Debug, Clone)]
@@ -74,8 +70,8 @@ impl TaskMetadata {
             submitted_at: SystemTime::now(),
             domain,
             risk_level,
-            preemptible: tier != PriorityTier::User,  // User tasks not preemptible
-            effective_priority: 0.0,  // Will be calculated
+            preemptible: tier != PriorityTier::User, // User tasks not preemptible
+            effective_priority: 0.0,                 // Will be calculated
         }
     }
 }
@@ -99,7 +95,7 @@ pub struct PrioritySchedulerConfig {
 impl Default for PrioritySchedulerConfig {
     fn default() -> Self {
         Self {
-            starvation_threshold: 300,  // 5 minutes
+            starvation_threshold: 300, // 5 minutes
             max_concurrent_browser_tasks: 3,
             enable_priority_boosting: true,
             enable_preemption: true,
@@ -196,7 +192,11 @@ impl PriorityScheduler {
         }
 
         // Check queues in priority order (User -> Financial -> Background)
-        for tier in [PriorityTier::User, PriorityTier::Financial, PriorityTier::Background] {
+        for tier in [
+            PriorityTier::User,
+            PriorityTier::Financial,
+            PriorityTier::Background,
+        ] {
             let queue = &mut self.queues[tier as usize];
 
             // Find first task that's ready (no domain conflicts)
@@ -263,11 +263,8 @@ impl PriorityScheduler {
                 .unwrap_or_default()
                 .as_secs();
 
-            metadata.effective_priority = Self::calculate_effective_priority(
-                metadata.tier,
-                age,
-                threshold,
-            );
+            metadata.effective_priority =
+                Self::calculate_effective_priority(metadata.tier, age, threshold);
         }
     }
 
@@ -373,7 +370,8 @@ impl PriorityScheduler {
         // Re-acquire domain lock
         if let Some(metadata) = self.metadata.get(task_id) {
             if let Some(domain) = &metadata.domain {
-                self.domain_locks.insert(domain.clone(), task_id.to_string());
+                self.domain_locks
+                    .insert(domain.clone(), task_id.to_string());
             }
         }
 
@@ -423,7 +421,7 @@ mod tests {
         assert_eq!(metadata.tier, PriorityTier::User);
         assert_eq!(metadata.domain, Some("example.com".to_string()));
         assert_eq!(metadata.risk_level, RiskLevel::High);
-        assert!(!metadata.preemptible);  // User tasks not preemptible
+        assert!(!metadata.preemptible); // User tasks not preemptible
     }
 
     #[test]
@@ -550,11 +548,8 @@ mod tests {
     #[test]
     fn test_priority_calculation() {
         // Fresh task (no aging)
-        let priority = PriorityScheduler::calculate_effective_priority(
-            PriorityTier::Background,
-            0,
-            300,
-        );
+        let priority =
+            PriorityScheduler::calculate_effective_priority(PriorityTier::Background, 0, 300);
         assert_eq!(priority, 100.0);
 
         // Aged task (beyond threshold)
@@ -566,11 +561,7 @@ mod tests {
         assert_eq!(priority, 200.0); // 100.0 * (1.0 + 1.0)
 
         // User task always has high base priority
-        let priority = PriorityScheduler::calculate_effective_priority(
-            PriorityTier::User,
-            0,
-            300,
-        );
+        let priority = PriorityScheduler::calculate_effective_priority(PriorityTier::User, 0, 300);
         assert_eq!(priority, 1000.0);
     }
 
@@ -578,8 +569,10 @@ mod tests {
     fn test_starvation_prevention() {
         use std::time::Duration;
 
-        let mut config = PrioritySchedulerConfig::default();
-        config.starvation_threshold = 1; // 1 second threshold for testing
+        let config = PrioritySchedulerConfig {
+            starvation_threshold: 1, // 1 second threshold for testing
+            ..PrioritySchedulerConfig::default()
+        };
         let mut scheduler = PriorityScheduler::new(config);
 
         // Submit a background task
@@ -744,8 +737,10 @@ mod tests {
 
     #[test]
     fn test_preemption_disabled() {
-        let mut config = PrioritySchedulerConfig::default();
-        config.enable_preemption = false;
+        let config = PrioritySchedulerConfig {
+            enable_preemption: false,
+            ..PrioritySchedulerConfig::default()
+        };
         let mut scheduler = PriorityScheduler::new(config);
 
         // Submit and execute a Financial task

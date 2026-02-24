@@ -48,7 +48,9 @@ impl PermissionMode {
     pub fn description(&self) -> &'static str {
         match self {
             PermissionMode::Normal => "Normal mode: edits and commands require confirmation",
-            PermissionMode::AutoAcceptEdits => "Auto-accept: edits are automatic, commands need confirmation",
+            PermissionMode::AutoAcceptEdits => {
+                "Auto-accept: edits are automatic, commands need confirmation"
+            }
             PermissionMode::PlanMode => "Plan mode: read-only exploration, no write operations",
         }
     }
@@ -131,7 +133,6 @@ pub struct LoopConfig {
     // ========================================================================
     // Unified Session Model Feature Flags (Phase 1-3 Migration)
     // ========================================================================
-
     /// Use unified ExecutionSession model (Phase 1)
     ///
     /// When enabled, the agent loop creates and maintains an ExecutionSession
@@ -159,7 +160,6 @@ pub struct LoopConfig {
     // ========================================================================
     // Thinking Levels System
     // ========================================================================
-
     /// Default thinking level for LLM calls
     ///
     /// Controls the depth of reasoning the model performs before responding.
@@ -178,7 +178,6 @@ pub struct LoopConfig {
     // ========================================================================
     // Meta-Cognition Layer (Phase 6)
     // ========================================================================
-
     /// Enable meta-cognition layer for self-reflection and behavioral learning
     ///
     /// When enabled, the agent loop will:
@@ -249,8 +248,8 @@ impl ThinkRetryConfig {
         if attempt == 0 {
             return Duration::ZERO;
         }
-        let delay_ms = (self.initial_backoff_ms as f64)
-            * self.backoff_multiplier.powi((attempt - 1) as i32);
+        let delay_ms =
+            (self.initial_backoff_ms as f64) * self.backoff_multiplier.powi((attempt - 1) as i32);
         let capped_ms = delay_ms.min(self.max_backoff_ms as f64) as u64;
         Duration::from_millis(capped_ms)
     }
@@ -598,17 +597,34 @@ impl LoopConfig {
         if self.permission_mode == PermissionMode::PlanMode {
             // In plan mode, only allow read operations
             let read_only_tools = [
-                "read", "read_file", "search", "grep", "glob", "find",
-                "list", "ls", "dir", "tree", "cat", "head", "tail",
-                "git_status", "git_log", "git_diff", "git_show",
-                "web_search", "web_fetch", "fetch_url",
-                "ask_user", "ask_question",
+                "read",
+                "read_file",
+                "search",
+                "grep",
+                "glob",
+                "find",
+                "list",
+                "ls",
+                "dir",
+                "tree",
+                "cat",
+                "head",
+                "tail",
+                "git_status",
+                "git_log",
+                "git_diff",
+                "git_show",
+                "web_search",
+                "web_fetch",
+                "fetch_url",
+                "ask_user",
+                "ask_question",
             ];
 
             let tool_lower = tool_name.to_lowercase();
-            let is_read_only = read_only_tools.iter().any(|t| {
-                tool_lower == *t || tool_lower.starts_with(&format!("{}_", t))
-            });
+            let is_read_only = read_only_tools
+                .iter()
+                .any(|t| tool_lower == *t || tool_lower.starts_with(&format!("{}_", t)));
 
             if !is_read_only {
                 return Err(format!(
@@ -631,13 +647,15 @@ impl LoopConfig {
             PermissionMode::AutoAcceptEdits => {
                 // Auto-accept edits - only confirm shell commands
                 let shell_tools = ["shell", "execute", "run", "bash", "cmd", "exec"];
-                shell_tools.iter().any(|t| tool_name.to_lowercase().contains(t))
+                shell_tools
+                    .iter()
+                    .any(|t| tool_name.to_lowercase().contains(t))
             }
             PermissionMode::Normal => {
                 // Normal mode - use the configured list
-                self.require_confirmation.iter().any(|t| {
-                    tool_name == t || tool_name.starts_with(t)
-                })
+                self.require_confirmation
+                    .iter()
+                    .any(|t| tool_name == t || tool_name.starts_with(t))
             }
         }
     }
@@ -720,7 +738,9 @@ mod tests {
         assert_eq!(config.max_steps, 100);
         assert_eq!(config.max_tokens, 50_000);
         assert_eq!(config.timeout, Duration::from_secs(300));
-        assert!(config.require_confirmation.contains(&"custom_danger".to_string()));
+        assert!(config
+            .require_confirmation
+            .contains(&"custom_danger".to_string()));
         assert_eq!(config.permission_mode, PermissionMode::PlanMode);
     }
 
@@ -784,7 +804,8 @@ mod tests {
     #[test]
     fn test_needs_confirmation() {
         let normal_config = LoopConfig::default();
-        let auto_config = LoopConfig::default().with_permission_mode(PermissionMode::AutoAcceptEdits);
+        let auto_config =
+            LoopConfig::default().with_permission_mode(PermissionMode::AutoAcceptEdits);
         let plan_config = LoopConfig::for_plan_mode();
 
         // Normal mode - dangerous tools need confirmation
@@ -870,8 +891,10 @@ mod tests {
         assert_eq!(delay, Duration::from_millis(4000));
 
         // With respect_retry_after = false
-        let mut config = ThinkRetryConfig::default();
-        config.respect_retry_after = false;
+        let config = ThinkRetryConfig {
+            respect_retry_after: false,
+            ..ThinkRetryConfig::default()
+        };
         let delay = config.calculate_delay_with_retry_after(1, Some(5000));
         assert_eq!(delay, Duration::from_millis(2000)); // Ignores retry-after
     }

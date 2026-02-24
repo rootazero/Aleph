@@ -97,8 +97,10 @@ mod tests {
 
     #[test]
     fn test_disabled_cache() {
-        let mut config = ToolCacheConfig::default();
-        config.enabled = false;
+        let config = ToolCacheConfig {
+            enabled: false,
+            ..ToolCacheConfig::default()
+        };
         assert!(!config.should_cache("file_ops"));
     }
 

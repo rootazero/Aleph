@@ -600,8 +600,10 @@ mod tests {
         let bus = EventBus::new();
         let ctx = EventContext::new(bus);
 
-        let mut session = ExecutionSession::default();
-        session.iteration_count = 50; // At max
+        let session = ExecutionSession {
+            iteration_count: 50, // At max
+            ..ExecutionSession::default()
+        };
 
         let result = controller.check_guards(&session, &ctx);
 
@@ -614,8 +616,10 @@ mod tests {
         let bus = EventBus::new();
         let ctx = EventContext::new(bus);
 
-        let mut session = ExecutionSession::default();
-        session.total_tokens = 100_000; // At max
+        let session = ExecutionSession {
+            total_tokens: 100_000, // At max
+            ..ExecutionSession::default()
+        };
 
         let result = controller.check_guards(&session, &ctx);
 
@@ -628,12 +632,14 @@ mod tests {
         let bus = EventBus::new();
         let ctx = EventContext::new(bus);
 
-        let mut session = ExecutionSession::default();
-        session.recent_calls = vec![
-            create_tool_call_record("search", serde_json::json!({"q": "test"})),
-            create_tool_call_record("search", serde_json::json!({"q": "test"})),
-            create_tool_call_record("search", serde_json::json!({"q": "test"})),
-        ];
+        let session = ExecutionSession {
+            recent_calls: vec![
+                create_tool_call_record("search", serde_json::json!({"q": "test"})),
+                create_tool_call_record("search", serde_json::json!({"q": "test"})),
+                create_tool_call_record("search", serde_json::json!({"q": "test"})),
+            ],
+            ..ExecutionSession::default()
+        };
 
         let result = controller.check_guards(&session, &ctx);
 

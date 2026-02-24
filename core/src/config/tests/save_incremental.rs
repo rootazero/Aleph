@@ -39,8 +39,10 @@ max_context_items = 10
     fs::write(&config_path, initial_toml).expect("Should write initial config");
 
     // Load config and test save_incremental
-    let mut config = Config::default();
-    config.shortcuts = Some(ShortcutsConfig::default());
+    let config = Config {
+        shortcuts: Some(ShortcutsConfig::default()),
+        ..Config::default()
+    };
 
     // Read existing content
     let existing_content = fs::read_to_string(&config_path).expect("Should read");
@@ -115,19 +117,21 @@ timeout_seconds = 10
     fs::write(&config_path, initial_toml).expect("Should write initial config");
 
     // Create config with PII settings
-    let mut config = Config::default();
-    config.search = Some(SearchConfigInternal {
-        enabled: true,
-        default_provider: "tavily".to_string(),
-        fallback_providers: None,
-        max_results: 5,
-        timeout_seconds: 10,
-        backends: HashMap::new(),
-        pii: Some(PIIConfig {
+    let config = Config {
+        search: Some(SearchConfigInternal {
             enabled: true,
-            ..Default::default()
+            default_provider: "tavily".to_string(),
+            fallback_providers: None,
+            max_results: 5,
+            timeout_seconds: 10,
+            backends: HashMap::new(),
+            pii: Some(PIIConfig {
+                enabled: true,
+                ..Default::default()
+            }),
         }),
-    });
+        ..Config::default()
+    };
 
     // Read existing and update only search.pii
     let existing_content = fs::read_to_string(&config_path).expect("Should read");

@@ -92,7 +92,6 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
     }
 }
 
-
 use std::time::Duration;
 
 /// Remote embedding provider using OpenAI-compatible API
@@ -110,7 +109,9 @@ pub struct RemoteEmbeddingProvider {
 
 impl RemoteEmbeddingProvider {
     /// Create from EmbeddingConfig
-    pub fn from_config(config: &crate::config::types::memory::EmbeddingConfig) -> Result<Self, AlephError> {
+    pub fn from_config(
+        config: &crate::config::types::memory::EmbeddingConfig,
+    ) -> Result<Self, AlephError> {
         let api_key = if let Some(ref env_var) = config.api_key_env {
             std::env::var(env_var).map_err(|_| {
                 AlephError::config(format!(
@@ -161,9 +162,10 @@ impl RemoteEmbeddingProvider {
             request = request.header("Authorization", format!("Bearer {}", self.api_key));
         }
 
-        let response = request.send().await.map_err(|e| {
-            AlephError::config(format!("Embedding API request failed: {}", e))
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| AlephError::config(format!("Embedding API request failed: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -245,7 +247,6 @@ impl EmbeddingProvider for RemoteEmbeddingProvider {
     }
 }
 
-
 use std::sync::Arc;
 
 /// Create an EmbeddingProvider from configuration
@@ -326,14 +327,15 @@ mod tests {
 
     #[test]
     fn test_unknown_provider_fails() {
-        let mut config = crate::config::types::memory::EmbeddingConfig::default();
-        config.provider = "unknown".to_string();
+        let config = crate::config::types::memory::EmbeddingConfig {
+            provider: "unknown".to_string(),
+            ..crate::config::types::memory::EmbeddingConfig::default()
+        };
         let result = create_embedding_provider(&config);
         assert!(result.is_err());
         let err = result.err().unwrap();
         assert!(err.to_string().contains("Unknown embedding provider"));
     }
-
 
     // =========================================================================
     // Mock provider for testing
@@ -380,12 +382,12 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires LanceMemoryBackend"]
     async fn test_full_embedding_evolution_flow() {
-        use crate::memory::store::MemoryBackend;
-        use crate::memory::embedding_migration::EmbeddingMigration;
         use crate::memory::context::{
             FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer,
             TemporalScope,
         };
+        use crate::memory::embedding_migration::EmbeddingMigration;
+        use crate::memory::store::MemoryBackend;
 
         // TODO: Create LanceMemoryBackend for test
         let db: MemoryBackend = unimplemented!("Migrate test to use LanceMemoryBackend");
@@ -423,7 +425,9 @@ mod tests {
             last_accessed_at: None,
         };
 
-        crate::memory::store::MemoryStore::insert_fact(db.as_ref(), &fact).await.unwrap();
+        crate::memory::store::MemoryStore::insert_fact(db.as_ref(), &fact)
+            .await
+            .unwrap();
 
         // 3. Create a new provider (different model name)
         let provider: Arc<dyn EmbeddingProvider> =
@@ -441,7 +445,10 @@ mod tests {
         assert_eq!(progress.remaining, 0);
 
         // 6. Verify fact was updated
-        let updated = crate::memory::store::MemoryStore::get_fact(db.as_ref(), "test-fact-1").await.unwrap().unwrap();
+        let updated = crate::memory::store::MemoryStore::get_fact(db.as_ref(), "test-fact-1")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(updated.embedding_model, "new-model-v2");
     }
 }

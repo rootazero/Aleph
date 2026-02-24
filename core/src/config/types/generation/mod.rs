@@ -46,7 +46,7 @@ mod tests {
 
     #[test]
     fn test_generation_config_get_default_provider() {
-        let config = GenerationConfig {
+        let mut config = GenerationConfig {
             default_image_provider: Some("dalle".to_string()),
             default_speech_provider: Some("elevenlabs".to_string()),
             ..Default::default()
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_generation_config_output_dir_expansion() {
-        let config = GenerationConfig {
+        let mut config = GenerationConfig {
             output_dir: PathBuf::from("~/test-output"),
             ..Default::default()
         };
@@ -302,9 +302,11 @@ mod tests {
 
     #[test]
     fn test_generation_config_toml_serialization() {
-        let mut config = GenerationConfig::default();
-        config.default_image_provider = Some("dalle".to_string());
-        config.smart_routing_enabled = true;
+        let mut config = GenerationConfig {
+            default_image_provider: Some("dalle".to_string()),
+            smart_routing_enabled: true,
+            ..GenerationConfig::default()
+        };
 
         config.providers.insert(
             "dalle".to_string(),

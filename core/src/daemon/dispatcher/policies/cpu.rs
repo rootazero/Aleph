@@ -16,11 +16,7 @@ impl Policy for HighCpuAlertPolicy {
         "High CPU Alert"
     }
 
-    fn evaluate(
-        &self,
-        context: &EnhancedContext,
-        _event: &DerivedEvent,
-    ) -> Option<ProposedAction> {
+    fn evaluate(&self, context: &EnhancedContext, _event: &DerivedEvent) -> Option<ProposedAction> {
         if context.system_constraint.cpu_usage > 90.0 {
             return Some(ProposedAction {
                 action_type: ActionType::NotifyUser {
@@ -29,9 +25,12 @@ impl Policy for HighCpuAlertPolicy {
                 },
                 reason: "CPU usage exceeds 90%".into(),
                 risk_level: RiskLevel::Low,
-                metadata: [("cpu_usage".into(), context.system_constraint.cpu_usage.into())]
-                    .into_iter()
-                    .collect(),
+                metadata: [(
+                    "cpu_usage".into(),
+                    context.system_constraint.cpu_usage.into(),
+                )]
+                .into_iter()
+                .collect(),
             });
         }
         None
@@ -47,11 +46,13 @@ mod tests {
     #[test]
     fn test_high_cpu_triggers_above_threshold() {
         let policy = HighCpuAlertPolicy;
-        let mut context = EnhancedContext::default();
-        context.system_constraint = SystemLoad {
-            cpu_usage: 95.5,
-            memory_pressure: MemoryPressure::Normal,
-            battery_level: None,
+        let context = EnhancedContext {
+            system_constraint: SystemLoad {
+                cpu_usage: 95.5,
+                memory_pressure: MemoryPressure::Normal,
+                battery_level: None,
+            },
+            ..EnhancedContext::default()
         };
 
         let event = DerivedEvent::IdleStateChanged {
@@ -79,11 +80,13 @@ mod tests {
     #[test]
     fn test_high_cpu_does_not_trigger_below_threshold() {
         let policy = HighCpuAlertPolicy;
-        let mut context = EnhancedContext::default();
-        context.system_constraint = SystemLoad {
-            cpu_usage: 75.0,
-            memory_pressure: MemoryPressure::Normal,
-            battery_level: None,
+        let context = EnhancedContext {
+            system_constraint: SystemLoad {
+                cpu_usage: 75.0,
+                memory_pressure: MemoryPressure::Normal,
+                battery_level: None,
+            },
+            ..EnhancedContext::default()
         };
 
         let event = DerivedEvent::IdleStateChanged {
@@ -99,11 +102,13 @@ mod tests {
     #[test]
     fn test_high_cpu_does_not_trigger_at_exactly_90() {
         let policy = HighCpuAlertPolicy;
-        let mut context = EnhancedContext::default();
-        context.system_constraint = SystemLoad {
-            cpu_usage: 90.0,
-            memory_pressure: MemoryPressure::Normal,
-            battery_level: None,
+        let context = EnhancedContext {
+            system_constraint: SystemLoad {
+                cpu_usage: 90.0,
+                memory_pressure: MemoryPressure::Normal,
+                battery_level: None,
+            },
+            ..EnhancedContext::default()
         };
 
         let event = DerivedEvent::IdleStateChanged {

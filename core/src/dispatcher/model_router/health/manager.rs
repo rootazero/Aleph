@@ -398,8 +398,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_failures_trigger_circuit() {
-        let mut config = HealthConfig::default();
-        config.failure_threshold = 2;
+        let mut config = HealthConfig {
+            failure_threshold: 2,
+            ..HealthConfig::default()
+        };
         config.circuit_breaker.failure_threshold = 2;
         let manager = HealthManager::new(config);
 
@@ -588,8 +590,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_cooldowns() {
-        let mut config = HealthConfig::default();
-        config.failure_threshold = 1;
+        let mut config = HealthConfig {
+            failure_threshold: 1,
+            ..HealthConfig::default()
+        };
         config.circuit_breaker.failure_threshold = 1;
         config.circuit_breaker.cooldown_secs = 0; // Immediate cooldown for test
         let manager = HealthManager::new(config);

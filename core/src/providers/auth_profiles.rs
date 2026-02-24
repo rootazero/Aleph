@@ -90,7 +90,10 @@ impl AuthProfileCredential {
         match self {
             Self::ApiKey(c) => !c.key.trim().is_empty(),
             Self::Token(c) => !c.token.trim().is_empty(),
-            Self::OAuth(c) => !c.access.trim().is_empty() || c.refresh.as_ref().is_some_and(|r| !r.trim().is_empty()),
+            Self::OAuth(c) => {
+                !c.access.trim().is_empty()
+                    || c.refresh.as_ref().is_some_and(|r| !r.trim().is_empty())
+            }
         }
     }
 
@@ -325,9 +328,9 @@ pub struct CooldownConfig {
 impl Default for CooldownConfig {
     fn default() -> Self {
         Self {
-            billing_backoff: Duration::from_secs(5 * 60 * 60),  // 5 hours
-            billing_max: Duration::from_secs(24 * 60 * 60),     // 24 hours
-            failure_window: Duration::from_secs(24 * 60 * 60),  // 24 hours
+            billing_backoff: Duration::from_secs(5 * 60 * 60), // 5 hours
+            billing_max: Duration::from_secs(24 * 60 * 60),    // 24 hours
+            failure_window: Duration::from_secs(24 * 60 * 60), // 24 hours
         }
     }
 }
@@ -404,9 +407,9 @@ pub fn mark_profile_failure(
     let stats = store.get_or_create_usage_stats(profile_id);
 
     // Check if failure window expired (reset counters)
-    let window_expired = stats.last_failure_at.is_some_and(|last| {
-        last > 0 && now.saturating_sub(last) > window_ms
-    });
+    let window_expired = stats
+        .last_failure_at
+        .is_some_and(|last| last > 0 && now.saturating_sub(last) > window_ms);
 
     let base_error_count = if window_expired {
         0
@@ -443,7 +446,11 @@ pub fn mark_profile_failure(
 
 /// Clear cooldown for a profile
 pub fn clear_profile_cooldown(store: &mut AuthProfileStore, profile_id: &str) {
-    if let Some(stats) = store.usage_stats.as_mut().and_then(|s| s.get_mut(profile_id)) {
+    if let Some(stats) = store
+        .usage_stats
+        .as_mut()
+        .and_then(|s| s.get_mut(profile_id))
+    {
         stats.error_count = Some(0);
         stats.cooldown_until = None;
         stats.disabled_until = None;
@@ -652,23 +659,44 @@ mod tests {
 
     #[test]
     fn test_failure_reason_from_status() {
-        assert_eq!(AuthProfileFailureReason::from_status(400), AuthProfileFailureReason::Format);
-        assert_eq!(AuthProfileFailureReason::from_status(401), AuthProfileFailureReason::Auth);
-        assert_eq!(AuthProfileFailureReason::from_status(402), AuthProfileFailureReason::Billing);
-        assert_eq!(AuthProfileFailureReason::from_status(403), AuthProfileFailureReason::Billing);
-        assert_eq!(AuthProfileFailureReason::from_status(429), AuthProfileFailureReason::RateLimit);
-        assert_eq!(AuthProfileFailureReason::from_status(408), AuthProfileFailureReason::Timeout);
-        assert_eq!(AuthProfileFailureReason::from_status(500), AuthProfileFailureReason::Unknown);
+        assert_eq!(
+            AuthProfileFailureReason::from_status(400),
+            AuthProfileFailureReason::Format
+        );
+        assert_eq!(
+            AuthProfileFailureReason::from_status(401),
+            AuthProfileFailureReason::Auth
+        );
+        assert_eq!(
+            AuthProfileFailureReason::from_status(402),
+            AuthProfileFailureReason::Billing
+        );
+        assert_eq!(
+            AuthProfileFailureReason::from_status(403),
+            AuthProfileFailureReason::Billing
+        );
+        assert_eq!(
+            AuthProfileFailureReason::from_status(429),
+            AuthProfileFailureReason::RateLimit
+        );
+        assert_eq!(
+            AuthProfileFailureReason::from_status(408),
+            AuthProfileFailureReason::Timeout
+        );
+        assert_eq!(
+            AuthProfileFailureReason::from_status(500),
+            AuthProfileFailureReason::Unknown
+        );
     }
 
     #[test]
     fn test_cooldown_calculation() {
         // Rate limit: 5^n minutes
-        assert_eq!(calculate_cooldown_ms(1), 60_000);       // 1 min
-        assert_eq!(calculate_cooldown_ms(2), 300_000);      // 5 min
-        assert_eq!(calculate_cooldown_ms(3), 1_500_000);    // 25 min
-        assert_eq!(calculate_cooldown_ms(4), 3_600_000);    // 1 hour (max)
-        assert_eq!(calculate_cooldown_ms(10), 3_600_000);   // Still max
+        assert_eq!(calculate_cooldown_ms(1), 60_000); // 1 min
+        assert_eq!(calculate_cooldown_ms(2), 300_000); // 5 min
+        assert_eq!(calculate_cooldown_ms(3), 1_500_000); // 25 min
+        assert_eq!(calculate_cooldown_ms(4), 3_600_000); // 1 hour (max)
+        assert_eq!(calculate_cooldown_ms(10), 3_600_000); // Still max
     }
 
     #[test]
@@ -677,10 +705,10 @@ mod tests {
 
         // Billing: 2^n × 5 hours
         let hour_ms = 60 * 60 * 1000u64;
-        assert_eq!(calculate_billing_cooldown_ms(1, &config), 5 * hour_ms);   // 5h
-        assert_eq!(calculate_billing_cooldown_ms(2, &config), 10 * hour_ms);  // 10h
-        assert_eq!(calculate_billing_cooldown_ms(3, &config), 20 * hour_ms);  // 20h
-        assert_eq!(calculate_billing_cooldown_ms(4, &config), 24 * hour_ms);  // 24h (max)
+        assert_eq!(calculate_billing_cooldown_ms(1, &config), 5 * hour_ms); // 5h
+        assert_eq!(calculate_billing_cooldown_ms(2, &config), 10 * hour_ms); // 10h
+        assert_eq!(calculate_billing_cooldown_ms(3, &config), 20 * hour_ms); // 20h
+        assert_eq!(calculate_billing_cooldown_ms(4, &config), 24 * hour_ms); // 24h (max)
     }
 
     #[test]
@@ -748,7 +776,12 @@ mod tests {
         );
 
         // First rate limit failure
-        mark_profile_failure(&mut store, "test:default", AuthProfileFailureReason::RateLimit, &config);
+        mark_profile_failure(
+            &mut store,
+            "test:default",
+            AuthProfileFailureReason::RateLimit,
+            &config,
+        );
 
         let stats = store.get_usage_stats("test:default").unwrap();
         assert_eq!(stats.error_count, Some(1));
@@ -756,7 +789,12 @@ mod tests {
         assert!(stats.is_in_cooldown());
 
         // Second failure
-        mark_profile_failure(&mut store, "test:default", AuthProfileFailureReason::RateLimit, &config);
+        mark_profile_failure(
+            &mut store,
+            "test:default",
+            AuthProfileFailureReason::RateLimit,
+            &config,
+        );
 
         let stats = store.get_usage_stats("test:default").unwrap();
         assert_eq!(stats.error_count, Some(2));
@@ -776,11 +814,19 @@ mod tests {
             }),
         );
 
-        mark_profile_failure(&mut store, "test:default", AuthProfileFailureReason::Billing, &config);
+        mark_profile_failure(
+            &mut store,
+            "test:default",
+            AuthProfileFailureReason::Billing,
+            &config,
+        );
 
         let stats = store.get_usage_stats("test:default").unwrap();
         assert!(stats.disabled_until.is_some());
-        assert_eq!(stats.disabled_reason, Some(AuthProfileFailureReason::Billing));
+        assert_eq!(
+            stats.disabled_reason,
+            Some(AuthProfileFailureReason::Billing)
+        );
     }
 
     #[test]
@@ -797,7 +843,12 @@ mod tests {
             }),
         );
 
-        mark_profile_failure(&mut store, "test:default", AuthProfileFailureReason::RateLimit, &config);
+        mark_profile_failure(
+            &mut store,
+            "test:default",
+            AuthProfileFailureReason::RateLimit,
+            &config,
+        );
         assert!(store.is_profile_in_cooldown("test:default"));
 
         clear_profile_cooldown(&mut store, "test:default");
@@ -902,7 +953,12 @@ mod tests {
         );
 
         // Put "bad" in cooldown
-        mark_profile_failure(&mut store, "test:bad", AuthProfileFailureReason::RateLimit, &config);
+        mark_profile_failure(
+            &mut store,
+            "test:bad",
+            AuthProfileFailureReason::RateLimit,
+            &config,
+        );
 
         let order = resolve_profile_order(&store, "test", None, None);
 
@@ -967,10 +1023,12 @@ mod tests {
 
     #[test]
     fn test_usage_stats_serialization() {
-        let mut stats = ProfileUsageStats::default();
-        stats.last_used = Some(1000);
-        stats.cooldown_until = Some(2000);
-        stats.error_count = Some(3);
+        let stats = ProfileUsageStats {
+            last_used: Some(1000),
+            cooldown_until: Some(2000),
+            error_count: Some(3),
+            ..ProfileUsageStats::default()
+        };
 
         let json = serde_json::to_string(&stats).unwrap();
         let deserialized: ProfileUsageStats = serde_json::from_str(&json).unwrap();

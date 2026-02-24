@@ -38,9 +38,7 @@
 //! 4. **Unauthorized Permissions**: Capabilities shouldn't grant undeclared permissions
 //! 5. **Process**: If manifest prohibits fork, capabilities must deny process spawn
 
-use crate::exec::sandbox::capabilities::{
-    Capabilities, FileSystemCapability, NetworkCapability,
-};
+use crate::exec::sandbox::capabilities::{Capabilities, FileSystemCapability, NetworkCapability};
 use crate::skill_evolution::success_manifest::SuccessManifest;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -97,14 +95,17 @@ impl ConstraintValidator {
                     report.add_error(ValidationError::NetworkMismatch {
                         manifest_rule: "Prohibit all network access".to_string(),
                         capabilities_rule: format!("Allow domains: {:?}", domains),
-                        reason: "Manifest prohibits network but Capabilities allow specific domains".to_string(),
+                        reason:
+                            "Manifest prohibits network but Capabilities allow specific domains"
+                                .to_string(),
                     });
                 }
                 NetworkCapability::AllowAll => {
                     report.add_error(ValidationError::NetworkMismatch {
                         manifest_rule: "Prohibit all network access".to_string(),
                         capabilities_rule: "Allow all network access".to_string(),
-                        reason: "Manifest prohibits network but Capabilities allow all network".to_string(),
+                        reason: "Manifest prohibits network but Capabilities allow all network"
+                            .to_string(),
                     });
                 }
             }
@@ -114,7 +115,8 @@ impl ConstraintValidator {
             if matches!(capabilities.network, NetworkCapability::Deny) {
                 report.add_warning(ValidationWarning::CapabilitiesMoreRestrictive {
                     aspect: "network".to_string(),
-                    reason: "Manifest doesn't prohibit network but Capabilities deny it".to_string(),
+                    reason: "Manifest doesn't prohibit network but Capabilities deny it"
+                        .to_string(),
                 });
             }
         }
@@ -130,12 +132,8 @@ impl ConstraintValidator {
         for read_path in manifest.allowed_read_paths() {
             let path_buf = PathBuf::from(read_path);
             let has_access = capabilities.filesystem.iter().any(|cap| match cap {
-                FileSystemCapability::ReadOnly { path } => {
-                    Self::path_matches(&path_buf, path)
-                }
-                FileSystemCapability::ReadWrite { path } => {
-                    Self::path_matches(&path_buf, path)
-                }
+                FileSystemCapability::ReadOnly { path } => Self::path_matches(&path_buf, path),
+                FileSystemCapability::ReadWrite { path } => Self::path_matches(&path_buf, path),
                 FileSystemCapability::TempWorkspace => false,
             });
 
@@ -143,7 +141,8 @@ impl ConstraintValidator {
                 report.add_error(ValidationError::FileSystemMismatch {
                     manifest_path: read_path.clone(),
                     operation: "read".to_string(),
-                    reason: "Manifest allows reading but Capabilities don't grant access".to_string(),
+                    reason: "Manifest allows reading but Capabilities don't grant access"
+                        .to_string(),
                 });
             }
         }
@@ -159,9 +158,7 @@ impl ConstraintValidator {
         for write_path in manifest.allowed_write_paths() {
             let path_buf = PathBuf::from(write_path);
             let has_write_access = capabilities.filesystem.iter().any(|cap| match cap {
-                FileSystemCapability::ReadWrite { path } => {
-                    Self::path_matches(&path_buf, path)
-                }
+                FileSystemCapability::ReadWrite { path } => Self::path_matches(&path_buf, path),
                 _ => false,
             });
 
@@ -169,7 +166,8 @@ impl ConstraintValidator {
                 report.add_error(ValidationError::FileSystemMismatch {
                     manifest_path: write_path.clone(),
                     operation: "write".to_string(),
-                    reason: "Manifest allows writing but Capabilities don't grant write access".to_string(),
+                    reason: "Manifest allows writing but Capabilities don't grant write access"
+                        .to_string(),
                 });
             }
         }
@@ -214,9 +212,7 @@ impl ConstraintValidator {
         report: &mut ValidationReport,
     ) {
         // If Manifest prohibits fork, Capabilities must enforce no_fork
-        if manifest.prohibited_operations.process.prohibit_fork
-            && !capabilities.process.no_fork
-        {
+        if manifest.prohibited_operations.process.prohibit_fork && !capabilities.process.no_fork {
             report.add_error(ValidationError::ProcessMismatch {
                 manifest_rule: "Prohibit fork/exec".to_string(),
                 capabilities_rule: "Allow fork/exec".to_string(),
@@ -315,10 +311,7 @@ pub enum ValidationError {
         reason: String,
     },
     /// Unauthorized permission granted
-    UnauthorizedPermission {
-        capability: String,
-        reason: String,
-    },
+    UnauthorizedPermission { capability: String, reason: String },
     /// Process constraint mismatch
     ProcessMismatch {
         manifest_rule: String,
@@ -332,15 +325,9 @@ pub enum ValidationError {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ValidationWarning {
     /// Capabilities are more restrictive than Manifest
-    CapabilitiesMoreRestrictive {
-        aspect: String,
-        reason: String,
-    },
+    CapabilitiesMoreRestrictive { aspect: String, reason: String },
     /// Unauthorized read permission (less severe than write)
-    UnauthorizedReadPermission {
-        path: String,
-        reason: String,
-    },
+    UnauthorizedReadPermission { path: String, reason: String },
 }
 
 /// Constraint mismatch error
@@ -354,7 +341,11 @@ impl std::fmt::Display for ConstraintMismatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConstraintMismatch::ValidationFailed(report) => {
-                write!(f, "Constraint validation failed with {} error(s)", report.errors.len())
+                write!(
+                    f,
+                    "Constraint validation failed with {} error(s)",
+                    report.errors.len()
+                )
             }
         }
     }
@@ -370,8 +361,10 @@ mod tests {
         let mut manifest = SuccessManifest::new("test", "test");
         manifest.prohibited_operations.network.prohibit_all = true;
 
-        let mut capabilities = Capabilities::default();
-        capabilities.network = NetworkCapability::Deny;
+        let capabilities = Capabilities {
+            network: NetworkCapability::Deny,
+            ..Capabilities::default()
+        };
 
         let result = ConstraintValidator::validate(&manifest, &capabilities);
         assert!(result.is_ok());
@@ -384,8 +377,10 @@ mod tests {
         let mut manifest = SuccessManifest::new("test", "test");
         manifest.prohibited_operations.network.prohibit_all = true;
 
-        let mut capabilities = Capabilities::default();
-        capabilities.network = NetworkCapability::AllowAll;
+        let capabilities = Capabilities {
+            network: NetworkCapability::AllowAll,
+            ..Capabilities::default()
+        };
 
         let result = ConstraintValidator::validate(&manifest, &capabilities);
         assert!(result.is_err());
@@ -398,16 +393,14 @@ mod tests {
     #[test]
     fn test_filesystem_read_constraint_match() {
         let mut manifest = SuccessManifest::new("test", "test");
-        manifest.allowed_operations.filesystem.read_paths = vec![
-            "/data/input/**".to_string(),
-        ];
+        manifest.allowed_operations.filesystem.read_paths = vec!["/data/input/**".to_string()];
 
-        let mut capabilities = Capabilities::default();
-        capabilities.filesystem = vec![
-            FileSystemCapability::ReadOnly {
+        let capabilities = Capabilities {
+            filesystem: vec![FileSystemCapability::ReadOnly {
                 path: PathBuf::from("/data/input"),
-            },
-        ];
+            }],
+            ..Capabilities::default()
+        };
 
         let result = ConstraintValidator::validate(&manifest, &capabilities);
         assert!(result.is_ok());
@@ -416,9 +409,7 @@ mod tests {
     #[test]
     fn test_filesystem_write_constraint_mismatch() {
         let mut manifest = SuccessManifest::new("test", "test");
-        manifest.allowed_operations.filesystem.write_paths = vec![
-            "/data/output/**".to_string(),
-        ];
+        manifest.allowed_operations.filesystem.write_paths = vec!["/data/output/**".to_string()];
 
         let capabilities = Capabilities::default();
         // Default capabilities don't grant write access to /data/output
@@ -435,12 +426,12 @@ mod tests {
         let manifest = SuccessManifest::new("test", "test");
         // Manifest doesn't allow any write paths
 
-        let mut capabilities = Capabilities::default();
-        capabilities.filesystem = vec![
-            FileSystemCapability::ReadWrite {
+        let capabilities = Capabilities {
+            filesystem: vec![FileSystemCapability::ReadWrite {
                 path: PathBuf::from("/data/output"),
-            },
-        ];
+            }],
+            ..Capabilities::default()
+        };
 
         let result = ConstraintValidator::validate(&manifest, &capabilities);
         assert!(result.is_err());

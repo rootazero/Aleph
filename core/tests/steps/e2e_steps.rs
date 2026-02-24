@@ -1,13 +1,15 @@
 //! Step definitions for E2E features (Evolution, YAML Policies)
 
-use crate::world::{AlephWorld, E2eContext, BatchLoadResult};
+use crate::world::{AlephWorld, BatchLoadResult, E2eContext};
+use alephcore::daemon::dispatcher::policy::{ActionType, PolicyEngine};
+use alephcore::daemon::events::{DerivedEvent, PressureLevel, PressureType};
+use alephcore::daemon::worldmodel::state::{
+    ActivityType, EnhancedContext, MemoryPressure, SystemLoad,
+};
 use alephcore::skill_evolution::types::{ExecutionStatus, SkillExecution, SolidificationConfig};
 use alephcore::skill_evolution::{EvolutionTracker, SolidificationPipeline};
 use alephcore::tools::markdown_skill::{EvolutionAutoLoader, MarkdownSkillGeneratorConfig};
 use alephcore::tools::AlephToolServer;
-use alephcore::daemon::dispatcher::policy::{PolicyEngine, ActionType};
-use alephcore::daemon::events::{DerivedEvent, PressureLevel, PressureType};
-use alephcore::daemon::worldmodel::state::{ActivityType, EnhancedContext, MemoryPressure, SystemLoad};
 use chrono::Utc;
 use cucumber::{given, then, when};
 use std::sync::Arc;
@@ -31,8 +33,14 @@ async fn given_auto_loader(w: &mut AlephWorld) {
         ..Default::default()
     };
 
-    let tool_server = ctx.tool_server.clone().expect("Tool server not initialized");
-    ctx.auto_loader = Some(Arc::new(EvolutionAutoLoader::with_config(tool_server, config)));
+    let tool_server = ctx
+        .tool_server
+        .clone()
+        .expect("Tool server not initialized");
+    ctx.auto_loader = Some(Arc::new(EvolutionAutoLoader::with_config(
+        tool_server,
+        config,
+    )));
     ctx.temp_dir = Some(temp_dir);
 }
 
@@ -120,8 +128,14 @@ async fn when_run_solidification(w: &mut AlephWorld) {
 #[when("I auto-load the first suggestion")]
 async fn when_auto_load_first(w: &mut AlephWorld) {
     let ctx = w.e2e.as_mut().expect("E2E context not initialized");
-    let auto_loader = ctx.auto_loader.clone().expect("Auto-loader not initialized");
-    let result = ctx.solidification_result.as_ref().expect("No solidification result");
+    let auto_loader = ctx
+        .auto_loader
+        .clone()
+        .expect("Auto-loader not initialized");
+    let result = ctx
+        .solidification_result
+        .as_ref()
+        .expect("No solidification result");
     let suggestion = &result.suggestions[0];
 
     // Store for later verification
@@ -147,8 +161,14 @@ async fn when_auto_load_first(w: &mut AlephWorld) {
 #[when("I auto-load the same suggestion again")]
 async fn when_auto_load_again(w: &mut AlephWorld) {
     let ctx = w.e2e.as_mut().expect("E2E context not initialized");
-    let auto_loader = ctx.auto_loader.clone().expect("Auto-loader not initialized");
-    let suggestion = ctx.current_suggestion.as_ref().expect("No current suggestion");
+    let auto_loader = ctx
+        .auto_loader
+        .clone()
+        .expect("Auto-loader not initialized");
+    let suggestion = ctx
+        .current_suggestion
+        .as_ref()
+        .expect("No current suggestion");
 
     let loaded_count = auto_loader.load_from_suggestion(suggestion).await.unwrap();
     ctx.loaded_count = loaded_count;
@@ -157,8 +177,14 @@ async fn when_auto_load_again(w: &mut AlephWorld) {
 #[when("I batch auto-load all suggestions")]
 async fn when_batch_auto_load(w: &mut AlephWorld) {
     let ctx = w.e2e.as_mut().expect("E2E context not initialized");
-    let auto_loader = ctx.auto_loader.clone().expect("Auto-loader not initialized");
-    let result = ctx.solidification_result.as_ref().expect("No solidification result");
+    let auto_loader = ctx
+        .auto_loader
+        .clone()
+        .expect("Auto-loader not initialized");
+    let result = ctx
+        .solidification_result
+        .as_ref()
+        .expect("No solidification result");
 
     let batch_result = auto_loader.load_batch(&result.suggestions).await.unwrap();
     ctx.batch_result = Some(BatchLoadResult {
@@ -173,7 +199,10 @@ async fn when_batch_auto_load(w: &mut AlephWorld) {
 #[then("suggestions should be generated")]
 async fn then_suggestions_generated(w: &mut AlephWorld) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
-    let result = ctx.solidification_result.as_ref().expect("No solidification result");
+    let result = ctx
+        .solidification_result
+        .as_ref()
+        .expect("No solidification result");
     assert!(
         !result.suggestions.is_empty(),
         "Pipeline should generate suggestions"
@@ -183,7 +212,10 @@ async fn then_suggestions_generated(w: &mut AlephWorld) {
 #[then(expr = "the candidate count should be {int}")]
 async fn then_candidate_count(w: &mut AlephWorld, expected: i32) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
-    let result = ctx.solidification_result.as_ref().expect("No solidification result");
+    let result = ctx
+        .solidification_result
+        .as_ref()
+        .expect("No solidification result");
     assert_eq!(
         result.candidates_detected, expected as usize,
         "Candidate count mismatch"
@@ -193,17 +225,20 @@ async fn then_candidate_count(w: &mut AlephWorld, expected: i32) {
 #[then(expr = "exactly {int} tool should be loaded")]
 async fn then_tool_loaded_count(w: &mut AlephWorld, expected: i32) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
-    assert_eq!(
-        ctx.loaded_count, expected as usize,
-        "Loaded count mismatch"
-    );
+    assert_eq!(ctx.loaded_count, expected as usize, "Loaded count mismatch");
 }
 
 #[then("the tool should be registered in the tool server")]
 async fn then_tool_registered(w: &mut AlephWorld) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
-    let tool_server = ctx.tool_server.as_ref().expect("Tool server not initialized");
-    let skill_name = ctx.generated_skill_name.as_ref().expect("No generated skill name");
+    let tool_server = ctx
+        .tool_server
+        .as_ref()
+        .expect("Tool server not initialized");
+    let skill_name = ctx
+        .generated_skill_name
+        .as_ref()
+        .expect("No generated skill name");
 
     assert!(
         tool_server.has_tool(skill_name).await,
@@ -215,40 +250,71 @@ async fn then_tool_registered(w: &mut AlephWorld) {
 #[then("the tool should have a description")]
 async fn then_tool_has_description(w: &mut AlephWorld) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
-    let tool_server = ctx.tool_server.as_ref().expect("Tool server not initialized");
-    let skill_name = ctx.generated_skill_name.as_ref().expect("No generated skill name");
+    let tool_server = ctx
+        .tool_server
+        .as_ref()
+        .expect("Tool server not initialized");
+    let skill_name = ctx
+        .generated_skill_name
+        .as_ref()
+        .expect("No generated skill name");
 
     let definition = tool_server.get_definition(skill_name).await.unwrap();
-    assert!(!definition.description.is_empty(), "Tool should have description");
+    assert!(
+        !definition.description.is_empty(),
+        "Tool should have description"
+    );
 }
 
 #[then("the tool should have a parameters schema")]
 async fn then_tool_has_params(w: &mut AlephWorld) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
-    let tool_server = ctx.tool_server.as_ref().expect("Tool server not initialized");
-    let skill_name = ctx.generated_skill_name.as_ref().expect("No generated skill name");
+    let tool_server = ctx
+        .tool_server
+        .as_ref()
+        .expect("Tool server not initialized");
+    let skill_name = ctx
+        .generated_skill_name
+        .as_ref()
+        .expect("No generated skill name");
 
     let definition = tool_server.get_definition(skill_name).await.unwrap();
-    assert!(definition.parameters.is_object(), "Tool should have parameters schema");
+    assert!(
+        definition.parameters.is_object(),
+        "Tool should have parameters schema"
+    );
 }
 
 #[then("the tool should have LLM context")]
 async fn then_tool_has_llm_context(w: &mut AlephWorld) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
-    let tool_server = ctx.tool_server.as_ref().expect("Tool server not initialized");
-    let skill_name = ctx.generated_skill_name.as_ref().expect("No generated skill name");
+    let tool_server = ctx
+        .tool_server
+        .as_ref()
+        .expect("Tool server not initialized");
+    let skill_name = ctx
+        .generated_skill_name
+        .as_ref()
+        .expect("No generated skill name");
 
     let definition = tool_server.get_definition(skill_name).await.unwrap();
-    assert!(definition.llm_context.is_some(), "Tool should have LLM context");
+    assert!(
+        definition.llm_context.is_some(),
+        "Tool should have LLM context"
+    );
 }
 
 #[then(expr = "the generated skills count should be {int}")]
 async fn then_generated_skills_count(w: &mut AlephWorld, expected: i32) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
-    let auto_loader = ctx.auto_loader.as_ref().expect("Auto-loader not initialized");
+    let auto_loader = ctx
+        .auto_loader
+        .as_ref()
+        .expect("Auto-loader not initialized");
     let generated = auto_loader.get_generated_skills();
     assert_eq!(
-        generated.len(), expected as usize,
+        generated.len(),
+        expected as usize,
         "Generated skills count mismatch"
     );
 }
@@ -256,9 +322,13 @@ async fn then_generated_skills_count(w: &mut AlephWorld, expected: i32) {
 #[then(expr = "{int} suggestions should be generated")]
 async fn then_n_suggestions(w: &mut AlephWorld, expected: i32) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
-    let result = ctx.solidification_result.as_ref().expect("No solidification result");
+    let result = ctx
+        .solidification_result
+        .as_ref()
+        .expect("No solidification result");
     assert_eq!(
-        result.suggestions.len(), expected as usize,
+        result.suggestions.len(),
+        expected as usize,
         "Suggestion count mismatch"
     );
 }
@@ -276,14 +346,23 @@ async fn then_batch_success_100(w: &mut AlephWorld) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
     let batch_result = ctx.batch_result.as_ref().expect("No batch result");
     assert!(batch_result.all_succeeded(), "All should succeed");
-    assert!((batch_result.success_rate() - 1.0).abs() < 0.001, "Success rate should be 100%");
+    assert!(
+        (batch_result.success_rate() - 1.0).abs() < 0.001,
+        "Success rate should be 100%"
+    );
 }
 
 #[then("all generated tools should be registered")]
 async fn then_all_tools_registered(w: &mut AlephWorld) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
-    let tool_server = ctx.tool_server.as_ref().expect("Tool server not initialized");
-    let result = ctx.solidification_result.as_ref().expect("No solidification result");
+    let tool_server = ctx
+        .tool_server
+        .as_ref()
+        .expect("Tool server not initialized");
+    let result = ctx
+        .solidification_result
+        .as_ref()
+        .expect("No solidification result");
 
     for suggestion in &result.suggestions {
         let skill_name = suggestion
@@ -308,8 +387,14 @@ async fn then_all_tools_registered(w: &mut AlephWorld) {
 #[then("the tool should still exist after reload")]
 async fn then_tool_exists_after_reload(w: &mut AlephWorld) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
-    let tool_server = ctx.tool_server.as_ref().expect("Tool server not initialized");
-    let skill_name = ctx.generated_skill_name.as_ref().expect("No generated skill name");
+    let tool_server = ctx
+        .tool_server
+        .as_ref()
+        .expect("Tool server not initialized");
+    let skill_name = ctx
+        .generated_skill_name
+        .as_ref()
+        .expect("No generated skill name");
 
     assert!(
         tool_server.has_tool(skill_name).await,
@@ -329,9 +414,13 @@ async fn given_mvp_policy_engine(w: &mut AlephWorld) {
 #[then(expr = "the engine should have {int} policies")]
 async fn then_engine_policy_count(w: &mut AlephWorld, expected: i32) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
-    let engine = ctx.policy_engine.as_ref().expect("Policy engine not initialized");
+    let engine = ctx
+        .policy_engine
+        .as_ref()
+        .expect("Policy engine not initialized");
     assert_eq!(
-        engine.policy_count(), expected as usize,
+        engine.policy_count(),
+        expected as usize,
         "Policy count mismatch"
     );
 }
@@ -345,11 +434,13 @@ async fn given_default_context(w: &mut AlephWorld) {
 #[given(expr = "an enhanced context with battery level {int}")]
 async fn given_context_battery(w: &mut AlephWorld, battery: i32) {
     let ctx = w.e2e.as_mut().expect("E2E context not initialized");
-    let mut context = EnhancedContext::default();
-    context.system_constraint = SystemLoad {
-        cpu_usage: 0.0,
-        memory_pressure: MemoryPressure::Normal,
-        battery_level: Some(battery as u8),
+    let context = EnhancedContext {
+        system_constraint: SystemLoad {
+            cpu_usage: 0.0,
+            memory_pressure: MemoryPressure::Normal,
+            battery_level: Some(battery as u8),
+        },
+        ..EnhancedContext::default()
     };
     ctx.enhanced_context = Some(context);
 }
@@ -366,7 +457,9 @@ async fn given_activity_event(w: &mut AlephWorld, old: String, new: String, part
 
     let new_activity = match new.as_str() {
         "Idle" => ActivityType::Idle,
-        "Meeting" => ActivityType::Meeting { participants: participants as usize },
+        "Meeting" => ActivityType::Meeting {
+            participants: participants as usize,
+        },
         _ => ActivityType::Unknown,
     };
 
@@ -405,7 +498,10 @@ async fn given_pressure_event(w: &mut AlephWorld, old: String, new: String) {
 #[when("I evaluate all policies")]
 async fn when_evaluate_policies(w: &mut AlephWorld) {
     let ctx = w.e2e.as_mut().expect("E2E context not initialized");
-    let engine = ctx.policy_engine.as_ref().expect("Policy engine not initialized");
+    let engine = ctx
+        .policy_engine
+        .as_ref()
+        .expect("Policy engine not initialized");
     let context = ctx.enhanced_context.as_ref().expect("Context not set");
     let event = ctx.derived_event.as_ref().expect("Event not set");
 
@@ -426,7 +522,9 @@ async fn then_actions_triggered(w: &mut AlephWorld) {
 async fn then_mute_action(w: &mut AlephWorld) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
     assert!(
-        ctx.triggered_actions.iter().any(|a| matches!(a.action_type, ActionType::MuteSystemAudio)),
+        ctx.triggered_actions
+            .iter()
+            .any(|a| matches!(a.action_type, ActionType::MuteSystemAudio)),
         "Should have MuteSystemAudio action"
     );
 }
@@ -435,7 +533,9 @@ async fn then_mute_action(w: &mut AlephWorld) {
 async fn then_notify_action(w: &mut AlephWorld) {
     let ctx = w.e2e.as_ref().expect("E2E context not initialized");
     assert!(
-        ctx.triggered_actions.iter().any(|a| matches!(a.action_type, ActionType::NotifyUser { .. })),
+        ctx.triggered_actions
+            .iter()
+            .any(|a| matches!(a.action_type, ActionType::NotifyUser { .. })),
         "Should have NotifyUser action"
     );
 }

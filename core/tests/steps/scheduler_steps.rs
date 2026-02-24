@@ -1,10 +1,10 @@
 //! Step definitions for Scheduler features
 
-use cucumber::{given, when, then};
+use cucumber::{given, then, when};
 
 use crate::world::{AlephWorld, SchedulerContext};
-use alephcore::scheduler::LaneConfig;
 use alephcore::agents::sub_agents::Lane;
+use alephcore::scheduler::LaneConfig;
 
 // =============================================================================
 // LaneState: Given Steps
@@ -18,14 +18,20 @@ async fn given_lane_state_with_max_concurrent(w: &mut AlephWorld, max_concurrent
 
 #[given(expr = "I enqueue run {string}")]
 async fn given_enqueue_run(w: &mut AlephWorld, run_id: String) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
     let lane_state = ctx.lane_state.as_ref().expect("LaneState not created");
     lane_state.enqueue(run_id).await;
 }
 
 #[given(expr = "I enqueue run {string} at timestamp {int}")]
 async fn given_enqueue_run_at_timestamp(w: &mut AlephWorld, run_id: String, timestamp: i64) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
     let lane_state = ctx.lane_state.as_ref().expect("LaneState not created");
     lane_state.enqueue_at(run_id, timestamp).await;
 }
@@ -36,21 +42,30 @@ async fn given_enqueue_run_at_timestamp(w: &mut AlephWorld, run_id: String, time
 
 #[when(expr = "I enqueue run {string}")]
 async fn when_enqueue_run(w: &mut AlephWorld, run_id: String) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
     let lane_state = ctx.lane_state.as_ref().expect("LaneState not created");
     lane_state.enqueue(run_id).await;
 }
 
 #[when(expr = "I enqueue run {string} at timestamp {int}")]
 async fn when_enqueue_run_at_timestamp(w: &mut AlephWorld, run_id: String, timestamp: i64) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
     let lane_state = ctx.lane_state.as_ref().expect("LaneState not created");
     lane_state.enqueue_at(run_id, timestamp).await;
 }
 
 #[when("I try to dequeue a run")]
 async fn when_try_dequeue_run(w: &mut AlephWorld) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
     let lane_state = ctx.lane_state.as_ref().expect("LaneState not created");
     ctx.dequeued_run_id = lane_state.try_dequeue().await;
     ctx.last_dequeue_result = Some(ctx.dequeued_run_id.is_some());
@@ -58,7 +73,10 @@ async fn when_try_dequeue_run(w: &mut AlephWorld) {
 
 #[when("I try to dequeue a run with semaphore")]
 async fn when_try_dequeue_run_with_semaphore(w: &mut AlephWorld) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
     let lane_state = ctx.lane_state.as_ref().expect("LaneState not created");
 
     // Check if a permit is available
@@ -87,7 +105,10 @@ async fn when_try_dequeue_run_with_semaphore(w: &mut AlephWorld) {
 
 #[when(expr = "I complete run {string}")]
 async fn when_complete_run(w: &mut AlephWorld, run_id: String) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
     let lane_state = ctx.lane_state.as_ref().expect("LaneState not created");
 
     // Mark as completed (removes from running set)
@@ -100,9 +121,16 @@ async fn when_complete_run(w: &mut AlephWorld, run_id: String) {
 
 #[when(expr = "I calculate priority boost for {string} at timestamp {int}")]
 async fn when_calculate_priority_boost(w: &mut AlephWorld, run_id: String, current_time: i64) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
     let lane_state = ctx.lane_state.as_ref().expect("LaneState not created");
-    ctx.priority_boost = Some(lane_state.calculate_priority_boost(&run_id, current_time).await);
+    ctx.priority_boost = Some(
+        lane_state
+            .calculate_priority_boost(&run_id, current_time)
+            .await,
+    );
 }
 
 // =============================================================================
@@ -111,7 +139,10 @@ async fn when_calculate_priority_boost(w: &mut AlephWorld, run_id: String, curre
 
 #[then(expr = "the queue should have {int} runs")]
 async fn then_queue_should_have_runs(w: &mut AlephWorld, expected_count: usize) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
     let lane_state = ctx.lane_state.as_ref().expect("LaneState not created");
     let actual_count = lane_state.queue_len().await;
     assert_eq!(
@@ -123,7 +154,10 @@ async fn then_queue_should_have_runs(w: &mut AlephWorld, expected_count: usize) 
 
 #[then(expr = "the dequeued run should be {string}")]
 async fn then_dequeued_run_should_be(w: &mut AlephWorld, expected_run_id: String) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
     let actual_run_id = ctx.dequeued_run_id.as_ref().expect("No run was dequeued");
     assert_eq!(
         actual_run_id, &expected_run_id,
@@ -134,22 +168,38 @@ async fn then_dequeued_run_should_be(w: &mut AlephWorld, expected_run_id: String
 
 #[then("the dequeue should succeed")]
 async fn then_dequeue_should_succeed(w: &mut AlephWorld) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
-    let result = ctx.last_dequeue_result.expect("No dequeue attempt was made");
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
+    let result = ctx
+        .last_dequeue_result
+        .expect("No dequeue attempt was made");
     assert!(result, "Expected dequeue to succeed, but it failed");
 }
 
 #[then("the dequeue should fail due to semaphore limit")]
 async fn then_dequeue_should_fail_due_to_semaphore(w: &mut AlephWorld) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
-    let result = ctx.last_dequeue_result.expect("No dequeue attempt was made");
-    assert!(!result, "Expected dequeue to fail due to semaphore limit, but it succeeded");
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
+    let result = ctx
+        .last_dequeue_result
+        .expect("No dequeue attempt was made");
+    assert!(
+        !result,
+        "Expected dequeue to fail due to semaphore limit, but it succeeded"
+    );
 }
 
 #[then(expr = "there should be {int} running run")]
 #[then(expr = "there should be {int} running runs")]
 async fn then_there_should_be_running_runs(w: &mut AlephWorld, expected_count: usize) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
     let lane_state = ctx.lane_state.as_ref().expect("LaneState not created");
     let actual_count = lane_state.running_count().await;
     assert_eq!(
@@ -161,20 +211,33 @@ async fn then_there_should_be_running_runs(w: &mut AlephWorld, expected_count: u
 
 #[then(expr = "run {string} should be running")]
 async fn then_run_should_be_running(w: &mut AlephWorld, run_id: String) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
     let lane_state = ctx.lane_state.as_ref().expect("LaneState not created");
     let is_running = lane_state.is_running(&run_id).await;
-    assert!(is_running, "Expected run '{}' to be running, but it is not", run_id);
+    assert!(
+        is_running,
+        "Expected run '{}' to be running, but it is not",
+        run_id
+    );
 }
 
 #[then(expr = "the priority boost should be at least {int}")]
 async fn then_priority_boost_should_be_at_least(w: &mut AlephWorld, min_boost: i8) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
-    let boost = ctx.priority_boost.expect("No priority boost was calculated");
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
+    let boost = ctx
+        .priority_boost
+        .expect("No priority boost was calculated");
     assert!(
         boost >= min_boost,
         "Expected priority boost to be at least {}, but got {}",
-        min_boost, boost
+        min_boost,
+        boost
     );
 }
 // =============================================================================
@@ -198,24 +261,30 @@ async fn given_lane_scheduler_with_main_lane_limit(w: &mut AlephWorld, limit: us
 #[given(expr = "a LaneScheduler with global limit {int}")]
 async fn given_lane_scheduler_with_global_limit(w: &mut AlephWorld, limit: usize) {
     let ctx = w.scheduler.get_or_insert_with(SchedulerContext::default);
-    let mut config = LaneConfig::default();
-    config.global_max_concurrent = limit;
+    let config = LaneConfig {
+        global_max_concurrent: limit,
+        ..LaneConfig::default()
+    };
     ctx.create_lane_scheduler_with_config(config);
 }
 
 #[given(expr = "a LaneScheduler with {int} second starvation threshold")]
 async fn given_lane_scheduler_with_starvation_threshold(w: &mut AlephWorld, threshold_sec: u64) {
     let ctx = w.scheduler.get_or_insert_with(SchedulerContext::default);
-    let mut config = LaneConfig::default();
-    config.anti_starvation_threshold_ms = threshold_sec * 1000;
+    let config = LaneConfig {
+        anti_starvation_threshold_ms: threshold_sec * 1000,
+        ..LaneConfig::default()
+    };
     ctx.create_lane_scheduler_with_config(config);
 }
 
 #[given(expr = "a LaneScheduler with max recursion depth {int}")]
 async fn given_lane_scheduler_with_max_recursion_depth(w: &mut AlephWorld, max_depth: usize) {
     let ctx = w.scheduler.get_or_insert_with(SchedulerContext::default);
-    let mut config = LaneConfig::default();
-    config.max_recursion_depth = max_depth;
+    let config = LaneConfig {
+        max_recursion_depth: max_depth,
+        ..LaneConfig::default()
+    };
     ctx.create_lane_scheduler_with_config(config);
 }
 
@@ -225,15 +294,24 @@ async fn given_lane_scheduler_with_max_recursion_depth(w: &mut AlephWorld, max_d
 
 #[when(expr = "I enqueue run {string} to lane {string}")]
 async fn when_enqueue_run_to_lane(w: &mut AlephWorld, run_id: String, lane_str: String) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     let lane = SchedulerContext::parse_lane(&lane_str);
     scheduler.enqueue(run_id, lane).await;
 }
 
 #[when(expr = "I enqueue {int} runs to lane {string}")]
 async fn when_enqueue_multiple_runs_to_lane(w: &mut AlephWorld, count: usize, lane_str: String) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
     let lane = SchedulerContext::parse_lane(&lane_str);
 
     // Generate run IDs first
@@ -243,7 +321,10 @@ async fn when_enqueue_multiple_runs_to_lane(w: &mut AlephWorld, count: usize, la
     }
 
     // Then enqueue them
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     for run_id in run_ids {
         scheduler.enqueue(run_id, lane).await;
     }
@@ -251,15 +332,27 @@ async fn when_enqueue_multiple_runs_to_lane(w: &mut AlephWorld, count: usize, la
 
 #[when("I schedule the next run")]
 async fn when_schedule_next_run(w: &mut AlephWorld) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     ctx.last_scheduled = scheduler.try_schedule_next().await;
 }
 
 #[when("I schedule runs until no more can be scheduled")]
 async fn when_schedule_runs_until_none(w: &mut AlephWorld) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
 
     while scheduler.try_schedule_next().await.is_some() {
         // Keep scheduling until no more can be scheduled
@@ -268,16 +361,28 @@ async fn when_schedule_runs_until_none(w: &mut AlephWorld) {
 
 #[when(expr = "I complete run {string} in lane {string}")]
 async fn when_complete_run_in_lane(w: &mut AlephWorld, run_id: String, lane_str: String) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     let lane = SchedulerContext::parse_lane(&lane_str);
     scheduler.on_run_complete(&run_id, lane).await;
 }
 
 #[when("I wait for anti-starvation conditions")]
 async fn when_wait_for_anti_starvation_conditions(w: &mut AlephWorld) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
 
     // Get the anti-starvation threshold from the scheduler config
     let threshold_ms = scheduler.config().anti_starvation_threshold_ms;
@@ -289,22 +394,40 @@ async fn when_wait_for_anti_starvation_conditions(w: &mut AlephWorld) {
 
 #[when("I sweep anti-starvation")]
 async fn when_sweep_anti_starvation(w: &mut AlephWorld) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     ctx.anti_starvation_boost_count = scheduler.sweep_anti_starvation().await;
 }
 
 #[when("I sweep anti-starvation immediately")]
 async fn when_sweep_anti_starvation_immediately(w: &mut AlephWorld) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     ctx.anti_starvation_boost_count = scheduler.sweep_anti_starvation().await;
 }
 
 #[when(expr = "I spawn child {string} from parent {string}")]
 async fn when_spawn_child_from_parent(w: &mut AlephWorld, child_id: String, parent_id: String) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
 
     // First check if spawning is allowed (validates recursion depth)
     let check_result = scheduler.check_recursion_depth(&parent_id).await;
@@ -326,8 +449,14 @@ async fn when_spawn_child_from_parent(w: &mut AlephWorld, child_id: String, pare
 #[then(expr = "the scheduler should have {int} queued runs")]
 #[then(expr = "the scheduler should have {int} queued run")]
 async fn then_scheduler_should_have_queued_runs(w: &mut AlephWorld, expected_count: usize) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     let stats = scheduler.stats().await;
     assert_eq!(
         stats.total_queued, expected_count,
@@ -339,8 +468,14 @@ async fn then_scheduler_should_have_queued_runs(w: &mut AlephWorld, expected_cou
 #[then(expr = "the scheduler should have {int} running runs")]
 #[then(expr = "the scheduler should have {int} running run")]
 async fn then_scheduler_should_have_running_runs(w: &mut AlephWorld, expected_count: usize) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     let stats = scheduler.stats().await;
     assert_eq!(
         stats.total_running, expected_count,
@@ -350,8 +485,15 @@ async fn then_scheduler_should_have_running_runs(w: &mut AlephWorld, expected_co
 }
 
 #[then(expr = "the scheduled run should be {string} from lane {string}")]
-async fn then_scheduled_run_should_be_from_lane(w: &mut AlephWorld, expected_run_id: String, expected_lane_str: String) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
+async fn then_scheduled_run_should_be_from_lane(
+    w: &mut AlephWorld,
+    expected_run_id: String,
+    expected_lane_str: String,
+) {
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
     let (run_id, lane) = ctx.last_scheduled.as_ref().expect("No run was scheduled");
     let expected_lane = SchedulerContext::parse_lane(&expected_lane_str);
     assert_eq!(
@@ -367,8 +509,14 @@ async fn then_scheduled_run_should_be_from_lane(w: &mut AlephWorld, expected_run
 }
 
 #[then(expr = "the scheduled run should be from lane {string}")]
-async fn then_scheduled_run_should_be_from_lane_only(w: &mut AlephWorld, expected_lane_str: String) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
+async fn then_scheduled_run_should_be_from_lane_only(
+    w: &mut AlephWorld,
+    expected_lane_str: String,
+) {
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
     let (_run_id, lane) = ctx.last_scheduled.as_ref().expect("No run was scheduled");
     let expected_lane = SchedulerContext::parse_lane(&expected_lane_str);
     assert_eq!(
@@ -381,8 +529,14 @@ async fn then_scheduled_run_should_be_from_lane_only(w: &mut AlephWorld, expecte
 #[then(expr = "exactly {int} runs should be running")]
 #[then(expr = "exactly {int} run should be running")]
 async fn then_exactly_runs_should_be_running(w: &mut AlephWorld, expected_count: usize) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     let stats = scheduler.stats().await;
     assert_eq!(
         stats.total_running, expected_count,
@@ -394,8 +548,14 @@ async fn then_exactly_runs_should_be_running(w: &mut AlephWorld, expected_count:
 #[then(expr = "{int} runs should remain queued")]
 #[then(expr = "{int} run should remain queued")]
 async fn then_runs_should_remain_queued(w: &mut AlephWorld, expected_count: usize) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     let stats = scheduler.stats().await;
     assert_eq!(
         stats.total_queued, expected_count,
@@ -407,7 +567,10 @@ async fn then_runs_should_remain_queued(w: &mut AlephWorld, expected_count: usiz
 #[then(expr = "{int} run should receive priority boost")]
 #[then(expr = "{int} runs should receive priority boost")]
 async fn then_runs_should_receive_priority_boost(w: &mut AlephWorld, expected_count: usize) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
     assert_eq!(
         ctx.anti_starvation_boost_count, expected_count,
         "Expected {} runs to receive priority boost, but found {}",
@@ -416,9 +579,19 @@ async fn then_runs_should_receive_priority_boost(w: &mut AlephWorld, expected_co
 }
 
 #[then(expr = "lane {string} should have priority boost of {int}")]
-async fn then_lane_should_have_priority_boost(w: &mut AlephWorld, lane_str: String, expected_boost: i8) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+async fn then_lane_should_have_priority_boost(
+    w: &mut AlephWorld,
+    lane_str: String,
+    expected_boost: i8,
+) {
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     let lane = SchedulerContext::parse_lane(&lane_str);
 
     // Get the lane state and check its priority boost
@@ -440,34 +613,62 @@ async fn then_lane_should_have_priority_boost(w: &mut AlephWorld, lane_str: Stri
 
 #[then(expr = "spawning child {string} from parent {string} should fail")]
 async fn then_spawning_child_should_fail(w: &mut AlephWorld, child_id: String, parent_id: String) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     let result = scheduler.check_recursion_depth(&parent_id).await;
     ctx.recursion_check_result = Some(result.map_err(|e| e.to_string()));
     assert!(
         ctx.recursion_check_result.as_ref().unwrap().is_err(),
         "Expected spawning child '{}' from parent '{}' to fail, but it succeeded",
-        child_id, parent_id
+        child_id,
+        parent_id
     );
 }
 
 #[then(expr = "spawning child {string} from parent {string} should succeed")]
-async fn then_spawning_child_should_succeed(w: &mut AlephWorld, child_id: String, parent_id: String) {
-    let ctx = w.scheduler.as_mut().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+async fn then_spawning_child_should_succeed(
+    w: &mut AlephWorld,
+    child_id: String,
+    parent_id: String,
+) {
+    let ctx = w
+        .scheduler
+        .as_mut()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     let result = scheduler.check_recursion_depth(&parent_id).await;
     ctx.recursion_check_result = Some(result.map_err(|e| e.to_string()));
     assert!(
         ctx.recursion_check_result.as_ref().unwrap().is_ok(),
         "Expected spawning child '{}' from parent '{}' to succeed, but it failed",
-        child_id, parent_id
+        child_id,
+        parent_id
     );
 }
 
 #[then(expr = "run {string} should have recursion depth {int}")]
-async fn then_run_should_have_recursion_depth(w: &mut AlephWorld, run_id: String, expected_depth: usize) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+async fn then_run_should_have_recursion_depth(
+    w: &mut AlephWorld,
+    run_id: String,
+    expected_depth: usize,
+) {
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     let actual_depth = scheduler.get_recursion_depth(&run_id).await;
     assert_eq!(
         actual_depth, expected_depth,
@@ -478,9 +679,19 @@ async fn then_run_should_have_recursion_depth(w: &mut AlephWorld, run_id: String
 
 #[then(expr = "lane {string} should have {int} queued run")]
 #[then(expr = "lane {string} should have {int} queued runs")]
-async fn then_lane_should_have_queued_runs(w: &mut AlephWorld, lane_str: String, expected_count: usize) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+async fn then_lane_should_have_queued_runs(
+    w: &mut AlephWorld,
+    lane_str: String,
+    expected_count: usize,
+) {
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     let lane = SchedulerContext::parse_lane(&lane_str);
     let stats = scheduler.stats().await;
     let lane_stats = stats.lanes.get(&lane).expect("Lane not found in stats");
@@ -493,9 +704,19 @@ async fn then_lane_should_have_queued_runs(w: &mut AlephWorld, lane_str: String,
 
 #[then(expr = "lane {string} should have {int} running run")]
 #[then(expr = "lane {string} should have {int} running runs")]
-async fn then_lane_should_have_running_runs(w: &mut AlephWorld, lane_str: String, expected_count: usize) {
-    let ctx = w.scheduler.as_ref().expect("Scheduler context not initialized");
-    let scheduler = ctx.lane_scheduler.as_ref().expect("LaneScheduler not created");
+async fn then_lane_should_have_running_runs(
+    w: &mut AlephWorld,
+    lane_str: String,
+    expected_count: usize,
+) {
+    let ctx = w
+        .scheduler
+        .as_ref()
+        .expect("Scheduler context not initialized");
+    let scheduler = ctx
+        .lane_scheduler
+        .as_ref()
+        .expect("LaneScheduler not created");
     let lane = SchedulerContext::parse_lane(&lane_str);
     let stats = scheduler.stats().await;
     let lane_stats = stats.lanes.get(&lane).expect("Lane not found in stats");

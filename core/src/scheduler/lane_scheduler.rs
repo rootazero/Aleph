@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
+use super::{LaneConfig, LaneState, RecursionTracker, WaitTimeTracker};
 use crate::agents::sub_agents::Lane;
-use super::{LaneConfig, LaneState, WaitTimeTracker, RecursionTracker};
 
 /// Main scheduling engine for multi-lane coordination
 pub struct LaneScheduler {
@@ -80,7 +80,10 @@ impl LaneScheduler {
 
         // Sort lanes by priority (highest first), applying anti-starvation boosts
         // TODO: In future, we can apply per-run priority boosts here
-        let mut lanes_by_priority: Vec<_> = self.config.quotas.iter()
+        let mut lanes_by_priority: Vec<_> = self
+            .config
+            .quotas
+            .iter()
             .map(|(lane, quota)| (*lane, quota.priority))
             .collect();
         lanes_by_priority.sort_by(|a, b| b.1.cmp(&a.1));
@@ -148,7 +151,8 @@ impl LaneScheduler {
         for (run_id, lane, wait_ms) in wait_times {
             if wait_ms > threshold_ms {
                 // Calculate boost
-                let boost = self.wait_tracker
+                let boost = self
+                    .wait_tracker
                     .calculate_boost(&run_id, current_time, threshold_ms, 1)
                     .await;
 
@@ -169,12 +173,16 @@ impl LaneScheduler {
     ///
     /// Returns Ok(()) if the spawn is allowed, or an error if the depth limit would be exceeded.
     pub async fn check_recursion_depth(&self, parent_run_id: &str) -> crate::error::Result<()> {
-        self.recursion_tracker.can_spawn(parent_run_id, self.config.max_recursion_depth).await
+        self.recursion_tracker
+            .can_spawn(parent_run_id, self.config.max_recursion_depth)
+            .await
     }
 
     /// Record a parent-child spawn relationship for recursion tracking
     pub async fn record_spawn(&self, parent_run_id: &str, child_run_id: &str) {
-        self.recursion_tracker.track_spawn(parent_run_id, child_run_id).await;
+        self.recursion_tracker
+            .track_spawn(parent_run_id, child_run_id)
+            .await;
     }
 
     /// Get the current recursion depth for a run
@@ -281,9 +289,13 @@ mod tests {
 
         // Enqueue to different lanes
         scheduler.enqueue("cron-1".to_string(), Lane::Cron).await;
-        scheduler.enqueue("subagent-1".to_string(), Lane::Subagent).await;
+        scheduler
+            .enqueue("subagent-1".to_string(), Lane::Subagent)
+            .await;
         scheduler.enqueue("main-1".to_string(), Lane::Main).await;
-        scheduler.enqueue("nested-1".to_string(), Lane::Nested).await;
+        scheduler
+            .enqueue("nested-1".to_string(), Lane::Nested)
+            .await;
 
         // Should schedule in priority order: Main (10) > Nested (8) > Subagent (5) > Cron (0)
         let scheduled1 = scheduler.try_schedule_next().await;
@@ -302,8 +314,10 @@ mod tests {
     #[tokio::test]
     async fn test_scheduler_global_concurrency_limit() {
         // Create a config with very low global limit
-        let mut config = LaneConfig::default();
-        config.global_max_concurrent = 2;
+        let config = LaneConfig {
+            global_max_concurrent: 2,
+            ..LaneConfig::default()
+        };
         let scheduler = LaneScheduler::new(config);
 
         // Enqueue 5 runs
@@ -408,14 +422,20 @@ mod tests {
             .unwrap()
             .as_millis() as i64;
 
-        let wait_time = scheduler.wait_tracker.get_wait_time("run-1", current_time).await;
+        let wait_time = scheduler
+            .wait_tracker
+            .get_wait_time("run-1", current_time)
+            .await;
         assert!(wait_time < 1000); // Should be very small (just enqueued)
 
         // Schedule the run
         scheduler.try_schedule_next().await;
 
         // After scheduling, should be removed from tracker
-        let wait_time_after = scheduler.wait_tracker.get_wait_time("run-1", current_time).await;
+        let wait_time_after = scheduler
+            .wait_tracker
+            .get_wait_time("run-1", current_time)
+            .await;
         assert_eq!(wait_time_after, 0);
     }
 
@@ -428,9 +448,13 @@ mod tests {
         let old_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as i64 - 60_000;
+            .as_millis() as i64
+            - 60_000;
 
-        scheduler.wait_tracker.track_enqueue("old-run", Lane::Cron, old_time).await;
+        scheduler
+            .wait_tracker
+            .track_enqueue("old-run", Lane::Cron, old_time)
+            .await;
 
         // Sweep should find and boost this run
         let boosted = scheduler.sweep_anti_starvation().await;
@@ -451,9 +475,13 @@ mod tests {
         let recent_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as i64 - 10_000;
+            .as_millis() as i64
+            - 10_000;
 
-        scheduler.wait_tracker.track_enqueue("recent-run", Lane::Cron, recent_time).await;
+        scheduler
+            .wait_tracker
+            .track_enqueue("recent-run", Lane::Cron, recent_time)
+            .await;
 
         // Sweep should not boost this run
         let boosted = scheduler.sweep_anti_starvation().await;
@@ -472,7 +500,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64;
-        let wait_time = scheduler.wait_tracker.get_wait_time("run-1", current_time).await;
+        let wait_time = scheduler
+            .wait_tracker
+            .get_wait_time("run-1", current_time)
+            .await;
         assert!(wait_time < 1000);
 
         // Schedule and complete
@@ -480,7 +511,10 @@ mod tests {
         scheduler.on_run_complete("run-1", Lane::Main).await;
 
         // Should be removed from tracker
-        let wait_time_after = scheduler.wait_tracker.get_wait_time("run-1", current_time).await;
+        let wait_time_after = scheduler
+            .wait_tracker
+            .get_wait_time("run-1", current_time)
+            .await;
         assert_eq!(wait_time_after, 0);
     }
 
@@ -574,8 +608,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_recursion_depth_at_boundary() {
-        let mut config = LaneConfig::default();
-        config.max_recursion_depth = 3;
+        let config = LaneConfig {
+            max_recursion_depth: 3,
+            ..LaneConfig::default()
+        };
         let scheduler = LaneScheduler::new(config);
 
         // Build chain to depth 2

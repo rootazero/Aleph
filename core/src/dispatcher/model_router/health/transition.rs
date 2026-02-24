@@ -650,8 +650,10 @@ mod tests {
 
     #[test]
     fn test_degraded_to_healthy_on_recovery() {
-        let mut config = HealthConfig::default();
-        config.degraded_recovery_successes = 3;
+        let config = HealthConfig {
+            degraded_recovery_successes: 3,
+            ..HealthConfig::default()
+        };
         let engine = HealthTransitionEngine::new(config);
 
         let mut health = create_health("test");
@@ -675,8 +677,10 @@ mod tests {
 
     #[test]
     fn test_unhealthy_to_healthy_on_recovery() {
-        let mut config = HealthConfig::default();
-        config.recovery_successes = 2;
+        let config = HealthConfig {
+            recovery_successes: 2,
+            ..HealthConfig::default()
+        };
         let engine = HealthTransitionEngine::new(config);
 
         let mut health = create_health("test");

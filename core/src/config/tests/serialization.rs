@@ -180,14 +180,14 @@ fn test_full_config_conversion() {
 
 #[test]
 fn test_config_toml_round_trip() {
-    let mut config = Config::default();
-
-    // Add comprehensive configuration
-    config.shortcuts = Some(ShortcutsConfig {
-        summon: "Command+Shift+A".to_string(),
-        cancel: Some("Escape".to_string()),
-        command_prompt: "Option+Space".to_string(),
-    });
+    let mut config = Config {
+        shortcuts: Some(ShortcutsConfig {
+            summon: "Command+Shift+A".to_string(),
+            cancel: Some("Escape".to_string()),
+            command_prompt: "Option+Space".to_string(),
+        }),
+        ..Config::default()
+    };
 
     config.behavior = Some(BehaviorConfig {
         output_mode: "instant".to_string(),
@@ -263,13 +263,17 @@ fn test_atomic_write_overwrites_existing_file() {
     let path = temp_file.path();
 
     // Write first config
-    let mut config1 = Config::default();
-    config1.default_hotkey = "Command+A".to_string();
+    let mut config1 = Config {
+        default_hotkey: "Command+A".to_string(),
+        ..Config::default()
+    };
     config1.save_to_file(path).unwrap();
 
     // Overwrite with second config
-    let mut config2 = Config::default();
-    config2.default_hotkey = "Command+B".to_string();
+    let mut config2 = Config {
+        default_hotkey: "Command+B".to_string(),
+        ..Config::default()
+    };
     config2.save_to_file(path).unwrap();
 
     // Load and verify

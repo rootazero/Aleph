@@ -170,9 +170,7 @@ impl ExecApprovalsFile {
             .or_else(|| global.and_then(|g| g.auto_allow_skills))
             .unwrap_or(false);
 
-        let allowlist = agent
-            .and_then(|a| a.allowlist.clone())
-            .unwrap_or_default();
+        let allowlist = agent.and_then(|a| a.allowlist.clone()).unwrap_or_default();
 
         let skill_allowlist = agent
             .and_then(|a| a.skill_allowlist.clone())
@@ -238,12 +236,14 @@ mod tests {
 
     #[test]
     fn test_resolve_for_agent() {
-        let mut config = ExecApprovalsFile::default();
-        config.defaults = Some(ExecDefaults {
-            security: Some(ExecSecurity::Allowlist),
-            ask: Some(ExecAsk::OnMiss),
-            ..Default::default()
-        });
+        let mut config = ExecApprovalsFile {
+            defaults: Some(ExecDefaults {
+                security: Some(ExecSecurity::Allowlist),
+                ask: Some(ExecAsk::OnMiss),
+                ..Default::default()
+            }),
+            ..ExecApprovalsFile::default()
+        };
 
         let mut agent_config = AgentExecConfig::default();
         agent_config.defaults.security = Some(ExecSecurity::Full);

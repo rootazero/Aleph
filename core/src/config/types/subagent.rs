@@ -161,15 +161,19 @@ mod tests {
 
     #[test]
     fn test_config_validation_invalid_timeout() {
-        let mut config = SubAgentConfig::default();
-        config.execution_timeout_ms = 0;
+        let config = SubAgentConfig {
+            execution_timeout_ms: 0,
+            ..SubAgentConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_config_validation_invalid_concurrent() {
-        let mut config = SubAgentConfig::default();
-        config.max_concurrent = 0;
+        let config = SubAgentConfig {
+            max_concurrent: 0,
+            ..SubAgentConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 

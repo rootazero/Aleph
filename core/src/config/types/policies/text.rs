@@ -131,8 +131,10 @@ mod tests {
 
     #[test]
     fn test_truncation_with_suffix() {
-        let mut policy = TextFormatPolicy::default();
-        policy.default_truncate_length = 10;
+        let policy = TextFormatPolicy {
+            default_truncate_length: 10,
+            ..TextFormatPolicy::default()
+        };
         let long_text = "This is a very long text that should be truncated";
         let result = policy.truncate_default(long_text);
         assert!(result.ends_with("..."));

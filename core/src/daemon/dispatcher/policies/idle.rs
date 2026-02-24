@@ -17,13 +17,11 @@ impl Policy for IdleCleanupPolicy {
         "Idle Cleanup"
     }
 
-    fn evaluate(
-        &self,
-        context: &EnhancedContext,
-        event: &DerivedEvent,
-    ) -> Option<ProposedAction> {
+    fn evaluate(&self, context: &EnhancedContext, event: &DerivedEvent) -> Option<ProposedAction> {
         if let DerivedEvent::ActivityChanged { new_activity, .. } = event {
-            if matches!(new_activity, ActivityType::Idle) && context.activity_duration > Duration::minutes(30) {
+            if matches!(new_activity, ActivityType::Idle)
+                && context.activity_duration > Duration::minutes(30)
+            {
                 return Some(ProposedAction {
                     action_type: ActionType::NotifyUser {
                         message: "Clean up temporary files?".into(),
@@ -47,8 +45,10 @@ mod tests {
     #[test]
     fn test_idle_cleanup_triggers_after_30_minutes() {
         let policy = IdleCleanupPolicy;
-        let mut context = EnhancedContext::default();
-        context.activity_duration = Duration::minutes(35);
+        let context = EnhancedContext {
+            activity_duration: Duration::minutes(35),
+            ..EnhancedContext::default()
+        };
 
         let event = DerivedEvent::ActivityChanged {
             timestamp: Utc::now(),
@@ -75,8 +75,10 @@ mod tests {
     #[test]
     fn test_idle_cleanup_does_not_trigger_before_30_minutes() {
         let policy = IdleCleanupPolicy;
-        let mut context = EnhancedContext::default();
-        context.activity_duration = Duration::minutes(15);
+        let context = EnhancedContext {
+            activity_duration: Duration::minutes(15),
+            ..EnhancedContext::default()
+        };
 
         let event = DerivedEvent::ActivityChanged {
             timestamp: Utc::now(),
@@ -92,8 +94,10 @@ mod tests {
     #[test]
     fn test_idle_cleanup_does_not_trigger_for_non_idle() {
         let policy = IdleCleanupPolicy;
-        let mut context = EnhancedContext::default();
-        context.activity_duration = Duration::minutes(35);
+        let context = EnhancedContext {
+            activity_duration: Duration::minutes(35),
+            ..EnhancedContext::default()
+        };
 
         let event = DerivedEvent::ActivityChanged {
             timestamp: Utc::now(),

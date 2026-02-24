@@ -491,14 +491,15 @@ mod tests {
 
     #[test]
     fn test_agent_config_get_routing_rules() {
-        let mut config = CoworkConfigToml::default();
-
-        config.model_routing = ModelRoutingConfigToml {
-            code_generation: Some("claude-opus".to_string()),
-            cost_strategy: CostStrategy::BestQuality,
-            enable_pipelines: false,
-            default_model: Some("claude-sonnet".to_string()),
-            ..Default::default()
+        let config = CoworkConfigToml {
+            model_routing: ModelRoutingConfigToml {
+                code_generation: Some("claude-opus".to_string()),
+                cost_strategy: CostStrategy::BestQuality,
+                enable_pipelines: false,
+                default_model: Some("claude-sonnet".to_string()),
+                ..Default::default()
+            },
+            ..CoworkConfigToml::default()
         };
 
         let rules = config.get_routing_rules();

@@ -1,9 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use crate::exec::sandbox::presets::PresetRegistry;
-    use crate::exec::sandbox::parameter_binding::CapabilityOverrides;
-    use crate::exec::sandbox::capability_resolver::apply_overrides;
     use crate::exec::sandbox::capabilities::NetworkCapability;
+    use crate::exec::sandbox::capability_resolver::apply_overrides;
+    use crate::exec::sandbox::parameter_binding::CapabilityOverrides;
+    use crate::exec::sandbox::presets::PresetRegistry;
     use crate::skill_evolution::sandbox_integration::resolve_tool_capabilities;
     use crate::skill_evolution::tool_generator::{GeneratedToolDefinition, GenerationMetadata};
     use std::collections::HashMap;
@@ -33,8 +33,10 @@ mod tests {
         let preset = registry.get("file_processor").unwrap();
 
         // Try to override network (immutable)
-        let mut overrides = CapabilityOverrides::default();
-        overrides.network = Some(NetworkCapability::AllowAll);
+        let overrides = CapabilityOverrides {
+            network: Some(NetworkCapability::AllowAll),
+            ..CapabilityOverrides::default()
+        };
 
         let result = apply_overrides(
             preset.capabilities.clone(),

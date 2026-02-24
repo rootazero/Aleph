@@ -34,7 +34,6 @@ pub enum DmPolicy {
     Disabled,
 }
 
-
 /// Group message policy
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -48,7 +47,6 @@ pub enum GroupPolicy {
     /// Disable group messages
     Disabled,
 }
-
 
 /// iMessage channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,12 +139,10 @@ impl IMessageConfig {
             DmPolicy::Open => true,
             DmPolicy::Disabled => false,
             DmPolicy::Pairing => true, // Will prompt for pairing
-            DmPolicy::Allowlist => {
-                crate::gateway::interfaces::imessage::target::is_allowed_sender(
-                    sender,
-                    &self.allow_from,
-                )
-            }
+            DmPolicy::Allowlist => crate::gateway::interfaces::imessage::target::is_allowed_sender(
+                sender,
+                &self.allow_from,
+            ),
         }
     }
 
@@ -185,7 +181,9 @@ mod tests {
     #[test]
     fn test_expand_path() {
         let expanded = expand_path("~/Library/Messages/chat.db");
-        assert!(expanded.to_string_lossy().contains("Library/Messages/chat.db"));
+        assert!(expanded
+            .to_string_lossy()
+            .contains("Library/Messages/chat.db"));
         assert!(!expanded.to_string_lossy().starts_with("~/"));
     }
 
@@ -208,9 +206,11 @@ mod tests {
 
     #[test]
     fn test_is_dm_allowed() {
-        let mut config = IMessageConfig::default();
-        config.dm_policy = DmPolicy::Allowlist;
-        config.allow_from = vec!["+15551234567".to_string()];
+        let mut config = IMessageConfig {
+            dm_policy: DmPolicy::Allowlist,
+            allow_from: vec!["+15551234567".to_string()],
+            ..IMessageConfig::default()
+        };
 
         assert!(config.is_dm_allowed("+15551234567"));
         assert!(!config.is_dm_allowed("+19998887777"));

@@ -1,9 +1,10 @@
 //! Agent loop test context
 
 use alephcore::agent_loop::{
-    callback::LoopEvent, GuardViolation, LoopConfig, LoopResult,
+    callback::LoopEvent,
     overflow::{ModelLimit, OverflowConfig, OverflowDetector},
     question::QuestionKind,
+    GuardViolation, LoopConfig, LoopResult,
 };
 use alephcore::event::{EventBus, EventSubscriber, EventType, StopReason, TimestampedEvent};
 use std::sync::Arc;
@@ -54,13 +55,22 @@ impl std::fmt::Debug for AgentLoopContext {
         f.debug_struct("AgentLoopContext")
             .field("decision_sequence_len", &self.decision_sequence.len())
             .field("decision_index", &self.decision_index)
-            .field("loop_config", &self.loop_config.as_ref().map(|_| "<LoopConfig>"))
+            .field(
+                "loop_config",
+                &self.loop_config.as_ref().map(|_| "<LoopConfig>"),
+            )
             .field("loop_result", &self.loop_result)
             .field("events_count", &self.events.len())
             .field("guard_violation", &self.guard_violation)
             .field("event_bus", &self.event_bus.as_ref().map(|_| "<EventBus>"))
             .field("bus_events_count", &self.bus_events.len())
-            .field("overflow_detector", &self.overflow_detector.as_ref().map(|_| "<OverflowDetector>"))
+            .field(
+                "overflow_detector",
+                &self
+                    .overflow_detector
+                    .as_ref()
+                    .map(|_| "<OverflowDetector>"),
+            )
             .field("token_usage", &self.token_usage)
             .field("should_compact", &self.should_compact)
             .field("is_overflow", &self.is_overflow)
@@ -107,9 +117,16 @@ impl AgentLoopContext {
     }
 
     /// Set up overflow detector with specified limits
-    pub fn setup_overflow_detector(&mut self, context_limit: usize, output_limit: usize, reserve: f32) {
-        let mut config = OverflowConfig::default();
-        config.default_limit = ModelLimit::new(context_limit as u64, output_limit as u64, reserve);
+    pub fn setup_overflow_detector(
+        &mut self,
+        context_limit: usize,
+        output_limit: usize,
+        reserve: f32,
+    ) {
+        let config = OverflowConfig {
+            default_limit: ModelLimit::new(context_limit as u64, output_limit as u64, reserve),
+            ..OverflowConfig::default()
+        };
         self.overflow_detector = Some(Arc::new(OverflowDetector::new(config)));
     }
 

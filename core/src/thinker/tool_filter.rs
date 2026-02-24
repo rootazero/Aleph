@@ -29,7 +29,9 @@ use crate::dispatcher::{tool_filter as intent_filter, UnifiedTool};
 use crate::intent::TaskCategory;
 
 // Re-export intent filter types for convenience
-pub use intent_filter::{FilterResult as IntentFilterResult, ToolFilterConfig as IntentFilterConfig};
+pub use intent_filter::{
+    FilterResult as IntentFilterResult, ToolFilterConfig as IntentFilterConfig,
+};
 
 /// Tool filter configuration
 #[derive(Debug, Clone)]
@@ -48,10 +50,7 @@ impl Default for ToolFilterConfig {
     fn default() -> Self {
         Self {
             max_tools: 20,
-            always_include: vec![
-                "complete".to_string(),
-                "ask_user".to_string(),
-            ],
+            always_include: vec!["complete".to_string(), "ask_user".to_string()],
             category_tools: Self::default_category_tools(),
             dynamic_filtering: true,
         }
@@ -76,26 +75,17 @@ impl ToolFilterConfig {
 
         map.insert(
             TaskCategory::WebSearch,
-            vec![
-                "web_search".to_string(),
-                "web_fetch".to_string(),
-            ],
+            vec!["web_search".to_string(), "web_fetch".to_string()],
         );
 
         map.insert(
             TaskCategory::CodeExecution,
-            vec![
-                "execute_code".to_string(),
-                "run_command".to_string(),
-            ],
+            vec!["execute_code".to_string(), "run_command".to_string()],
         );
 
         map.insert(
             TaskCategory::ImageGeneration,
-            vec![
-                "generate_image".to_string(),
-                "edit_image".to_string(),
-            ],
+            vec!["generate_image".to_string(), "edit_image".to_string()],
         );
 
         map
@@ -257,11 +247,10 @@ impl ToolFilter {
         }
 
         // URL detection from mime_type or filename
-        if observation
-            .attachments
-            .iter()
-            .any(|a| a.mime_type.contains("url") || a.filename.as_ref().is_some_and(|f| f.starts_with("http")))
-        {
+        if observation.attachments.iter().any(|a| {
+            a.mime_type.contains("url")
+                || a.filename.as_ref().is_some_and(|f| f.starts_with("http"))
+        }) {
             categories.push(TaskCategory::WebFetch);
         }
 
@@ -381,8 +370,10 @@ mod tests {
 
     #[test]
     fn test_max_tools_limit() {
-        let mut config = ToolFilterConfig::default();
-        config.max_tools = 3;
+        let config = ToolFilterConfig {
+            max_tools: 3,
+            ..ToolFilterConfig::default()
+        };
 
         let filter = ToolFilter::new(config);
 

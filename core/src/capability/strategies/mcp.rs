@@ -187,8 +187,10 @@ mod tests {
 
     #[test]
     fn test_mcp_strategy_with_disabled_config() {
-        let mut config = McpConfig::default();
-        config.enabled = false;
+        let config = McpConfig {
+            enabled: false,
+            ..McpConfig::default()
+        };
 
         let strategy = McpStrategy::with_client(None, Some(Arc::new(config)));
         assert!(!strategy.is_available());
