@@ -4,17 +4,30 @@ use crate::error::{AlephError, Result};
 use crate::runtimes::ensure::ensure_capability;
 use crate::runtimes::ledger::CapabilityLedger;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 use tracing::debug;
+
+/// Cached shared ledger instance for yt-dlp lookups.
+static YTDLP_LEDGER: OnceLock<Arc<RwLock<CapabilityLedger>>> = OnceLock::new();
+
+/// Get or initialize the shared ledger instance.
+fn get_shared_ledger() -> Result<Arc<RwLock<CapabilityLedger>>> {
+    let ledger = YTDLP_LEDGER.get_or_init(|| {
+        let runtimes_dir = crate::utils::paths::get_runtimes_dir()
+            .unwrap_or_else(|_| PathBuf::from("~/.aleph/runtimes"));
+        let ledger = CapabilityLedger::load_or_create(runtimes_dir.join("ledger.json"));
+        Arc::new(RwLock::new(ledger))
+    });
+    Ok(Arc::clone(ledger))
+}
 
 /// Get yt-dlp executable path using CapabilityLedger
 ///
 /// Auto-installs yt-dlp if not present (on-demand provisioning).
+/// Uses a cached ledger instance to avoid re-loading from disk on every call.
 pub async fn get_ytdlp_path() -> Result<PathBuf> {
-    let runtimes_dir = crate::utils::paths::get_runtimes_dir()?;
-    let ledger = CapabilityLedger::load_or_create(runtimes_dir.join("ledger.json"));
-    let ledger = Arc::new(RwLock::new(ledger));
+    let ledger = get_shared_ledger()?;
     ensure_capability("yt-dlp", &ledger).await
 }
 

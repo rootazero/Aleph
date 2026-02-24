@@ -43,7 +43,7 @@ const BOOTSTRAP_SPECS: &[BootstrapSpec] = &[
     BootstrapSpec {
         capability: "ffmpeg",
         script_macos: "brew install ffmpeg 2>/dev/null || echo 'Please install ffmpeg manually: brew install ffmpeg'",
-        script_linux: "sudo apt-get install -y ffmpeg 2>/dev/null || echo 'Please install ffmpeg manually'",
+        script_linux: "apt-get install -y ffmpeg 2>/dev/null || echo 'Please install ffmpeg manually: sudo apt-get install ffmpeg'",
         expected_paths: &["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"],
     },
     BootstrapSpec {

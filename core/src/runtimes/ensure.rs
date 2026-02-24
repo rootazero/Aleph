@@ -17,19 +17,25 @@ use tracing::{info, warn};
 
 /// Ensure a capability is ready, probing and bootstrapping if needed.
 /// Returns the executable path on success.
+///
+/// Note: There is an inherent TOCTOU (Time-of-check-to-time-of-use) gap
+/// between probing for a binary and the caller using it. This is acceptable
+/// for our use case since runtime binaries are rarely deleted while in use.
 pub async fn ensure_capability(
     capability: &str,
     ledger: &Arc<RwLock<CapabilityLedger>>,
 ) -> Result<PathBuf, AlephError> {
     // Fast path: already Ready
     {
-        let guard = ledger.read().await;
+        let mut guard = ledger.write().await;
         if guard.status(capability) == CapabilityStatus::Ready {
             if let Some(path) = guard.executable(capability) {
                 if path.exists() {
                     return Ok(path.to_path_buf());
                 }
                 // Path gone — mark stale, fall through to re-probe
+                warn!("Capability {} path no longer exists, marking stale", capability);
+                guard.update_status(capability, CapabilityStatus::Stale);
             }
         }
     }

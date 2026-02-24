@@ -6,9 +6,12 @@
 //!
 //! It never installs anything — only detects what is already available.
 
+use once_cell::sync::Lazy;
 use regex::Regex;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use tracing::{debug, trace, warn};
 
 use crate::runtimes::ledger::CapabilitySource;
@@ -192,7 +195,8 @@ fn probe_system_path(spec: &ProbeSpec) -> Option<ProbeResult> {
     for bin_name in spec.binaries {
         trace!("Looking for '{}' on system PATH", bin_name);
 
-        let output = Command::new("which").arg(bin_name).output().ok()?;
+        let cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
+        let output = Command::new(cmd).arg(bin_name).output().ok()?;
 
         if output.status.success() {
             let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -217,8 +221,30 @@ fn probe_system_path(spec: &ProbeSpec) -> Option<ProbeResult> {
     None
 }
 
+/// Thread-safe cache for compiled regexes, keyed by pattern string.
+static REGEX_CACHE: Lazy<Mutex<HashMap<&'static str, Regex>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Get a compiled regex from the cache, or compile and cache it.
+fn get_compiled_regex(pattern: &'static str) -> Option<Regex> {
+    let mut cache = REGEX_CACHE.lock().ok()?;
+    if let Some(re) = cache.get(pattern) {
+        return Some(re.clone());
+    }
+    match Regex::new(pattern) {
+        Ok(re) => {
+            cache.insert(pattern, re.clone());
+            Some(re)
+        }
+        Err(e) => {
+            warn!("Invalid version regex '{}': {}", pattern, e);
+            None
+        }
+    }
+}
+
 /// Execute the binary with its version flag and parse the version string.
-fn get_version(bin_path: &Path, version_flag: &str, version_regex: &str) -> Option<String> {
+fn get_version(bin_path: &Path, version_flag: &str, version_regex: &'static str) -> Option<String> {
     let output = Command::new(bin_path)
         .arg(version_flag)
         .output()
@@ -231,13 +257,7 @@ fn get_version(bin_path: &Path, version_flag: &str, version_regex: &str) -> Opti
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let re = match Regex::new(version_regex) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("Invalid version regex '{}': {}", version_regex, e);
-            return None;
-        }
-    };
+    let re = get_compiled_regex(version_regex)?;
 
     re.captures(&combined)
         .and_then(|caps| caps.get(1))
