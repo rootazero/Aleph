@@ -472,17 +472,31 @@ impl CronService {
     pub async fn enable_job(&self, job_id: &str) -> CronResult<()> {
         let db_path = self.db_path.clone();
         let job_id = job_id.to_string();
+        let jobs_select = Self::JOBS_SELECT;
 
         tokio::task::spawn_blocking(move || {
             let conn = Connection::open(&db_path)?;
-            let now = Utc::now().timestamp();
+            let now = Utc::now();
+
+            // Enable the job
             let rows = conn.execute(
                 "UPDATE cron_jobs SET enabled = 1, updated_at = ?2 WHERE id = ?1",
-                params![job_id, now],
+                params![job_id, now.timestamp()],
             )?;
 
             if rows == 0 {
                 return Err(CronError::NotFound(job_id));
+            }
+
+            // Recompute next_run_at for fresh scheduling
+            let sql = format!("SELECT {} FROM cron_jobs WHERE id = ?1", jobs_select);
+            let mut stmt = conn.prepare(&sql)?;
+            if let Ok(job) = stmt.query_row(params![job_id], CronService::row_to_cron_job) {
+                let next = scheduler::compute_next_run_at(&job, now);
+                conn.execute(
+                    "UPDATE cron_jobs SET next_run_at = ?1 WHERE id = ?2",
+                    params![next, job.id],
+                )?;
             }
 
             Ok::<_, CronError>(())
@@ -876,10 +890,13 @@ impl CronService {
         }
 
         // Phase 2: Determine effective concurrency based on CPU load
-        let effective_max = resource::resolve_effective_concurrency(
-            max_concurrent,
-            semaphore.available_permits(),
-        );
+        // Runs in spawn_blocking because get_cpu_usage() sleeps 200ms for sysinfo
+        let available_permits = semaphore.available_permits();
+        let effective_max = tokio::task::spawn_blocking(move || {
+            resource::resolve_effective_concurrency(max_concurrent, available_permits)
+        })
+        .await
+        .unwrap_or(max_concurrent);
 
         // Phase 3: Atomic acquire due jobs
         let jobs_select = Self::JOBS_SELECT;

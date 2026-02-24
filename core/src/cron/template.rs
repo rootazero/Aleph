@@ -1,6 +1,11 @@
 //! Dynamic prompt template engine for cron jobs.
 
+use std::sync::LazyLock;
+
 use crate::cron::config::{CronJob, JobRun};
+
+static ENV_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"\{\{env:(\w+)\}\}").unwrap());
 
 /// Render a prompt template with variable substitution.
 ///
@@ -40,8 +45,7 @@ pub fn render_template(
     }
 
     // Environment variables: {{env:VAR_NAME}}
-    let env_re = regex::Regex::new(r"\{\{env:(\w+)\}\}").unwrap();
-    result = env_re
+    result = ENV_RE
         .replace_all(&result, |caps: &regex::Captures| {
             std::env::var(&caps[1]).unwrap_or_default()
         })
