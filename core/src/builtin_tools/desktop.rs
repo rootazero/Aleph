@@ -197,11 +197,15 @@ fn build_request(args: &DesktopArgs) -> std::result::Result<DesktopRequest, Stri
         "ax_tree" => DesktopRequest::AxTree {
             app_bundle_id: args.app_bundle_id.clone(),
         },
-        "click" => DesktopRequest::Click {
-            x: args.x.unwrap_or(0.0),
-            y: args.y.unwrap_or(0.0),
-            button: args.button.clone().unwrap_or(MouseButton::Left),
-        },
+        "click" => {
+            let x = args.x.ok_or_else(|| "click requires 'x' coordinate".to_string())?;
+            let y = args.y.ok_or_else(|| "click requires 'y' coordinate".to_string())?;
+            DesktopRequest::Click {
+                x,
+                y,
+                button: args.button.clone().unwrap_or(MouseButton::Left),
+            }
+        }
         "type_text" => DesktopRequest::TypeText {
             text: args.text.clone().unwrap_or_default(),
         },
@@ -212,9 +216,12 @@ fn build_request(args: &DesktopArgs) -> std::result::Result<DesktopRequest, Stri
             bundle_id: args.bundle_id.clone().unwrap_or_default(),
         },
         "window_list" => DesktopRequest::WindowList,
-        "focus_window" => DesktopRequest::FocusWindow {
-            window_id: args.window_id.unwrap_or(0),
-        },
+        "focus_window" => {
+            let window_id = args
+                .window_id
+                .ok_or_else(|| "focus_window requires 'window_id' (get it from window_list)".to_string())?;
+            DesktopRequest::FocusWindow { window_id }
+        }
         "canvas_show" => DesktopRequest::CanvasShow {
             html: args.html.clone().unwrap_or_default(),
             position: args.position.clone().unwrap_or(CanvasPosition {
