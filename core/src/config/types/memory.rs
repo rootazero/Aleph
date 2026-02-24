@@ -103,6 +103,13 @@ pub struct MemoryConfig {
     /// Memory fact decay policy
     #[serde(default)]
     pub memory_decay: MemoryDecayPolicy,
+
+    // ========================================
+    // Noise Filter
+    // ========================================
+    /// Noise filter configuration for storage-time and retrieval-time filtering
+    #[serde(default)]
+    pub noise_filter: crate::memory::noise_filter::NoiseFilterConfig,
 }
 
 // =============================================================================
@@ -480,6 +487,7 @@ impl Default for MemoryConfig {
             dreaming: DreamingConfig::default(),
             graph_decay: GraphDecayPolicy::default(),
             memory_decay: MemoryDecayPolicy::default(),
+            noise_filter: crate::memory::noise_filter::NoiseFilterConfig::default(),
         }
     }
 }
