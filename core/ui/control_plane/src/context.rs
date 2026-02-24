@@ -269,6 +269,17 @@ impl DashboardState {
                                                             state.dispatch_event(event);
                                                         }
                                                     }
+                                                } else if method.starts_with("stream.") {
+                                                    // Gateway sends streaming events as {method: "stream.run_accepted", params: {...StreamEvent...}}
+                                                    // Convert to GatewayEvent with run.* topic for subscriber filtering
+                                                    let data = value.get("params").cloned().unwrap_or(Value::Null);
+                                                    let topic = method.replacen("stream.", "run.", 1);
+                                                    let event = GatewayEvent {
+                                                        topic,
+                                                        data,
+                                                    };
+                                                    web_sys::console::log_1(&format!("Stream event: {} - {:?}", event.topic, event.data).into());
+                                                    state.dispatch_event(event);
                                                 }
                                             }
                                         }
