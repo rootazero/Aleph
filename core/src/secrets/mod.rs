@@ -15,7 +15,7 @@ pub mod types;
 pub mod vault;
 pub mod web3_signer;
 
-pub use injection::{render_with_secrets, InjectedSecret, SecretResolver};
+pub use injection::{render_with_secrets, InjectedSecret};
 pub use leak_detector::{LeakDecision, LeakDetector};
 pub use placeholder::{extract_secret_refs, SecretRef};
 pub use types::{DecryptedSecret, SecretError};

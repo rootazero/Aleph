@@ -156,8 +156,9 @@ impl SecretVault {
     }
 }
 
-impl super::injection::SecretResolver for SecretVault {
-    fn resolve(&self, name: &str) -> Result<super::types::DecryptedSecret, super::types::SecretError> {
+#[async_trait::async_trait]
+impl super::router::AsyncSecretResolver for SecretVault {
+    async fn resolve(&self, name: &str) -> Result<super::types::DecryptedSecret, super::types::SecretError> {
         self.get(name)
     }
 }
