@@ -92,6 +92,15 @@ pub struct Config {
     /// Profiles define the "Physics" of workspaces: model binding, tool whitelist, system prompt
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub profiles: HashMap<String, ProfileConfig>,
+    /// Secret provider backends (e.g., local_vault, 1password, bitwarden)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub secret_providers: HashMap<String, SecretProviderConfig>,
+    /// Logical secret name -> provider mapping
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub secrets: HashMap<String, SecretMapping>,
+    /// Top-level secrets subsystem settings
+    #[serde(default)]
+    pub secrets_config: SecretsConfig,
 }
 
 // =============================================================================
@@ -179,6 +188,9 @@ impl Default for Config {
             evolution: EvolutionConfig::default(),
             privacy: PrivacyConfig::default(),
             profiles: HashMap::new(),
+            secret_providers: HashMap::new(),
+            secrets: HashMap::new(),
+            secrets_config: SecretsConfig::default(),
         }
     }
 }

@@ -34,8 +34,8 @@ fn siphash_value(value: &str) -> u64 {
 
 /// Full pipeline: create vault -> store secret -> extract_secret_refs ->
 /// render_with_secrets -> scan_inbound safe response -> Allow
-#[test]
-fn test_green_path_placeholder_to_injection() {
+#[tokio::test]
+async fn test_green_path_placeholder_to_injection() {
     let dir = TempDir::new().unwrap();
     let api_key = "my-custom-safe-api-key-value-1234";
     let vault = vault_with_secret(&dir, "my_api_key", api_key);
@@ -49,8 +49,8 @@ fn test_green_path_placeholder_to_injection() {
     assert_eq!(refs[0].name, "my_api_key");
     assert_eq!(refs[0].raw, "{{secret:my_api_key}}");
 
-    // Step 3: Render via vault (SecretVault implements SecretResolver)
-    let (rendered, injected) = render_with_secrets(template, &vault).unwrap();
+    // Step 3: Render via vault (SecretVault implements AsyncSecretResolver)
+    let (rendered, injected) = render_with_secrets(template, &vault).await.unwrap();
     assert_eq!(
         rendered,
         format!("Authorization: Bearer {}", api_key)
@@ -79,15 +79,15 @@ fn test_green_path_placeholder_to_injection() {
 
 /// Full pipeline: inject secret -> response echoes it -> scan_inbound -> Block
 /// with redacted content
-#[test]
-fn test_red_path_response_echoes_injected_secret() {
+#[tokio::test]
+async fn test_red_path_response_echoes_injected_secret() {
     let dir = TempDir::new().unwrap();
     let secret_value = "super-secret-token-abcdefghij";
     let vault = vault_with_secret(&dir, "token", secret_value);
 
     // Render the template
     let template = "Token: {{secret:token}}";
-    let (rendered, injected) = render_with_secrets(template, &vault).unwrap();
+    let (rendered, injected) = render_with_secrets(template, &vault).await.unwrap();
     assert_eq!(rendered, format!("Token: {}", secret_value));
 
     // Register with leak detector
@@ -301,8 +301,8 @@ fn test_evm_signing_never_leaks_private_key() {
 // ─── Test 5: Vault Persistence ──────────────────────────────────────────────
 
 /// Store secrets -> reopen vault -> render_with_secrets still works -> wrong master key fails
-#[test]
-fn test_vault_persistence_across_operations() {
+#[tokio::test]
+async fn test_vault_persistence_across_operations() {
     let dir = TempDir::new().unwrap();
     let vault_path = dir.path().join("persist.vault");
     let master_key = "correct-master-key";
@@ -347,7 +347,7 @@ fn test_vault_persistence_across_operations() {
 
         // Verify render_with_secrets works with the reopened vault
         let template = "Key: {{secret:persistent_key}}";
-        let (rendered, injected) = render_with_secrets(template, &vault).unwrap();
+        let (rendered, injected) = render_with_secrets(template, &vault).await.unwrap();
         assert_eq!(rendered, format!("Key: {}", secret_value));
         assert_eq!(injected.len(), 1);
         assert_eq!(injected[0].name, "persistent_key");
@@ -383,7 +383,7 @@ fn test_vault_persistence_across_operations() {
 
         // render_with_secrets should also fail since it calls resolve -> get
         let template = "Key: {{secret:persistent_key}}";
-        let render_result = render_with_secrets(template, &vault);
+        let render_result = render_with_secrets(template, &vault).await;
         assert!(
             render_result.is_err(),
             "render_with_secrets with wrong master key should fail"
