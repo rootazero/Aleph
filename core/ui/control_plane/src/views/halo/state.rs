@@ -52,6 +52,8 @@ pub struct HaloState {
     pub reasoning_text: RwSignal<String>,
     /// Error message (set when run_error arrives).
     pub error_message: RwSignal<Option<String>>,
+    /// Monotonic counter for generating unique user message IDs.
+    next_msg_id: RwSignal<u64>,
 }
 
 impl HaloState {
@@ -63,12 +65,15 @@ impl HaloState {
             session_key: RwSignal::new(None),
             reasoning_text: RwSignal::new(String::new()),
             error_message: RwSignal::new(None),
+            next_msg_id: RwSignal::new(0),
         }
     }
 
     /// Append a user message and reset error state.
     pub fn push_user_message(&self, text: &str) {
-        let id = format!("user-{}", self.messages.with(|m| m.len()));
+        let seq = self.next_msg_id.get_untracked();
+        self.next_msg_id.set(seq + 1);
+        let id = format!("user-{}", seq);
         self.messages.update(|msgs| {
             msgs.push(HaloMessage {
                 id,
@@ -108,9 +113,7 @@ impl HaloState {
                 msg.content.push_str(content);
             }
         });
-        if self.phase.get() != HaloPhase::Streaming {
-            self.phase.set(HaloPhase::Streaming);
-        }
+        self.phase.set(HaloPhase::Streaming);
     }
 
     /// Record a tool call event.
