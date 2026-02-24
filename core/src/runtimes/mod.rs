@@ -24,6 +24,7 @@
 //! let runtimes = registry.list();
 //! ```
 
+pub mod bootstrap;
 mod capability;
 mod download;
 pub mod ledger;
