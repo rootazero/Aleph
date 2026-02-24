@@ -239,7 +239,7 @@ impl DispatcherIntegration {
 
         // Notify Swift for each expired confirmation
         for id in expired_ids {
-            event_handler.on_confirmation_expired(id);
+            event_handler.on_confirmation_expired(&id);
         }
 
         count
