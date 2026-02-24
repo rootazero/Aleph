@@ -51,10 +51,6 @@ protocol KeyboardFlowDelegate: AnyObject {
     /// Called when the flow is cancelled
     func flowDidCancel()
 
-    /// Update the HaloWindow state
-    /// - Parameter state: New state to set
-    func updateState(_ state: HaloState)
-
     /// Update window's ignoresMouseEvents property
     /// - Parameter ignores: Whether to ignore mouse events
     func setIgnoresMouseEvents(_ ignores: Bool)

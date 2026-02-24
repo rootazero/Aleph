@@ -392,7 +392,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// This is called after core is initialized
     private func initializeRustCore() {
         // Show Halo animation immediately on startup (better UX feedback)
-        haloWindow?.updateState(.streaming(StreamingContext(runId: "startup", phase: .thinking)))
+        // WebView handles startup display — just ensure window is visible
         haloWindow?.showCentered()
         print("[Aleph] Showing Halo startup animation")
 

@@ -139,8 +139,7 @@ final class ClarificationFlowHandler: KeyboardFlowHandler {
         // Set frame without animation first
         window.setFrame(NSRect(origin: windowOrigin, size: windowSize), display: false)
 
-        // Update state to clarification
-        delegate?.updateState(.clarification(request: request))
+        // Clarification state display is handled by WebView
 
         // Enable mouse events for interaction
         delegate?.setIgnoresMouseEvents(false)
