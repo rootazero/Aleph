@@ -6,7 +6,7 @@
 
 pub mod protocol;
 
-use aleph_protocol::desktop_bridge::{self, ERR_METHOD_NOT_FOUND};
+use aleph_protocol::desktop_bridge::{self, ERR_METHOD_NOT_FOUND, ERR_NOT_IMPLEMENTED};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
@@ -73,7 +73,11 @@ async fn handle_connection(stream: tokio::net::UnixStream) {
     let mut line = String::new();
 
     match buf_reader.read_line(&mut line).await {
-        Ok(0) | Err(_) => return,
+        Ok(0) => return,
+        Err(e) => {
+            tracing::debug!("Failed to read from client: {}", e);
+            return;
+        }
         Ok(_) => {}
     }
 
@@ -94,7 +98,9 @@ async fn handle_connection(stream: tokio::net::UnixStream) {
     };
 
     let response_line = format!("{}\n", response);
-    let _ = writer.write_all(response_line.as_bytes()).await;
+    if let Err(e) = writer.write_all(response_line.as_bytes()).await {
+        tracing::debug!("Failed to write response to client: {}", e);
+    }
 }
 
 /// Dispatch a method call to the appropriate handler
@@ -115,7 +121,7 @@ fn dispatch(method: &str, _params: serde_json::Value) -> Result<serde_json::Valu
         | desktop_bridge::METHOD_CANVAS_SHOW
         | desktop_bridge::METHOD_CANVAS_HIDE
         | desktop_bridge::METHOD_CANVAS_UPDATE => Err((
-            ERR_METHOD_NOT_FOUND,
+            ERR_NOT_IMPLEMENTED,
             format!("{} not implemented on this platform", method),
         )),
 
