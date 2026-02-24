@@ -1,3 +1,4 @@
+mod bridge;
 mod commands;
 mod error;
 mod settings;
@@ -35,6 +36,11 @@ pub fn run() {
             if let Err(e) = shortcuts::register_shortcuts(app.handle()) {
                 tracing::error!("Failed to register shortcuts: {:?}", e);
             }
+
+            // Start Desktop Bridge UDS server
+            tauri::async_runtime::spawn(async {
+                bridge::start_bridge_server().await;
+            });
 
             let halo_window = app.get_webview_window("halo");
             let settings_window = app.get_webview_window("settings");
