@@ -127,9 +127,7 @@ impl SubagentsConfigToml {
         // Validate allow_agents entries
         for agent_id in &self.allow_agents {
             if agent_id.is_empty() {
-                return Err(
-                    "cowork.subagents.allow_agents contains empty agent ID".to_string()
-                );
+                return Err("cowork.subagents.allow_agents contains empty agent ID".to_string());
             }
 
             // Check for invalid characters (basic validation)

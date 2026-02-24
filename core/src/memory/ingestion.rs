@@ -5,9 +5,9 @@
 use crate::config::MemoryConfig;
 use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
-use crate::memory::store::{MemoryBackend, SessionStore};
 use crate::memory::dreaming::{ensure_dream_daemon, record_activity};
 use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::store::{MemoryBackend, SessionStore};
 use crate::utils::pii::scrub_pii;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -215,17 +215,10 @@ mod tests {
         // Retrieve and verify PII was scrubbed
         let embedding = vec![0.0; crate::memory::EMBEDDING_DIM]; // Dummy query embedding
         let filter = crate::memory::store::types::MemoryFilter::for_context(
-                &context.app_bundle_id,
-                &context.window_title,
-            );
-        let memories = db
-            .search_memories(
-                &embedding,
-                &filter,
-                10,
-            )
-            .await
-            .unwrap();
+            &context.app_bundle_id,
+            &context.window_title,
+        );
+        let memories = db.search_memories(&embedding, &filter, 10).await.unwrap();
 
         assert_eq!(memories.len(), 1);
         assert!(memories[0].user_input.contains("[EMAIL]"));
@@ -239,8 +232,10 @@ mod tests {
     async fn test_store_memory_disabled() {
         let db = create_test_db();
         let model = create_test_model();
-        let mut config = MemoryConfig::default();
-        config.enabled = false;
+        let config = MemoryConfig {
+            enabled: false,
+            ..MemoryConfig::default()
+        };
         let config = Arc::new(config);
         let ingestion = MemoryIngestion::new(db.clone(), model, config);
 
@@ -291,22 +286,21 @@ mod tests {
         // Retrieve memory and verify embedding exists
         let query_embedding = vec![0.0; crate::memory::EMBEDDING_DIM];
         let filter = crate::memory::store::types::MemoryFilter::for_context(
-                &context.app_bundle_id,
-                &context.window_title,
-            );
+            &context.app_bundle_id,
+            &context.window_title,
+        );
         let memories = db
-            .search_memories(
-                &query_embedding,
-                &filter,
-                10,
-            )
+            .search_memories(&query_embedding, &filter, 10)
             .await
             .unwrap();
 
         assert_eq!(memories.len(), 1);
         assert_eq!(memories[0].id, memory_id);
         assert!(memories[0].embedding.is_some());
-        assert_eq!(memories[0].embedding.as_ref().unwrap().len(), crate::memory::EMBEDDING_DIM);
+        assert_eq!(
+            memories[0].embedding.as_ref().unwrap().len(),
+            crate::memory::EMBEDDING_DIM
+        );
     }
 
     #[tokio::test]

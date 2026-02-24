@@ -14,23 +14,23 @@ impl Policy for FocusModePolicy {
         "Focus Mode for High CPU Tasks"
     }
 
-    fn evaluate(
-        &self,
-        context: &EnhancedContext,
-        event: &DerivedEvent,
-    ) -> Option<ProposedAction> {
+    fn evaluate(&self, context: &EnhancedContext, event: &DerivedEvent) -> Option<ProposedAction> {
         if let DerivedEvent::ActivityChanged {
             new_activity: ActivityType::Programming { .. },
             ..
-        } = event {
+        } = event
+        {
             if context.system_constraint.cpu_usage > 70.0 {
                 return Some(ProposedAction {
                     action_type: ActionType::EnableDoNotDisturb,
                     reason: "High CPU usage detected during programming".into(),
                     risk_level: RiskLevel::Medium,
-                    metadata: [("cpu_usage".into(), context.system_constraint.cpu_usage.into())]
-                        .into_iter()
-                        .collect(),
+                    metadata: [(
+                        "cpu_usage".into(),
+                        context.system_constraint.cpu_usage.into(),
+                    )]
+                    .into_iter()
+                    .collect(),
                 });
             }
         }
@@ -47,11 +47,13 @@ mod tests {
     #[test]
     fn test_focus_mode_triggers_on_programming_with_high_cpu() {
         let policy = FocusModePolicy;
-        let mut context = EnhancedContext::default();
-        context.system_constraint = SystemLoad {
-            cpu_usage: 85.0,
-            memory_pressure: MemoryPressure::Normal,
-            battery_level: None,
+        let context = EnhancedContext {
+            system_constraint: SystemLoad {
+                cpu_usage: 85.0,
+                memory_pressure: MemoryPressure::Normal,
+                battery_level: None,
+            },
+            ..EnhancedContext::default()
         };
 
         let event = DerivedEvent::ActivityChanged {
@@ -68,10 +70,7 @@ mod tests {
         assert!(result.is_some());
 
         let action = result.unwrap();
-        assert!(matches!(
-            action.action_type,
-            ActionType::EnableDoNotDisturb
-        ));
+        assert!(matches!(action.action_type, ActionType::EnableDoNotDisturb));
         assert_eq!(action.risk_level as u8, RiskLevel::Medium as u8);
         assert!(action.metadata.contains_key("cpu_usage"));
     }
@@ -79,11 +78,13 @@ mod tests {
     #[test]
     fn test_focus_mode_does_not_trigger_with_low_cpu() {
         let policy = FocusModePolicy;
-        let mut context = EnhancedContext::default();
-        context.system_constraint = SystemLoad {
-            cpu_usage: 30.0,
-            memory_pressure: MemoryPressure::Normal,
-            battery_level: None,
+        let context = EnhancedContext {
+            system_constraint: SystemLoad {
+                cpu_usage: 30.0,
+                memory_pressure: MemoryPressure::Normal,
+                battery_level: None,
+            },
+            ..EnhancedContext::default()
         };
 
         let event = DerivedEvent::ActivityChanged {
@@ -103,11 +104,13 @@ mod tests {
     #[test]
     fn test_focus_mode_does_not_trigger_for_non_programming() {
         let policy = FocusModePolicy;
-        let mut context = EnhancedContext::default();
-        context.system_constraint = SystemLoad {
-            cpu_usage: 85.0,
-            memory_pressure: MemoryPressure::Normal,
-            battery_level: None,
+        let context = EnhancedContext {
+            system_constraint: SystemLoad {
+                cpu_usage: 85.0,
+                memory_pressure: MemoryPressure::Normal,
+                battery_level: None,
+            },
+            ..EnhancedContext::default()
         };
 
         let event = DerivedEvent::ActivityChanged {

@@ -392,10 +392,7 @@ impl ModelRoutingConfigToml {
                 .reasoning
                 .clone()
                 .unwrap_or_else(|| default_model_name.clone()),
-            fast_model: self
-                .quick_tasks
-                .clone()
-                .unwrap_or(default_fast_model),
+            fast_model: self.quick_tasks.clone().unwrap_or(default_fast_model),
             auto_route: self.enable_pipelines,
         }
     }
@@ -637,9 +634,11 @@ mod tests {
         config.retry.max_attempts = 3; // Reset
 
         // Invalid budget config (negative limit)
-        let mut limit = crate::config::BudgetLimitConfigToml::default();
-        limit.id = "test".to_string();
-        limit.limit_usd = -10.0;
+        let limit = crate::config::BudgetLimitConfigToml {
+            id: "test".to_string(),
+            limit_usd: -10.0,
+            ..crate::config::BudgetLimitConfigToml::default()
+        };
         config.budget.limits.push(limit);
         assert!(config.validate(&available_profiles).is_err());
     }
@@ -650,12 +649,14 @@ mod tests {
         config.budget.enabled = true;
         config.budget.default_enforcement = "warn_only".to_string();
 
-        let mut limit_config = crate::config::BudgetLimitConfigToml::default();
-        limit_config.id = "test-limit".to_string();
-        limit_config.scope = "global".to_string();
-        limit_config.period = "daily".to_string();
-        limit_config.limit_usd = 50.0;
-        limit_config.warning_thresholds = vec![0.8, 0.95];
+        let limit_config = crate::config::BudgetLimitConfigToml {
+            id: "test-limit".to_string(),
+            scope: "global".to_string(),
+            period: "daily".to_string(),
+            limit_usd: 50.0,
+            warning_thresholds: vec![0.8, 0.95],
+            ..crate::config::BudgetLimitConfigToml::default()
+        };
         config.budget.limits.push(limit_config);
 
         let limit = config.budget.limits[0].to_budget_limit(&config.budget.default_enforcement);

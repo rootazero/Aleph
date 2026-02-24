@@ -8,8 +8,8 @@ use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::dreaming::record_activity;
 use crate::memory::graph::GraphStore;
 use crate::memory::smart_embedder::SmartEmbedder;
-use crate::memory::store::{MemoryBackend, SessionStore};
 use crate::memory::store::types::MemoryFilter;
+use crate::memory::store::{MemoryBackend, SessionStore};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -39,11 +39,7 @@ impl MemoryRetrieval {
         }
     }
 
-    async fn resolve_entity_filter(
-        &self,
-        context: &ContextAnchor,
-        query: &str,
-    ) -> Option<String> {
+    async fn resolve_entity_filter(&self, context: &ContextAnchor, query: &str) -> Option<String> {
         let graph_store = self.graph_store.as_ref()?;
         let hints = GraphStore::extract_query_hints(query);
         if hints.is_empty() {
@@ -118,8 +114,7 @@ impl MemoryRetrieval {
         // 3. Search database with optional graph entity filter
         let filter = MemoryFilter::for_context(&context.app_bundle_id, &context.window_title);
         let limit = self.config.max_context_items as usize;
-        let mut memories = if let Some(entity_id) =
-            self.resolve_entity_filter(context, query).await
+        let mut memories = if let Some(entity_id) = self.resolve_entity_filter(context, query).await
         {
             let filtered = self
                 .database
@@ -213,8 +208,7 @@ impl MemoryRetrieval {
 
         // 3. Search database with optional graph entity filter and custom limit
         let filter = MemoryFilter::for_context(&context.app_bundle_id, &context.window_title);
-        let mut memories = if let Some(entity_id) =
-            self.resolve_entity_filter(context, query).await
+        let mut memories = if let Some(entity_id) = self.resolve_entity_filter(context, query).await
         {
             let filtered = self
                 .database
@@ -273,7 +267,10 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let db_path = temp_dir.join(format!("test_retrieval_{}", Uuid::new_v4()));
         let rt = tokio::runtime::Runtime::new().unwrap();
-        Arc::new(rt.block_on(LanceMemoryBackend::open_or_create(&db_path)).unwrap())
+        Arc::new(
+            rt.block_on(LanceMemoryBackend::open_or_create(&db_path))
+                .unwrap(),
+        )
     }
 
     fn create_test_model() -> Arc<SmartEmbedder> {
@@ -282,8 +279,10 @@ mod tests {
     }
 
     fn create_test_config() -> Arc<MemoryConfig> {
-        let mut config = MemoryConfig::default();
-        config.similarity_threshold = 0.0; // Accept all similarities for testing
+        let config = MemoryConfig {
+            similarity_threshold: 0.0, // Accept all similarities for testing
+            ..MemoryConfig::default()
+        };
         Arc::new(config)
     }
 
@@ -322,8 +321,10 @@ mod tests {
     async fn test_retrieve_when_disabled() {
         let db = create_test_db();
         let model = create_test_model();
-        let mut config = MemoryConfig::default();
-        config.enabled = false;
+        let config = MemoryConfig {
+            enabled: false,
+            ..MemoryConfig::default()
+        };
         let config = Arc::new(config);
 
         let retrieval = MemoryRetrieval::new(db, model, config);
@@ -336,6 +337,4 @@ mod tests {
 
         assert!(memories.is_empty());
     }
-
 }
-

@@ -8,8 +8,8 @@ use crate::memory::cortex::{
     ClusteringConfig, ClusteringService, CortexDreamingConfig, CortexDreamingService,
     DistillationConfig, DistillationService, PatternExtractor, PatternExtractorConfig,
 };
-use crate::memory::store::MemoryBackend;
 use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::store::MemoryBackend;
 use crate::memory::value_estimator::cortex::CortexValueEstimator;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -193,15 +193,20 @@ mod tests {
 
     async fn create_test_db() -> (MemoryBackend, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let backend = crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap();
+        let backend =
+            crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path())
+                .await
+                .unwrap();
         (Arc::new(backend), temp_dir)
     }
 
     #[tokio::test]
     async fn test_cortex_integration_lifecycle() {
         let (db, temp) = create_test_db().await;
-        let mut config = CortexConfig::default();
-        config.embedder_cache_dir = temp.path().join("embedder");
+        let config = CortexConfig {
+            embedder_cache_dir: temp.path().join("embedder"),
+            ..CortexConfig::default()
+        };
 
         let mut cortex = CortexIntegration::new(config, db);
 
@@ -220,9 +225,11 @@ mod tests {
     #[tokio::test]
     async fn test_cortex_integration_disabled() {
         let (db, temp) = create_test_db().await;
-        let mut config = CortexConfig::default();
-        config.enabled = false;
-        config.embedder_cache_dir = temp.path().join("embedder");
+        let config = CortexConfig {
+            enabled: false,
+            embedder_cache_dir: temp.path().join("embedder"),
+            ..CortexConfig::default()
+        };
 
         let mut cortex = CortexIntegration::new(config, db);
 

@@ -16,11 +16,7 @@ impl Policy for LowBatteryPolicy {
         "Low Battery Alert"
     }
 
-    fn evaluate(
-        &self,
-        context: &EnhancedContext,
-        _event: &DerivedEvent,
-    ) -> Option<ProposedAction> {
+    fn evaluate(&self, context: &EnhancedContext, _event: &DerivedEvent) -> Option<ProposedAction> {
         if let Some(battery_level) = context.system_constraint.battery_level {
             if battery_level < 20 {
                 return Some(ProposedAction {
@@ -49,11 +45,13 @@ mod tests {
     #[test]
     fn test_low_battery_triggers_below_threshold() {
         let policy = LowBatteryPolicy;
-        let mut context = EnhancedContext::default();
-        context.system_constraint = SystemLoad {
-            cpu_usage: 0.0,
-            memory_pressure: MemoryPressure::Normal,
-            battery_level: Some(15),
+        let context = EnhancedContext {
+            system_constraint: SystemLoad {
+                cpu_usage: 0.0,
+                memory_pressure: MemoryPressure::Normal,
+                battery_level: Some(15),
+            },
+            ..EnhancedContext::default()
         };
 
         let event = DerivedEvent::IdleStateChanged {
@@ -80,11 +78,13 @@ mod tests {
     #[test]
     fn test_low_battery_does_not_trigger_above_threshold() {
         let policy = LowBatteryPolicy;
-        let mut context = EnhancedContext::default();
-        context.system_constraint = SystemLoad {
-            cpu_usage: 0.0,
-            memory_pressure: MemoryPressure::Normal,
-            battery_level: Some(50),
+        let context = EnhancedContext {
+            system_constraint: SystemLoad {
+                cpu_usage: 0.0,
+                memory_pressure: MemoryPressure::Normal,
+                battery_level: Some(50),
+            },
+            ..EnhancedContext::default()
         };
 
         let event = DerivedEvent::IdleStateChanged {

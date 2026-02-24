@@ -82,7 +82,11 @@ fn default_true() -> bool {
 
 impl McpManagerConfig {
     /// Create a new stdio server configuration
-    pub fn stdio(id: impl Into<String>, name: impl Into<String>, command: impl Into<String>) -> Self {
+    pub fn stdio(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        command: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
@@ -204,7 +208,6 @@ pub enum HealthStatus {
     #[default]
     Stopped,
 }
-
 
 impl std::fmt::Display for HealthStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -491,10 +494,9 @@ pub enum McpCommand {
 impl std::fmt::Debug for McpCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::AddServer { config, .. } => f
-                .debug_struct("AddServer")
-                .field("config", config)
-                .finish(),
+            Self::AddServer { config, .. } => {
+                f.debug_struct("AddServer").field("config", config).finish()
+            }
             Self::RemoveServer { server_id, .. } => f
                 .debug_struct("RemoveServer")
                 .field("server_id", server_id)
@@ -687,7 +689,8 @@ mod tests {
 
     #[test]
     fn test_mcp_manager_config_http() {
-        let config = McpManagerConfig::http("remote-id", "Remote Server", "https://api.example.com/mcp");
+        let config =
+            McpManagerConfig::http("remote-id", "Remote Server", "https://api.example.com/mcp");
         assert_eq!(config.id, "remote-id");
         assert_eq!(config.transport, McpTransportType::Http);
         assert_eq!(config.url, Some("https://api.example.com/mcp".to_string()));
@@ -722,9 +725,11 @@ mod tests {
 
     #[test]
     fn test_server_health_record_success() {
-        let mut health = ServerHealth::default();
-        health.consecutive_failures = 5;
-        health.status = HealthStatus::Unhealthy;
+        let mut health = ServerHealth {
+            consecutive_failures: 5,
+            status: HealthStatus::Unhealthy,
+            ..ServerHealth::default()
+        };
 
         health.record_success();
 
@@ -735,8 +740,10 @@ mod tests {
 
     #[test]
     fn test_server_health_record_failure() {
-        let mut health = ServerHealth::default();
-        health.status = HealthStatus::Healthy;
+        let mut health = ServerHealth {
+            status: HealthStatus::Healthy,
+            ..ServerHealth::default()
+        };
 
         // First failure - still healthy
         health.record_failure("error 1");
@@ -746,7 +753,10 @@ mod tests {
         // Second failure - degraded
         health.record_failure("error 2");
         assert_eq!(health.consecutive_failures, 2);
-        assert!(matches!(health.status, HealthStatus::Degraded { failures: 2 }));
+        assert!(matches!(
+            health.status,
+            HealthStatus::Degraded { failures: 2 }
+        ));
 
         // More failures - unhealthy
         health.record_failure("error 3");
@@ -762,11 +772,17 @@ mod tests {
 
         health.mark_restarting();
         assert_eq!(health.restart_count, 1);
-        assert!(matches!(health.status, HealthStatus::Restarting { attempt: 1 }));
+        assert!(matches!(
+            health.status,
+            HealthStatus::Restarting { attempt: 1 }
+        ));
 
         health.mark_restarting();
         assert_eq!(health.restart_count, 2);
-        assert!(matches!(health.status, HealthStatus::Restarting { attempt: 2 }));
+        assert!(matches!(
+            health.status,
+            HealthStatus::Restarting { attempt: 2 }
+        ));
     }
 
     #[test]

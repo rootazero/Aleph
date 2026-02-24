@@ -20,8 +20,8 @@ pub use retry::*;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::backoff::BackoffConfigToml;
+    use super::*;
 
     #[test]
     fn test_retry_config_default() {
@@ -35,8 +35,10 @@ mod tests {
 
     #[test]
     fn test_retry_config_validation() {
-        let mut config = RetryConfigToml::default();
-        config.max_attempts = 0;
+        let mut config = RetryConfigToml {
+            max_attempts: 0,
+            ..RetryConfigToml::default()
+        };
         assert!(config.validate().is_err());
 
         config.max_attempts = 3;
@@ -57,10 +59,10 @@ mod tests {
 
     #[test]
     fn test_backoff_config_validation() {
-        let mut config = BackoffConfigToml::default();
-
-        // Invalid strategy
-        config.strategy = "invalid".to_string();
+        let mut config = BackoffConfigToml {
+            strategy: "invalid".to_string(),
+            ..BackoffConfigToml::default()
+        };
         assert!(config.validate().is_err());
 
         // Reset and test jitter factor

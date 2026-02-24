@@ -1,12 +1,12 @@
 //! Memory test context for Facts Vector DB and Integration operations
 
-use alephcore::resilience::database::StateDatabase;
 use alephcore::memory::store::{LanceMemoryBackend, MemoryBackend};
 use alephcore::memory::{
-    ContextAnchor, FactSpecificity, FactType, MemoryEntry, MemoryFact,
-    MemoryIngestion, MemoryLayer, MemoryRetrieval, MemoryScope, MemoryTier, PromptAugmenter,
-    SmartEmbedder, TemporalScope, EMBEDDING_DIM,
+    ContextAnchor, FactSpecificity, FactType, MemoryEntry, MemoryFact, MemoryIngestion,
+    MemoryLayer, MemoryRetrieval, MemoryScope, MemoryTier, PromptAugmenter, SmartEmbedder,
+    TemporalScope, EMBEDDING_DIM,
 };
+use alephcore::resilience::database::StateDatabase;
 use alephcore::{MemoryConfig, MemoryStats};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -78,7 +78,6 @@ impl std::fmt::Debug for MemoryContext {
             .finish()
     }
 }
-
 
 impl MemoryContext {
     /// Create a test embedding with specified first values, rest filled with zeros
@@ -162,30 +161,38 @@ impl MemoryContext {
 
     /// Create default memory config with threshold 0.0 for testing
     pub fn create_default_config(&mut self) {
-        let mut config = MemoryConfig::default();
-        config.similarity_threshold = 0.0; // Accept all similarities for testing
+        let config = MemoryConfig {
+            similarity_threshold: 0.0, // Accept all similarities for testing
+            ..MemoryConfig::default()
+        };
         self.config = Some(Arc::new(config));
     }
 
     /// Create memory config with custom threshold
     pub fn create_config_with_threshold(&mut self, threshold: f32) {
-        let mut config = MemoryConfig::default();
-        config.similarity_threshold = threshold;
+        let config = MemoryConfig {
+            similarity_threshold: threshold,
+            ..MemoryConfig::default()
+        };
         self.config = Some(Arc::new(config));
     }
 
     /// Create memory config with custom max_context_items
     pub fn create_config_with_max_items(&mut self, max_items: u32) {
-        let mut config = MemoryConfig::default();
-        config.max_context_items = max_items;
-        config.similarity_threshold = 0.0;
+        let config = MemoryConfig {
+            max_context_items: max_items,
+            similarity_threshold: 0.0,
+            ..MemoryConfig::default()
+        };
         self.config = Some(Arc::new(config));
     }
 
     /// Create disabled memory config
     pub fn create_disabled_config(&mut self) {
-        let mut config = MemoryConfig::default();
-        config.enabled = false;
+        let config = MemoryConfig {
+            enabled: false,
+            ..MemoryConfig::default()
+        };
         self.config = Some(Arc::new(config));
     }
 
@@ -194,7 +201,10 @@ impl MemoryContext {
     /// Both MemoryIngestion and MemoryRetrieval use MemoryBackend (LanceDB)
     /// as the unified storage layer.
     pub fn init_services(&mut self) {
-        let memory_backend = self.memory_backend.clone().expect("MemoryBackend not initialized");
+        let memory_backend = self
+            .memory_backend
+            .clone()
+            .expect("MemoryBackend not initialized");
         let embedder = self.embedder.clone().expect("Embedder not initialized");
         let config = self.config.clone().expect("Config not initialized");
 

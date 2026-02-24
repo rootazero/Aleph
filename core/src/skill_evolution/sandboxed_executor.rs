@@ -50,18 +50,18 @@
 //! - **Design Time**: CollaborativeSolidificationPipeline generates constraints
 //! - **Runtime**: SandboxedToolExecutor validates and enforces constraints
 
-use std::sync::Arc;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use super::constraint_validator::ConstraintValidator;
+use super::sandbox_integration::resolve_tool_capabilities;
+use super::tool_generator::GeneratedToolDefinition;
 use crate::error::{AlephError, Result};
 use crate::exec::sandbox::{
-    executor::SandboxManager,
     adapter::{SandboxAdapter, SandboxCommand},
-    audit::{SandboxAuditLog, ToolExecutionContext, ResolutionStep},
+    audit::{ResolutionStep, SandboxAuditLog, ToolExecutionContext},
+    executor::SandboxManager,
 };
-use super::tool_generator::GeneratedToolDefinition;
-use super::sandbox_integration::resolve_tool_capabilities;
-use super::constraint_validator::ConstraintValidator;
 
 /// Executor for running tools in sandbox
 pub struct SandboxedToolExecutor {
@@ -100,12 +100,16 @@ impl SandboxedToolExecutor {
                             message: format!(
                                 "Tool '{}' has constraint violations: {}",
                                 tool_def.name,
-                                report.errors.iter()
+                                report
+                                    .errors
+                                    .iter()
                                     .map(|e| format!("{:?}", e))
                                     .collect::<Vec<_>>()
                                     .join(", ")
                             ),
-                            suggestion: Some("Fix the constraint violations before executing".to_string()),
+                            suggestion: Some(
+                                "Fix the constraint violations before executing".to_string(),
+                            ),
                         });
                     }
 
@@ -206,13 +210,15 @@ impl SandboxedToolExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skill_evolution::success_manifest::{
-        SuccessManifest, SkillMetadata, AllowedOperations, ProhibitedOperations,
-        FileSystemOperations, ScriptExecution, DataProcessing,
-        NetworkRestrictions, FileSystemRestrictions, ProcessRestrictions,
+    use crate::exec::sandbox::capabilities::{
+        Capabilities, FileSystemCapability, NetworkCapability,
     };
     use crate::skill_evolution::constraint_validator::ConstraintMismatch;
-    use crate::exec::sandbox::capabilities::{Capabilities, NetworkCapability, FileSystemCapability};
+    use crate::skill_evolution::success_manifest::{
+        AllowedOperations, DataProcessing, FileSystemOperations, FileSystemRestrictions,
+        NetworkRestrictions, ProcessRestrictions, ProhibitedOperations, ScriptExecution,
+        SkillMetadata, SuccessManifest,
+    };
 
     #[test]
     fn test_sandboxed_executor_structure() {
@@ -271,8 +277,10 @@ mod tests {
         };
 
         // Create capabilities that allow network (mismatch)
-        let mut capabilities = Capabilities::default();
-        capabilities.network = NetworkCapability::AllowAll;
+        let capabilities = Capabilities {
+            network: NetworkCapability::AllowAll,
+            ..Capabilities::default()
+        };
 
         // Validate constraints
         let result = ConstraintValidator::validate(&manifest, &capabilities);
@@ -284,7 +292,11 @@ mod tests {
             }
             Err(ConstraintMismatch::ValidationFailed(report)) => {
                 assert!(!report.errors.is_empty(), "Expected errors but got none");
-                assert!(report.errors.iter().any(|e| format!("{:?}", e).contains("network") || format!("{:?}", e).contains("Network")));
+                assert!(report
+                    .errors
+                    .iter()
+                    .any(|e| format!("{:?}", e).contains("network")
+                        || format!("{:?}", e).contains("Network")));
             }
         }
     }
@@ -341,10 +353,12 @@ mod tests {
 
         // Create capabilities that don't allow network (matching)
         let mut capabilities = Capabilities::default(); // Default has no network
-        // Add filesystem read capability for /tmp/*
-        capabilities.filesystem.push(FileSystemCapability::ReadOnly {
-            path: std::path::PathBuf::from("/tmp"),
-        });
+                                                        // Add filesystem read capability for /tmp/*
+        capabilities
+            .filesystem
+            .push(FileSystemCapability::ReadOnly {
+                path: std::path::PathBuf::from("/tmp"),
+            });
 
         // Validate constraints
         let result = ConstraintValidator::validate(&manifest, &capabilities);
@@ -352,7 +366,11 @@ mod tests {
         // Should have no errors
         match result {
             Ok(report) => {
-                assert!(report.errors.is_empty(), "Expected no errors but got: {:?}", report.errors);
+                assert!(
+                    report.errors.is_empty(),
+                    "Expected no errors but got: {:?}",
+                    report.errors
+                );
             }
             Err(e) => {
                 panic!("Validation returned Err instead of Ok: {:?}", e);

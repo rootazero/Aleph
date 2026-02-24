@@ -9,14 +9,14 @@ use super::super::*;
 fn test_migrate_command_prompt_hotkey() {
     use crate::config::types::ShortcutsConfig;
 
-    let mut config = Config::default();
-
-    // Set old hotkey
-    config.shortcuts = Some(ShortcutsConfig {
-        summon: "Command+Grave".to_string(),
-        cancel: Some("Escape".to_string()),
-        command_prompt: "Command+Option+/".to_string(),
-    });
+    let mut config = Config {
+        shortcuts: Some(ShortcutsConfig {
+            summon: "Command+Grave".to_string(),
+            cancel: Some("Escape".to_string()),
+            command_prompt: "Command+Option+/".to_string(),
+        }),
+        ..Config::default()
+    };
 
     // Run migration
     let migrated = config.migrate_command_prompt_hotkey();
@@ -34,14 +34,14 @@ fn test_migrate_command_prompt_hotkey() {
 fn test_migrate_command_prompt_hotkey_noop_when_already_new() {
     use crate::config::types::ShortcutsConfig;
 
-    let mut config = Config::default();
-
-    // Set new hotkey (already Option+Space)
-    config.shortcuts = Some(ShortcutsConfig {
-        summon: "Command+Grave".to_string(),
-        cancel: Some("Escape".to_string()),
-        command_prompt: "Option+Space".to_string(),
-    });
+    let mut config = Config {
+        shortcuts: Some(ShortcutsConfig {
+            summon: "Command+Grave".to_string(),
+            cancel: Some("Escape".to_string()),
+            command_prompt: "Option+Space".to_string(),
+        }),
+        ..Config::default()
+    };
 
     // Run migration
     let migrated = config.migrate_command_prompt_hotkey();
@@ -59,14 +59,14 @@ fn test_migrate_command_prompt_hotkey_noop_when_already_new() {
 fn test_migrate_command_prompt_hotkey_noop_when_custom() {
     use crate::config::types::ShortcutsConfig;
 
-    let mut config = Config::default();
-
-    // Set custom hotkey (neither old nor new default)
-    config.shortcuts = Some(ShortcutsConfig {
-        summon: "Command+Grave".to_string(),
-        cancel: Some("Escape".to_string()),
-        command_prompt: "Control+Shift+/".to_string(),
-    });
+    let mut config = Config {
+        shortcuts: Some(ShortcutsConfig {
+            summon: "Command+Grave".to_string(),
+            cancel: Some("Escape".to_string()),
+            command_prompt: "Control+Shift+/".to_string(),
+        }),
+        ..Config::default()
+    };
 
     // Run migration
     let migrated = config.migrate_command_prompt_hotkey();

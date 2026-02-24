@@ -413,32 +413,34 @@ mod tests {
     use super::*;
 
     fn create_test_config() -> Config {
-        let mut config = Config::default();
-        config.rules = vec![
-            RoutingRuleConfig {
-                regex: "^/search".to_string(),
-                provider: Some("openai".to_string()),
-                capabilities: Some(vec!["search".to_string()]),
-                system_prompt: Some("Search the web".to_string()),
-                icon: Some("magnifyingglass".to_string()),
-                ..Default::default()
-            },
-            RoutingRuleConfig {
-                regex: "^/en".to_string(),
-                provider: Some("openai".to_string()),
-                capabilities: None,
-                system_prompt: Some("Translate to English".to_string()),
-                icon: Some("globe".to_string()),
-                ..Default::default()
-            },
-            // Keyword rule (should be ignored)
-            RoutingRuleConfig {
-                regex: "翻译".to_string(),
-                provider: None,
-                system_prompt: Some("Translate".to_string()),
-                ..Default::default()
-            },
-        ];
+        let config = Config {
+            rules: vec![
+                RoutingRuleConfig {
+                    regex: "^/search".to_string(),
+                    provider: Some("openai".to_string()),
+                    capabilities: Some(vec!["search".to_string()]),
+                    system_prompt: Some("Search the web".to_string()),
+                    icon: Some("magnifyingglass".to_string()),
+                    ..Default::default()
+                },
+                RoutingRuleConfig {
+                    regex: "^/en".to_string(),
+                    provider: Some("openai".to_string()),
+                    capabilities: None,
+                    system_prompt: Some("Translate to English".to_string()),
+                    icon: Some("globe".to_string()),
+                    ..Default::default()
+                },
+                // Keyword rule (should be ignored)
+                RoutingRuleConfig {
+                    regex: "翻译".to_string(),
+                    provider: None,
+                    system_prompt: Some("Translate".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Config::default()
+        };
         config
     }
 

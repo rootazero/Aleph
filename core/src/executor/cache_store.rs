@@ -49,8 +49,8 @@ pub struct ToolResultCache {
 impl ToolResultCache {
     /// Create a new cache store
     pub fn new(config: ToolCacheConfig) -> Self {
-        let capacity = NonZeroUsize::new(config.capacity)
-            .unwrap_or(NonZeroUsize::new(100).unwrap());
+        let capacity =
+            NonZeroUsize::new(config.capacity).unwrap_or(NonZeroUsize::new(100).unwrap());
         let cache = Arc::new(RwLock::new(LruCache::new(capacity)));
 
         Self { cache, config }
@@ -176,10 +176,7 @@ mod tests {
         // Lookup - should hit
         let cached = cache.lookup(tool_name, &args).await;
         assert!(cached.is_some());
-        assert!(matches!(
-            cached.unwrap(),
-            ActionResult::ToolSuccess { .. }
-        ));
+        assert!(matches!(cached.unwrap(), ActionResult::ToolSuccess { .. }));
     }
 
     #[tokio::test]
@@ -205,8 +202,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_ttl_expiration() {
-        let mut config = ToolCacheConfig::default();
-        config.ttl_seconds = 1; // 1 second TTL
+        let config = ToolCacheConfig {
+            ttl_seconds: 1, // 1 second TTL
+            ..ToolCacheConfig::default()
+        };
         let cache = ToolResultCache::new(config);
 
         let tool_name = "file_ops";
@@ -229,8 +228,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_exclude_tools() {
-        let mut config = ToolCacheConfig::default();
-        config.exclude_tools = vec!["bash".to_string()];
+        let config = ToolCacheConfig {
+            exclude_tools: vec!["bash".to_string()],
+            ..ToolCacheConfig::default()
+        };
         let cache = ToolResultCache::new(config);
 
         let tool_name = "bash";

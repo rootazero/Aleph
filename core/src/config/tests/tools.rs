@@ -80,8 +80,10 @@ fn test_unified_tools_config_from_legacy() {
     };
 
     // Create legacy McpConfig with some servers
-    let mut mcp = McpConfig::default();
-    mcp.enabled = true;
+    let mut mcp = McpConfig {
+        enabled: true,
+        ..McpConfig::default()
+    };
     mcp.external_servers.push(McpExternalServerConfig {
         name: "github".to_string(),
         command: "node".to_string(),
@@ -222,8 +224,10 @@ args = ["~/.mcp/github/index.js"]
 
 #[test]
 fn test_unified_tools_config_serialization_round_trip() {
-    let mut config = UnifiedToolsConfig::default();
-    config.enabled = true;
+    let mut config = UnifiedToolsConfig {
+        enabled: true,
+        ..UnifiedToolsConfig::default()
+    };
     config.native.fs = Some(FsToolConfig {
         enabled: true,
         allowed_roots: vec!["~".to_string(), "/home".to_string()],

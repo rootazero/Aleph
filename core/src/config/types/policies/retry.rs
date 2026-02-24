@@ -152,8 +152,10 @@ mod tests {
 
     #[test]
     fn test_backoff_cap() {
-        let mut policy = RetryPolicy::default();
-        policy.max_backoff_ms = 5000;
+        let mut policy = RetryPolicy {
+            max_backoff_ms: 5000,
+            ..RetryPolicy::default()
+        };
         // Would be 8000ms without cap, but capped at 5000
         assert_eq!(
             policy.backoff_for_attempt(3),
