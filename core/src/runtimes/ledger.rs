@@ -199,7 +199,8 @@ impl CapabilityLedger {
 
     /// Persist the ledger to its JSON file.
     ///
-    /// Creates parent directories if needed.
+    /// Creates parent directories if needed. Uses atomic write (write-to-temp
+    /// then rename) to avoid corruption if the process crashes mid-write.
     pub fn persist(&self) -> std::io::Result<()> {
         if let Some(parent) = self.persist_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -208,7 +209,11 @@ impl CapabilityLedger {
         let content = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-        std::fs::write(&self.persist_path, content)?;
+        // Atomic write: write to temp file then rename
+        let tmp_path = self.persist_path.with_extension("json.tmp");
+        std::fs::write(&tmp_path, &content)?;
+        std::fs::rename(&tmp_path, &self.persist_path)?;
+
         debug!("Persisted capability ledger to {:?}", self.persist_path);
         Ok(())
     }
