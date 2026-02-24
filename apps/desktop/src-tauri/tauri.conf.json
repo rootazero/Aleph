@@ -15,7 +15,7 @@
       {
         "label": "halo",
         "title": "",
-        "url": "/halo.html",
+        "url": "http://127.0.0.1:18790/halo",
         "width": 800,
         "height": 80,
         "transparent": true,
