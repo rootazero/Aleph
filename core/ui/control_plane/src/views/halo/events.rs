@@ -15,8 +15,10 @@ pub fn subscribe_run_events(dashboard: &DashboardState, halo: HaloState) -> usiz
 
         let data = &event.data;
 
-        // Extract event type from the "type" field
-        let event_type = data.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        // Extract event type: prefer data.type, fallback to topic suffix (e.g. "run.run_accepted" -> "run_accepted")
+        let event_type = data.get("type").and_then(|t| t.as_str())
+            .or_else(|| event.topic.strip_prefix("run."))
+            .unwrap_or("");
         let run_id = data.get("run_id").and_then(|r| r.as_str()).unwrap_or("");
 
         // Guard: most events require a valid run_id to associate with a message
