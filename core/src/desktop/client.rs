@@ -4,8 +4,10 @@
 //! fresh connection, sends one JSON-RPC request, reads one response, and closes.
 
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
+use tokio::time::timeout;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -71,9 +73,9 @@ impl DesktopBridgeClient {
             .map_err(DesktopError::ConnectionFailed)?;
 
         let mut lines = BufReader::new(reader).lines();
-        let line = lines
-            .next_line()
+        let line = timeout(Duration::from_secs(30), lines.next_line())
             .await
+            .map_err(|_| DesktopError::Protocol("desktop bridge request timed out after 30s".into()))?
             .map_err(DesktopError::ConnectionFailed)?
             .ok_or_else(|| DesktopError::Protocol("connection closed without response".into()))?;
 
