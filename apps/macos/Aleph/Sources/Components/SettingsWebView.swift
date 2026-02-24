@@ -24,11 +24,15 @@ struct SettingsWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
+        #if DEBUG
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        #endif
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
+        #if DEBUG
         webView.isInspectable = true
+        #endif
         webView.load(URLRequest(url: url))
         return webView
     }

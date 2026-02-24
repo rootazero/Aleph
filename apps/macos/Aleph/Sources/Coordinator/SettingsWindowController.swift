@@ -104,7 +104,7 @@ final class SettingsWindowController {
     }
 
     /// Show an alert indicating the Aleph server is not reachable.
-    func handleServerUnavailable() {
+    private func handleServerUnavailable() {
         closeSettings()
         showWarningAlert(
             title: L("settings.server_unavailable.title"),
