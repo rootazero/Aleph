@@ -81,6 +81,14 @@ final class DesktopBridgeServer: @unchecked Sendable {
         isRunning = true
         print("[DesktopBridge] Listening on \(socketPath)")
 
+        // Check accessibility permission (prompts user if not granted)
+        let trusted = AXIsProcessTrustedWithOptions(
+            [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        )
+        if !trusted {
+            print("[DesktopBridge] Warning: Accessibility permission not granted. AX tree will be limited.")
+        }
+
         // Accept loop on background thread
         let capturedFd = serverFd
         Thread.detachNewThread {
