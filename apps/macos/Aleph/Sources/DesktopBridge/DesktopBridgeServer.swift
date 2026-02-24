@@ -161,18 +161,47 @@ final class DesktopBridgeServer: @unchecked Sendable {
         }
     }
 
+    // MARK: - Async Bridge
+    // dispatch() is synchronous (called from a background thread, not in an async context).
+    // Use DispatchSemaphore to bridge async Perception calls into this synchronous context.
+
+    private func runAsync<T>(_ work: @escaping () async -> T) -> T {
+        let semaphore = DispatchSemaphore(value: 0)
+        var resultValue: T!
+        Task {
+            resultValue = await work()
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return resultValue
+    }
+
     private func dispatch(method: String, params: [String: Any]) -> Result<Any, Error> {
         switch method {
         case "desktop.ping":
             return .success("pong")
 
-        // Perception — stubs for now (Phase 2)
+        // Perception — real implementations via Perception.swift
         case "desktop.screenshot":
-            return .success(["stub": true, "message": "screenshot not yet implemented"])
+            let region: ScreenRegion?
+            if let regionDict = params["region"] as? [String: Any],
+               let x = regionDict["x"] as? Double,
+               let y = regionDict["y"] as? Double,
+               let w = regionDict["width"] as? Double,
+               let h = regionDict["height"] as? Double {
+                region = ScreenRegion(x: x, y: y, width: w, height: h)
+            } else {
+                region = nil
+            }
+            return runAsync { await Perception.shared.screenshot(region: region) }
+
         case "desktop.ocr":
-            return .success(["stub": true, "message": "ocr not yet implemented"])
+            let imageBase64 = params["image_base64"] as? String
+            return runAsync { await Perception.shared.ocr(imageBase64: imageBase64) }
+
         case "desktop.ax_tree":
-            return .success(["stub": true, "message": "ax_tree not yet implemented"])
+            let bundleId = params["app_bundle_id"] as? String
+            return runAsync { await Perception.shared.axTree(appBundleId: bundleId) }
 
         // Action — stubs for now (Phase 3)
         case "desktop.click":
