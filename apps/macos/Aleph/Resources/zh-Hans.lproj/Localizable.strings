@@ -34,6 +34,10 @@
 "user_input.title" = "需要输入";
 "user_input.placeholder" = "输入您的回复...";
 
+// MARK: - Settings Window - Server Status
+"settings.server_unavailable.title" = "Aleph Server 未运行";
+"settings.server_unavailable.message" = "控制面板不可用。请先启动 Aleph Server。";
+
 // MARK: - Settings Window - Sidebar
 "settings.sidebar.title" = "Aleph";
 
