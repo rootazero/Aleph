@@ -12,7 +12,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 use super::error::DesktopError;
-use super::types::{CanvasPosition, DesktopRequest, MouseButton, ScreenRegion};
+use super::types::{DesktopRequest, MouseButton};
 
 /// Client that sends requests to the macOS App's UDS Desktop Bridge server.
 #[derive(Clone)]

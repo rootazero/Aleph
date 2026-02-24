@@ -26,6 +26,8 @@ use crate::gateway::bridge::{
 };
 use crate::gateway::channel::{ChannelError, ChannelFactory, ChannelId};
 
+type ChannelMap = HashMap<ChannelId, Arc<Mutex<Box<dyn crate::gateway::channel::Channel>>>>;
+
 // ---------------------------------------------------------------------------
 // Scanning helpers
 // ---------------------------------------------------------------------------
@@ -53,7 +55,7 @@ pub async fn scan_link_configs(dir: &Path) -> Result<Vec<LinkConfig>, LinkManage
         let path = entry.path();
         let is_yaml = path
             .extension()
-            .map_or(false, |ext| ext == "yaml" || ext == "yml");
+            .is_some_and(|ext| ext == "yaml" || ext == "yml");
 
         if !is_yaml {
             continue;
@@ -214,7 +216,7 @@ pub struct LinkManager {
     ///
     /// Wrapped in `Arc<Mutex<>>` because [`Channel::start`] / [`Channel::stop`]
     /// take `&mut self`.
-    builtin_channels: RwLock<HashMap<ChannelId, Arc<Mutex<Box<dyn crate::gateway::channel::Channel>>>>>,
+    builtin_channels: RwLock<ChannelMap>,
 
     /// Active bridged channel instances keyed by channel id.
     ///

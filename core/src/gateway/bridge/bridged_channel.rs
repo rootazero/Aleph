@@ -289,6 +289,7 @@ impl BridgedChannel {
     // -----------------------------------------------------------------------
 
     /// Set the channel status directly.  Used internally and in tests.
+    #[allow(dead_code)]
     fn set_status(&self, status: ChannelStatus) {
         self.status.set(status);
     }
@@ -397,7 +398,7 @@ async fn handle_event(
 
             let converted_attachments: Vec<Attachment> = attachments
                 .iter()
-                .map(|a| convert_attachment(a))
+                .map(convert_attachment)
                 .collect();
 
             let inbound = InboundMessage {
