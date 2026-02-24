@@ -47,8 +47,15 @@ final class DesktopBridgeServer: @unchecked Sendable {
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
+        let maxLen = MemoryLayout.size(ofValue: addr.sun_path) - 1
+        guard socketPath.utf8.count <= maxLen else {
+            print("[DesktopBridge] Socket path too long: \(socketPath)")
+            Darwin.close(serverFd)
+            serverFd = -1
+            return
+        }
         _ = withUnsafeMutablePointer(to: &addr.sun_path.0) { ptr in
-            socketPath.withCString { cStr in strcpy(ptr, cStr) }
+            socketPath.withCString { cStr in strncpy(ptr, cStr, maxLen) }
         }
 
         let bindResult = withUnsafePointer(to: &addr) { ptr in
@@ -82,6 +89,8 @@ final class DesktopBridgeServer: @unchecked Sendable {
     }
 
     func stop() {
+        // Note: start()/stop() are not reentrant. Do not call start() before
+        // the previous acceptLoop thread has exited.
         isRunning = false
         if serverFd >= 0 {
             Darwin.close(serverFd)
