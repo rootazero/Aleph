@@ -26,6 +26,7 @@
 
 mod capability;
 mod download;
+pub mod ledger;
 mod manager;
 mod manifest;
 mod registry;
@@ -41,6 +42,7 @@ pub mod git_check;
 
 // Re-exports
 pub use capability::RuntimeCapability;
+pub use ledger::{CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus};
 pub use manager::{RuntimeInfo, RuntimeManager, UpdateInfo};
 pub use manifest::Manifest;
 pub use registry::RuntimeRegistry;
