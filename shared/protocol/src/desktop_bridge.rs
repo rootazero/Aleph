@@ -85,6 +85,39 @@ pub const METHOD_CANVAS_SHOW: &str = "desktop.canvas_show";
 pub const METHOD_CANVAS_HIDE: &str = "desktop.canvas_hide";
 pub const METHOD_CANVAS_UPDATE: &str = "desktop.canvas_update";
 
+// WebView control methods (Server → Bridge)
+pub const METHOD_WEBVIEW_SHOW: &str = "webview.show";
+pub const METHOD_WEBVIEW_HIDE: &str = "webview.hide";
+pub const METHOD_WEBVIEW_NAVIGATE: &str = "webview.navigate";
+
+// Tray control methods (Server → Bridge)
+pub const METHOD_TRAY_UPDATE_STATUS: &str = "tray.update_status";
+
+// Bridge lifecycle methods
+pub const METHOD_BRIDGE_SHUTDOWN: &str = "bridge.shutdown";
+
+// Capability types for desktop bridge
+pub const METHOD_CAPABILITY_REGISTER: &str = "capability.register";
+
+// ============================================================================
+// Capability Registration Types
+// ============================================================================
+
+/// A single capability declared by the bridge
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeCapabilityInfo {
+    pub name: String,
+    pub version: String,
+}
+
+/// Capability registration payload (bridge → server during handshake)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityRegistration {
+    pub platform: String,
+    pub arch: String,
+    pub capabilities: Vec<BridgeCapabilityInfo>,
+}
+
 // ============================================================================
 // Error Codes
 // ============================================================================
