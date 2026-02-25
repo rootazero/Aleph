@@ -42,6 +42,9 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Input automation
+enigo = { version = "0.3", features = ["serde"] }
+
 # Screen capture
 xcap = "0.8"
 base64 = "0.22"
