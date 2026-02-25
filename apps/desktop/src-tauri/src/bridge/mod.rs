@@ -1,7 +1,7 @@
 //! Desktop Bridge — UDS JSON-RPC 2.0 server
 //!
 //! Symmetric with macOS Swift DesktopBridgeServer.
-//! Listens on ~/.aleph/desktop.sock, dispatches JSON-RPC requests
+//! Listens on ~/.aleph/bridge.sock, dispatches JSON-RPC requests
 //! to perception/action handlers.
 
 mod perception;
@@ -15,7 +15,7 @@ use tracing::{error, info, warn};
 
 /// Start the Desktop Bridge UDS server
 ///
-/// Listens on ~/.aleph/desktop.sock and dispatches JSON-RPC 2.0 requests.
+/// Listens on ~/.aleph/bridge.sock and dispatches JSON-RPC 2.0 requests.
 /// This function runs forever; call it from a spawned task.
 pub async fn start_bridge_server() {
     let socket_path = desktop_bridge::default_socket_path();
