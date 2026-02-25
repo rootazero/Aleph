@@ -164,6 +164,20 @@ impl AlephToolServer {
         self.tool(McpGetPromptTool::new(mcp_handle))
     }
 
+    /// Register the browser automation tool (Chromium via CDP).
+    ///
+    /// The tool manages its own browser lifecycle. When no browser is running,
+    /// action calls return a friendly message instead of an error.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let server = AlephToolServer::new()
+    ///     .with_browser();
+    /// ```
+    pub fn with_browser(self) -> Self {
+        self.tool(BrowserTool::new())
+    }
+
     /// Register the desktop bridge tool (requires macOS App running).
     ///
     /// When the macOS App is not running, all tool calls return a friendly
