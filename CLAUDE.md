@@ -234,8 +234,7 @@ aleph/
 │       └── lib.rs                  # 60+ public modules
 ├── apps/
 │   ├── cli/                        # Rust CLI 客户端
-│   ├── macos/                      # macOS App (Swift/SwiftUI, 45+ dirs)
-│   └── desktop/                    # Cross-platform Tauri App
+│   └── desktop/                    # Cross-platform Tauri Bridge (aleph-bridge)
 ├── docs/                           # 文档
 │   ├── reference/                  # 核心架构文档
 │   │   ├── ARCHITECTURE.md         # 完整架构
@@ -267,8 +266,7 @@ aleph/
 | **Embedding** | fastembed (bge-small-zh-v1.5, 本地) |
 | **Providers** | Claude, GPT-4, Gemini, Ollama, DeepSeek, Moonshot |
 | **Plugins** | Extism (WASM), Node.js IPC |
-| **macOS App** | Swift + SwiftUI + AppKit |
-| **Cross-platform** | Tauri + React |
+| **Desktop App** | Tauri (cross-platform bridge) |
 | **Schema** | schemars (JSON Schema 自动生成) |
 
 ---
@@ -286,9 +284,6 @@ cargo run --bin aleph-server
 
 # 启动 Server (含 Control Plane UI)
 cargo run --bin aleph-server --features control-plane
-
-# macOS App
-cd apps/macos && xcodegen generate && open Aleph.xcodeproj
 
 # Tauri App
 cd apps/desktop && pnpm install && pnpm tauri dev
@@ -325,10 +320,6 @@ plugin-wasm = ["extism"]
 
 - Python path: ~/.uv/python3/bin/python
 - Install Python package: cd ~/.uv/python3 && uv pip install <package>
-- Xcode generation: cd apps/macos && xcodegen generate
-- Syntax validation: ~/.uv/python3/bin/python Scripts/verify_swift_syntax.py <file.swift>
-- Xcode build cache cleanup: rm -rf ~/Library/Developer/Xcode/DerivedData/(Aleph)-*
-- This project uses XcodeGen to manage the Xcode project. See docs/XCODEGEN_README.md for detailed workflow instructions.
 
 ### Git Worktree 操作规范
 
