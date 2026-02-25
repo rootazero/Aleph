@@ -653,6 +653,7 @@ mod tests {
         args.text = Some("hello".into());
         let req = build_request(&args).unwrap();
         assert!(matches!(req, DesktopRequest::Paste { text } if text == "hello"));
+    }
 
     // ── Approval policy tests ──────────────────────────────────────────
 

@@ -617,7 +617,7 @@ test_f12_handshake() {
 
 test_f12_ping() {
     local resp
-    resp=$(send_rpc "system.ping" '{}')
+    resp=$(send_rpc "desktop.ping" '{}')
     assert_json_eq "$resp" ".result" "pong" "ping response"
 }
 
