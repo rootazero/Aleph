@@ -2,7 +2,7 @@
 
 ## Purpose
 
-**Aleph** is a system-level AI middleware for macOS (with future Windows/Linux support) that acts as an invisible "ether" connecting user intent with AI models through a frictionless, native interface. The project embodies a "Ghost" aesthetic - no permanent windows, no dock icon, only ephemeral UI that appears at the cursor when summoned.
+**Aleph** is a system-level AI middleware for macOS (with future Windows/Linux support) that connects user intent with AI models through a lightweight, native interface. The application runs as a menu bar daemon (no Dock icon), with a lightweight Halo overlay as the primary quick-interaction surface. Normal windows are used when complexity demands it (settings, long conversations, debugging).
 
 **Core Value Proposition:**
 - Brings AI intelligence directly to the cursor in ANY application
@@ -82,8 +82,8 @@
 - Mock implementations for testing
 
 **Key Architectural Principles:**
-1. **Native-First**: No webviews, no Electron, no Tauri for UI
-2. **Invisible-First**: No permanent windows, Halo overlay is ephemeral
+1. **Native-Powered**: System capabilities in native code (Rust/Swift), UI unified via Leptos/WASM
+2. **Menu Bar First**: Default presence is menu bar + Halo overlay; use normal windows when the task requires it
 3. **Focus Protection**: UI must NEVER steal focus from active application
 4. **Privacy-First**: PII scrubbing, local-first config, no telemetry
 
@@ -243,7 +243,7 @@
 ## Anti-Patterns to Avoid
 
 - **DO NOT** use webviews (violates native-first principle)
-- **DO NOT** create permanent GUI windows (violates "Ghost" philosophy)
+- **DO NOT** create unnecessary permanent GUI windows — prefer menu bar + Halo for quick interactions, but use proper windows for complex tasks (settings, conversations, debug panels)
 - **DO NOT** require manual app switching (defeats frictionless UX)
 - **DO NOT** hardcode AI providers (must be config-driven)
 - **DO NOT** ignore permissions errors (especially Accessibility)
