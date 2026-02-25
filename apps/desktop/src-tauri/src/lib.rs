@@ -5,9 +5,18 @@ mod settings;
 mod shortcuts;
 mod tray;
 
-use tauri::Manager;
+use std::sync::OnceLock;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_autostart::MacosLauncher;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+/// Global AppHandle so the bridge module can access Tauri windows.
+static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+/// Retrieve the stored AppHandle (available after setup).
+pub fn get_app_handle() -> Option<&'static AppHandle> {
+    APP_HANDLE.get()
+}
 
 pub fn run() {
     let _ = tracing_subscriber::registry()
@@ -31,6 +40,8 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_store::Builder::new().build())
         .setup(|app| {
+            let _ = APP_HANDLE.set(app.handle().clone());
+
             let _tray = tray::create_tray(app.handle())?;
 
             if let Err(e) = shortcuts::register_shortcuts(app.handle()) {
