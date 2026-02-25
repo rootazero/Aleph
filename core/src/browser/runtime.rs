@@ -59,9 +59,9 @@ impl BrowserRuntime {
         // Spawn the CDP event loop so the browser stays responsive.
         let handle = tokio::spawn(async move {
             while let Some(event) = handler.next().await {
-                if event.is_err() {
-                    tracing::warn!("CDP handler event error: {:?}", event.err());
-                    break;
+                if let Err(e) = event {
+                    tracing::warn!("CDP handler event error: {e}");
+                    // Continue processing — transient errors are expected
                 }
             }
             tracing::debug!("CDP handler loop exited");
@@ -323,13 +323,6 @@ impl BrowserRuntime {
             .ok_or_else(|| BrowserError::TabNotFound(tab_id.to_string()))
     }
 
-    #[allow(dead_code)]
-    fn find_page_index(&self, tab_id: &str) -> Result<usize, BrowserError> {
-        self.pages
-            .keys()
-            .position(|k| k == tab_id)
-            .ok_or_else(|| BrowserError::TabNotFound(tab_id.to_string()))
-    }
 }
 
 // ── Free functions ──────────────────────────────────────────────────────────
