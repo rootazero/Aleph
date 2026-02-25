@@ -129,29 +129,37 @@ impl DesktopTool {
         let request = ActionRequest {
             action_type,
             target: target.to_string(),
-            agent_id: String::new(),
-            context: String::new(),
+            agent_id: String::new(), // TODO: plumb agent_id from agent loop call context
+            context: String::new(),  // TODO: populate with action description for audit
             timestamp: chrono::Utc::now(),
         };
 
         let decision = policy.check(&request).await;
-        policy.record(&request, &decision).await;
 
         match decision {
-            ApprovalDecision::Allow => None,
-            ApprovalDecision::Deny { reason } => Some(DesktopOutput {
-                success: false,
-                data: None,
-                message: Some(format!("Action denied by approval policy: {reason}")),
-            }),
-            ApprovalDecision::Ask { prompt } => Some(DesktopOutput {
-                success: false,
-                data: Some(serde_json::json!({
-                    "approval_required": true,
-                    "prompt": prompt,
-                })),
-                message: Some(format!("Approval required: {prompt}")),
-            }),
+            ApprovalDecision::Allow => {
+                policy.record(&request, &decision).await;
+                None
+            }
+            ApprovalDecision::Deny { ref reason } => {
+                policy.record(&request, &decision).await;
+                Some(DesktopOutput {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Action denied by approval policy: {reason}")),
+                })
+            }
+            ApprovalDecision::Ask { ref prompt } => {
+                // Don't record yet — record() should be called after user responds
+                Some(DesktopOutput {
+                    success: false,
+                    data: Some(serde_json::json!({
+                        "approval_required": true,
+                        "prompt": prompt,
+                    })),
+                    message: Some(format!("Approval required: {prompt}")),
+                })
+            }
         }
     }
 }

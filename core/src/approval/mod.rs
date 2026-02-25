@@ -272,6 +272,7 @@ mod tests {
             ActionType::BrowserNavigate,
             ActionType::BrowserClick,
             ActionType::BrowserType,
+            ActionType::BrowserFill,
             ActionType::BrowserEvaluate,
             ActionType::DesktopClick,
             ActionType::DesktopType,
@@ -295,6 +296,7 @@ mod tests {
                 "browser_navigate": "allow",
                 "browser_click": "allow",
                 "browser_type": "allow",
+                "browser_fill": "allow",
                 "browser_evaluate": "ask",
                 "desktop_click": "ask",
                 "desktop_type": "ask",
@@ -314,7 +316,7 @@ mod tests {
 
         let config: PolicyConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.version, 1);
-        assert_eq!(config.defaults.len(), 9);
+        assert_eq!(config.defaults.len(), 10);
         assert_eq!(config.allowlist.len(), 2);
         assert_eq!(config.blocklist.len(), 2);
         assert_eq!(

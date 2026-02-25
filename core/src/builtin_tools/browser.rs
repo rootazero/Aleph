@@ -180,9 +180,9 @@ impl BrowserTool {
 
     /// Attach an approval policy to gate sensitive actions.
     ///
-    /// When a policy is set, mutating actions (Navigate, Click, Type, Fill,
-    /// Evaluate) are checked before execution. Read-only actions (Screenshot,
-    /// Snapshot, Scroll, Hover, ListTabs, etc.) are always allowed.
+    /// When a policy is set, mutating actions (OpenTab, Navigate, Click, Type,
+    /// Fill, Evaluate) are checked before execution. Read-only actions
+    /// (Screenshot, Snapshot, Scroll, Hover, ListTabs, etc.) are always allowed.
     pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
         self.approval_policy = Some(policy);
         self
@@ -289,8 +289,19 @@ Examples:
             BrowserAction::Start => self.handle_start(&args).await,
             BrowserAction::Stop => self.handle_stop().await,
 
-            // ── Tab management (no approval needed) ─────────────────────
-            BrowserAction::OpenTab => self.handle_open_tab(&args).await,
+            // ── Tab management ───────────────────────────────────────────
+            BrowserAction::OpenTab => {
+                if let Some(out) = self
+                    .check_approval(
+                        ActionType::BrowserNavigate,
+                        args.url.as_deref().unwrap_or(""),
+                    )
+                    .await
+                {
+                    return Ok(out);
+                }
+                self.handle_open_tab(&args).await
+            }
             BrowserAction::CloseTab => self.handle_close_tab(&args).await,
             BrowserAction::ListTabs => self.handle_list_tabs().await,
 
@@ -338,7 +349,7 @@ Examples:
             BrowserAction::Fill => {
                 if let Some(out) = self
                     .check_approval(
-                        ActionType::BrowserType,
+                        ActionType::BrowserFill,
                         args.text.as_deref().unwrap_or(""),
                     )
                     .await
@@ -391,27 +402,35 @@ impl BrowserTool {
         let request = ActionRequest {
             action_type,
             target: target.to_string(),
-            agent_id: String::new(),
-            context: String::new(),
+            agent_id: String::new(), // TODO: plumb agent_id from agent loop call context
+            context: String::new(),  // TODO: populate with action description for audit
             timestamp: chrono::Utc::now(),
         };
 
         let decision = policy.check(&request).await;
-        policy.record(&request, &decision).await;
 
         match decision {
-            ApprovalDecision::Allow => None,
-            ApprovalDecision::Deny { reason } => Some(BrowserOutput::err(format!(
-                "Action denied by approval policy: {reason}"
-            ))),
-            ApprovalDecision::Ask { prompt } => Some(BrowserOutput {
-                success: false,
-                message: Some(format!("Approval required: {prompt}")),
-                data: Some(serde_json::json!({
-                    "approval_required": true,
-                    "prompt": prompt,
-                })),
-            }),
+            ApprovalDecision::Allow => {
+                policy.record(&request, &decision).await;
+                None
+            }
+            ApprovalDecision::Deny { ref reason } => {
+                policy.record(&request, &decision).await;
+                Some(BrowserOutput::err(format!(
+                    "Action denied by approval policy: {reason}"
+                )))
+            }
+            ApprovalDecision::Ask { ref prompt } => {
+                // Don't record yet — record() should be called after user responds
+                Some(BrowserOutput {
+                    success: false,
+                    message: Some(format!("Approval required: {prompt}")),
+                    data: Some(serde_json::json!({
+                        "approval_required": true,
+                        "prompt": prompt,
+                    })),
+                })
+            }
         }
     }
 
@@ -1049,6 +1068,45 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("Action denied"));
+    }
+
+    #[tokio::test]
+    async fn test_approval_deny_blocks_open_tab() {
+        let policy = Arc::new(MockPolicy {
+            decision: ApprovalDecision::Deny {
+                reason: "open tab blocked".to_string(),
+            },
+        });
+        let tool = BrowserTool::new().with_approval_policy(policy);
+
+        let mut args = make_args(BrowserAction::OpenTab);
+        args.url = Some("https://evil.com".to_string());
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!output.success);
+        assert!(output
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Action denied"));
+    }
+
+    #[tokio::test]
+    async fn test_approval_allow_proceeds_open_tab() {
+        let policy = Arc::new(MockPolicy {
+            decision: ApprovalDecision::Allow,
+        });
+        let tool = BrowserTool::new().with_approval_policy(policy);
+
+        let mut args = make_args(BrowserAction::OpenTab);
+        args.url = Some("https://example.com".to_string());
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        // Approval gate passed; should fail on "not running" (no browser started)
+        assert!(!output.success);
+        assert!(output
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("not running"));
     }
 
     #[tokio::test]

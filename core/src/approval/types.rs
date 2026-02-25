@@ -17,6 +17,7 @@ pub enum ActionType {
     BrowserNavigate,
     BrowserClick,
     BrowserType,
+    BrowserFill,
     BrowserEvaluate,
     DesktopClick,
     DesktopType,

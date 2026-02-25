@@ -205,6 +205,7 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::BrowserNavigate, DefaultDecision::Allow);
         defaults.insert(ActionType::BrowserClick, DefaultDecision::Allow);
         defaults.insert(ActionType::BrowserType, DefaultDecision::Allow);
+        defaults.insert(ActionType::BrowserFill, DefaultDecision::Allow);
         defaults.insert(ActionType::BrowserEvaluate, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopClick, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopType, DefaultDecision::Ask);
