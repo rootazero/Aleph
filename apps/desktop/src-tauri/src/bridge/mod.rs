@@ -20,10 +20,18 @@ use tracing::{error, info, warn};
 
 /// Start the Desktop Bridge UDS server
 ///
-/// Listens on ~/.aleph/bridge.sock and dispatches JSON-RPC 2.0 requests.
+/// Listens on the configured socket path and dispatches JSON-RPC 2.0 requests.
+/// In bridge mode, `ALEPH_SOCKET_PATH` overrides the default `~/.aleph/bridge.sock`.
 /// This function runs forever; call it from a spawned task.
 pub async fn start_bridge_server() {
-    let socket_path = desktop_bridge::default_socket_path();
+    // Allow server-provided socket path override (set in bridge-mode startup)
+    let socket_path = match std::env::var("ALEPH_SOCKET_PATH") {
+        Ok(path) if !path.is_empty() => {
+            info!("Using ALEPH_SOCKET_PATH override: {}", path);
+            std::path::PathBuf::from(path)
+        }
+        _ => desktop_bridge::default_socket_path(),
+    };
 
     // Ensure ~/.aleph/ directory exists
     if let Some(parent) = socket_path.parent() {
