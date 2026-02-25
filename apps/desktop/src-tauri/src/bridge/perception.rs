@@ -293,3 +293,220 @@ unsafe fn nsstring_from_str(nsstring_cls: &objc::runtime::Class, s: &str) -> *mu
     let cstr = CString::new(s).expect("NSString source must not contain NUL bytes");
     msg_send![nsstring_cls, stringWithUTF8String: cstr.as_ptr()]
 }
+
+// ── AX Tree handler ─────────────────────────────────────────────
+
+/// Handle `desktop.ax_tree` — inspect accessibility tree of an application.
+///
+/// Params: `{ "app_bundle_id": "com.apple.Safari" }` or `{}` (frontmost app)
+/// Returns: `{ "role": "AXApplication", "title": "...", "children": [...] }`
+pub fn handle_ax_tree(params: Value) -> Result<Value, (i32, String)> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_ax_tree(&params)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = params;
+        Err((
+            aleph_protocol::desktop_bridge::ERR_NOT_IMPLEMENTED,
+            "AX tree inspection not implemented on this platform".to_string(),
+        ))
+    }
+}
+
+// ── macOS Accessibility API ─────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn AXUIElementCreateApplication(pid: i32) -> *const std::os::raw::c_void;
+    fn AXUIElementCopyAttributeValue(
+        element: *const std::os::raw::c_void,
+        attribute: *const std::os::raw::c_void,
+        value: *mut *const std::os::raw::c_void,
+    ) -> i32;
+}
+
+/// Maximum depth to recurse into the AX tree.
+#[cfg(target_os = "macos")]
+const AX_MAX_DEPTH: usize = 5;
+
+#[cfg(target_os = "macos")]
+fn macos_ax_tree(params: &Value) -> Result<Value, (i32, String)> {
+    use objc::runtime::{Class, Object};
+
+    let bundle_id = params.get("app_bundle_id").and_then(|v| v.as_str());
+
+    unsafe {
+        let workspace_cls = Class::get("NSWorkspace")
+            .ok_or_else(|| (ERR_INTERNAL, "NSWorkspace class not found".into()))?;
+        let workspace: *mut Object = msg_send![workspace_cls, sharedWorkspace];
+        if workspace.is_null() {
+            return Err((ERR_INTERNAL, "Failed to get shared workspace".into()));
+        }
+
+        let pid: i32 = if let Some(bid) = bundle_id {
+            // Find running app by bundle identifier
+            let running_apps: *mut Object = msg_send![workspace, runningApplications];
+            if running_apps.is_null() {
+                return Err((ERR_INTERNAL, "Failed to get running applications".into()));
+            }
+
+            let count: usize = msg_send![running_apps, count];
+            let nsstring_cls = Class::get("NSString")
+                .ok_or_else(|| (ERR_INTERNAL, "NSString class not found".into()))?;
+
+            let mut found_pid: Option<i32> = None;
+            for i in 0..count {
+                let app: *mut Object = msg_send![running_apps, objectAtIndex: i];
+                let app_bid: *mut Object = msg_send![app, bundleIdentifier];
+                if app_bid.is_null() {
+                    continue;
+                }
+
+                let target_ns = nsstring_from_str(nsstring_cls, bid);
+                let is_equal: bool = msg_send![app_bid, isEqualToString: target_ns];
+                if is_equal {
+                    let p: i32 = msg_send![app, processIdentifier];
+                    found_pid = Some(p);
+                    break;
+                }
+            }
+
+            found_pid.ok_or_else(|| {
+                (
+                    ERR_INTERNAL,
+                    format!("No running app found with bundle ID: {}", bid),
+                )
+            })?
+        } else {
+            // Use frontmost application
+            let front_app: *mut Object = msg_send![workspace, frontmostApplication];
+            if front_app.is_null() {
+                return Err((ERR_INTERNAL, "No frontmost application found".into()));
+            }
+            msg_send![front_app, processIdentifier]
+        };
+
+        // Create AX element for the application
+        let ax_app = AXUIElementCreateApplication(pid);
+        if ax_app.is_null() {
+            return Err((
+                ERR_INTERNAL,
+                format!("Failed to create AXUIElement for PID {}", pid),
+            ));
+        }
+
+        let result = ax_element_to_json(ax_app, 0, AX_MAX_DEPTH);
+
+        // Release the application AX element (follows Create Rule)
+        core_foundation::base::CFRelease(ax_app);
+
+        Ok(result)
+    }
+}
+
+/// Create a CFString (NSString) from a Rust string for use as an AX attribute name.
+#[cfg(target_os = "macos")]
+unsafe fn cfstring(s: &str) -> *const std::os::raw::c_void {
+    use objc::runtime::Class;
+    use std::ffi::CString;
+
+    let cls = Class::get("NSString").unwrap();
+    let cstr = CString::new(s).unwrap();
+    msg_send![cls, stringWithUTF8String: cstr.as_ptr()]
+}
+
+/// Get a string attribute from an AX element, returning `None` if unavailable.
+#[cfg(target_os = "macos")]
+unsafe fn ax_get_string(
+    element: *const std::os::raw::c_void,
+    attr: &str,
+) -> Option<String> {
+    use objc::runtime::{Class, Object};
+    use std::ffi::CStr;
+    use std::os::raw::c_char;
+
+    let mut value_ref: *const std::os::raw::c_void = std::ptr::null();
+    let err = AXUIElementCopyAttributeValue(element, cfstring(attr), &mut value_ref);
+    if err != 0 || value_ref.is_null() {
+        return None;
+    }
+
+    let obj = value_ref as *mut Object;
+    let nsstring_cls = Class::get("NSString")?;
+    let is_string: bool = msg_send![obj, isKindOfClass: nsstring_cls];
+    if is_string {
+        let utf8: *const c_char = msg_send![obj, UTF8String];
+        let result = if utf8.is_null() {
+            None
+        } else {
+            Some(CStr::from_ptr(utf8).to_string_lossy().into_owned())
+        };
+        core_foundation::base::CFRelease(value_ref);
+        result
+    } else {
+        core_foundation::base::CFRelease(value_ref);
+        None
+    }
+}
+
+/// Recursively convert an AXUIElement into a JSON tree structure.
+#[cfg(target_os = "macos")]
+unsafe fn ax_element_to_json(
+    element: *const std::os::raw::c_void,
+    depth: usize,
+    max_depth: usize,
+) -> Value {
+    use objc::runtime::Object;
+
+    if depth >= max_depth {
+        return json!({"truncated": true});
+    }
+
+    let mut result = serde_json::Map::new();
+
+    // Get role
+    if let Some(role) = ax_get_string(element, "AXRole") {
+        result.insert("role".into(), json!(role));
+    }
+
+    // Get title
+    if let Some(title) = ax_get_string(element, "AXTitle") {
+        if !title.is_empty() {
+            result.insert("title".into(), json!(title));
+        }
+    }
+
+    // Get value
+    if let Some(value) = ax_get_string(element, "AXValue") {
+        if !value.is_empty() {
+            result.insert("value".into(), json!(value));
+        }
+    }
+
+    // Get children
+    let mut children_ref: *const std::os::raw::c_void = std::ptr::null();
+    let err = AXUIElementCopyAttributeValue(
+        element,
+        cfstring("AXChildren"),
+        &mut children_ref,
+    );
+    if err == 0 && !children_ref.is_null() {
+        let count: usize = msg_send![children_ref as *mut Object, count];
+        let children: Vec<Value> = (0..count)
+            .map(|i| {
+                let child: *const std::os::raw::c_void =
+                    msg_send![children_ref as *mut Object, objectAtIndex: i];
+                ax_element_to_json(child, depth + 1, max_depth)
+            })
+            .collect();
+        if !children.is_empty() {
+            result.insert("children".into(), json!(children));
+        }
+        core_foundation::base::CFRelease(children_ref);
+    }
+
+    Value::Object(result)
+}
