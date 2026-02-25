@@ -149,6 +149,7 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
         desktop_bridge::METHOD_CLICK => action::handle_click(params),
         desktop_bridge::METHOD_TYPE_TEXT => action::handle_type_text(params),
         desktop_bridge::METHOD_KEY_COMBO => action::handle_key_combo(params),
+        desktop_bridge::METHOD_SCROLL => action::handle_scroll(params),
         desktop_bridge::METHOD_LAUNCH_APP => action::handle_launch_app(params),
 
         // Window management
@@ -200,6 +201,7 @@ fn handle_handshake(params: serde_json::Value) -> Result<serde_json::Value, (i32
         json!({"name": "notification", "version": "1.0"}),
         json!({"name": "keyboard_control", "version": "1.0"}),
         json!({"name": "mouse_control", "version": "1.0"}),
+        json!({"name": "scroll", "version": "1.0"}),
         json!({"name": "canvas", "version": "1.0"}),
         json!({"name": "launch_app", "version": "1.0"}),
     ];

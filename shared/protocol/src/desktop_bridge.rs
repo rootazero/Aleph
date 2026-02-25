@@ -78,6 +78,7 @@ pub const METHOD_AX_TREE: &str = "desktop.ax_tree";
 pub const METHOD_CLICK: &str = "desktop.click";
 pub const METHOD_TYPE_TEXT: &str = "desktop.type_text";
 pub const METHOD_KEY_COMBO: &str = "desktop.key_combo";
+pub const METHOD_SCROLL: &str = "desktop.scroll";
 pub const METHOD_LAUNCH_APP: &str = "desktop.launch_app";
 pub const METHOD_WINDOW_LIST: &str = "desktop.window_list";
 pub const METHOD_FOCUS_WINDOW: &str = "desktop.focus_window";
