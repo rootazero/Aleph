@@ -153,7 +153,7 @@ impl DesktopBridgeManager {
 
         let link_id = LinkId::new(DESKTOP_LINK_ID);
 
-        let transport = self
+        let result = self
             .supervisor
             .spawn(&link_id, config)
             .await
@@ -161,10 +161,11 @@ impl DesktopBridgeManager {
 
         info!("Desktop bridge started and handshake completed");
 
-        self.transport = Some(transport);
+        self.transport = Some(result.transport);
 
-        // TODO: Parse capabilities from handshake response and populate
-        // self.capabilities. For now we leave it empty.
+        // TODO (Task 2): Parse capabilities from result.handshake_response
+        // and populate self.capabilities.
+        let _ = result.handshake_response;
 
         Ok(())
     }

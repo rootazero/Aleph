@@ -439,8 +439,8 @@ impl LinkManager {
             LinkManagerError::InvalidRuntime("Expected process runtime".into())
         })?;
 
-        // Spawn the bridge process and get its transport.
-        let transport = self
+        // Spawn the bridge process and get its transport + handshake response.
+        let result = self
             .bridge_supervisor
             .spawn(&link.id, process_config)
             .await
@@ -452,7 +452,7 @@ impl LinkManager {
             &link.name,
             link.bridge.as_str(),
         );
-        bridged.set_transport(transport);
+        bridged.set_transport(result.transport);
 
         bridged
             .start()

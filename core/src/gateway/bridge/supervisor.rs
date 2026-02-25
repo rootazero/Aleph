@@ -9,7 +9,7 @@
 //!
 //! ```rust,no_run
 //! use std::path::PathBuf;
-//! use alephcore::gateway::bridge::supervisor::{BridgeSupervisor, ManagedProcessConfig};
+//! use alephcore::gateway::bridge::supervisor::{BridgeSupervisor, ManagedProcessConfig, SpawnResult};
 //! use alephcore::gateway::link::LinkId;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,7 +23,9 @@
 //!     health_check_interval: std::time::Duration::from_secs(30),
 //!     env_vars: std::collections::HashMap::new(),
 //! };
-//! let transport = supervisor.spawn(&LinkId::new("my-signal"), config).await?;
+//! let result = supervisor.spawn(&LinkId::new("my-signal"), config).await?;
+//! let _transport = result.transport;
+//! let _handshake = result.handshake_response;
 //! # Ok(())
 //! # }
 //! ```
@@ -41,6 +43,22 @@ use crate::gateway::bridge::types::{BridgeRuntime, TransportType};
 use crate::gateway::link::LinkId;
 use crate::gateway::transport::unix_socket::UnixSocketTransport;
 use crate::gateway::transport::{StdioTransport, Transport};
+
+// ---------------------------------------------------------------------------
+// SpawnResult
+// ---------------------------------------------------------------------------
+
+/// Successful result of spawning a bridge process.
+///
+/// Contains the IPC transport handle and the raw JSON response from the
+/// `aleph.handshake` RPC, which typically includes capability declarations
+/// and protocol metadata.
+pub struct SpawnResult {
+    /// The IPC transport handle for communicating with the bridge.
+    pub transport: Arc<dyn Transport>,
+    /// The JSON response from the `aleph.handshake` RPC.
+    pub handshake_response: serde_json::Value,
+}
 
 // ---------------------------------------------------------------------------
 // ManagedProcessConfig
@@ -260,13 +278,13 @@ impl BridgeSupervisor {
     /// 6. Perform the `aleph.handshake` RPC call.
     /// 7. Store the managed process and start health monitoring.
     ///
-    /// Returns an `Arc<dyn Transport>` that callers can use to communicate
-    /// with the bridge process.
+    /// Returns a [`SpawnResult`] containing the transport handle and the
+    /// raw handshake response (which typically includes capability info).
     pub async fn spawn(
         &self,
         link_id: &LinkId,
         config: ManagedProcessConfig,
-    ) -> Result<Arc<dyn Transport>, BridgeSupervisorError> {
+    ) -> Result<SpawnResult, BridgeSupervisorError> {
         // 1. Ensure run_dir exists.
         tokio::fs::create_dir_all(&self.run_dir)
             .await
@@ -363,13 +381,14 @@ impl BridgeSupervisor {
             )
             .await;
 
-        match handshake_result {
+        let handshake_response = match handshake_result {
             Ok(response) => {
                 debug!(
                     link_id = %link_id,
                     response = %response,
                     "Bridge handshake succeeded"
                 );
+                response
             }
             Err(e) => {
                 // Clean up: kill child and close transport on handshake failure.
@@ -379,7 +398,7 @@ impl BridgeSupervisor {
                     "Handshake with bridge failed: {e}"
                 )));
             }
-        }
+        };
 
         // 7. Store the managed process — guard against duplicate link_id.
         let health_interval = config.health_check_interval;
@@ -408,7 +427,10 @@ impl BridgeSupervisor {
         // 8. Start health monitor.
         self.start_health_monitor(link_id.clone(), health_interval);
 
-        Ok(transport)
+        Ok(SpawnResult {
+            transport,
+            handshake_response,
+        })
     }
 
     /// Stop a managed bridge process by link id.
