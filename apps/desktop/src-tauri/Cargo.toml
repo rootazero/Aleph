@@ -62,6 +62,14 @@ windows = { version = "0.58", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Foundation",
     "Win32_System_Threading",
+    # OCR (WinRT Media.Ocr)
+    "Media_Ocr",
+    "Globalization",
+    "Graphics_Imaging",
+    "Storage_Streams",
+    # UI Automation (AX tree)
+    "Win32_UI_Accessibility",
+    "Win32_System_Com",
 ] }
 
 [features]
