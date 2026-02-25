@@ -192,7 +192,7 @@ fn handle_handshake(params: serde_json::Value) -> Result<serde_json::Value, (i32
         "Handshake received from server"
     );
 
-    // Build capability list — cross-platform baseline + macOS-only extras
+    // Build capability list — cross-platform baseline + platform-specific extras
     let mut capabilities = vec![
         json!({"name": "screen_capture", "version": "1.0"}),
         json!({"name": "webview", "version": "1.0"}),
@@ -204,13 +204,14 @@ fn handle_handshake(params: serde_json::Value) -> Result<serde_json::Value, (i32
         json!({"name": "scroll", "version": "1.0"}),
         json!({"name": "canvas", "version": "1.0"}),
         json!({"name": "launch_app", "version": "1.0"}),
+        json!({"name": "window_list", "version": "1.0"}),
+        json!({"name": "focus_window", "version": "1.0"}),
     ];
 
     #[cfg(target_os = "macos")]
     {
         capabilities.push(json!({"name": "ocr", "version": "1.0"}));
         capabilities.push(json!({"name": "ax_inspect", "version": "1.0"}));
-        capabilities.push(json!({"name": "window_list", "version": "1.0"}));
     }
 
     // Return capability registration
