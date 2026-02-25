@@ -14,6 +14,8 @@ use std::sync::Arc;
 #[cfg(feature = "gateway")]
 use alephcore::gateway::GatewayServer;
 #[cfg(feature = "gateway")]
+use alephcore::gateway::bridge::DesktopBridgeManager;
+#[cfg(feature = "gateway")]
 use alephcore::gateway::router::AgentRouter;
 #[cfg(feature = "gateway")]
 use alephcore::gateway::handlers::agent::{
@@ -867,8 +869,21 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     #[cfg(feature = "control-plane")]
     start_control_plane_server(&final_bind, final_port, args.daemon).await;
 
+    // Start desktop bridge (non-blocking — server runs headless if bridge not found)
+    let run_dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".aleph")
+        .join("run");
+    let mut bridge_manager = DesktopBridgeManager::new(run_dir, final_port);
+    if let Err(e) = bridge_manager.start().await {
+        tracing::warn!("Desktop bridge not started: {e} — running headless");
+    }
+
     let shutdown_rx = setup_graceful_shutdown(args);
     server.run_until_shutdown(shutdown_rx).await?;
+
+    // Graceful shutdown: stop desktop bridge and mDNS
+    bridge_manager.stop().await;
 
     if let Some(broadcaster) = auth_bundle.mdns_broadcaster {
         broadcaster.shutdown();
