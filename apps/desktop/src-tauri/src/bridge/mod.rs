@@ -10,7 +10,7 @@ mod perception;
 pub mod protocol;
 
 use aleph_protocol::desktop_bridge::{
-    self, ERR_INTERNAL, ERR_METHOD_NOT_FOUND, ERR_NOT_IMPLEMENTED, METHOD_BRIDGE_SHUTDOWN,
+    self, ERR_INTERNAL, ERR_METHOD_NOT_FOUND, METHOD_BRIDGE_SHUTDOWN,
     METHOD_HANDSHAKE, METHOD_SYSTEM_PING, METHOD_WEBVIEW_HIDE, METHOD_WEBVIEW_NAVIGATE,
     METHOD_WEBVIEW_SHOW,
 };
@@ -166,11 +166,8 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
         // Perception — OCR
         desktop_bridge::METHOD_OCR => perception::handle_ocr(params),
 
-        // Remaining unimplemented methods
-        desktop_bridge::METHOD_AX_TREE => Err((
-            ERR_NOT_IMPLEMENTED,
-            format!("{} not implemented on this platform", method),
-        )),
+        // Perception — AX tree inspection
+        desktop_bridge::METHOD_AX_TREE => perception::handle_ax_tree(params),
 
         _ => Err((
             ERR_METHOD_NOT_FOUND,
