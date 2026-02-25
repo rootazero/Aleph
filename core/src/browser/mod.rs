@@ -1,11 +1,13 @@
 pub mod discovery;
 pub mod error;
 pub mod runtime;
+pub mod snapshot;
 pub mod types;
 
 pub use discovery::find_chromium;
 pub use error::BrowserError;
 pub use runtime::BrowserRuntime;
+pub use snapshot::{resolve_ref_to_point, take_aria_snapshot};
 pub use types::{
     ActionTarget, AriaElement, AriaSnapshot, BrowserConfig, ElementRect, LaunchMode,
     ScreenshotOpts, ScreenshotResult, ScrollDirection, StorageKind, TabId, TabInfo,
