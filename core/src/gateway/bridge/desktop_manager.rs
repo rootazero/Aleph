@@ -91,7 +91,7 @@ pub struct DesktopBridgeManager {
     server_port: u16,
 
     /// Capabilities reported by the bridge during handshake.
-    /// Populated after a successful start (TODO: parse from handshake response).
+    /// Populated after a successful start from the handshake response.
     capabilities: Vec<String>,
 }
 
@@ -163,9 +163,20 @@ impl DesktopBridgeManager {
 
         self.transport = Some(result.transport);
 
-        // TODO (Task 2): Parse capabilities from result.handshake_response
-        // and populate self.capabilities.
-        let _ = result.handshake_response;
+        // Parse capabilities from handshake response
+        if let Some(caps) = result
+            .handshake_response
+            .get("capabilities")
+            .and_then(|v| v.as_array())
+        {
+            self.capabilities = caps
+                .iter()
+                .filter_map(|c| c.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect();
+            info!(capabilities = ?self.capabilities, "Bridge capabilities registered");
+        } else {
+            warn!("Bridge handshake response missing capabilities array");
+        }
 
         Ok(())
     }
@@ -196,11 +207,13 @@ impl DesktopBridgeManager {
 
     /// Check whether the bridge reported a specific capability during
     /// handshake.
-    ///
-    /// Currently always returns `false` because capability parsing from
-    /// the handshake response is not yet implemented.
     pub fn has_capability(&self, name: &str) -> bool {
         self.capabilities.iter().any(|c| c == name)
+    }
+
+    /// Get all registered capabilities.
+    pub fn capabilities(&self) -> &[String] {
+        &self.capabilities
     }
 
     /// Send a JSON-RPC request to the bridge and return the response.
@@ -298,6 +311,52 @@ mod tests {
         assert!(mgr.has_capability("webview"));
         assert!(mgr.has_capability("screenshot"));
         assert!(!mgr.has_capability("keyboard"));
+    }
+
+    #[test]
+    fn test_capabilities_parsing() {
+        let response = serde_json::json!({
+            "protocol_version": "1.0",
+            "capabilities": [
+                {"name": "screen_capture", "version": "1.0"},
+                {"name": "webview", "version": "1.0"}
+            ]
+        });
+        let caps: Vec<String> = response
+            .get("capabilities")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|c| c.get("name").and_then(|n| n.as_str()).map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(caps, vec!["screen_capture", "webview"]);
+    }
+
+    #[test]
+    fn test_capabilities_accessor() {
+        let mut mgr = DesktopBridgeManager::new(PathBuf::from("/tmp/run"), 8080);
+        assert!(mgr.capabilities().is_empty());
+        mgr.capabilities = vec!["webview".into(), "screenshot".into()];
+        assert_eq!(mgr.capabilities(), &["webview", "screenshot"]);
+    }
+
+    #[test]
+    fn test_capabilities_parsing_missing() {
+        let response = serde_json::json!({
+            "protocol_version": "1.0"
+        });
+        let caps: Vec<String> = response
+            .get("capabilities")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|c| c.get("name").and_then(|n| n.as_str()).map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(caps.is_empty());
     }
 
     #[tokio::test]
