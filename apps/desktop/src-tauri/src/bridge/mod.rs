@@ -5,6 +5,7 @@
 //! to perception/action handlers.
 
 mod action;
+mod canvas;
 mod perception;
 pub mod protocol;
 
@@ -154,12 +155,14 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
         desktop_bridge::METHOD_WINDOW_LIST => action::handle_window_list(params),
         desktop_bridge::METHOD_FOCUS_WINDOW => action::handle_focus_window(params),
 
+        // Canvas overlay
+        desktop_bridge::METHOD_CANVAS_SHOW => canvas::handle_canvas_show(params),
+        desktop_bridge::METHOD_CANVAS_HIDE => canvas::handle_canvas_hide(params),
+        desktop_bridge::METHOD_CANVAS_UPDATE => canvas::handle_canvas_update(params),
+
         // Remaining unimplemented methods
         desktop_bridge::METHOD_OCR
         | desktop_bridge::METHOD_AX_TREE
-        | desktop_bridge::METHOD_CANVAS_SHOW
-        | desktop_bridge::METHOD_CANVAS_HIDE
-        | desktop_bridge::METHOD_CANVAS_UPDATE
         | desktop_bridge::METHOD_TRAY_UPDATE_STATUS => Err((
             ERR_NOT_IMPLEMENTED,
             format!("{} not implemented on this platform", method),
