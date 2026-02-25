@@ -9,7 +9,8 @@ pub mod protocol;
 
 use aleph_protocol::desktop_bridge::{
     self, ERR_INTERNAL, ERR_METHOD_NOT_FOUND, ERR_NOT_IMPLEMENTED, METHOD_BRIDGE_SHUTDOWN,
-    METHOD_WEBVIEW_HIDE, METHOD_WEBVIEW_NAVIGATE, METHOD_WEBVIEW_SHOW,
+    METHOD_HANDSHAKE, METHOD_SYSTEM_PING, METHOD_WEBVIEW_HIDE, METHOD_WEBVIEW_NAVIGATE,
+    METHOD_WEBVIEW_SHOW,
 };
 use serde_json::json;
 use tauri::Manager;
@@ -111,6 +112,10 @@ async fn handle_connection(stream: tokio::net::UnixStream) {
 /// Dispatch a method call to the appropriate handler
 fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value, (i32, String)> {
     match method {
+        // Server ↔ Bridge handshake / health
+        METHOD_HANDSHAKE => handle_handshake(params),
+        METHOD_SYSTEM_PING => Ok(json!({"pong": true})),
+
         desktop_bridge::METHOD_PING => Ok(json!("pong")),
 
         desktop_bridge::METHOD_SCREENSHOT => perception::handle_screenshot(params),
@@ -147,6 +152,37 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
             format!("Method not found: {}", method),
         )),
     }
+}
+
+// ── Handshake handler ────────────────────────────────────────────
+
+/// Handle `aleph.handshake` — respond with bridge capabilities so the
+/// server knows what operations this bridge supports.
+fn handle_handshake(params: serde_json::Value) -> Result<serde_json::Value, (i32, String)> {
+    let protocol_version = params
+        .get("protocol_version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("1.0");
+
+    tracing::info!(
+        protocol_version,
+        "Handshake received from server"
+    );
+
+    // Return capability registration
+    Ok(json!({
+        "protocol_version": protocol_version,
+        "bridge_type": "desktop",
+        "platform": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "capabilities": [
+            {"name": "screen_capture", "version": "1.0"},
+            {"name": "webview", "version": "1.0"},
+            {"name": "tray", "version": "1.0"},
+            {"name": "global_hotkey", "version": "1.0"},
+            {"name": "notification", "version": "1.0"}
+        ]
+    }))
 }
 
 // ── WebView handlers ──────────────────────────────────────────────

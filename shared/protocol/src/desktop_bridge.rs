@@ -96,6 +96,10 @@ pub const METHOD_TRAY_UPDATE_STATUS: &str = "tray.update_status";
 // Bridge lifecycle methods
 pub const METHOD_BRIDGE_SHUTDOWN: &str = "bridge.shutdown";
 
+// Server ↔ Bridge handshake / health
+pub const METHOD_HANDSHAKE: &str = "aleph.handshake";
+pub const METHOD_SYSTEM_PING: &str = "system.ping";
+
 // Capability types for desktop bridge
 pub const METHOD_CAPABILITY_REGISTER: &str = "capability.register";
 
