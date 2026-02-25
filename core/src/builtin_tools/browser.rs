@@ -523,10 +523,8 @@ impl BrowserTool {
             Ok(id) => id,
             Err(out) => return Ok(out),
         };
-        let target = match resolve_action_target(args) {
-            Ok(t) => t,
-            Err(msg) => return Ok(BrowserOutput::err(msg)),
-        };
+        let target = resolve_action_target(args)
+            .unwrap_or(ActionTarget::Coordinates { x: 0.0, y: 0.0 });
         let direction = match args.direction.clone() {
             Some(d) => d,
             None => {

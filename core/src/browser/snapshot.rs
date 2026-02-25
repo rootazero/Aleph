@@ -76,8 +76,8 @@ const ARIA_SNAPSHOT_JS: &str = r#"
     const labelledBy = el.getAttribute('aria-labelledby');
     if (labelledBy) {
       const parts = labelledBy.split(/\s+/).map(id => {
-        const ref = document.getElementById(id);
-        return ref ? ref.textContent.trim() : '';
+        const refEl = document.getElementById(id);
+        return refEl ? refEl.textContent.trim() : '';
       }).filter(Boolean);
       if (parts.length) return parts.join(' ');
     }
