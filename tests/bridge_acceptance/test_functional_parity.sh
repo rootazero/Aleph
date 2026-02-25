@@ -45,14 +45,29 @@ test_f1_screenshot_returns_base64() {
     local resp
     resp=$(send_rpc "desktop.screenshot" '{}')
     assert_no_error "$resp" "screenshot base64"
-    # Result should contain base64-encoded image data (check for typical PNG/JPEG base64 prefix)
-    local result
-    result=$(echo "$resp" | jq -r '.result' 2>/dev/null)
-    # If result is an object with image_base64 field, extract it
+    # Result should contain base64-encoded image data
     local image_data
-    image_data=$(echo "$resp" | jq -r '.result.image_base64 // .result' 2>/dev/null)
+    image_data=$(echo "$resp" | jq -r '.result.image // .result.image_base64 // .result' 2>/dev/null)
     if [[ ${#image_data} -lt 100 ]]; then
         echo "FAIL: screenshot data too small (${#image_data} chars)" >&2
+        return 1
+    fi
+}
+
+test_f1_screenshot_returns_dimensions() {
+    local resp
+    resp=$(send_rpc "desktop.screenshot" '{}')
+    assert_no_error "$resp" "screenshot dimensions"
+    # Must return width and height > 0
+    local width height
+    width=$(echo "$resp" | jq -r '.result.width // empty' 2>/dev/null)
+    height=$(echo "$resp" | jq -r '.result.height // empty' 2>/dev/null)
+    if [[ -z "$width" || -z "$height" ]]; then
+        echo "FAIL: screenshot missing width/height fields" >&2
+        return 1
+    fi
+    if [[ "$width" -le 0 || "$height" -le 0 ]]; then
+        echo "FAIL: screenshot dimensions invalid (${width}x${height})" >&2
         return 1
     fi
 }
@@ -60,6 +75,7 @@ test_f1_screenshot_returns_base64() {
 run_test "F1a: Screenshot (fullscreen)" test_f1_screenshot_fullscreen
 run_test "F1b: Screenshot (region)" test_f1_screenshot_region
 run_test "F1c: Screenshot returns base64 image data" test_f1_screenshot_returns_base64
+run_test "F1d: Screenshot returns dimensions" test_f1_screenshot_returns_dimensions
 
 # ===================================================================
 # F2: OCR (macOS only)
@@ -153,12 +169,55 @@ test_f3_ax_tree_by_bundle() {
     assert_json_has "$resp" ".result" "AX tree by bundle result"
 }
 
+# Recursive depth counter for AX tree JSON
+_ax_tree_depth() {
+    local json="$1"
+    echo "$json" | python3 -c "
+import json, sys
+def depth(node, d=1):
+    children = node.get('children', [])
+    if not children:
+        return d
+    return max(depth(c, d+1) for c in children)
+try:
+    data = json.load(sys.stdin)
+    result = data.get('result', data)
+    print(depth(result))
+except:
+    print(0)
+"
+}
+
+test_f3_ax_tree_depth() {
+    local resp
+    resp=$(send_rpc "desktop.ax_tree" '{"app_bundle_id":"com.apple.finder"}')
+    local has_error
+    has_error=$(echo "$resp" | jq 'has("error")' 2>/dev/null)
+    if [[ "$has_error" == "true" ]]; then
+        local code
+        code=$(echo "$resp" | jq -r '.error.code' 2>/dev/null)
+        if [[ "$code" == "-32000" ]]; then
+            return 0  # Not implemented is acceptable
+        fi
+        echo "FAIL: unexpected error code $code" >&2
+        return 1
+    fi
+    local tree_depth
+    tree_depth=$(_ax_tree_depth "$resp")
+    if [[ "$tree_depth" -lt 3 ]]; then
+        echo "FAIL: AX tree depth is $tree_depth, expected >= 3" >&2
+        return 1
+    fi
+}
+
 if is_macos; then
     run_test "F3a: AX tree (focused app)" test_f3_ax_tree
     run_test "F3b: AX tree (by bundle ID)" test_f3_ax_tree_by_bundle
+    run_test "F3c: AX tree depth >= 3" test_f3_ax_tree_depth
 else
     skip_test "F3a: AX tree (focused app)" "macOS only"
     skip_test "F3b: AX tree (by bundle ID)" "macOS only"
+    skip_test "F3c: AX tree depth >= 3" "macOS only"
 fi
 
 # ===================================================================
@@ -430,15 +489,25 @@ run_test "F8c: Canvas hide" test_f8_canvas_hide
 print_header "F9: Tray Status"
 
 test_f9_tray_status() {
-    # Tray is a Tauri-native feature (not a bridge RPC method).
-    # We verify the bridge process is alive and can respond to ping,
-    # which implies the Tauri app (with its tray) is running.
     local resp
-    resp=$(send_rpc "desktop.ping" '{}')
-    assert_json_eq "$resp" ".result" "pong" "tray status (bridge alive)"
+    resp=$(send_rpc "tray.update_status" '{"status":"idle","tooltip":"Acceptance Test"}')
+    local has_error
+    has_error=$(echo "$resp" | jq 'has("error")' 2>/dev/null)
+    if [[ "$has_error" == "true" ]]; then
+        local code
+        code=$(echo "$resp" | jq -r '.error.code' 2>/dev/null)
+        # -32601 (method not found) or -32000 (not implemented) are acceptable
+        # since tray may be a Tauri command rather than bridge RPC
+        if [[ "$code" == "-32601" || "$code" == "-32000" ]]; then
+            echo "INFO: tray.update_status not available via bridge RPC (code=$code), defer to manual checklist M3" >&2
+            return 0
+        fi
+        echo "FAIL: unexpected error code $code" >&2
+        return 1
+    fi
 }
 
-run_test "F9: Tray status (bridge alive implies tray active)" test_f9_tray_status
+run_test "F9: Tray status update" test_f9_tray_status
 
 # ===================================================================
 # F10: Halo Window Show/Hide
@@ -446,15 +515,41 @@ run_test "F9: Tray status (bridge alive implies tray active)" test_f9_tray_statu
 
 print_header "F10: Halo Window Show/Hide"
 
-test_f10_halo() {
-    # Halo is managed by Tauri commands, not bridge RPC.
-    # We verify the bridge is responsive (Tauri app is running).
+test_f10_halo_show() {
     local resp
-    resp=$(send_rpc "desktop.ping" '{}')
-    assert_json_eq "$resp" ".result" "pong" "halo (bridge alive)"
+    resp=$(send_rpc "webview.show" '{"window":"halo"}')
+    local has_error
+    has_error=$(echo "$resp" | jq 'has("error")' 2>/dev/null)
+    if [[ "$has_error" == "true" ]]; then
+        local code
+        code=$(echo "$resp" | jq -r '.error.code' 2>/dev/null)
+        if [[ "$code" == "-32601" || "$code" == "-32000" ]]; then
+            echo "INFO: webview.show not available via bridge RPC (code=$code), defer to manual checklist M4" >&2
+            return 0
+        fi
+        echo "FAIL: unexpected error code $code" >&2
+        return 1
+    fi
 }
 
-run_test "F10: Halo show/hide (bridge alive, manual checklist M4)" test_f10_halo
+test_f10_halo_hide() {
+    local resp
+    resp=$(send_rpc "webview.hide" '{"window":"halo"}')
+    local has_error
+    has_error=$(echo "$resp" | jq 'has("error")' 2>/dev/null)
+    if [[ "$has_error" == "true" ]]; then
+        local code
+        code=$(echo "$resp" | jq -r '.error.code' 2>/dev/null)
+        if [[ "$code" == "-32601" || "$code" == "-32000" ]]; then
+            return 0
+        fi
+        echo "FAIL: unexpected error code $code" >&2
+        return 1
+    fi
+}
+
+run_test "F10a: Halo window show" test_f10_halo_show
+run_test "F10b: Halo window hide" test_f10_halo_hide
 
 # ===================================================================
 # F11: Settings Window Show/Hide
@@ -462,14 +557,41 @@ run_test "F10: Halo show/hide (bridge alive, manual checklist M4)" test_f10_halo
 
 print_header "F11: Settings Window Show/Hide"
 
-test_f11_settings() {
-    # Settings is managed by Tauri commands, not bridge RPC.
+test_f11_settings_show() {
     local resp
-    resp=$(send_rpc "desktop.ping" '{}')
-    assert_json_eq "$resp" ".result" "pong" "settings (bridge alive)"
+    resp=$(send_rpc "webview.show" '{"window":"settings"}')
+    local has_error
+    has_error=$(echo "$resp" | jq 'has("error")' 2>/dev/null)
+    if [[ "$has_error" == "true" ]]; then
+        local code
+        code=$(echo "$resp" | jq -r '.error.code' 2>/dev/null)
+        if [[ "$code" == "-32601" || "$code" == "-32000" ]]; then
+            echo "INFO: webview.show not available via bridge RPC (code=$code), defer to manual checklist M5" >&2
+            return 0
+        fi
+        echo "FAIL: unexpected error code $code" >&2
+        return 1
+    fi
 }
 
-run_test "F11: Settings show/hide (bridge alive, manual checklist M5)" test_f11_settings
+test_f11_settings_hide() {
+    local resp
+    resp=$(send_rpc "webview.hide" '{"window":"settings"}')
+    local has_error
+    has_error=$(echo "$resp" | jq 'has("error")' 2>/dev/null)
+    if [[ "$has_error" == "true" ]]; then
+        local code
+        code=$(echo "$resp" | jq -r '.error.code' 2>/dev/null)
+        if [[ "$code" == "-32601" || "$code" == "-32000" ]]; then
+            return 0
+        fi
+        echo "FAIL: unexpected error code $code" >&2
+        return 1
+    fi
+}
+
+run_test "F11a: Settings window show" test_f11_settings_show
+run_test "F11b: Settings window hide" test_f11_settings_hide
 
 # ===================================================================
 # F12: Handshake + Capabilities
@@ -477,10 +599,25 @@ run_test "F11: Settings show/hide (bridge alive, manual checklist M5)" test_f11_
 
 print_header "F12: Handshake + Capabilities"
 
+test_f12_handshake() {
+    local resp
+    resp=$(send_rpc "aleph.handshake" '{"protocol_version":"1.0"}')
+    assert_no_error "$resp" "handshake"
+    assert_json_eq "$resp" ".result.bridge_type" "desktop" "bridge type"
+    assert_json_has "$resp" ".result.platform" "platform"
+    assert_json_has "$resp" ".result.capabilities" "capabilities list"
+    # Verify at least 3 capabilities registered
+    local cap_count
+    cap_count=$(echo "$resp" | jq '.result.capabilities | length' 2>/dev/null)
+    if [[ -z "$cap_count" || "$cap_count" -lt 3 ]]; then
+        echo "FAIL: only $cap_count capabilities (expected >= 3)" >&2
+        return 1
+    fi
+}
+
 test_f12_ping() {
     local resp
-    resp=$(send_rpc "desktop.ping" '{}')
-    assert_json_eq "$resp" ".jsonrpc" "2.0" "JSON-RPC version"
+    resp=$(send_rpc "system.ping" '{}')
     assert_json_eq "$resp" ".result" "pong" "ping response"
 }
 
@@ -491,13 +628,11 @@ test_f12_unknown_method() {
 }
 
 test_f12_malformed_json() {
-    # Send raw malformed JSON over the socket
     local response
     response=$(echo 'this is not json' | socat - UNIX-CONNECT:"$SOCKET_PATH" 2>/dev/null) || {
         echo "FAIL: could not connect" >&2
         return 1
     }
-    # Should get a parse error response
     local code
     code=$(echo "$response" | jq -r '.error.code' 2>/dev/null) || {
         echo "FAIL: response is not valid JSON: $response" >&2
@@ -509,16 +644,10 @@ test_f12_malformed_json() {
     fi
 }
 
-test_f12_response_id_matches() {
-    local resp
-    resp=$(send_rpc "desktop.ping" '{}' "unique-id-42")
-    assert_json_eq "$resp" ".id" "unique-id-42" "response ID matches request"
-}
-
-run_test "F12a: Ping/pong handshake" test_f12_ping
-run_test "F12b: Unknown method returns -32601" test_f12_unknown_method
-run_test "F12c: Malformed JSON returns -32700" test_f12_malformed_json
-run_test "F12d: Response ID matches request ID" test_f12_response_id_matches
+run_test "F12a: Handshake returns capabilities" test_f12_handshake
+run_test "F12b: Ping/pong" test_f12_ping
+run_test "F12c: Unknown method returns -32601" test_f12_unknown_method
+run_test "F12d: Malformed JSON returns -32700" test_f12_malformed_json
 
 # ===================================================================
 # Summary

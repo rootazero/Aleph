@@ -15,7 +15,7 @@ source "$SCRIPT_DIR/lib.sh"
 # Configuration (all durations configurable)
 # ---------------------------------------------------------------------------
 
-STABILITY_LONG_RUN_SECS="${STABILITY_LONG_RUN_SECS:-300}"
+STABILITY_LONG_RUN_SECS="${STABILITY_LONG_RUN_SECS:-28800}"
 STABILITY_HOTKEY_CYCLES="${STABILITY_HOTKEY_CYCLES:-100}"
 STABILITY_UDS_CYCLES="${STABILITY_UDS_CYCLES:-10}"
 STABILITY_STRESS_DURATION_SECS="${STABILITY_STRESS_DURATION_SECS:-300}"
@@ -110,14 +110,14 @@ test_s1_memory_leak() {
     echo "  Final RSS:   ${final_mb} MB"
     echo "  Peak RSS:    ${max_mb} MB"
 
-    # Check for significant memory growth (> 50% increase from initial)
+    # Check for significant memory growth (> 20% increase from initial)
     if [[ "$initial_rss" -gt 0 ]]; then
         local growth_pct
         growth_pct=$(echo "scale=0; ($final_rss - $initial_rss) * 100 / $initial_rss" | bc)
         echo "  Growth:      ${growth_pct}%"
 
-        if [[ "$growth_pct" -gt 50 ]]; then
-            echo "  ${RED}WARNING: Memory grew by ${growth_pct}% (threshold: 50%)${RESET}"
+        if [[ "$growth_pct" -gt 20 ]]; then
+            echo "  ${RED}WARNING: Memory grew by ${growth_pct}% (threshold: 20%)${RESET}"
             return 1
         fi
     fi
