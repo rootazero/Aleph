@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::policy::ApprovalPolicy;
-use super::types::{ActionRequest, ActionType, ApprovalDecision};
+use super::types::{ActionRequest, ActionType, ApprovalDecision, DefaultDecision};
 
 // ---------------------------------------------------------------------------
 // JSON config schema
@@ -22,8 +22,8 @@ use super::types::{ActionRequest, ActionType, ApprovalDecision};
 pub struct PolicyConfig {
     /// Schema version (currently 1).
     pub version: u32,
-    /// Per-action-type default decisions: "allow", "deny", or "ask".
-    pub defaults: HashMap<ActionType, String>,
+    /// Per-action-type default decisions.
+    pub defaults: HashMap<ActionType, DefaultDecision>,
     /// Rules that unconditionally allow matching actions.
     #[serde(default)]
     pub allowlist: Vec<PolicyRule>,
@@ -46,15 +46,15 @@ pub struct PolicyRule {
 // Glob matching
 // ---------------------------------------------------------------------------
 
-/// Match a value against a glob pattern.
+/// Convert a glob pattern to a regex string.
 ///
 /// Pattern rules:
 /// - `*`  matches any characters except `/`
 /// - `**` matches any characters including `/`
-/// - `?`  matches a single character
+/// - `?`  matches a single character (except `/`)
 ///
 /// This intentionally mirrors the logic in `exec/approval/binding.rs`.
-fn matches_glob(value: &str, pattern: &str) -> bool {
+fn glob_to_regex_str(pattern: &str) -> String {
     let mut regex_str = String::with_capacity(pattern.len() * 2);
     regex_str.push('^');
 
@@ -77,7 +77,7 @@ fn matches_glob(value: &str, pattern: &str) -> bool {
                     regex_str.push_str("[^/]*");
                 }
             }
-            '?' => regex_str.push('.'),
+            '?' => regex_str.push_str("[^/]"),
             '.' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$' | '|' | '+' | '\\' => {
                 regex_str.push('\\');
                 regex_str.push(ch);
@@ -87,10 +87,40 @@ fn matches_glob(value: &str, pattern: &str) -> bool {
     }
 
     regex_str.push('$');
+    regex_str
+}
 
-    regex::Regex::new(&regex_str)
+/// Match a value against a glob pattern.
+///
+/// Public for use in tests. The hot path in [`ConfigApprovalPolicy::check`]
+/// uses pre-compiled regexes instead.
+pub fn matches_glob(value: &str, pattern: &str) -> bool {
+    regex::Regex::new(&glob_to_regex_str(pattern))
         .map(|re| re.is_match(value))
         .unwrap_or(false)
+}
+
+/// Pre-compile a list of [`PolicyRule`]s into `(ActionType, Regex)` pairs.
+///
+/// Rules whose patterns fail to compile are silently skipped (with a warning).
+fn compile_rules(rules: &[PolicyRule]) -> Vec<(ActionType, regex::Regex)> {
+    rules
+        .iter()
+        .filter_map(|rule| {
+            let regex_str = glob_to_regex_str(&rule.pattern);
+            match regex::Regex::new(&regex_str) {
+                Ok(re) => Some((rule.action_type.clone(), re)),
+                Err(e) => {
+                    tracing::warn!(
+                        pattern = %rule.pattern,
+                        error = %e,
+                        "Failed to compile glob pattern; skipping rule"
+                    );
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -106,12 +136,20 @@ fn matches_glob(value: &str, pattern: &str) -> bool {
 /// 4. If no default is configured → `Ask`
 pub struct ConfigApprovalPolicy {
     config: PolicyConfig,
+    blocklist_compiled: Vec<(ActionType, regex::Regex)>,
+    allowlist_compiled: Vec<(ActionType, regex::Regex)>,
 }
 
 impl ConfigApprovalPolicy {
     /// Create a new policy from an explicit [`PolicyConfig`].
     pub fn new(config: PolicyConfig) -> Self {
-        Self { config }
+        let blocklist_compiled = compile_rules(&config.blocklist);
+        let allowlist_compiled = compile_rules(&config.allowlist);
+        Self {
+            config,
+            blocklist_compiled,
+            allowlist_compiled,
+        }
     }
 
     /// Load the policy from `~/.aleph/approval-policy.json`.
@@ -125,10 +163,10 @@ impl ConfigApprovalPolicy {
             Ok(contents) => match serde_json::from_str::<PolicyConfig>(&contents) {
                 Ok(config) => {
                     debug!("Loaded approval policy from {}", path.display());
-                    Self { config }
+                    Self::new(config)
                 }
                 Err(e) => {
-                    debug!(
+                    tracing::warn!(
                         "Failed to parse approval policy at {}: {}. Using defaults.",
                         path.display(),
                         e
@@ -164,24 +202,22 @@ impl Default for ConfigApprovalPolicy {
     /// - Shell exec → Deny
     fn default() -> Self {
         let mut defaults = HashMap::new();
-        defaults.insert(ActionType::BrowserNavigate, "allow".to_string());
-        defaults.insert(ActionType::BrowserClick, "allow".to_string());
-        defaults.insert(ActionType::BrowserType, "allow".to_string());
-        defaults.insert(ActionType::BrowserEvaluate, "ask".to_string());
-        defaults.insert(ActionType::DesktopClick, "ask".to_string());
-        defaults.insert(ActionType::DesktopType, "ask".to_string());
-        defaults.insert(ActionType::DesktopKeyCombo, "ask".to_string());
-        defaults.insert(ActionType::DesktopLaunchApp, "ask".to_string());
-        defaults.insert(ActionType::ShellExec, "deny".to_string());
+        defaults.insert(ActionType::BrowserNavigate, DefaultDecision::Allow);
+        defaults.insert(ActionType::BrowserClick, DefaultDecision::Allow);
+        defaults.insert(ActionType::BrowserType, DefaultDecision::Allow);
+        defaults.insert(ActionType::BrowserEvaluate, DefaultDecision::Ask);
+        defaults.insert(ActionType::DesktopClick, DefaultDecision::Ask);
+        defaults.insert(ActionType::DesktopType, DefaultDecision::Ask);
+        defaults.insert(ActionType::DesktopKeyCombo, DefaultDecision::Ask);
+        defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Ask);
+        defaults.insert(ActionType::ShellExec, DefaultDecision::Deny);
 
-        Self {
-            config: PolicyConfig {
-                version: 1,
-                defaults,
-                allowlist: vec![],
-                blocklist: vec![],
-            },
-        }
+        Self::new(PolicyConfig {
+            version: 1,
+            defaults,
+            allowlist: vec![],
+            blocklist: vec![],
+        })
     }
 }
 
@@ -191,28 +227,28 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
         let action = &request.action_type;
         let target = &request.target;
 
-        // 1. Blocklist takes priority
-        for rule in &self.config.blocklist {
-            if &rule.action_type == action && matches_glob(target, &rule.pattern) {
+        // 1. Blocklist takes priority (pre-compiled regexes)
+        for (rule_action, re) in &self.blocklist_compiled {
+            if rule_action == action && re.is_match(target) {
                 debug!(
                     action = ?action,
                     target = %target,
-                    pattern = %rule.pattern,
+                    pattern = %re,
                     "Blocked by blocklist rule"
                 );
                 return ApprovalDecision::Deny {
-                    reason: format!("Blocked by policy rule: {}", rule.pattern),
+                    reason: format!("Blocked by policy rule: {}", re),
                 };
             }
         }
 
-        // 2. Allowlist overrides defaults
-        for rule in &self.config.allowlist {
-            if &rule.action_type == action && matches_glob(target, &rule.pattern) {
+        // 2. Allowlist overrides defaults (pre-compiled regexes)
+        for (rule_action, re) in &self.allowlist_compiled {
+            if rule_action == action && re.is_match(target) {
                 debug!(
                     action = ?action,
                     target = %target,
-                    pattern = %rule.pattern,
+                    pattern = %re,
                     "Allowed by allowlist rule"
                 );
                 return ApprovalDecision::Allow;
@@ -221,12 +257,12 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
 
         // 3. Fall back to defaults
         if let Some(default_decision) = self.config.defaults.get(action) {
-            return match default_decision.as_str() {
-                "allow" => ApprovalDecision::Allow,
-                "deny" => ApprovalDecision::Deny {
+            return match default_decision {
+                DefaultDecision::Allow => ApprovalDecision::Allow,
+                DefaultDecision::Deny => ApprovalDecision::Deny {
                     reason: format!("Denied by default policy for {:?}", action),
                 },
-                _ => ApprovalDecision::Ask {
+                DefaultDecision::Ask => ApprovalDecision::Ask {
                     prompt: format!("Action {:?} on target '{}' requires approval", action, target),
                 },
             };
