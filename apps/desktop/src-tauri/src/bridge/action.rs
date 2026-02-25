@@ -72,33 +72,42 @@ pub fn handle_type_text(params: Value) -> Result<Value, (i32, String)> {
         .text(text)
         .map_err(|e| (ERR_INTERNAL, format!("Failed to type text: {e}")))?;
 
-    info!(chars = text.len(), "Text typed");
-    Ok(json!({"typed": true, "length": text.len()}))
+    let char_count = text.chars().count();
+    info!(chars = char_count, "Text typed");
+    Ok(json!({"typed": true, "length": char_count}))
 }
 
 /// Handle `desktop.key_combo` — press a key combination
 ///
-/// Params:
-/// - `modifiers`: array of strings — e.g. ["meta", "shift"]
-/// - `key`: string — the main key, e.g. "c", "v", "space", "return", "tab", "escape"
+/// Accepts two formats:
+/// 1. New format: `{ "modifiers": ["meta", "shift"], "key": "c" }`
+/// 2. Legacy format: `{ "keys": ["cmd", "c"] }` — last non-modifier element is the main key
 ///
-/// Modifier names: "meta"/"command"/"super", "shift", "control"/"ctrl", "alt"/"option"
+/// Modifier names: "meta"/"command"/"cmd"/"super"/"win", "shift", "control"/"ctrl", "alt"/"option"
 pub fn handle_key_combo(params: Value) -> Result<Value, (i32, String)> {
-    let modifiers = params
-        .get("modifiers")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let key_str = params
-        .get("key")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| (ERR_INTERNAL, "Missing or invalid 'key' parameter".to_string()))?;
+    let (modifier_strs, key_str) = if let Some(keys_arr) = params.get("keys").and_then(|v| v.as_array()) {
+        // Legacy format: flat array like ["cmd", "c"]
+        // Split into modifiers and main key — last non-modifier element is the main key
+        parse_legacy_keys(keys_arr)?
+    } else {
+        // New format: separate modifiers + key
+        let modifiers: Vec<String> = params
+            .get("modifiers")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let key = params
+            .get("key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| (ERR_INTERNAL, "Missing 'key' parameter (or use legacy 'keys' array)".to_string()))?
+            .to_string();
+        (modifiers, key)
+    };
 
-    let main_key = parse_key(key_str)?;
-    let modifier_keys: Vec<Key> = modifiers
+    let main_key = parse_key(&key_str)?;
+    let modifier_keys: Vec<Key> = modifier_strs
         .iter()
-        .filter_map(|v| v.as_str())
-        .map(parse_modifier)
+        .map(|s| parse_modifier(s))
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut enigo = Enigo::new(&Settings::default())
@@ -123,9 +132,39 @@ pub fn handle_key_combo(params: Value) -> Result<Value, (i32, String)> {
             .map_err(|e| (ERR_INTERNAL, format!("Failed to release modifier: {e}")))?;
     }
 
-    let mod_names: Vec<&str> = modifiers.iter().filter_map(|v| v.as_str()).collect();
-    info!(modifiers = ?mod_names, key = key_str, "Key combo performed");
+    let mod_names: Vec<&str> = modifier_strs.iter().map(|s| s.as_str()).collect();
+    info!(modifiers = ?mod_names, key = %key_str, "Key combo performed");
     Ok(json!({"pressed": true, "modifiers": mod_names, "key": key_str}))
+}
+
+/// Parse the legacy `keys` flat array into (modifiers, main_key).
+///
+/// The last element that is NOT a known modifier name is treated as the main key.
+/// All preceding modifier-like elements become modifiers.
+/// Example: `["cmd", "shift", "c"]` -> (["cmd", "shift"], "c")
+fn parse_legacy_keys(keys: &[Value]) -> Result<(Vec<String>, String), (i32, String)> {
+    let strs: Vec<&str> = keys
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+
+    if strs.is_empty() {
+        return Err((ERR_INTERNAL, "Empty 'keys' array".to_string()));
+    }
+
+    // The last element is always the main key in the legacy format
+    // (even if it happens to also be a modifier name, the convention is last = main key).
+    // All preceding elements are treated as modifiers.
+    let (mod_strs, main_str) = strs.split_at(strs.len() - 1);
+    let modifiers: Vec<String> = mod_strs.iter().map(|s| s.to_string()).collect();
+    let main_key = main_str[0].to_string();
+
+    // Validate that all prefix elements are actually modifiers
+    for m in &modifiers {
+        parse_modifier(m)?;
+    }
+
+    Ok((modifiers, main_key))
 }
 
 /// Handle `desktop.launch_app` — launch an application

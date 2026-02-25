@@ -121,6 +121,22 @@ fn capture_screen_png() -> Result<Vec<u8>, (i32, String)> {
 
 // ── macOS Vision framework OCR ──────────────────────────────────
 
+/// RAII guard for CoreFoundation objects that follow the Create Rule.
+/// Ensures CFRelease is called even on early-return error paths.
+#[cfg(target_os = "macos")]
+struct CfGuard(*mut std::os::raw::c_void);
+
+#[cfg(target_os = "macos")]
+impl Drop for CfGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                core_foundation::base::CFRelease(self.0 as *const _);
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn macos_ocr(png_bytes: &[u8]) -> Result<Value, (i32, String)> {
     use objc::runtime::{Class, Object, BOOL, YES};
@@ -162,6 +178,8 @@ fn macos_ocr(png_bytes: &[u8]) -> Result<Value, (i32, String)> {
         if cg_image.is_null() {
             return Err((ERR_INTERNAL, "Failed to create CGImage from CIImage".into()));
         }
+        // RAII guard: ensures CFRelease on all exit paths (Create Rule)
+        let _cg_guard = CfGuard(cg_image);
 
         // ── 4. VNRecognizeTextRequest ───────────────────────────
         let vnreq_cls = Class::get("VNRecognizeTextRequest")
@@ -274,10 +292,7 @@ fn macos_ocr(png_bytes: &[u8]) -> Result<Value, (i32, String)> {
             }));
         }
 
-        // ── 7. Release CGImage (created via create, not get rule) ────
-        // CIContext.createCGImage follows the CoreFoundation Create Rule,
-        // so the caller owns the reference and must release it.
-        core_foundation::base::CFRelease(cg_image);
+        // CGImage release is handled by _cg_guard (RAII / Drop)
 
         Ok(json!({
             "text": full_text,
