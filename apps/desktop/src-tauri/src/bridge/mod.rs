@@ -150,11 +150,13 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
         desktop_bridge::METHOD_KEY_COMBO => action::handle_key_combo(params),
         desktop_bridge::METHOD_LAUNCH_APP => action::handle_launch_app(params),
 
+        // Window management
+        desktop_bridge::METHOD_WINDOW_LIST => action::handle_window_list(params),
+        desktop_bridge::METHOD_FOCUS_WINDOW => action::handle_focus_window(params),
+
         // Remaining unimplemented methods
         desktop_bridge::METHOD_OCR
         | desktop_bridge::METHOD_AX_TREE
-        | desktop_bridge::METHOD_WINDOW_LIST
-        | desktop_bridge::METHOD_FOCUS_WINDOW
         | desktop_bridge::METHOD_CANVAS_SHOW
         | desktop_bridge::METHOD_CANVAS_HIDE
         | desktop_bridge::METHOD_CANVAS_UPDATE
