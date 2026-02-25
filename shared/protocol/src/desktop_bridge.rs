@@ -98,8 +98,8 @@ pub const ERR_NOT_IMPLEMENTED: i32 = -32000;
 // Socket Path
 // ============================================================================
 
-/// Get the default Desktop Bridge socket path (~/.aleph/desktop.sock)
+/// Get the default Desktop Bridge socket path (~/.aleph/bridge.sock)
 pub fn default_socket_path() -> std::path::PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
-    home.join(".aleph").join("desktop.sock")
+    home.join(".aleph").join("bridge.sock")
 }
