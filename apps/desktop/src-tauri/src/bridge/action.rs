@@ -4,7 +4,7 @@
 //! platform-specific commands for app launching.
 
 use aleph_protocol::desktop_bridge::ERR_INTERNAL;
-use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
+use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use serde_json::{json, Value};
 use tracing::info;
 
@@ -167,6 +167,50 @@ fn parse_legacy_keys(keys: &[Value]) -> Result<(Vec<String>, String), (i32, Stri
     Ok((modifiers, main_key))
 }
 
+/// Handle `desktop.scroll` — scroll the mouse wheel
+///
+/// Params:
+/// - `direction`: string (optional) — "up", "down" (default), "left", or "right"
+/// - `amount`: integer (optional) — number of scroll clicks (default: 3)
+///
+/// Enigo convention: positive length = down/right, negative = up/left
+pub fn handle_scroll(params: Value) -> Result<Value, (i32, String)> {
+    let direction = params
+        .get("direction")
+        .and_then(|v| v.as_str())
+        .unwrap_or("down");
+    let amount = params
+        .get("amount")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(3) as i32;
+
+    let (axis, length) = match direction {
+        "down" => (Axis::Vertical, amount),
+        "up" => (Axis::Vertical, -amount),
+        "right" => (Axis::Horizontal, amount),
+        "left" => (Axis::Horizontal, -amount),
+        other => {
+            return Err((
+                ERR_INTERNAL,
+                format!(
+                    "Unknown scroll direction: '{}'. Expected up, down, left, or right",
+                    other
+                ),
+            ));
+        }
+    };
+
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| (ERR_INTERNAL, format!("Failed to create Enigo instance: {e}")))?;
+
+    enigo
+        .scroll(length, axis)
+        .map_err(|e| (ERR_INTERNAL, format!("Failed to scroll: {e}")))?;
+
+    info!(direction, amount, "Scroll performed");
+    Ok(json!({"scrolled": true, "direction": direction, "amount": amount}))
+}
+
 /// Handle `desktop.launch_app` — launch an application
 ///
 /// Params:
@@ -288,7 +332,17 @@ pub fn handle_window_list(_params: Value) -> Result<Value, (i32, String)> {
         macos_window_list()
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows_window_list()
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        linux_window_list()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         Err((
             aleph_protocol::desktop_bridge::ERR_NOT_IMPLEMENTED,
@@ -300,20 +354,29 @@ pub fn handle_window_list(_params: Value) -> Result<Value, (i32, String)> {
 /// Handle `desktop.focus_window` — bring a window's owning application to front.
 ///
 /// Params:
-/// - `window_id`: u64 — the CGWindowID to focus
+/// - `window_id`: u64 — the window ID to focus (CGWindowID on macOS, HWND on Windows, XID on Linux)
 pub fn handle_focus_window(params: Value) -> Result<Value, (i32, String)> {
     let window_id = params
         .get("window_id")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| (ERR_INTERNAL, "Missing or invalid 'window_id' parameter".to_string()))?
-        as u32;
+        .ok_or_else(|| (ERR_INTERNAL, "Missing or invalid 'window_id' parameter".to_string()))?;
 
     #[cfg(target_os = "macos")]
     {
-        macos_focus_window(window_id)
+        macos_focus_window(window_id as u32)
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows_focus_window(window_id)
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        linux_focus_window(window_id)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = window_id;
         Err((
@@ -434,6 +497,184 @@ fn get_cf_string(
     dict.find(key as *const _)
         .map(|v| unsafe { CFString::wrap_under_get_rule(*v as *const _) })
         .map(|s| s.to_string())
+}
+
+// ── Windows window management ────────────────────────────────────
+
+#[cfg(target_os = "windows")]
+fn windows_window_list() -> Result<Value, (i32, String)> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use std::sync::Mutex;
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
+    use windows::Win32::System::Threading::GetWindowThreadProcessId;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
+    };
+
+    // Collect window info through the EnumWindows callback
+    static WINDOWS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+    {
+        let mut w = WINDOWS.lock().map_err(|e| (ERR_INTERNAL, format!("Lock error: {e}")))?;
+        w.clear();
+    }
+
+    unsafe extern "system" fn enum_callback(hwnd: HWND, _lparam: LPARAM) -> BOOL {
+        // Skip invisible windows
+        if !IsWindowVisible(hwnd).as_bool() {
+            return TRUE;
+        }
+
+        let text_len = GetWindowTextLengthW(hwnd);
+        if text_len == 0 {
+            return TRUE; // Skip windows with no title
+        }
+
+        // Get window title
+        let mut buf = vec![0u16; (text_len + 1) as usize];
+        let copied = GetWindowTextW(hwnd, &mut buf);
+        let title = if copied > 0 {
+            OsString::from_wide(&buf[..copied as usize])
+                .to_string_lossy()
+                .to_string()
+        } else {
+            return TRUE;
+        };
+
+        // Get owning process ID
+        let mut pid: u32 = 0;
+        let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+
+        let id = hwnd.0 as u64;
+
+        if let Ok(mut w) = WINDOWS.lock() {
+            w.push(serde_json::json!({
+                "id": id,
+                "title": title,
+                "owner": "", // Windows doesn't easily give process name without extra work
+                "pid": pid,
+            }));
+        }
+
+        TRUE
+    }
+
+    unsafe {
+        EnumWindows(Some(enum_callback), LPARAM(0))
+            .map_err(|e| (ERR_INTERNAL, format!("EnumWindows failed: {e}")))?;
+    }
+
+    let windows = {
+        let w = WINDOWS.lock().map_err(|e| (ERR_INTERNAL, format!("Lock error: {e}")))?;
+        w.clone()
+    };
+
+    info!(count = windows.len(), "Window list retrieved (Windows)");
+    Ok(json!({ "windows": windows }))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_focus_window(window_id: u64) -> Result<Value, (i32, String)> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+
+    let hwnd = HWND(window_id as *mut _);
+
+    unsafe {
+        if !IsWindow(hwnd).as_bool() {
+            return Err((ERR_INTERNAL, format!("Window {} is not valid", window_id)));
+        }
+
+        // Restore if minimized, then bring to foreground
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd)
+            .map_err(|e| (ERR_INTERNAL, format!("SetForegroundWindow failed: {e}")))?;
+    }
+
+    info!(window_id, "Window focused (Windows)");
+    Ok(json!({ "focused": window_id }))
+}
+
+// ── Linux window management ─────────────────────────────────────
+
+#[cfg(target_os = "linux")]
+fn linux_window_list() -> Result<Value, (i32, String)> {
+    // Use wmctrl -l -p to list windows: <XID> <desktop> <PID> <machine> <title>
+    let output = std::process::Command::new("wmctrl")
+        .args(["-l", "-p"])
+        .output()
+        .map_err(|e| {
+            (
+                ERR_INTERNAL,
+                format!(
+                    "Failed to run wmctrl (is it installed? `sudo apt install wmctrl`): {e}"
+                ),
+            )
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err((ERR_INTERNAL, format!("wmctrl failed: {}", stderr.trim())));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut windows = Vec::new();
+
+    for line in stdout.lines() {
+        // Format: 0x04000007  0 12345 hostname Window Title Here
+        let parts: Vec<&str> = line.splitn(5, char::is_whitespace).collect();
+        if parts.len() < 5 {
+            continue;
+        }
+
+        // Parse hex window ID (e.g., "0x04000007")
+        let id_str = parts[0].trim_start_matches("0x").trim_start_matches("0X");
+        let id = u64::from_str_radix(id_str, 16).unwrap_or(0);
+
+        // parts[1] = desktop number, parts[2] = PID, parts[3] = machine, parts[4..] = title
+        let pid: i64 = parts[2].trim().parse().unwrap_or(0);
+        let title = parts[4].trim();
+
+        windows.push(json!({
+            "id": id,
+            "title": title,
+            "owner": "",
+            "pid": pid,
+        }));
+    }
+
+    info!(count = windows.len(), "Window list retrieved (Linux)");
+    Ok(json!({ "windows": windows }))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_focus_window(window_id: u64) -> Result<Value, (i32, String)> {
+    // Use wmctrl -i -a <window_id> to activate a window by its XID
+    let id_hex = format!("0x{:08x}", window_id);
+    let output = std::process::Command::new("wmctrl")
+        .args(["-i", "-a", &id_hex])
+        .output()
+        .map_err(|e| {
+            (
+                ERR_INTERNAL,
+                format!(
+                    "Failed to run wmctrl (is it installed? `sudo apt install wmctrl`): {e}"
+                ),
+            )
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err((
+            ERR_INTERNAL,
+            format!("Failed to focus window {}: {}", id_hex, stderr.trim()),
+        ));
+    }
+
+    info!(window_id, "Window focused (Linux)");
+    Ok(json!({ "focused": window_id }))
 }
 
 // ── Key parsing helpers ──────────────────────────────────────────

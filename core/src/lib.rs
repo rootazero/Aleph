@@ -36,6 +36,8 @@
 
 pub mod agent_loop;
 pub mod agents;
+pub mod approval;
+pub mod browser;
 pub mod builtin_tools;
 pub mod capability;
 pub mod clarification;
@@ -85,6 +87,7 @@ pub mod tool_output;
 pub mod tools;
 pub mod utils;
 pub mod video;
+pub mod vision;
 pub mod wizard;
 pub mod spec_driven;
 pub mod skill_evolution;
