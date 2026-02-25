@@ -21,11 +21,11 @@ pub struct DesktopBridgeClient {
 }
 
 impl DesktopBridgeClient {
-    /// Create a new client pointing at `~/.aleph/desktop.sock`.
+    /// Create a new client pointing at `~/.aleph/bridge.sock`.
     pub fn new() -> Self {
         let socket_path = dirs::home_dir()
             .expect("cannot resolve home directory")
-            .join(".aleph/desktop.sock");
+            .join(".aleph/bridge.sock");
         Self { socket_path }
     }
 

@@ -2,7 +2,7 @@
 //  DesktopBridgeServer.swift
 //  Aleph
 //
-//  Listens on ~/.aleph/desktop.sock and dispatches JSON-RPC 2.0 requests.
+//  Listens on ~/.aleph/bridge.sock and dispatches JSON-RPC 2.0 requests.
 //
 //  Each request opens a connection, receives one newline-terminated JSON-RPC message,
 //  dispatches to the appropriate handler, and writes one response.
@@ -21,7 +21,7 @@ final class DesktopBridgeServer: @unchecked Sendable {
 
     private var socketPath: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.aleph/desktop.sock"
+        return "\(home)/.aleph/bridge.sock"
     }
 
     func start() {
