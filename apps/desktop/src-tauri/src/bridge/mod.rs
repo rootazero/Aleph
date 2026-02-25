@@ -160,10 +160,12 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
         desktop_bridge::METHOD_CANVAS_HIDE => canvas::handle_canvas_hide(params),
         desktop_bridge::METHOD_CANVAS_UPDATE => canvas::handle_canvas_update(params),
 
+        // Tray control
+        desktop_bridge::METHOD_TRAY_UPDATE_STATUS => handle_tray_update_status(params),
+
         // Remaining unimplemented methods
         desktop_bridge::METHOD_OCR
-        | desktop_bridge::METHOD_AX_TREE
-        | desktop_bridge::METHOD_TRAY_UPDATE_STATUS => Err((
+        | desktop_bridge::METHOD_AX_TREE => Err((
             ERR_NOT_IMPLEMENTED,
             format!("{} not implemented on this platform", method),
         )),
@@ -283,4 +285,45 @@ fn handle_webview_navigate(
         .map_err(|e| (ERR_INTERNAL, format!("Navigation failed: {e}")))?;
 
     Ok(json!({"navigated": true, "label": label, "url": url}))
+}
+
+// ── Tray handlers ────────────────────────────────────────────────
+
+/// Handle `tray.update_status` — update tray icon tooltip.
+///
+/// Params: `{ "status": "idle"|"thinking"|"acting"|"error", "tooltip": "optional text" }`
+/// Returns: `{ "updated": true, "status": "..." }`
+fn handle_tray_update_status(
+    params: serde_json::Value,
+) -> Result<serde_json::Value, (i32, String)> {
+    let status = params
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("idle");
+    let explicit_tooltip = params.get("tooltip").and_then(|v| v.as_str());
+
+    let app = crate::get_app_handle()
+        .ok_or_else(|| (ERR_INTERNAL, "App handle not available".into()))?;
+
+    let tray = app
+        .tray_by_id("main")
+        .ok_or_else(|| (ERR_INTERNAL, "Tray icon 'main' not found".into()))?;
+
+    // Use explicit tooltip if provided, otherwise derive from status
+    let tooltip_text = match explicit_tooltip {
+        Some(text) => text.to_string(),
+        None => match status {
+            "thinking" => "Aleph - Thinking...".to_string(),
+            "acting" => "Aleph - Acting...".to_string(),
+            "error" => "Aleph - Error".to_string(),
+            _ => "Aleph - AI Assistant".to_string(),
+        },
+    };
+
+    tray.set_tooltip(Some(&tooltip_text))
+        .map_err(|e| (ERR_INTERNAL, format!("Failed to set tooltip: {e}")))?;
+
+    info!(status, tooltip = %tooltip_text, "Tray status updated");
+
+    Ok(json!({"updated": true, "status": status}))
 }
