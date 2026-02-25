@@ -1,7 +1,16 @@
-//! Unix Domain Socket client for the macOS App Desktop Bridge.
+//! Unix Domain Socket client for the Desktop Bridge.
 //!
 //! Uses JSON-RPC 2.0 over a newline-delimited stream. Each request opens a
 //! fresh connection, sends one JSON-RPC request, reads one response, and closes.
+//!
+//! ## Socket path resolution
+//!
+//! The bridge can run in two modes, each using a different socket path:
+//!
+//! 1. **Managed mode** — `~/.aleph/run/desktop-bridge.sock` (bridge launched by `BridgeSupervisor`)
+//! 2. **Standalone mode** — `~/.aleph/bridge.sock` (bridge launched manually by the user)
+//!
+//! `DesktopBridgeClient::new()` probes both paths, preferring managed mode.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,7 +21,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 use super::error::DesktopError;
-use super::types::{DesktopRequest, MouseButton, ScreenRegion};
+use super::types::{DesktopRequest, MouseButton};
 
 /// Client that sends requests to the macOS App's UDS Desktop Bridge server.
 #[derive(Clone)]
@@ -21,11 +30,23 @@ pub struct DesktopBridgeClient {
 }
 
 impl DesktopBridgeClient {
-    /// Create a new client pointing at `~/.aleph/bridge.sock`.
+    /// Create a new client.
+    ///
+    /// Probes two socket paths in order:
+    /// 1. `~/.aleph/run/desktop-bridge.sock` (managed by BridgeSupervisor)
+    /// 2. `~/.aleph/bridge.sock` (standalone bridge)
     pub fn new() -> Self {
-        let socket_path = dirs::home_dir()
-            .expect("cannot resolve home directory")
-            .join(".aleph/bridge.sock");
+        let home = dirs::home_dir().expect("cannot resolve home directory");
+        let managed = home.join(".aleph").join("run").join("desktop-bridge.sock");
+        let standalone = home.join(".aleph").join("bridge.sock");
+
+        // Prefer managed socket (from BridgeSupervisor) when it exists
+        let socket_path = if managed.exists() { managed } else { standalone };
+        Self { socket_path }
+    }
+
+    /// Create a client pointing at a specific socket path (for testing).
+    pub fn with_path(socket_path: PathBuf) -> Self {
         Self { socket_path }
     }
 
