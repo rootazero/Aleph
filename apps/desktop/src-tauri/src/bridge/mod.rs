@@ -7,8 +7,12 @@
 mod perception;
 pub mod protocol;
 
-use aleph_protocol::desktop_bridge::{self, ERR_METHOD_NOT_FOUND, ERR_NOT_IMPLEMENTED};
+use aleph_protocol::desktop_bridge::{
+    self, ERR_INTERNAL, ERR_METHOD_NOT_FOUND, ERR_NOT_IMPLEMENTED, METHOD_BRIDGE_SHUTDOWN,
+    METHOD_WEBVIEW_HIDE, METHOD_WEBVIEW_NAVIGATE, METHOD_WEBVIEW_SHOW,
+};
 use serde_json::json;
+use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tracing::{error, info, warn};
@@ -111,6 +115,17 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
 
         desktop_bridge::METHOD_SCREENSHOT => perception::handle_screenshot(params),
 
+        // WebView control
+        METHOD_WEBVIEW_SHOW => handle_webview_show(params),
+        METHOD_WEBVIEW_HIDE => handle_webview_hide(params),
+        METHOD_WEBVIEW_NAVIGATE => handle_webview_navigate(params),
+
+        // Bridge lifecycle
+        METHOD_BRIDGE_SHUTDOWN => {
+            info!("Bridge shutdown requested");
+            std::process::exit(0);
+        }
+
         // All other methods return "not implemented" for MVP
         desktop_bridge::METHOD_OCR
         | desktop_bridge::METHOD_AX_TREE
@@ -132,4 +147,83 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
             format!("Method not found: {}", method),
         )),
     }
+}
+
+// ── WebView handlers ──────────────────────────────────────────────
+
+/// Show a WebView window, optionally navigating to a URL first.
+fn handle_webview_show(params: serde_json::Value) -> Result<serde_json::Value, (i32, String)> {
+    let label = params
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("halo");
+    let url = params.get("url").and_then(|v| v.as_str());
+
+    let app = crate::get_app_handle()
+        .ok_or_else(|| (ERR_INTERNAL, "App handle not available".into()))?;
+
+    let window = app
+        .get_webview_window(label)
+        .ok_or_else(|| (ERR_INTERNAL, format!("Window '{}' not found", label)))?;
+
+    if let Some(url_str) = url {
+        let parsed = url_str
+            .parse()
+            .map_err(|e| (ERR_INTERNAL, format!("Invalid URL: {e}")))?;
+        let _ = window.navigate(parsed);
+    }
+
+    let _ = window.show();
+    let _ = window.set_focus();
+
+    Ok(json!({"shown": true, "label": label}))
+}
+
+/// Hide a WebView window.
+fn handle_webview_hide(params: serde_json::Value) -> Result<serde_json::Value, (i32, String)> {
+    let label = params
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("halo");
+
+    let app = crate::get_app_handle()
+        .ok_or_else(|| (ERR_INTERNAL, "App handle not available".into()))?;
+
+    let window = app
+        .get_webview_window(label)
+        .ok_or_else(|| (ERR_INTERNAL, format!("Window '{}' not found", label)))?;
+
+    let _ = window.hide();
+
+    Ok(json!({"hidden": true, "label": label}))
+}
+
+/// Navigate a WebView window to a URL.
+fn handle_webview_navigate(
+    params: serde_json::Value,
+) -> Result<serde_json::Value, (i32, String)> {
+    let label = params
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("halo");
+    let url = params
+        .get("url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| (ERR_INTERNAL, "Missing 'url' parameter".to_string()))?;
+
+    let app = crate::get_app_handle()
+        .ok_or_else(|| (ERR_INTERNAL, "App handle not available".into()))?;
+
+    let window = app
+        .get_webview_window(label)
+        .ok_or_else(|| (ERR_INTERNAL, format!("Window '{}' not found", label)))?;
+
+    let parsed = url
+        .parse()
+        .map_err(|e| (ERR_INTERNAL, format!("Invalid URL: {e}")))?;
+    window
+        .navigate(parsed)
+        .map_err(|e| (ERR_INTERNAL, format!("Navigation failed: {e}")))?;
+
+    Ok(json!({"navigated": true, "label": label, "url": url}))
 }
