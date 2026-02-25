@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Tauri
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
@@ -42,6 +42,9 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Input automation
+enigo = { version = "0.3", features = ["serde"] }
+
 # Screen capture
 xcap = "0.8"
 base64 = "0.22"
@@ -50,6 +53,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2"
+core-graphics = "0.24"
+core-foundation = "0.10"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
