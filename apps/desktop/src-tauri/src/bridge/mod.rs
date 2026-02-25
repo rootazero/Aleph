@@ -4,6 +4,7 @@
 //! Listens on ~/.aleph/bridge.sock, dispatches JSON-RPC requests
 //! to perception/action handlers.
 
+mod action;
 mod perception;
 pub mod protocol;
 
@@ -143,13 +144,15 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
             Ok(json!({"shutdown": true}))
         }
 
-        // All other methods return "not implemented" for MVP
+        // Action handlers — mouse, keyboard, app launch
+        desktop_bridge::METHOD_CLICK => action::handle_click(params),
+        desktop_bridge::METHOD_TYPE_TEXT => action::handle_type_text(params),
+        desktop_bridge::METHOD_KEY_COMBO => action::handle_key_combo(params),
+        desktop_bridge::METHOD_LAUNCH_APP => action::handle_launch_app(params),
+
+        // Remaining unimplemented methods
         desktop_bridge::METHOD_OCR
         | desktop_bridge::METHOD_AX_TREE
-        | desktop_bridge::METHOD_CLICK
-        | desktop_bridge::METHOD_TYPE_TEXT
-        | desktop_bridge::METHOD_KEY_COMBO
-        | desktop_bridge::METHOD_LAUNCH_APP
         | desktop_bridge::METHOD_WINDOW_LIST
         | desktop_bridge::METHOD_FOCUS_WINDOW
         | desktop_bridge::METHOD_CANVAS_SHOW
