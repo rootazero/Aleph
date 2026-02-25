@@ -36,6 +36,7 @@
 
 pub mod agent_loop;
 pub mod agents;
+pub mod browser;
 pub mod builtin_tools;
 pub mod capability;
 pub mod clarification;
