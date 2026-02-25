@@ -136,7 +136,11 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
         // Bridge lifecycle
         METHOD_BRIDGE_SHUTDOWN => {
             info!("Bridge shutdown requested");
-            std::process::exit(0);
+            // Trigger Tauri's graceful exit flow instead of hard process::exit
+            if let Some(app) = crate::get_app_handle() {
+                app.exit(0);
+            }
+            Ok(json!({"shutdown": true}))
         }
 
         // All other methods return "not implemented" for MVP
@@ -150,7 +154,8 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
         | desktop_bridge::METHOD_FOCUS_WINDOW
         | desktop_bridge::METHOD_CANVAS_SHOW
         | desktop_bridge::METHOD_CANVAS_HIDE
-        | desktop_bridge::METHOD_CANVAS_UPDATE => Err((
+        | desktop_bridge::METHOD_CANVAS_UPDATE
+        | desktop_bridge::METHOD_TRAY_UPDATE_STATUS => Err((
             ERR_NOT_IMPLEMENTED,
             format!("{} not implemented on this platform", method),
         )),
