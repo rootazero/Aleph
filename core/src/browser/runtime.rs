@@ -18,7 +18,8 @@ use futures::StreamExt;
 use super::discovery::find_chromium;
 use super::error::BrowserError;
 use super::types::{
-    BrowserConfig, LaunchMode, ScreenshotOpts, ScreenshotResult, TabId, TabInfo,
+    ActionTarget, AriaSnapshot, BrowserConfig, LaunchMode, ScreenshotOpts, ScreenshotResult,
+    ScrollDirection, TabId, TabInfo,
 };
 
 /// A running browser instance managed through CDP.
@@ -235,6 +236,70 @@ impl BrowserRuntime {
     /// operations not covered by the convenience methods above.
     pub fn get_page(&self, tab_id: &str) -> Result<&Page, BrowserError> {
         self.find_page(tab_id)
+    }
+
+    // ── High-level action helpers ───────────────────────────────────────
+
+    /// Click the element identified by `target` in the given tab.
+    pub async fn click(
+        &self,
+        tab_id: &str,
+        target: ActionTarget,
+    ) -> Result<(), BrowserError> {
+        let page = self.find_page(tab_id)?;
+        super::actions::click(page, &target).await
+    }
+
+    /// Type (append) `text` into the element identified by `target`.
+    pub async fn type_text(
+        &self,
+        tab_id: &str,
+        target: ActionTarget,
+        text: &str,
+    ) -> Result<(), BrowserError> {
+        let page = self.find_page(tab_id)?;
+        super::actions::type_text(page, &target, text).await
+    }
+
+    /// Fill (replace) the value of the element identified by `target`.
+    pub async fn fill(
+        &self,
+        tab_id: &str,
+        target: ActionTarget,
+        value: &str,
+    ) -> Result<(), BrowserError> {
+        let page = self.find_page(tab_id)?;
+        super::actions::fill(page, &target, value).await
+    }
+
+    /// Scroll the element at `target` in the given `direction`.
+    pub async fn scroll(
+        &self,
+        tab_id: &str,
+        target: ActionTarget,
+        direction: ScrollDirection,
+    ) -> Result<(), BrowserError> {
+        let page = self.find_page(tab_id)?;
+        super::actions::scroll(page, &target, &direction).await
+    }
+
+    /// Hover over the element identified by `target`.
+    pub async fn hover(
+        &self,
+        tab_id: &str,
+        target: ActionTarget,
+    ) -> Result<(), BrowserError> {
+        let page = self.find_page(tab_id)?;
+        super::actions::hover(page, &target).await
+    }
+
+    /// Take an ARIA accessibility snapshot of the given tab.
+    pub async fn snapshot(
+        &self,
+        tab_id: &str,
+    ) -> Result<AriaSnapshot, BrowserError> {
+        let page = self.find_page(tab_id)?;
+        super::snapshot::take_aria_snapshot(page).await
     }
 
     /// Shut down the browser and abort the CDP handler task.
