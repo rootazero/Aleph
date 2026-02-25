@@ -114,14 +114,14 @@ Rust Core 是 Aleph 的灵魂，只负责三件事：
 
 | 界面 | 角色 | 宿主 |
 |------|------|------|
-| **统一 Panel (Leptos/WASM)** | 全平台唯一 UI 逻辑实现 | Web、macOS (Swift 壳)、Windows/Linux (Tauri 壳) |
+| **统一 Panel (Leptos/WASM)** | 全平台唯一 UI 逻辑实现 | Web、macOS/Windows/Linux (Tauri 壳) |
 | **社交 Bot 通道 (Gateway)** | 数字世界的身影，永远在线的后台智能 | Telegram、Discord 等 |
 
 ### 3 Limbs — 执行系统 (The Limbs)
 
 | 系统 | 角色 | 示例 |
 |------|------|------|
-| **Native 能力 (The Muscles)** | 直接控制系统 | Bash/Shell、Desktop Bridge (Tauri/Rust) — "看"(OCR/截图) 和 "动"(点击/输入) |
+| **Native 能力 (The Muscles)** | 直接控制系统 | Bash/Shell、Desktop Bridge (Tauri-Rust) — "看"(OCR/截图) 和 "动"(点击/输入) |
 | **MCP (The External Tools)** | 杠杆效应，调用社区工具 | Playwright、Google Maps 等 |
 | **Skills/Plugins (The Expertise)** | 领域知识 | PPT 专家、代码审查助手 |
 
@@ -160,11 +160,11 @@ Rust Core 是 Aleph 的灵魂，只负责三件事：
 ### R1. 大脑与四肢绝对分离 (Brain-Limb Separation)
 
 - **禁令**: 严禁在 `core/src` 中直接调用特定平台系统 API (AppKit, Vision, CoreGraphics, windows-rs)
-- **原则**: 核心层只定义"能力契约 (Trait)"，物理实现由 Desktop Bridge (Swift/Tauri-Rust) 通过 IPC 提供
+- **原则**: 核心层只定义"能力契约 (Trait)"，物理实现由 Desktop Bridge (Tauri-Rust) 通过 IPC 提供
 
 ### R2. UI 逻辑唯一源 (Single Source of UI Truth)
 
-- **禁令**: 严禁在 Swift 或 Tauri 中实现具有业务逻辑的复杂设置页面、表单或列表
+- **禁令**: 严禁在 Tauri 中实现具有业务逻辑的复杂设置页面、表单或列表
 - **原则**: 所有复杂业务 UI 在 Leptos (WASM) 中实现。原生外壳仅负责窗口容器、原生动画和菜单栏
 
 ### R3. 核心轻量化 (Core Minimalism)
@@ -205,7 +205,7 @@ Rust Core 是 Aleph 的灵魂，只负责三件事：
 
 ### 标准化桌面操作协议
 
-完成 Desktop Bridge 的协议定义，先实现 Swift 版，后实现 Tauri 版，进度完全可控。
+Desktop Bridge 协议已定义完成，Tauri 版已全面实现。持续完善跨平台覆盖和性能。
 
 ### Skill 驱动未来
 
@@ -244,7 +244,6 @@ aleph/
 │       └── lib.rs                  # 60+ public modules
 ├── apps/
 │   ├── cli/                        # Rust CLI 客户端
-│   ├── macos/                      # [DEPRECATED] macOS App → replaced by Tauri Bridge
 │   └── desktop/                    # Cross-platform Tauri Bridge (aleph-bridge)
 ├── docs/                           # 文档
 │   ├── reference/                  # 核心架构文档
@@ -277,8 +276,7 @@ aleph/
 | **Embedding** | fastembed (bge-small-zh-v1.5, 本地) |
 | **Providers** | Claude, GPT-4, Gemini, Ollama, DeepSeek, Moonshot |
 | **Plugins** | Extism (WASM), Node.js IPC |
-| **macOS App** | Swift + SwiftUI + AppKit |
-| **Cross-platform** | Tauri + React |
+| **Desktop App** | Tauri (cross-platform bridge) |
 | **Schema** | schemars (JSON Schema 自动生成) |
 
 ---
@@ -296,9 +294,6 @@ cargo run --bin aleph-server
 
 # 启动 Server (含 Control Plane UI)
 cargo run --bin aleph-server --features control-plane
-
-# [DEPRECATED] macOS App (保留仅供参考)
-# cd apps/macos && xcodegen generate && open Aleph.xcodeproj
 
 # Tauri App
 cd apps/desktop && pnpm install && pnpm tauri dev
@@ -338,10 +333,6 @@ plugin-wasm = ["extism"]
 
 - Python path: ~/.uv/python3/bin/python
 - Install Python package: cd ~/.uv/python3 && uv pip install <package>
-- Xcode generation: cd apps/macos && xcodegen generate
-- Syntax validation: ~/.uv/python3/bin/python Scripts/verify_swift_syntax.py <file.swift>
-- Xcode build cache cleanup: rm -rf ~/Library/Developer/Xcode/DerivedData/(Aleph)-*
-- This project uses XcodeGen to manage the Xcode project. See docs/XCODEGEN_README.md for detailed workflow instructions.
 
 ### Git Worktree 操作规范
 
@@ -428,7 +419,7 @@ Example: `gateway: add WebSocket server foundation`
 
 - **项目定位**: 自托管个人 AI 助手，1-2-3-4 架构模型 (1 Core, 2 Faces, 3 Limbs, 4 Nerves)
 - **核心循环**: Observe → Think → Act → Feedback → Compress
-- **技术栈**: Rust Core (大脑) + Leptos/WASM (统一 UI) + Swift/Tauri (原生壳) + Gateway (社交通道)
+- **技术栈**: Rust Core (大脑) + Leptos/WASM (统一 UI) + Tauri (原生壳) + Gateway (社交通道)
 - **当前阶段**: 架构稳固期 — 填充而非推倒，Skill 驱动未来
 
 ### Memory Prompt
