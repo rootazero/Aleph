@@ -1,24 +1,37 @@
 //! Desktop Bridge — UDS JSON-RPC 2.0 server
 //!
 //! Symmetric with macOS Swift DesktopBridgeServer.
-//! Listens on ~/.aleph/desktop.sock, dispatches JSON-RPC requests
+//! Listens on ~/.aleph/bridge.sock, dispatches JSON-RPC requests
 //! to perception/action handlers.
 
 mod perception;
 pub mod protocol;
 
-use aleph_protocol::desktop_bridge::{self, ERR_METHOD_NOT_FOUND, ERR_NOT_IMPLEMENTED};
+use aleph_protocol::desktop_bridge::{
+    self, ERR_INTERNAL, ERR_METHOD_NOT_FOUND, ERR_NOT_IMPLEMENTED, METHOD_BRIDGE_SHUTDOWN,
+    METHOD_HANDSHAKE, METHOD_SYSTEM_PING, METHOD_WEBVIEW_HIDE, METHOD_WEBVIEW_NAVIGATE,
+    METHOD_WEBVIEW_SHOW,
+};
 use serde_json::json;
+use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tracing::{error, info, warn};
 
 /// Start the Desktop Bridge UDS server
 ///
-/// Listens on ~/.aleph/desktop.sock and dispatches JSON-RPC 2.0 requests.
+/// Listens on the configured socket path and dispatches JSON-RPC 2.0 requests.
+/// In bridge mode, `ALEPH_SOCKET_PATH` overrides the default `~/.aleph/bridge.sock`.
 /// This function runs forever; call it from a spawned task.
 pub async fn start_bridge_server() {
-    let socket_path = desktop_bridge::default_socket_path();
+    // Allow server-provided socket path override (set in bridge-mode startup)
+    let socket_path = match std::env::var("ALEPH_SOCKET_PATH") {
+        Ok(path) if !path.is_empty() => {
+            info!("Using ALEPH_SOCKET_PATH override: {}", path);
+            std::path::PathBuf::from(path)
+        }
+        _ => desktop_bridge::default_socket_path(),
+    };
 
     // Ensure ~/.aleph/ directory exists
     if let Some(parent) = socket_path.parent() {
@@ -107,9 +120,28 @@ async fn handle_connection(stream: tokio::net::UnixStream) {
 /// Dispatch a method call to the appropriate handler
 fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value, (i32, String)> {
     match method {
+        // Server ↔ Bridge handshake / health
+        METHOD_HANDSHAKE => handle_handshake(params),
+        METHOD_SYSTEM_PING => Ok(json!({"pong": true})),
+
         desktop_bridge::METHOD_PING => Ok(json!("pong")),
 
         desktop_bridge::METHOD_SCREENSHOT => perception::handle_screenshot(params),
+
+        // WebView control
+        METHOD_WEBVIEW_SHOW => handle_webview_show(params),
+        METHOD_WEBVIEW_HIDE => handle_webview_hide(params),
+        METHOD_WEBVIEW_NAVIGATE => handle_webview_navigate(params),
+
+        // Bridge lifecycle
+        METHOD_BRIDGE_SHUTDOWN => {
+            info!("Bridge shutdown requested");
+            // Trigger Tauri's graceful exit flow instead of hard process::exit
+            if let Some(app) = crate::get_app_handle() {
+                app.exit(0);
+            }
+            Ok(json!({"shutdown": true}))
+        }
 
         // All other methods return "not implemented" for MVP
         desktop_bridge::METHOD_OCR
@@ -122,7 +154,8 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
         | desktop_bridge::METHOD_FOCUS_WINDOW
         | desktop_bridge::METHOD_CANVAS_SHOW
         | desktop_bridge::METHOD_CANVAS_HIDE
-        | desktop_bridge::METHOD_CANVAS_UPDATE => Err((
+        | desktop_bridge::METHOD_CANVAS_UPDATE
+        | desktop_bridge::METHOD_TRAY_UPDATE_STATUS => Err((
             ERR_NOT_IMPLEMENTED,
             format!("{} not implemented on this platform", method),
         )),
@@ -132,4 +165,114 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
             format!("Method not found: {}", method),
         )),
     }
+}
+
+// ── Handshake handler ────────────────────────────────────────────
+
+/// Handle `aleph.handshake` — respond with bridge capabilities so the
+/// server knows what operations this bridge supports.
+fn handle_handshake(params: serde_json::Value) -> Result<serde_json::Value, (i32, String)> {
+    let protocol_version = params
+        .get("protocol_version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("1.0");
+
+    tracing::info!(
+        protocol_version,
+        "Handshake received from server"
+    );
+
+    // Return capability registration
+    Ok(json!({
+        "protocol_version": protocol_version,
+        "bridge_type": "desktop",
+        "platform": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "capabilities": [
+            {"name": "screen_capture", "version": "1.0"},
+            {"name": "webview", "version": "1.0"},
+            {"name": "tray", "version": "1.0"},
+            {"name": "global_hotkey", "version": "1.0"},
+            {"name": "notification", "version": "1.0"}
+        ]
+    }))
+}
+
+// ── WebView handlers ──────────────────────────────────────────────
+
+/// Show a WebView window, optionally navigating to a URL first.
+fn handle_webview_show(params: serde_json::Value) -> Result<serde_json::Value, (i32, String)> {
+    let label = params
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("halo");
+    let url = params.get("url").and_then(|v| v.as_str());
+
+    let app = crate::get_app_handle()
+        .ok_or_else(|| (ERR_INTERNAL, "App handle not available".into()))?;
+
+    let window = app
+        .get_webview_window(label)
+        .ok_or_else(|| (ERR_INTERNAL, format!("Window '{}' not found", label)))?;
+
+    if let Some(url_str) = url {
+        let parsed = url_str
+            .parse()
+            .map_err(|e| (ERR_INTERNAL, format!("Invalid URL: {e}")))?;
+        let _ = window.navigate(parsed);
+    }
+
+    let _ = window.show();
+    let _ = window.set_focus();
+
+    Ok(json!({"shown": true, "label": label}))
+}
+
+/// Hide a WebView window.
+fn handle_webview_hide(params: serde_json::Value) -> Result<serde_json::Value, (i32, String)> {
+    let label = params
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("halo");
+
+    let app = crate::get_app_handle()
+        .ok_or_else(|| (ERR_INTERNAL, "App handle not available".into()))?;
+
+    let window = app
+        .get_webview_window(label)
+        .ok_or_else(|| (ERR_INTERNAL, format!("Window '{}' not found", label)))?;
+
+    let _ = window.hide();
+
+    Ok(json!({"hidden": true, "label": label}))
+}
+
+/// Navigate a WebView window to a URL.
+fn handle_webview_navigate(
+    params: serde_json::Value,
+) -> Result<serde_json::Value, (i32, String)> {
+    let label = params
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("halo");
+    let url = params
+        .get("url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| (ERR_INTERNAL, "Missing 'url' parameter".to_string()))?;
+
+    let app = crate::get_app_handle()
+        .ok_or_else(|| (ERR_INTERNAL, "App handle not available".into()))?;
+
+    let window = app
+        .get_webview_window(label)
+        .ok_or_else(|| (ERR_INTERNAL, format!("Window '{}' not found", label)))?;
+
+    let parsed = url
+        .parse()
+        .map_err(|e| (ERR_INTERNAL, format!("Invalid URL: {e}")))?;
+    window
+        .navigate(parsed)
+        .map_err(|e| (ERR_INTERNAL, format!("Navigation failed: {e}")))?;
+
+    Ok(json!({"navigated": true, "label": label, "url": url}))
 }
