@@ -191,19 +191,33 @@ fn handle_handshake(params: serde_json::Value) -> Result<serde_json::Value, (i32
         "Handshake received from server"
     );
 
+    // Build capability list — cross-platform baseline + macOS-only extras
+    let mut capabilities = vec![
+        json!({"name": "screen_capture", "version": "1.0"}),
+        json!({"name": "webview", "version": "1.0"}),
+        json!({"name": "tray", "version": "1.0"}),
+        json!({"name": "global_hotkey", "version": "1.0"}),
+        json!({"name": "notification", "version": "1.0"}),
+        json!({"name": "keyboard_control", "version": "1.0"}),
+        json!({"name": "mouse_control", "version": "1.0"}),
+        json!({"name": "canvas", "version": "1.0"}),
+        json!({"name": "launch_app", "version": "1.0"}),
+    ];
+
+    #[cfg(target_os = "macos")]
+    {
+        capabilities.push(json!({"name": "ocr", "version": "1.0"}));
+        capabilities.push(json!({"name": "ax_inspect", "version": "1.0"}));
+        capabilities.push(json!({"name": "window_list", "version": "1.0"}));
+    }
+
     // Return capability registration
     Ok(json!({
         "protocol_version": protocol_version,
         "bridge_type": "desktop",
         "platform": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
-        "capabilities": [
-            {"name": "screen_capture", "version": "1.0"},
-            {"name": "webview", "version": "1.0"},
-            {"name": "tray", "version": "1.0"},
-            {"name": "global_hotkey", "version": "1.0"},
-            {"name": "notification", "version": "1.0"}
-        ]
+        "capabilities": capabilities
     }))
 }
 
