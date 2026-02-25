@@ -4,11 +4,13 @@
 //! Listens on ~/.aleph/bridge.sock, dispatches JSON-RPC requests
 //! to perception/action handlers.
 
+mod action;
+mod canvas;
 mod perception;
 pub mod protocol;
 
 use aleph_protocol::desktop_bridge::{
-    self, ERR_INTERNAL, ERR_METHOD_NOT_FOUND, ERR_NOT_IMPLEMENTED, METHOD_BRIDGE_SHUTDOWN,
+    self, ERR_INTERNAL, ERR_METHOD_NOT_FOUND, METHOD_BRIDGE_SHUTDOWN,
     METHOD_HANDSHAKE, METHOD_SYSTEM_PING, METHOD_WEBVIEW_HIDE, METHOD_WEBVIEW_NAVIGATE,
     METHOD_WEBVIEW_SHOW,
 };
@@ -143,22 +145,29 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
             Ok(json!({"shutdown": true}))
         }
 
-        // All other methods return "not implemented" for MVP
-        desktop_bridge::METHOD_OCR
-        | desktop_bridge::METHOD_AX_TREE
-        | desktop_bridge::METHOD_CLICK
-        | desktop_bridge::METHOD_TYPE_TEXT
-        | desktop_bridge::METHOD_KEY_COMBO
-        | desktop_bridge::METHOD_LAUNCH_APP
-        | desktop_bridge::METHOD_WINDOW_LIST
-        | desktop_bridge::METHOD_FOCUS_WINDOW
-        | desktop_bridge::METHOD_CANVAS_SHOW
-        | desktop_bridge::METHOD_CANVAS_HIDE
-        | desktop_bridge::METHOD_CANVAS_UPDATE
-        | desktop_bridge::METHOD_TRAY_UPDATE_STATUS => Err((
-            ERR_NOT_IMPLEMENTED,
-            format!("{} not implemented on this platform", method),
-        )),
+        // Action handlers — mouse, keyboard, app launch
+        desktop_bridge::METHOD_CLICK => action::handle_click(params),
+        desktop_bridge::METHOD_TYPE_TEXT => action::handle_type_text(params),
+        desktop_bridge::METHOD_KEY_COMBO => action::handle_key_combo(params),
+        desktop_bridge::METHOD_LAUNCH_APP => action::handle_launch_app(params),
+
+        // Window management
+        desktop_bridge::METHOD_WINDOW_LIST => action::handle_window_list(params),
+        desktop_bridge::METHOD_FOCUS_WINDOW => action::handle_focus_window(params),
+
+        // Canvas overlay
+        desktop_bridge::METHOD_CANVAS_SHOW => canvas::handle_canvas_show(params),
+        desktop_bridge::METHOD_CANVAS_HIDE => canvas::handle_canvas_hide(params),
+        desktop_bridge::METHOD_CANVAS_UPDATE => canvas::handle_canvas_update(params),
+
+        // Tray control
+        desktop_bridge::METHOD_TRAY_UPDATE_STATUS => handle_tray_update_status(params),
+
+        // Perception — OCR
+        desktop_bridge::METHOD_OCR => perception::handle_ocr(params),
+
+        // Perception — AX tree inspection
+        desktop_bridge::METHOD_AX_TREE => perception::handle_ax_tree(params),
 
         _ => Err((
             ERR_METHOD_NOT_FOUND,
@@ -182,19 +191,33 @@ fn handle_handshake(params: serde_json::Value) -> Result<serde_json::Value, (i32
         "Handshake received from server"
     );
 
+    // Build capability list — cross-platform baseline + macOS-only extras
+    let mut capabilities = vec![
+        json!({"name": "screen_capture", "version": "1.0"}),
+        json!({"name": "webview", "version": "1.0"}),
+        json!({"name": "tray", "version": "1.0"}),
+        json!({"name": "global_hotkey", "version": "1.0"}),
+        json!({"name": "notification", "version": "1.0"}),
+        json!({"name": "keyboard_control", "version": "1.0"}),
+        json!({"name": "mouse_control", "version": "1.0"}),
+        json!({"name": "canvas", "version": "1.0"}),
+        json!({"name": "launch_app", "version": "1.0"}),
+    ];
+
+    #[cfg(target_os = "macos")]
+    {
+        capabilities.push(json!({"name": "ocr", "version": "1.0"}));
+        capabilities.push(json!({"name": "ax_inspect", "version": "1.0"}));
+        capabilities.push(json!({"name": "window_list", "version": "1.0"}));
+    }
+
     // Return capability registration
     Ok(json!({
         "protocol_version": protocol_version,
         "bridge_type": "desktop",
         "platform": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
-        "capabilities": [
-            {"name": "screen_capture", "version": "1.0"},
-            {"name": "webview", "version": "1.0"},
-            {"name": "tray", "version": "1.0"},
-            {"name": "global_hotkey", "version": "1.0"},
-            {"name": "notification", "version": "1.0"}
-        ]
+        "capabilities": capabilities
     }))
 }
 
@@ -275,4 +298,45 @@ fn handle_webview_navigate(
         .map_err(|e| (ERR_INTERNAL, format!("Navigation failed: {e}")))?;
 
     Ok(json!({"navigated": true, "label": label, "url": url}))
+}
+
+// ── Tray handlers ────────────────────────────────────────────────
+
+/// Handle `tray.update_status` — update tray icon tooltip.
+///
+/// Params: `{ "status": "idle"|"thinking"|"acting"|"error", "tooltip": "optional text" }`
+/// Returns: `{ "updated": true, "status": "..." }`
+fn handle_tray_update_status(
+    params: serde_json::Value,
+) -> Result<serde_json::Value, (i32, String)> {
+    let status = params
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("idle");
+    let explicit_tooltip = params.get("tooltip").and_then(|v| v.as_str());
+
+    let app = crate::get_app_handle()
+        .ok_or_else(|| (ERR_INTERNAL, "App handle not available".into()))?;
+
+    let tray = app
+        .tray_by_id("main")
+        .ok_or_else(|| (ERR_INTERNAL, "Tray icon 'main' not found".into()))?;
+
+    // Use explicit tooltip if provided, otherwise derive from status
+    let tooltip_text = match explicit_tooltip {
+        Some(text) => text.to_string(),
+        None => match status {
+            "thinking" => "Aleph - Thinking...".to_string(),
+            "acting" => "Aleph - Acting...".to_string(),
+            "error" => "Aleph - Error".to_string(),
+            _ => "Aleph - AI Assistant".to_string(),
+        },
+    };
+
+    tray.set_tooltip(Some(&tooltip_text))
+        .map_err(|e| (ERR_INTERNAL, format!("Failed to set tooltip: {e}")))?;
+
+    info!(status, tooltip = %tooltip_text, "Tray status updated");
+
+    Ok(json!({"updated": true, "status": status}))
 }
