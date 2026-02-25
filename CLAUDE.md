@@ -28,7 +28,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## 🔮 核心哲学
 
-**Aleph 是一个完整的智能生命体。** 它拥有五层涌现的进化灵魂 (Soul)，遵循 Ghost 隐形美学 (Skin)，由 1-2-3-4 工程骨架 (Skeleton) 支撑，以 POE+DDD 思维 (Mind) 驱动决策。
+**Aleph 是一个完整的智能生命体。** 它拥有五层涌现的进化灵魂 (Soul)，由 1-2-3-4 工程骨架 (Skeleton) 支撑，以 POE+DDD 思维 (Mind) 驱动决策，以具体产品约束 (R1-R7) 保障实用性。
 
 ### 五层涌现架构 (The Soul — 灵魂)
 
@@ -47,14 +47,6 @@ This file provides guidance to Claude Code when working with code in this reposi
 | **L4** | 功能模块 | 技能封装，即插即用 — AI 可以组合能力达成目标 |
 | **L5** | 多态智能体 | **灵魂获得躯壳** — 随需变身，干涉物理/数字世界 |
 
-### Ghost 美学 (The Skin — 皮肤)
-
-| 原则 | 实现 |
-|------|------|
-| **Invisible First** | 无 Dock 图标、无常驻窗口，只有后台进程 + 菜单栏 |
-| **Frictionless** | AI 来到你身边，而不是你去找 AI |
-| **Native-Powered** | UI 归一化 (Leptos/WASM) 保证多端一致性，系统能力原生化 (Rust/Swift) 保证对硬件 100% 掌控 |
-| **Polymorphic** | 一个灵魂，无限形态 |
 
 ### 🧠 Agent 设计思想：POE 架构 (The Mind — 思维)
 
@@ -184,6 +176,23 @@ Rust Core 是 Aleph 的灵魂，只负责三件事：
 
 - **禁令**: 禁止在 App/Bot/CLI 中处理数据持久化、记忆检索或任务规划逻辑
 - **原则**: Interface 层是"纯 I/O"— 输入转为 JSON-RPC 发给 Server，响应渲染给用户
+
+### R5. 菜单栏优先，按需展窗 (Menu Bar First)
+
+- **默认形态**: macOS 无 Dock 图标，菜单栏常驻，Halo 浮窗为主要快捷交互入口
+- **允许窗口**: 复杂场景（设置、长对话、调试面板）应使用正常窗口，不要为"隐形"牺牲可用性
+- **原则**: 轻量入口 + 按需展开，而非"绝对无窗口"
+
+### R6. AI 主动到达 (AI Comes to You)
+
+- **原则**: 减少用户切换上下文的成本，AI 尽量在用户当前工作环境中提供帮助
+- **实现**: Halo 浮窗、通知、内联建议等
+- **边界**: 不打扰用户 (不抢焦点、不弹模态对话框)，但不要因此拒绝提供必要的 UI
+
+### R7. 一核多端 (One Core, Many Shells)
+
+- **原则**: Rust Core 是唯一大脑，UI 通过 Leptos/WASM 统一，原生壳只负责窗口容器和系统集成
+- **备注**: 这已在 R1 和 R2 中体现，此条作为产品层面的重申
 
 ---
 
