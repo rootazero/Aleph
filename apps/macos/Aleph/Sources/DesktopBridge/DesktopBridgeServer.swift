@@ -217,16 +217,30 @@ final class DesktopBridgeServer: @unchecked Sendable {
             let bundleId = params["app_bundle_id"] as? String
             return runAsync { await Perception.shared.axTree(appBundleId: bundleId) }
 
+        case "desktop.snapshot":
+            let bundleId = params["app_bundle_id"] as? String
+            let maxDepth = params["max_depth"] as? Int ?? 5
+            let includeNonInteractive = params["include_non_interactive"] as? Bool ?? false
+            return runAsync {
+                await Perception.shared.snapshot(
+                    appBundleId: bundleId,
+                    maxDepth: maxDepth,
+                    includeNonInteractive: includeNonInteractive
+                )
+            }
+
         // Action — real implementations via Action.swift
         case "desktop.click":
-            let x = params["x"] as? Double ?? 0
-            let y = params["y"] as? Double ?? 0
+            let refId = params["ref"] as? String
+            let x = params["x"] as? Double
+            let y = params["y"] as? Double
             let button = params["button"] as? String ?? "left"
-            return runAsync { await Action.shared.click(x: x, y: y, button: button) }
+            return runAsync { await Action.shared.clickTarget(refId: refId, x: x, y: y, button: button) }
 
         case "desktop.type_text":
+            let refId = params["ref"] as? String
             let text = params["text"] as? String ?? ""
-            return runAsync { await Action.shared.typeText(text) }
+            return runAsync { await Action.shared.typeTextTarget(refId: refId, text: text) }
 
         case "desktop.key_combo":
             let keys = params["keys"] as? [String] ?? []
@@ -242,6 +256,47 @@ final class DesktopBridgeServer: @unchecked Sendable {
         case "desktop.focus_window":
             let windowId = params["window_id"] as? UInt32 ?? 0
             return runAsync { await Action.shared.focusWindow(id: windowId) }
+
+        case "desktop.scroll":
+            let refId = params["ref"] as? String
+            let x = params["x"] as? Double
+            let y = params["y"] as? Double
+            let deltaX = params["delta_x"] as? Double ?? 0
+            let deltaY = params["delta_y"] as? Double ?? 0
+            return runAsync { await Action.shared.scroll(refId: refId, x: x, y: y, deltaX: deltaX, deltaY: deltaY) }
+
+        case "desktop.double_click":
+            let refId = params["ref"] as? String
+            let x = params["x"] as? Double
+            let y = params["y"] as? Double
+            let button = params["button"] as? String ?? "left"
+            return runAsync { await Action.shared.doubleClick(refId: refId, x: x, y: y, button: button) }
+
+        case "desktop.drag":
+            let startRef = params["start_ref"] as? String
+            let startX = params["start_x"] as? Double
+            let startY = params["start_y"] as? Double
+            let endRef = params["end_ref"] as? String
+            let endX = params["end_x"] as? Double
+            let endY = params["end_y"] as? Double
+            let durationMs = params["duration_ms"] as? UInt64
+            return runAsync {
+                await Action.shared.drag(
+                    startRefId: startRef, startX: startX, startY: startY,
+                    endRefId: endRef, endX: endX, endY: endY,
+                    durationMs: durationMs
+                )
+            }
+
+        case "desktop.hover":
+            let refId = params["ref"] as? String
+            let x = params["x"] as? Double
+            let y = params["y"] as? Double
+            return runAsync { await Action.shared.hover(refId: refId, x: x, y: y) }
+
+        case "desktop.paste":
+            let text = params["text"] as? String ?? ""
+            return runAsync { await Action.shared.paste(text: text) }
 
         // Canvas — WKWebView overlay with A2UI patch protocol support
         case "desktop.canvas_show":
