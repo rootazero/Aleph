@@ -18,6 +18,7 @@ use serde_json::json;
 use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
+use std::time::Duration;
 use tracing::{error, info, warn};
 
 /// Start the Desktop Bridge UDS server
@@ -88,13 +89,20 @@ async fn handle_connection(stream: tokio::net::UnixStream) {
     let mut buf_reader = BufReader::new(reader);
     let mut line = String::new();
 
-    match buf_reader.read_line(&mut line).await {
-        Ok(0) => return,
-        Err(e) => {
+    // Read request with 5s timeout (prevents idle connections from accumulating)
+    let read_result = tokio::time::timeout(
+        Duration::from_secs(5),
+        buf_reader.read_line(&mut line),
+    )
+    .await;
+
+    match read_result {
+        Ok(Ok(0)) | Err(_) => return,   // EOF or read timeout
+        Ok(Err(e)) => {
             tracing::debug!("Failed to read from client: {}", e);
             return;
         }
-        Ok(_) => {}
+        Ok(Ok(_)) => {}
     }
 
     let line = line.trim_end();
@@ -104,10 +112,31 @@ async fn handle_connection(stream: tokio::net::UnixStream) {
 
     let response = match protocol::parse_request(line) {
         Ok(req) => {
-            let result = dispatch(&req.method, req.params.unwrap_or(json!({})));
+            let method = req.method.clone();
+            let params = req.params.unwrap_or(json!({}));
+            let id = req.id.clone();
+
+            // Run dispatch on blocking thread pool with 30s timeout.
+            // spawn_blocking also catches panics (returns JoinError).
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                tokio::task::spawn_blocking(move || dispatch(&method, params)),
+            )
+            .await;
+
             match result {
-                Ok(value) => protocol::success_response(&req.id, value),
-                Err((code, msg)) => protocol::error_response(&req.id, code, &msg),
+                Ok(Ok(Ok(value))) => protocol::success_response(&id, value),
+                Ok(Ok(Err((code, msg)))) => protocol::error_response(&id, code, &msg),
+                Ok(Err(join_err)) => protocol::error_response(
+                    &id,
+                    ERR_INTERNAL,
+                    &format!("Handler panicked: {join_err}"),
+                ),
+                Err(_) => protocol::error_response(
+                    &id,
+                    ERR_INTERNAL,
+                    "Request timed out after 30s",
+                ),
             }
         }
         Err(err_resp) => serde_json::to_string(&err_resp).unwrap_or_default(),
