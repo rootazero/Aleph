@@ -10,7 +10,7 @@ set -euo pipefail
 # Configuration
 # ---------------------------------------------------------------------------
 
-SOCKET_PATH="${ALEPH_SOCKET_PATH:-$HOME/.aleph/desktop.sock}"
+SOCKET_PATH="${ALEPH_SOCKET_PATH:-$HOME/.aleph/bridge.sock}"
 ALEPH_SERVER_BIN="${ALEPH_SERVER_BIN:-}"
 
 # ---------------------------------------------------------------------------
