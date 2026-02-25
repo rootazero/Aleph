@@ -36,7 +36,8 @@ use crate::gateway::transport::{Transport, TransportError};
 const DESKTOP_LINK_ID: &str = "desktop-bridge";
 
 /// Name of the desktop bridge binary to search for.
-const BRIDGE_BINARY_NAME: &str = "aleph-desktop";
+/// Matches the Cargo.toml `name` field of the Tauri crate.
+const BRIDGE_BINARY_NAME: &str = "aleph-tauri";
 
 /// Maximum number of automatic restarts before giving up.
 const DEFAULT_MAX_RESTARTS: u32 = 5;
@@ -222,7 +223,7 @@ impl DesktopBridgeManager {
     pub async fn show_panel(&self, url: &str) -> Result<(), TransportError> {
         self.call(
             "webview.show",
-            serde_json::json!({ "url": url }),
+            serde_json::json!({ "label": "halo", "url": url }),
         )
         .await?;
         Ok(())
@@ -230,7 +231,7 @@ impl DesktopBridgeManager {
 
     /// Ask the bridge to hide the web panel.
     pub async fn hide_panel(&self) -> Result<(), TransportError> {
-        self.call("webview.hide", serde_json::json!({})).await?;
+        self.call("webview.hide", serde_json::json!({ "label": "halo" })).await?;
         Ok(())
     }
 
