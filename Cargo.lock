@@ -197,6 +197,8 @@ dependencies = [
  "aleph-protocol",
  "base64 0.22.1",
  "cocoa",
+ "core-foundation 0.10.1",
+ "core-graphics",
  "dirs 6.0.0",
  "enigo",
  "image 0.25.9",

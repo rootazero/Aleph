@@ -238,6 +238,165 @@ pub fn handle_launch_app(params: Value) -> Result<Value, (i32, String)> {
     }
 }
 
+// ── Window management handlers ───────────────────────────────────
+
+/// Handle `desktop.window_list` — list visible on-screen windows.
+///
+/// Returns: `{ "windows": [{ "id", "title", "owner", "pid" }] }`
+pub fn handle_window_list(_params: Value) -> Result<Value, (i32, String)> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_window_list()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err((
+            aleph_protocol::desktop_bridge::ERR_NOT_IMPLEMENTED,
+            "window_list not implemented on this platform".into(),
+        ))
+    }
+}
+
+/// Handle `desktop.focus_window` — bring a window's owning application to front.
+///
+/// Params:
+/// - `window_id`: u64 — the CGWindowID to focus
+pub fn handle_focus_window(params: Value) -> Result<Value, (i32, String)> {
+    let window_id = params
+        .get("window_id")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| (ERR_INTERNAL, "Missing or invalid 'window_id' parameter".to_string()))?
+        as u32;
+
+    #[cfg(target_os = "macos")]
+    {
+        macos_focus_window(window_id)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window_id;
+        Err((
+            aleph_protocol::desktop_bridge::ERR_NOT_IMPLEMENTED,
+            "focus_window not implemented on this platform".into(),
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_window_list() -> Result<Value, (i32, String)> {
+    use core_foundation::array::CFArray;
+    use core_foundation::base::TCFType;
+    use core_foundation::dictionary::CFDictionary;
+    use core_graphics::display::{
+        kCGNullWindowID, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
+        CGWindowListCopyWindowInfo,
+    };
+    use core_graphics::window::{
+        kCGWindowName, kCGWindowNumber, kCGWindowOwnerName, kCGWindowOwnerPID,
+    };
+
+    let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+    let window_info = unsafe { CGWindowListCopyWindowInfo(options, kCGNullWindowID) };
+    if window_info.is_null() {
+        return Err((ERR_INTERNAL, "Failed to list windows".into()));
+    }
+
+    let info_array: CFArray = unsafe { TCFType::wrap_under_create_rule(window_info) };
+    let mut windows = Vec::new();
+
+    for i in 0..info_array.len() {
+        let dict_ptr = unsafe { *info_array.get_unchecked(i) };
+        let dict: CFDictionary =
+            unsafe { TCFType::wrap_under_get_rule(dict_ptr as *const _ as _) };
+
+        let id = unsafe { get_cf_number(&dict, kCGWindowNumber) }.unwrap_or(0);
+        let title = unsafe { get_cf_string(&dict, kCGWindowName) }.unwrap_or_default();
+        let owner = unsafe { get_cf_string(&dict, kCGWindowOwnerName) }.unwrap_or_default();
+        let pid = unsafe { get_cf_number(&dict, kCGWindowOwnerPID) }.unwrap_or(0);
+
+        windows.push(json!({
+            "id": id,
+            "title": title,
+            "owner": owner,
+            "pid": pid,
+        }));
+    }
+
+    info!(count = windows.len(), "Window list retrieved");
+    Ok(json!({ "windows": windows }))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_focus_window(window_id: u32) -> Result<Value, (i32, String)> {
+    use core_foundation::array::CFArray;
+    use core_foundation::base::TCFType;
+    use core_foundation::dictionary::CFDictionary;
+    use core_graphics::display::{kCGWindowListOptionAll, CGWindowListCopyWindowInfo};
+    use core_graphics::window::kCGWindowOwnerPID;
+
+    // Find the PID for this window
+    let window_info =
+        unsafe { CGWindowListCopyWindowInfo(kCGWindowListOptionAll, window_id) };
+    if window_info.is_null() {
+        return Err((ERR_INTERNAL, format!("Window {} not found", window_id)));
+    }
+
+    let info_array: CFArray = unsafe { TCFType::wrap_under_create_rule(window_info) };
+    if info_array.len() == 0 {
+        return Err((ERR_INTERNAL, format!("Window {} not found", window_id)));
+    }
+
+    let dict_ptr = unsafe { *info_array.get_unchecked(0) };
+    let dict: CFDictionary =
+        unsafe { TCFType::wrap_under_get_rule(dict_ptr as *const _ as _) };
+    let pid = unsafe { get_cf_number(&dict, kCGWindowOwnerPID) }
+        .ok_or_else(|| (ERR_INTERNAL, format!("Cannot determine PID for window {}", window_id)))?;
+
+    // Activate the application owning this window
+    unsafe {
+        let cls = objc::runtime::Class::get("NSRunningApplication")
+            .ok_or_else(|| (ERR_INTERNAL, "NSRunningApplication class not found".to_string()))?;
+        let app: *mut objc::runtime::Object =
+            msg_send![cls, runningApplicationWithProcessIdentifier: pid as i32];
+        if app.is_null() {
+            return Err((ERR_INTERNAL, format!("No running application with PID {}", pid)));
+        }
+        // NSApplicationActivateAllWindows (1) | NSApplicationActivateIgnoringOtherApps (2) = 3
+        let _: bool = msg_send![app, activateWithOptions: 3u64];
+    }
+
+    info!(window_id, pid, "Window focused");
+    Ok(json!({ "focused": window_id }))
+}
+
+/// Extract an integer value from a CFDictionary by CFString key reference.
+#[cfg(target_os = "macos")]
+fn get_cf_number(
+    dict: &core_foundation::dictionary::CFDictionary,
+    key: core_foundation::string::CFStringRef,
+) -> Option<i64> {
+    use core_foundation::base::TCFType;
+    use core_foundation::number::CFNumber;
+    dict.find(key as *const _)
+        .map(|v| unsafe { CFNumber::wrap_under_get_rule(*v as *const _) })
+        .and_then(|n| n.to_i64())
+}
+
+/// Extract a string value from a CFDictionary by CFString key reference.
+#[cfg(target_os = "macos")]
+fn get_cf_string(
+    dict: &core_foundation::dictionary::CFDictionary,
+    key: core_foundation::string::CFStringRef,
+) -> Option<String> {
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+    dict.find(key as *const _)
+        .map(|v| unsafe { CFString::wrap_under_get_rule(*v as *const _) })
+        .map(|s| s.to_string())
+}
+
 // ── Key parsing helpers ──────────────────────────────────────────
 
 /// Parse a modifier name to an enigo Key
