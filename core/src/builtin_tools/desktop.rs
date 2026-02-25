@@ -74,6 +74,55 @@ pub struct DesktopArgs {
     /// A2UI patch for canvas_update (JSON array of patch operations).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub patch: Option<Value>,
+
+    /// Element ref from snapshot (alternative to x/y coordinates).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ref")]
+    pub ref_id: Option<String>,
+
+    /// Start element ref for drag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_ref: Option<String>,
+
+    /// Start X for drag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_x: Option<f64>,
+
+    /// Start Y for drag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_y: Option<f64>,
+
+    /// End element ref for drag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_ref: Option<String>,
+
+    /// End X for drag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_x: Option<f64>,
+
+    /// End Y for drag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_y: Option<f64>,
+
+    /// Horizontal scroll amount in pixels (negative=left).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta_x: Option<f64>,
+
+    /// Vertical scroll amount in pixels (negative=up).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta_y: Option<f64>,
+
+    /// Drag duration in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+
+    /// Max AX tree depth for snapshot (default: 5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_depth: Option<u32>,
+
+    /// Include non-interactive elements in snapshot refs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_non_interactive: Option<bool>,
 }
 
 /// Output from desktop operations.
@@ -109,38 +158,42 @@ impl Default for DesktopTool {
 #[async_trait]
 impl AlephTool for DesktopTool {
     const NAME: &'static str = "desktop";
-    const DESCRIPTION: &'static str = r#"Control the desktop: screenshots, OCR, UI automation, keyboard/mouse, app launch, canvas overlays.
+    const DESCRIPTION: &'static str = r#"Control the desktop: screenshot, OCR, UI snapshot with element refs, keyboard/mouse, canvas overlays.
 
 Requires the Aleph Desktop Bridge (starts automatically with the server).
 
-Actions:
+Perception:
+- snapshot: Capture UI structure with element refs. Returns tree (text), refs map, interactive list. Use BEFORE click/scroll/drag to target elements by ref.
 - screenshot: Capture screen as base64 PNG. Optional region: {x,y,width,height}
 - ocr: Extract text from screen (or provided image_base64). Returns {text, lines[]}
-- ax_tree: Accessibility tree. Optional app_bundle_id (default: frontmost app)
-- click: Click at {x,y}. Optional button: "left"/"right"/"middle"
-- type_text: Type text string using keyboard
-- key_combo: Press key combo, e.g. keys=["cmd","c"] for Copy
-- launch_app: Launch by bundle_id, e.g. "com.apple.Safari"
-- window_list: List open windows with IDs, titles, owners
-- focus_window: Bring window_id to front
-- canvas_show: Render HTML panel at position {x,y,width,height}
-- canvas_hide: Hide canvas panel
-- canvas_update: Apply A2UI patch to canvas
+- ax_tree: Raw accessibility tree (for debugging, prefer snapshot)
+
+Actions (support ref OR x/y targeting):
+- click: Click element. ref="e3" (from snapshot) or x/y coordinates. Optional button.
+- double_click: Double-click element. Same targeting as click.
+- scroll: Scroll at element. ref or x/y + delta_x/delta_y (pixels, negative=up/left).
+- drag: Drag between elements. start_ref/end_ref or start_x,y/end_x,y + duration_ms.
+- hover: Move mouse to element without clicking. ref or x/y.
+- type_text: Type text string. Optional ref to focus element first.
+- key_combo: Press key combo, e.g. keys=["cmd","c"]
+- paste: Write text to clipboard and paste (Cmd+V).
+- launch_app: Launch by bundle_id
+- window_list: List open windows
+- focus_window: Bring window to front
+
+Canvas:
+- canvas_show/canvas_hide/canvas_update: HTML overlay with A2UI patches.
 
 Examples:
-{"action":"screenshot"}
-{"action":"ocr"}
-{"action":"screenshot","region":{"x":0,"y":0,"width":1920,"height":1080}}
+{"action":"snapshot"}
+{"action":"click","ref":"e3"}
 {"action":"click","x":500,"y":300}
-{"action":"click","x":500,"y":300,"button":"right"}
-{"action":"type_text","text":"Hello, world!"}
-{"action":"key_combo","keys":["cmd","c"]}
-{"action":"launch_app","bundle_id":"com.apple.Safari"}
-{"action":"window_list"}
-{"action":"focus_window","window_id":123}
-{"action":"canvas_show","html":"<h1>Hello</h1>","position":{"x":100,"y":100,"width":800,"height":600}}
-{"action":"canvas_hide"}
-{"action":"canvas_update","patch":[{"type":"surfaceUpdate","content":"<p>Updated</p>"}]}"#;
+{"action":"scroll","ref":"e7","delta_y":-300}
+{"action":"double_click","ref":"e1"}
+{"action":"drag","start_ref":"e5","end_ref":"e12"}
+{"action":"hover","ref":"e3"}
+{"action":"type_text","ref":"e1","text":"Hello"}
+{"action":"paste","text":"clipboard content"}"#;
 
     type Args = DesktopArgs;
     type Output = DesktopOutput;
@@ -199,15 +252,21 @@ fn build_request(args: &DesktopArgs) -> std::result::Result<DesktopRequest, Stri
             app_bundle_id: args.app_bundle_id.clone(),
         },
         "click" => {
-            let x = args.x.ok_or_else(|| "click requires 'x' coordinate".to_string())?;
-            let y = args.y.ok_or_else(|| "click requires 'y' coordinate".to_string())?;
+            let ref_id = args.ref_id.clone();
+            let x = args.x;
+            let y = args.y;
+            if ref_id.is_none() && (x.is_none() || y.is_none()) {
+                return Err("click requires 'ref' or both 'x' and 'y' coordinates".to_string());
+            }
             DesktopRequest::Click {
+                ref_id,
                 x,
                 y,
                 button: args.button.clone().unwrap_or(MouseButton::Left),
             }
         }
         "type_text" => DesktopRequest::TypeText {
+            ref_id: args.ref_id.clone(),
             text: args.text.clone().unwrap_or_default(),
         },
         "key_combo" => DesktopRequest::KeyCombo {
@@ -223,6 +282,64 @@ fn build_request(args: &DesktopArgs) -> std::result::Result<DesktopRequest, Stri
                 .ok_or_else(|| "focus_window requires 'window_id' (get it from window_list)".to_string())?;
             DesktopRequest::FocusWindow { window_id }
         }
+        "snapshot" => DesktopRequest::Snapshot {
+            app_bundle_id: args.app_bundle_id.clone(),
+            max_depth: args.max_depth,
+            include_non_interactive: args.include_non_interactive,
+        },
+        "scroll" => {
+            let ref_id = args.ref_id.clone();
+            let x = args.x;
+            let y = args.y;
+            if ref_id.is_none() && (x.is_none() || y.is_none()) {
+                return Err("scroll requires 'ref' or both 'x' and 'y' coordinates".to_string());
+            }
+            DesktopRequest::Scroll {
+                ref_id, x, y,
+                delta_x: args.delta_x.unwrap_or(0.0),
+                delta_y: args.delta_y.unwrap_or(0.0),
+            }
+        }
+        "double_click" => {
+            let ref_id = args.ref_id.clone();
+            let x = args.x;
+            let y = args.y;
+            if ref_id.is_none() && (x.is_none() || y.is_none()) {
+                return Err("double_click requires 'ref' or both 'x' and 'y' coordinates".to_string());
+            }
+            DesktopRequest::DoubleClick {
+                ref_id, x, y,
+                button: args.button.clone().unwrap_or(MouseButton::Left),
+            }
+        }
+        "drag" => {
+            let has_start = args.start_ref.is_some() || (args.start_x.is_some() && args.start_y.is_some());
+            let has_end = args.end_ref.is_some() || (args.end_x.is_some() && args.end_y.is_some());
+            if !has_start || !has_end {
+                return Err("drag requires start (start_ref or start_x+start_y) and end (end_ref or end_x+end_y)".to_string());
+            }
+            DesktopRequest::Drag {
+                start_ref: args.start_ref.clone(),
+                start_x: args.start_x,
+                start_y: args.start_y,
+                end_ref: args.end_ref.clone(),
+                end_x: args.end_x,
+                end_y: args.end_y,
+                duration_ms: args.duration_ms,
+            }
+        }
+        "hover" => {
+            let ref_id = args.ref_id.clone();
+            let x = args.x;
+            let y = args.y;
+            if ref_id.is_none() && (x.is_none() || y.is_none()) {
+                return Err("hover requires 'ref' or both 'x' and 'y' coordinates".to_string());
+            }
+            DesktopRequest::Hover { ref_id, x, y }
+        }
+        "paste" => DesktopRequest::Paste {
+            text: args.text.clone().unwrap_or_default(),
+        },
         "canvas_show" => DesktopRequest::CanvasShow {
             html: args.html.clone().unwrap_or_default(),
             position: args.position.clone().unwrap_or(CanvasPosition {
@@ -238,8 +355,9 @@ fn build_request(args: &DesktopArgs) -> std::result::Result<DesktopRequest, Stri
         },
         other => {
             return Err(format!(
-                "Unknown desktop action: '{}'. Valid: screenshot, ocr, ax_tree, \
-                 click, type_text, key_combo, launch_app, window_list, focus_window, \
+                "Unknown desktop action: '{}'. Valid: snapshot, screenshot, ocr, ax_tree, \
+                 click, double_click, scroll, drag, hover, type_text, key_combo, paste, \
+                 launch_app, window_list, focus_window, \
                  canvas_show, canvas_hide, canvas_update",
                 other
             ));
@@ -268,6 +386,18 @@ mod tests {
             html: None,
             position: None,
             patch: None,
+            ref_id: None,
+            start_ref: None,
+            start_x: None,
+            start_y: None,
+            end_ref: None,
+            end_x: None,
+            end_y: None,
+            delta_x: None,
+            delta_y: None,
+            duration_ms: None,
+            max_depth: None,
+            include_non_interactive: None,
         }
     }
 
@@ -300,7 +430,7 @@ mod tests {
         args.y = Some(200.0);
         args.button = Some(MouseButton::Right);
         let req = build_request(&args).unwrap();
-        assert!(matches!(req, DesktopRequest::Click { x: _, y: _, button: MouseButton::Right }));
+        assert!(matches!(req, DesktopRequest::Click { ref_id: None, button: MouseButton::Right, .. }));
     }
 
     #[test]
@@ -350,5 +480,77 @@ mod tests {
         let args = make_args("fly");
         let err = build_request(&args).unwrap_err();
         assert!(err.contains("fly"), "error should mention the unknown action");
+    }
+
+    #[test]
+    fn test_build_request_snapshot() {
+        let mut args = make_args("snapshot");
+        args.max_depth = Some(3);
+        let req = build_request(&args).unwrap();
+        assert!(matches!(req, DesktopRequest::Snapshot { max_depth: Some(3), .. }));
+    }
+
+    #[test]
+    fn test_build_request_click_with_ref() {
+        let mut args = make_args("click");
+        args.ref_id = Some("e3".into());
+        let req = build_request(&args).unwrap();
+        assert!(matches!(req, DesktopRequest::Click { ref_id: Some(_), .. }));
+    }
+
+    #[test]
+    fn test_build_request_click_no_target() {
+        let args = make_args("click");
+        assert!(build_request(&args).is_err());
+    }
+
+    #[test]
+    fn test_build_request_scroll() {
+        let mut args = make_args("scroll");
+        args.ref_id = Some("e7".into());
+        args.delta_y = Some(-300.0);
+        let req = build_request(&args).unwrap();
+        assert!(matches!(req, DesktopRequest::Scroll { .. }));
+    }
+
+    #[test]
+    fn test_build_request_double_click() {
+        let mut args = make_args("double_click");
+        args.ref_id = Some("e1".into());
+        let req = build_request(&args).unwrap();
+        assert!(matches!(req, DesktopRequest::DoubleClick { .. }));
+    }
+
+    #[test]
+    fn test_build_request_drag() {
+        let mut args = make_args("drag");
+        args.start_ref = Some("e1".into());
+        args.end_ref = Some("e5".into());
+        let req = build_request(&args).unwrap();
+        assert!(matches!(req, DesktopRequest::Drag { .. }));
+    }
+
+    #[test]
+    fn test_build_request_drag_missing_end() {
+        let mut args = make_args("drag");
+        args.start_ref = Some("e1".into());
+        assert!(build_request(&args).is_err());
+    }
+
+    #[test]
+    fn test_build_request_hover() {
+        let mut args = make_args("hover");
+        args.x = Some(100.0);
+        args.y = Some(200.0);
+        let req = build_request(&args).unwrap();
+        assert!(matches!(req, DesktopRequest::Hover { .. }));
+    }
+
+    #[test]
+    fn test_build_request_paste() {
+        let mut args = make_args("paste");
+        args.text = Some("hello".into());
+        let req = build_request(&args).unwrap();
+        assert!(matches!(req, DesktopRequest::Paste { text } if text == "hello"));
     }
 }

@@ -145,15 +145,17 @@ fn request_to_jsonrpc(request: &DesktopRequest) -> (&'static str, serde_json::Va
         DesktopRequest::AxTree { app_bundle_id } => {
             ("desktop.ax_tree", json!({ "app_bundle_id": app_bundle_id }))
         }
-        DesktopRequest::Click { x, y, button } => {
+        DesktopRequest::Click { ref_id, x, y, button } => {
             let btn = match button {
                 MouseButton::Left => "left",
                 MouseButton::Right => "right",
                 MouseButton::Middle => "middle",
             };
-            ("desktop.click", json!({ "x": x, "y": y, "button": btn }))
+            ("desktop.click", json!({ "ref": ref_id, "x": x, "y": y, "button": btn }))
         }
-        DesktopRequest::TypeText { text } => ("desktop.type_text", json!({ "text": text })),
+        DesktopRequest::TypeText { ref_id, text } => {
+            ("desktop.type_text", json!({ "ref": ref_id, "text": text }))
+        }
         DesktopRequest::KeyCombo { keys } => ("desktop.key_combo", json!({ "keys": keys })),
         DesktopRequest::LaunchApp { bundle_id } => {
             ("desktop.launch_app", json!({ "bundle_id": bundle_id }))
@@ -161,6 +163,40 @@ fn request_to_jsonrpc(request: &DesktopRequest) -> (&'static str, serde_json::Va
         DesktopRequest::WindowList => ("desktop.window_list", json!({})),
         DesktopRequest::FocusWindow { window_id } => {
             ("desktop.focus_window", json!({ "window_id": window_id }))
+        }
+        DesktopRequest::Snapshot { app_bundle_id, max_depth, include_non_interactive } => {
+            ("desktop.snapshot", json!({
+                "app_bundle_id": app_bundle_id,
+                "max_depth": max_depth,
+                "include_non_interactive": include_non_interactive,
+            }))
+        }
+        DesktopRequest::Scroll { ref_id, x, y, delta_x, delta_y } => {
+            ("desktop.scroll", json!({
+                "ref": ref_id, "x": x, "y": y,
+                "delta_x": delta_x, "delta_y": delta_y,
+            }))
+        }
+        DesktopRequest::DoubleClick { ref_id, x, y, button } => {
+            let btn = match button {
+                MouseButton::Left => "left",
+                MouseButton::Right => "right",
+                MouseButton::Middle => "middle",
+            };
+            ("desktop.double_click", json!({ "ref": ref_id, "x": x, "y": y, "button": btn }))
+        }
+        DesktopRequest::Drag { start_ref, start_x, start_y, end_ref, end_x, end_y, duration_ms } => {
+            ("desktop.drag", json!({
+                "start_ref": start_ref, "start_x": start_x, "start_y": start_y,
+                "end_ref": end_ref, "end_x": end_x, "end_y": end_y,
+                "duration_ms": duration_ms,
+            }))
+        }
+        DesktopRequest::Hover { ref_id, x, y } => {
+            ("desktop.hover", json!({ "ref": ref_id, "x": x, "y": y }))
+        }
+        DesktopRequest::Paste { text } => {
+            ("desktop.paste", json!({ "text": text }))
         }
         DesktopRequest::CanvasShow { html, position } => (
             "desktop.canvas_show",
@@ -213,8 +249,9 @@ mod tests {
     #[test]
     fn test_request_to_jsonrpc_click() {
         let (method, params) = request_to_jsonrpc(&DesktopRequest::Click {
-            x: 100.0,
-            y: 200.0,
+            ref_id: None,
+            x: Some(100.0),
+            y: Some(200.0),
             button: MouseButton::Left,
         });
         assert_eq!(method, "desktop.click");
@@ -226,6 +263,83 @@ mod tests {
         let (method, params) = request_to_jsonrpc(&DesktopRequest::WindowList);
         assert_eq!(method, "desktop.window_list");
         assert_eq!(params, serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_request_to_jsonrpc_snapshot() {
+        let (method, params) = request_to_jsonrpc(&DesktopRequest::Snapshot {
+            app_bundle_id: None,
+            max_depth: Some(5),
+            include_non_interactive: Some(false),
+        });
+        assert_eq!(method, "desktop.snapshot");
+        assert_eq!(params["max_depth"], 5);
+    }
+
+    #[test]
+    fn test_request_to_jsonrpc_scroll() {
+        let (method, params) = request_to_jsonrpc(&DesktopRequest::Scroll {
+            ref_id: Some("e3".into()),
+            x: None, y: None,
+            delta_x: 0.0, delta_y: -200.0,
+        });
+        assert_eq!(method, "desktop.scroll");
+        assert_eq!(params["ref"], "e3");
+        assert_eq!(params["delta_y"], -200.0);
+    }
+
+    #[test]
+    fn test_request_to_jsonrpc_double_click() {
+        let (method, params) = request_to_jsonrpc(&DesktopRequest::DoubleClick {
+            ref_id: Some("e1".into()),
+            x: None, y: None,
+            button: MouseButton::Left,
+        });
+        assert_eq!(method, "desktop.double_click");
+        assert_eq!(params["ref"], "e1");
+    }
+
+    #[test]
+    fn test_request_to_jsonrpc_drag() {
+        let (method, params) = request_to_jsonrpc(&DesktopRequest::Drag {
+            start_ref: Some("e1".into()), start_x: None, start_y: None,
+            end_ref: Some("e5".into()), end_x: None, end_y: None,
+            duration_ms: Some(500),
+        });
+        assert_eq!(method, "desktop.drag");
+        assert_eq!(params["start_ref"], "e1");
+        assert_eq!(params["end_ref"], "e5");
+    }
+
+    #[test]
+    fn test_request_to_jsonrpc_hover() {
+        let (method, params) = request_to_jsonrpc(&DesktopRequest::Hover {
+            ref_id: None,
+            x: Some(300.0), y: Some(400.0),
+        });
+        assert_eq!(method, "desktop.hover");
+        assert_eq!(params["x"], 300.0);
+    }
+
+    #[test]
+    fn test_request_to_jsonrpc_paste() {
+        let (method, params) = request_to_jsonrpc(&DesktopRequest::Paste {
+            text: "hello".into(),
+        });
+        assert_eq!(method, "desktop.paste");
+        assert_eq!(params["text"], "hello");
+    }
+
+    #[test]
+    fn test_request_to_jsonrpc_click_with_ref() {
+        let (method, params) = request_to_jsonrpc(&DesktopRequest::Click {
+            ref_id: Some("e7".into()),
+            x: None, y: None,
+            button: MouseButton::Left,
+        });
+        assert_eq!(method, "desktop.click");
+        assert_eq!(params["ref"], "e7");
+        assert!(params["x"].is_null());
     }
 
     #[tokio::test]
