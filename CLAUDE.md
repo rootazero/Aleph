@@ -332,19 +332,33 @@ plugin-wasm = ["extism"]
 
 ### Git Worktree 操作规范
 
-**⚠️ 致命陷阱：删除 worktree 前必须先切回主仓库目录**
+**⚠️ 致命陷阱：`EnterWorktree` 会锁定 CWD，无法在同一会话内安全删除 worktree**
 
-`EnterWorktree` 会将 Shell CWD 切到 worktree 目录。如果直接执行 `git worktree remove`，该目录被删除后 Shell 的 CWD 失效，**所有后续 Bash 命令都会 exit 1 且无法恢复**，只能重启会话。
+`EnterWorktree` 会在每次 Bash 命令后**强制重置 CWD 到 worktree 目录**，即使你用 `cd` 切回主仓库也无效。因此在同一会话内执行 `git worktree remove` 必然导致 Shell 永久损坏（exit 1 且无法恢复）。
+
+**正确做法：不在使用 `EnterWorktree` 的会话内删除 worktree**
 
 ```bash
-# ✅ 正确顺序
-cd /Volumes/TBU4/Workspace/Aleph          # 1. 先回主仓库
-git worktree remove .claude/worktrees/xxx  # 2. 再删 worktree
-git branch -D worktree-xxx                 # 3. 删分支
-git worktree prune                         # 4. 清理残留
+# ✅ 方案 A：在会话内只合并，不删除 worktree
+cd /Volumes/TBU4/Workspace/Aleph          # 切回主仓库（仅在本命令内有效）
+git merge worktree-xxx                     # 合并分支
+# 结束会话 → 提示清理 worktree
 
-# ❌ 错误 — 会导致 Shell 永久损坏
-git worktree remove .claude/worktrees/xxx  # CWD 就在这个目录里！
+# ✅ 方案 B：用新终端/新会话清理
+cd /Volumes/TBU4/Workspace/Aleph
+git worktree remove .claude/worktrees/xxx
+git branch -D worktree-xxx
+git worktree prune
+
+# ✅ 方案 C：不用 EnterWorktree，手动管理（CWD 始终在主仓库）
+git worktree add .claude/worktrees/xxx -b branch-xxx
+# 用绝对路径操作 worktree 内文件，CWD 从不切换
+git merge branch-xxx
+git worktree remove .claude/worktrees/xxx  # 安全，因为 CWD 不在 worktree 内
+git branch -D branch-xxx
+
+# ❌ 错误 — EnterWorktree 后在同一会话内删除 worktree
+git worktree remove .claude/worktrees/xxx  # CWD 被锁定在这里，Shell 永久损坏
 ```
 
 ### 分支策略
