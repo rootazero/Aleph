@@ -4,7 +4,7 @@
 //! platform-specific commands for app launching.
 
 use aleph_protocol::desktop_bridge::ERR_INTERNAL;
-use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
+use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use serde_json::{json, Value};
 use tracing::info;
 
@@ -165,6 +165,50 @@ fn parse_legacy_keys(keys: &[Value]) -> Result<(Vec<String>, String), (i32, Stri
     }
 
     Ok((modifiers, main_key))
+}
+
+/// Handle `desktop.scroll` — scroll the mouse wheel
+///
+/// Params:
+/// - `direction`: string (optional) — "up", "down" (default), "left", or "right"
+/// - `amount`: integer (optional) — number of scroll clicks (default: 3)
+///
+/// Enigo convention: positive length = down/right, negative = up/left
+pub fn handle_scroll(params: Value) -> Result<Value, (i32, String)> {
+    let direction = params
+        .get("direction")
+        .and_then(|v| v.as_str())
+        .unwrap_or("down");
+    let amount = params
+        .get("amount")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(3) as i32;
+
+    let (axis, length) = match direction {
+        "down" => (Axis::Vertical, amount),
+        "up" => (Axis::Vertical, -amount),
+        "right" => (Axis::Horizontal, amount),
+        "left" => (Axis::Horizontal, -amount),
+        other => {
+            return Err((
+                ERR_INTERNAL,
+                format!(
+                    "Unknown scroll direction: '{}'. Expected up, down, left, or right",
+                    other
+                ),
+            ));
+        }
+    };
+
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| (ERR_INTERNAL, format!("Failed to create Enigo instance: {e}")))?;
+
+    enigo
+        .scroll(length, axis)
+        .map_err(|e| (ERR_INTERNAL, format!("Failed to scroll: {e}")))?;
+
+    info!(direction, amount, "Scroll performed");
+    Ok(json!({"scrolled": true, "direction": direction, "amount": amount}))
 }
 
 /// Handle `desktop.launch_app` — launch an application
