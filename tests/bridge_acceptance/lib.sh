@@ -99,7 +99,7 @@ send_rpc() {
         "$id" "$method" "$params")
 
     local response
-    response=$(echo "$request" | socat -T10 - UNIX-CONNECT:"$SOCKET_PATH" 2>/dev/null) || {
+    response=$(echo "$request" | socat -t10 -T15 - UNIX-CONNECT:"$SOCKET_PATH" 2>/dev/null) || {
         echo "${RED}ERROR: Failed to connect to socket $SOCKET_PATH${RESET}" >&2
         return 1
     }
