@@ -46,8 +46,8 @@ pub struct ResourceGovernor {
 impl ResourceGovernor {
     /// Create a new ResourceGovernor with specified limits
     pub fn new(limits: ResourceLimits) -> Self {
-        let refresh_kind = RefreshKind::new()
-            .with_cpu(CpuRefreshKind::new().with_cpu_usage());
+        let refresh_kind = RefreshKind::nothing()
+            .with_cpu(CpuRefreshKind::nothing().with_cpu_usage());
 
         Self {
             limits,
