@@ -11,6 +11,22 @@ use base64::{engine::general_purpose, Engine as _};
 use serde_json::{json, Value};
 use std::io::Cursor;
 
+/// Check if Screen Recording permission is granted (macOS only).
+/// Returns `true` on non-macOS platforms (no permission needed).
+#[cfg(target_os = "macos")]
+fn screen_recording_granted() -> bool {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGPreflightScreenCaptureAccess() -> bool;
+    }
+    unsafe { CGPreflightScreenCaptureAccess() }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn screen_recording_granted() -> bool {
+    true
+}
+
 struct CaptureRegion {
     x: u32,
     y: u32,
@@ -23,6 +39,12 @@ struct CaptureRegion {
 /// Params: `{ "region": { "x", "y", "width", "height" } | null }`
 /// Returns: `{ "image_base64", "width", "height", "format": "png" }`
 pub fn handle_screenshot(params: Value) -> Result<Value, (i32, String)> {
+    if !screen_recording_granted() {
+        return Err((ERR_INTERNAL,
+            "Screen Recording permission not granted. \
+             Enable in System Settings > Privacy & Security > Screen Recording.".into()));
+    }
+
     let region = parse_region(&params);
 
     let monitors = xcap::Monitor::all()
@@ -107,6 +129,12 @@ pub fn handle_ocr(params: Value) -> Result<Value, (i32, String)> {
 
 /// Capture the primary monitor as PNG bytes (reuses screenshot logic).
 fn capture_screen_png() -> Result<Vec<u8>, (i32, String)> {
+    if !screen_recording_granted() {
+        return Err((ERR_INTERNAL,
+            "Screen Recording permission not granted. \
+             Enable in System Settings > Privacy & Security > Screen Recording.".into()));
+    }
+
     let monitors = xcap::Monitor::all()
         .map_err(|e| (ERR_INTERNAL, format!("Failed to enumerate monitors: {e}")))?;
     let monitor = monitors
