@@ -191,5 +191,23 @@ impl AlephToolServer {
     pub fn with_desktop(self) -> Self {
         self.tool(DesktopTool::new())
     }
+
+    /// Register the vision tool (image understanding + OCR).
+    ///
+    /// Requires a [`VisionPipeline`](crate::vision::VisionPipeline) configured
+    /// with one or more providers (e.g. Claude Vision, Platform OCR).
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use alephcore::vision::VisionPipeline;
+    ///
+    /// let pipeline = Arc::new(VisionPipeline::new());
+    /// let server = AlephToolServer::new()
+    ///     .with_vision(pipeline);
+    /// ```
+    pub fn with_vision(self, pipeline: std::sync::Arc<crate::vision::VisionPipeline>) -> Self {
+        self.tool(VisionTool::new(pipeline))
+    }
 }
 
