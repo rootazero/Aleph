@@ -112,31 +112,17 @@ async fn handle_connection(stream: tokio::net::UnixStream) {
 
     let response = match protocol::parse_request(line) {
         Ok(req) => {
-            let method = req.method.clone();
             let params = req.params.unwrap_or(json!({}));
-            let id = req.id.clone();
 
-            // Run dispatch on blocking thread pool with 30s timeout.
-            // spawn_blocking also catches panics (returns JoinError).
-            let result = tokio::time::timeout(
-                Duration::from_secs(30),
-                tokio::task::spawn_blocking(move || dispatch(&method, params)),
-            )
-            .await;
-
-            match result {
-                Ok(Ok(Ok(value))) => protocol::success_response(&id, value),
-                Ok(Ok(Err((code, msg)))) => protocol::error_response(&id, code, &msg),
-                Ok(Err(join_err)) => protocol::error_response(
-                    &id,
-                    ERR_INTERNAL,
-                    &format!("Handler panicked: {join_err}"),
-                ),
-                Err(_) => protocol::error_response(
-                    &id,
-                    ERR_INTERNAL,
-                    "Request timed out after 30s",
-                ),
+            // Run dispatch directly on the async runtime thread.
+            // NOTE: spawn_blocking is NOT safe here — macOS HIToolbox APIs
+            // (enigo keyboard, TSMGetInputSourceProperty) and Tauri WebView
+            // operations require the calling thread to have the correct
+            // dispatch queue properties. spawn_blocking uses a separate thread
+            // pool that lacks these, causing SIGTRAP crashes.
+            match dispatch(&req.method, params) {
+                Ok(value) => protocol::success_response(&req.id, value),
+                Err((code, msg)) => protocol::error_response(&req.id, code, &msg),
             }
         }
         Err(err_resp) => serde_json::to_string(&err_resp).unwrap_or_default(),
