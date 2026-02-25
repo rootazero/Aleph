@@ -13,7 +13,7 @@
       {
         "label": "halo",
         "title": "",
-        "url": "http://127.0.0.1:18790/halo",
+        "url": "about:blank",
         "width": 800,
         "height": 80,
         "transparent": true,
@@ -28,7 +28,7 @@
       {
         "label": "settings",
         "title": "Aleph Settings",
-        "url": "http://127.0.0.1:18790/settings",
+        "url": "about:blank",
         "width": 900,
         "height": 650,
         "minWidth": 700,
@@ -40,7 +40,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' http://127.0.0.1:18790; style-src 'self' 'unsafe-inline' http://127.0.0.1:18790; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline' http://127.0.0.1:18790; img-src 'self' data: https: http://127.0.0.1:18790; connect-src 'self' http://127.0.0.1:18790 ws://127.0.0.1:18789 https://*.openai.com https://*.anthropic.com https://*.googleapis.com; frame-src http://127.0.0.1:18790"
+      "csp": "default-src 'self' http://127.0.0.1:*; style-src 'self' 'unsafe-inline' http://127.0.0.1:*; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline' http://127.0.0.1:*; img-src 'self' data: https: http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* https://*.openai.com https://*.anthropic.com https://*.googleapis.com; frame-src http://127.0.0.1:*"
     }
   },
   "bundle": {

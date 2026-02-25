@@ -1,7 +1,7 @@
-//! Desktop Bridge tool — sees and controls the macOS desktop via Swift Bridge.
+//! Desktop Bridge tool — sees and controls the desktop via the Desktop Bridge.
 //!
-//! Requires the Aleph macOS App to be running. When the App is absent, all
-//! operations return a friendly message instead of an error.
+//! Requires the Aleph Desktop Bridge to be connected. When the bridge is absent,
+//! all operations return a friendly message instead of an error.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -86,7 +86,7 @@ pub struct DesktopOutput {
     pub message: Option<String>,
 }
 
-/// Desktop Bridge tool — gives the AI agent eyes and hands on macOS.
+/// Desktop Bridge tool — gives the AI agent eyes and hands on the desktop.
 #[derive(Clone)]
 pub struct DesktopTool {
     client: DesktopBridgeClient,
@@ -109,9 +109,9 @@ impl Default for DesktopTool {
 #[async_trait]
 impl AlephTool for DesktopTool {
     const NAME: &'static str = "desktop";
-    const DESCRIPTION: &'static str = r#"Control the macOS desktop: screenshots, OCR, UI automation, keyboard/mouse, app launch, canvas overlays.
+    const DESCRIPTION: &'static str = r#"Control the desktop: screenshots, OCR, UI automation, keyboard/mouse, app launch, canvas overlays.
 
-Requires the Aleph macOS App to be running.
+Requires the Aleph Desktop Bridge (starts automatically with the server).
 
 Actions:
 - screenshot: Capture screen as base64 PNG. Optional region: {x,y,width,height}
@@ -146,14 +146,15 @@ Examples:
     type Output = DesktopOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // Gracefully handle the case where the macOS App is not running.
+        // Gracefully handle the case where the Desktop Bridge is not connected.
         if !self.client.is_available() {
             return Ok(DesktopOutput {
                 success: false,
                 data: None,
                 message: Some(
-                    "Desktop capabilities require the Aleph macOS App. \
-                     Please open Aleph.app to use screenshot, OCR, keyboard, and UI automation."
+                    "Desktop bridge not connected. The bridge provides screenshot, OCR, \
+                     keyboard, and UI automation capabilities. It starts automatically \
+                     with aleph-server, or can be run standalone via aleph-tauri."
                         .to_string(),
                 ),
             });

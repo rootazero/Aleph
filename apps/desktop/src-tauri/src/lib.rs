@@ -130,6 +130,30 @@ pub fn run() {
                 settings_window.is_some()
             );
 
+            // Navigate WebView windows to the correct server URL at runtime.
+            // The port comes from ALEPH_SERVER_PORT (set by bridge-mode CLI
+            // args or the user's environment) and falls back to 18790.
+            let server_port: u16 = std::env::var("ALEPH_SERVER_PORT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(18790);
+            let base_url = format!("http://127.0.0.1:{}", server_port);
+
+            if let Some(ref halo) = halo_window {
+                let url = format!("{}/halo", base_url);
+                if let Ok(parsed) = url.parse() {
+                    let _ = halo.navigate(parsed);
+                }
+            }
+            if let Some(ref settings) = settings_window {
+                let url = format!("{}/settings", base_url);
+                if let Ok(parsed) = url.parse() {
+                    let _ = settings.navigate(parsed);
+                }
+            }
+
+            tracing::info!(port = server_port, "WebView windows configured for server at {}", base_url);
+
             if let Some(settings) = settings_window {
                 let app_handle = app.handle().clone();
                 settings.on_window_event(move |event| {
