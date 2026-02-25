@@ -198,15 +198,15 @@ fn build_request(args: &DesktopArgs) -> std::result::Result<DesktopRequest, Stri
             app_bundle_id: args.app_bundle_id.clone(),
         },
         "click" => {
-            let x = args.x.ok_or_else(|| "click requires 'x' coordinate".to_string())?;
-            let y = args.y.ok_or_else(|| "click requires 'y' coordinate".to_string())?;
             DesktopRequest::Click {
-                x,
-                y,
+                ref_id: None,
+                x: args.x,
+                y: args.y,
                 button: args.button.clone().unwrap_or(MouseButton::Left),
             }
         }
         "type_text" => DesktopRequest::TypeText {
+            ref_id: None,
             text: args.text.clone().unwrap_or_default(),
         },
         "key_combo" => DesktopRequest::KeyCombo {
@@ -299,7 +299,7 @@ mod tests {
         args.y = Some(200.0);
         args.button = Some(MouseButton::Right);
         let req = build_request(&args).unwrap();
-        assert!(matches!(req, DesktopRequest::Click { x: _, y: _, button: MouseButton::Right }));
+        assert!(matches!(req, DesktopRequest::Click { ref_id: _, x: _, y: _, button: MouseButton::Right }));
     }
 
     #[test]
