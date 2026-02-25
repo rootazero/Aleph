@@ -163,9 +163,11 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
         // Tray control
         desktop_bridge::METHOD_TRAY_UPDATE_STATUS => handle_tray_update_status(params),
 
+        // Perception — OCR
+        desktop_bridge::METHOD_OCR => perception::handle_ocr(params),
+
         // Remaining unimplemented methods
-        desktop_bridge::METHOD_OCR
-        | desktop_bridge::METHOD_AX_TREE => Err((
+        desktop_bridge::METHOD_AX_TREE => Err((
             ERR_NOT_IMPLEMENTED,
             format!("{} not implemented on this platform", method),
         )),
