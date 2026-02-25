@@ -9,6 +9,25 @@ import Foundation
 final class Action: @unchecked Sendable {
     static let shared = Action()
 
+    // MARK: - Ref Resolution
+
+    /// Resolve a target from either a ref ID or explicit coordinates.
+    private func resolveTarget(refId: String?, x: Double?, y: Double?) -> Result<CGPoint, Error> {
+        if let refId = refId {
+            switch RefStore.shared.resolve(refId) {
+            case .success(let point):
+                return .success(point)
+            case .failure(let err):
+                return .failure(err)
+            }
+        }
+        if let x = x, let y = y {
+            return .success(CGPoint(x: x, y: y))
+        }
+        return .failure(NSError(domain: "Action", code: 10,
+                                userInfo: [NSLocalizedDescriptionKey: "Either ref or (x, y) coordinates required"]))
+    }
+
     // MARK: - Mouse
 
     func click(x: Double, y: Double, button: String) async -> Result<Any, Error> {
@@ -38,6 +57,187 @@ final class Action: @unchecked Sendable {
         up.post(tap: .cghidEventTap)
 
         return .success(["clicked": true, "x": x, "y": y, "button": button] as [String: Any])
+    }
+
+    /// Click with ref-based or coordinate-based targeting.
+    func clickTarget(refId: String?, x: Double?, y: Double?, button: String) async -> Result<Any, Error> {
+        switch resolveTarget(refId: refId, x: x, y: y) {
+        case .success(let point):
+            return await click(x: point.x, y: point.y, button: button)
+        case .failure(let err):
+            return .failure(err)
+        }
+    }
+
+    // MARK: - Double Click
+
+    func doubleClick(refId: String?, x: Double?, y: Double?, button: String) async -> Result<Any, Error> {
+        switch resolveTarget(refId: refId, x: x, y: y) {
+        case .failure(let err):
+            return .failure(err)
+        case .success(let point):
+            let (downType, upType, cgButton): (CGEventType, CGEventType, CGMouseButton)
+            switch button.lowercased() {
+            case "right":
+                downType = .rightMouseDown; upType = .rightMouseUp; cgButton = .right
+            case "middle":
+                downType = .otherMouseDown; upType = .otherMouseUp; cgButton = .center
+            default:
+                downType = .leftMouseDown; upType = .leftMouseUp; cgButton = .left
+            }
+
+            guard let source = CGEventSource(stateID: .hidSystemState),
+                  let down = CGEvent(mouseEventSource: source, mouseType: downType,
+                                     mouseCursorPosition: point, mouseButton: cgButton),
+                  let up = CGEvent(mouseEventSource: source, mouseType: upType,
+                                   mouseCursorPosition: point, mouseButton: cgButton)
+            else {
+                return .failure(NSError(domain: "Action", code: 1,
+                                       userInfo: [NSLocalizedDescriptionKey: "Failed to create mouse events"]))
+            }
+
+            // First click
+            down.setIntegerValueField(.mouseEventClickState, value: 1)
+            up.setIntegerValueField(.mouseEventClickState, value: 1)
+            down.post(tap: .cghidEventTap)
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            up.post(tap: .cghidEventTap)
+            try? await Task.sleep(nanoseconds: 50_000_000)
+
+            // Second click
+            guard let down2 = CGEvent(mouseEventSource: source, mouseType: downType,
+                                      mouseCursorPosition: point, mouseButton: cgButton),
+                  let up2 = CGEvent(mouseEventSource: source, mouseType: upType,
+                                    mouseCursorPosition: point, mouseButton: cgButton)
+            else {
+                return .failure(NSError(domain: "Action", code: 1,
+                                       userInfo: [NSLocalizedDescriptionKey: "Failed to create mouse events"]))
+            }
+            down2.setIntegerValueField(.mouseEventClickState, value: 2)
+            up2.setIntegerValueField(.mouseEventClickState, value: 2)
+            down2.post(tap: .cghidEventTap)
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            up2.post(tap: .cghidEventTap)
+
+            return .success(["double_clicked": true, "x": point.x, "y": point.y, "button": button] as [String: Any])
+        }
+    }
+
+    // MARK: - Scroll
+
+    func scroll(refId: String?, x: Double?, y: Double?, deltaX: Double, deltaY: Double) async -> Result<Any, Error> {
+        if refId != nil || (x != nil && y != nil) {
+            switch resolveTarget(refId: refId, x: x, y: y) {
+            case .success(let point):
+                guard let source = CGEventSource(stateID: .hidSystemState),
+                      let moveEvent = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
+                                              mouseCursorPosition: point, mouseButton: .left)
+                else {
+                    return .failure(NSError(domain: "Action", code: 8,
+                                           userInfo: [NSLocalizedDescriptionKey: "Failed to create move event"]))
+                }
+                moveEvent.post(tap: .cghidEventTap)
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            case .failure(let err):
+                return .failure(err)
+            }
+        }
+
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let scrollEvent = CGEvent(scrollWheelEvent2Source: source,
+                                        units: .pixel,
+                                        wheelCount: 2,
+                                        wheel1: Int32(deltaY),
+                                        wheel2: Int32(deltaX))
+        else {
+            return .failure(NSError(domain: "Action", code: 9,
+                                   userInfo: [NSLocalizedDescriptionKey: "Failed to create scroll event"]))
+        }
+        scrollEvent.post(tap: .cghidEventTap)
+
+        return .success(["scrolled": true, "delta_x": deltaX, "delta_y": deltaY] as [String: Any])
+    }
+
+    // MARK: - Hover
+
+    func hover(refId: String?, x: Double?, y: Double?) async -> Result<Any, Error> {
+        switch resolveTarget(refId: refId, x: x, y: y) {
+        case .failure(let err):
+            return .failure(err)
+        case .success(let point):
+            guard let source = CGEventSource(stateID: .hidSystemState),
+                  let moveEvent = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
+                                          mouseCursorPosition: point, mouseButton: .left)
+            else {
+                return .failure(NSError(domain: "Action", code: 11,
+                                       userInfo: [NSLocalizedDescriptionKey: "Failed to create move event"]))
+            }
+            moveEvent.post(tap: .cghidEventTap)
+            return .success(["hovered": true, "x": point.x, "y": point.y] as [String: Any])
+        }
+    }
+
+    // MARK: - Drag
+
+    func drag(startRefId: String?, startX: Double?, startY: Double?,
+              endRefId: String?, endX: Double?, endY: Double?,
+              durationMs: UInt64?) async -> Result<Any, Error> {
+        let startPoint: CGPoint
+        switch resolveTarget(refId: startRefId, x: startX, y: startY) {
+        case .success(let p): startPoint = p
+        case .failure(let err): return .failure(err)
+        }
+
+        let endPoint: CGPoint
+        switch resolveTarget(refId: endRefId, x: endX, y: endY) {
+        case .success(let p): endPoint = p
+        case .failure(let err): return .failure(err)
+        }
+
+        guard let source = CGEventSource(stateID: .hidSystemState) else {
+            return .failure(NSError(domain: "Action", code: 12,
+                                   userInfo: [NSLocalizedDescriptionKey: "Failed to create event source"]))
+        }
+
+        let duration = durationMs ?? 300
+        let steps = max(Int(duration / 16), 5)
+        let sleepPerStep = UInt64(duration) * 1_000_000 / UInt64(steps)
+
+        guard let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown,
+                                 mouseCursorPosition: startPoint, mouseButton: .left)
+        else {
+            return .failure(NSError(domain: "Action", code: 12,
+                                   userInfo: [NSLocalizedDescriptionKey: "Failed to create mouse down"]))
+        }
+        down.post(tap: .cghidEventTap)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        for i in 1...steps {
+            let t = Double(i) / Double(steps)
+            let ix = startPoint.x + (endPoint.x - startPoint.x) * t
+            let iy = startPoint.y + (endPoint.y - startPoint.y) * t
+            let pt = CGPoint(x: ix, y: iy)
+
+            guard let dragEvent = CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged,
+                                          mouseCursorPosition: pt, mouseButton: .left)
+            else { continue }
+            dragEvent.post(tap: .cghidEventTap)
+            try? await Task.sleep(nanoseconds: sleepPerStep)
+        }
+
+        guard let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp,
+                               mouseCursorPosition: endPoint, mouseButton: .left)
+        else {
+            return .failure(NSError(domain: "Action", code: 12,
+                                   userInfo: [NSLocalizedDescriptionKey: "Failed to create mouse up"]))
+        }
+        up.post(tap: .cghidEventTap)
+
+        return .success([
+            "dragged": true,
+            "start": ["x": startPoint.x, "y": startPoint.y],
+            "end": ["x": endPoint.x, "y": endPoint.y],
+        ] as [String: Any])
     }
 
     // MARK: - Keyboard
@@ -100,6 +300,27 @@ final class Action: @unchecked Sendable {
         up.post(tap: .cghidEventTap)
 
         return .success(["keys": keys] as [String: Any])
+    }
+
+    // MARK: - Paste
+
+    func paste(text: String) async -> Result<Any, Error> {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        return await keyCombo(keys: ["cmd", "v"])
+    }
+
+    /// Type text with optional ref-based focus.
+    func typeTextTarget(refId: String?, text: String) async -> Result<Any, Error> {
+        if let refId = refId {
+            let clickResult = await clickTarget(refId: refId, x: nil, y: nil, button: "left")
+            if case .failure(let err) = clickResult {
+                return .failure(err)
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return await typeText(text)
     }
 
     private func keyNameToCode(_ name: String) -> CGKeyCode {
