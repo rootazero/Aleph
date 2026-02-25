@@ -91,7 +91,7 @@ is_macos() {
 # Exit code: 0 on success, 1 on connection failure
 send_rpc() {
     local method="$1"
-    local params="${2:-{}}"
+    local params="${2:-"{}"}"
     local id="${3:-test-$(( RANDOM % 10000 ))}"
 
     local request
@@ -99,7 +99,7 @@ send_rpc() {
         "$id" "$method" "$params")
 
     local response
-    response=$(echo "$request" | socat - UNIX-CONNECT:"$SOCKET_PATH" 2>/dev/null) || {
+    response=$(echo "$request" | socat -T10 - UNIX-CONNECT:"$SOCKET_PATH" 2>/dev/null) || {
         echo "${RED}ERROR: Failed to connect to socket $SOCKET_PATH${RESET}" >&2
         return 1
     }
@@ -116,7 +116,7 @@ send_rpc() {
 # Simpler usage via benchmark_rpc below.
 send_rpc_timed() {
     local method="$1"
-    local params="${2:-{}}"
+    local params="${2:-"{}"}"
     local id="${3:-test-$(( RANDOM % 10000 ))}"
 
     local start_ns end_ns elapsed_ms response
