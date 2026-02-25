@@ -121,7 +121,7 @@ Rust Core 是 Aleph 的灵魂，只负责三件事：
 
 | 系统 | 角色 | 示例 |
 |------|------|------|
-| **Native 能力 (The Muscles)** | 直接控制系统 | Bash/Shell、Desktop Bridge (Swift/Tauri-Rust) — "看"(OCR/截图) 和 "动"(点击/输入) |
+| **Native 能力 (The Muscles)** | 直接控制系统 | Bash/Shell、Desktop Bridge (Tauri/Rust) — "看"(OCR/截图) 和 "动"(点击/输入) |
 | **MCP (The External Tools)** | 杠杆效应，调用社区工具 | Playwright、Google Maps 等 |
 | **Skills/Plugins (The Expertise)** | 领域知识 | PPT 专家、代码审查助手 |
 
@@ -146,6 +146,7 @@ Rust Core 是 Aleph 的灵魂，只负责三件事：
 | **Memory** | LanceDB 统一存储，混合检索 (ANN + FTS)，MemoryStore/GraphStore/SessionStore traits | [Memory System](docs/reference/MEMORY_SYSTEM.md) |
 | **Resilience** | 多 Agent 弹性系统，StateDatabase (SQLite) 管理事件/任务/追踪/会话 | — |
 | **Extension** | WASM + Node.js 插件运行时 | [Extension System](docs/reference/EXTENSION_SYSTEM.md) |
+| **Desktop Bridge** | UDS JSON-RPC 2.0 桌面能力 (OCR/截图/输入/窗口/Canvas) | [Design](docs/plans/2026-02-25-server-centric-build-architecture-design.md) |
 | **Exec** | Shell 执行安全，审批工作流 | [Security](docs/reference/SECURITY.md) |
 
 详见：[完整架构文档](docs/reference/ARCHITECTURE.md)
@@ -243,8 +244,8 @@ aleph/
 │       └── lib.rs                  # 60+ public modules
 ├── apps/
 │   ├── cli/                        # Rust CLI 客户端
-│   ├── macos/                      # macOS App (Swift/SwiftUI, 45+ dirs)
-│   └── desktop/                    # Cross-platform Tauri App
+│   ├── macos/                      # [DEPRECATED] macOS App → replaced by Tauri Bridge
+│   └── desktop/                    # Cross-platform Tauri Bridge (aleph-bridge)
 ├── docs/                           # 文档
 │   ├── reference/                  # 核心架构文档
 │   │   ├── ARCHITECTURE.md         # 完整架构
@@ -296,11 +297,14 @@ cargo run --bin aleph-server
 # 启动 Server (含 Control Plane UI)
 cargo run --bin aleph-server --features control-plane
 
-# macOS App
-cd apps/macos && xcodegen generate && open Aleph.xcodeproj
+# [DEPRECATED] macOS App (保留仅供参考)
+# cd apps/macos && xcodegen generate && open Aleph.xcodeproj
 
 # Tauri App
 cd apps/desktop && pnpm install && pnpm tauri dev
+
+# Build Bridge (cross-platform)
+cd apps/desktop && cargo tauri build
 ```
 
 ---
@@ -413,6 +417,7 @@ Example: `gateway: add WebSocket server foundation`
 | [AGENT_DESIGN_PHILOSOPHY.md](docs/reference/AGENT_DESIGN_PHILOSOPHY.md) | 四大设计思想：第一性原理、启发式、自学习、POE |
 | [POE Architecture](docs/plans/2026-02-01-poe-architecture-design.md) | POE 架构详细设计 |
 | [Server-Centric Architecture](docs/plans/2026-02-23-server-centric-architecture-design.md) | Server-centric 架构设计 |
+| [Server-Centric Build](docs/plans/2026-02-25-server-centric-build-architecture-design.md) | Daemon + Bridge 架构设计 |
 
 ---
 
