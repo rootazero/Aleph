@@ -46,9 +46,9 @@ mod config;
 mod policy;
 mod types;
 
-pub use config::{ConfigApprovalPolicy, PolicyConfig, PolicyRule};
+pub use config::{matches_glob, ConfigApprovalPolicy, PolicyConfig, PolicyRule};
 pub use policy::ApprovalPolicy;
-pub use types::{ActionRequest, ActionType, ApprovalDecision};
+pub use types::{ActionRequest, ActionType, ApprovalDecision, DefaultDecision};
 
 #[cfg(test)]
 mod tests {
@@ -68,16 +68,14 @@ mod tests {
 
     /// Helper to build a policy with custom config.
     fn make_policy(
-        defaults: Vec<(ActionType, &str)>,
+        defaults: Vec<(ActionType, DefaultDecision)>,
         allowlist: Vec<(ActionType, &str)>,
         blocklist: Vec<(ActionType, &str)>,
     ) -> ConfigApprovalPolicy {
         use std::collections::HashMap;
 
-        let defaults_map: HashMap<ActionType, String> = defaults
-            .into_iter()
-            .map(|(k, v)| (k, v.to_string()))
-            .collect();
+        let defaults_map: HashMap<ActionType, DefaultDecision> =
+            defaults.into_iter().collect();
 
         let allowlist_rules: Vec<PolicyRule> = allowlist
             .into_iter()
@@ -111,7 +109,7 @@ mod tests {
     async fn test_blocklist_takes_priority() {
         // Even though the default is "allow", a blocklist match should deny.
         let policy = make_policy(
-            vec![(ActionType::BrowserNavigate, "allow")],
+            vec![(ActionType::BrowserNavigate, DefaultDecision::Allow)],
             vec![(ActionType::BrowserNavigate, "https://*.example.com/*")],
             vec![(ActionType::BrowserNavigate, "https://evil.example.com/*")],
         );
@@ -132,7 +130,7 @@ mod tests {
     async fn test_allowlist_overrides_default() {
         // Default is "ask", but allowlist should let it through.
         let policy = make_policy(
-            vec![(ActionType::DesktopLaunchApp, "ask")],
+            vec![(ActionType::DesktopLaunchApp, DefaultDecision::Ask)],
             vec![(ActionType::DesktopLaunchApp, "com.apple.*")],
             vec![],
         );
@@ -147,9 +145,9 @@ mod tests {
     async fn test_default_decision() {
         let policy = make_policy(
             vec![
-                (ActionType::BrowserNavigate, "allow"),
-                (ActionType::ShellExec, "deny"),
-                (ActionType::DesktopClick, "ask"),
+                (ActionType::BrowserNavigate, DefaultDecision::Allow),
+                (ActionType::ShellExec, DefaultDecision::Deny),
+                (ActionType::DesktopClick, DefaultDecision::Ask),
             ],
             vec![],
             vec![],
@@ -195,7 +193,7 @@ mod tests {
     #[tokio::test]
     async fn test_glob_patterns() {
         let policy = make_policy(
-            vec![(ActionType::BrowserNavigate, "deny")],
+            vec![(ActionType::BrowserNavigate, DefaultDecision::Deny)],
             vec![
                 (ActionType::BrowserNavigate, "https://*.github.com/**"),
                 (ActionType::DesktopLaunchApp, "com.apple.*"),
@@ -321,7 +319,7 @@ mod tests {
         assert_eq!(config.blocklist.len(), 2);
         assert_eq!(
             config.defaults.get(&ActionType::ShellExec).unwrap(),
-            "deny"
+            &DefaultDecision::Deny
         );
     }
 
@@ -337,5 +335,16 @@ mod tests {
 
         // Should not panic — currently just logs via tracing::debug.
         policy.record(&req, &decision).await;
+    }
+
+    // -----------------------------------------------------------------------
+    // Serde validation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_invalid_default_value_rejected_by_serde() {
+        let json = r#"{"version":1,"defaults":{"shell_exec":"Deny"},"allowlist":[],"blocklist":[]}"#;
+        let result: Result<PolicyConfig, _> = serde_json::from_str(json);
+        assert!(result.is_err(), "Serde should reject capitalized 'Deny'");
     }
 }
