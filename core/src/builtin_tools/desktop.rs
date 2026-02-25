@@ -3,13 +3,16 @@
 //! Requires the Aleph Desktop Bridge to be connected. When the bridge is absent,
 //! all operations return a friendly message instead of an error.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::desktop::{DesktopBridgeClient, DesktopRequest};
+use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
 use crate::desktop::types::{CanvasPosition, MouseButton, ScreenRegion};
+use crate::desktop::{DesktopBridgeClient, DesktopRequest};
 use crate::error::Result;
 use crate::tools::AlephTool;
 
@@ -139,12 +142,73 @@ pub struct DesktopOutput {
 #[derive(Clone)]
 pub struct DesktopTool {
     client: DesktopBridgeClient,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl DesktopTool {
     pub fn new() -> Self {
         Self {
             client: DesktopBridgeClient::new(),
+            approval_policy: None,
+        }
+    }
+
+    /// Attach an approval policy to gate sensitive actions.
+    ///
+    /// When a policy is set, mutating actions (click, type_text, key_combo,
+    /// launch_app) are checked before execution. Read-only actions (screenshot,
+    /// ocr, ax_tree, window_list, focus_window, canvas_*) are always allowed.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
+    }
+
+    /// Check the approval policy for a sensitive action.
+    ///
+    /// Returns `None` if the action is allowed (or no policy is configured),
+    /// or `Some(DesktopOutput)` if the action is denied or requires user
+    /// confirmation.
+    async fn check_approval(
+        &self,
+        action_type: ActionType,
+        target: &str,
+    ) -> Option<DesktopOutput> {
+        let policy = self.approval_policy.as_ref()?;
+
+        let request = ActionRequest {
+            action_type,
+            target: target.to_string(),
+            agent_id: String::new(), // TODO: plumb agent_id from agent loop call context
+            context: String::new(),  // TODO: populate with action description for audit
+            timestamp: chrono::Utc::now(),
+        };
+
+        let decision = policy.check(&request).await;
+
+        match decision {
+            ApprovalDecision::Allow => {
+                policy.record(&request, &decision).await;
+                None
+            }
+            ApprovalDecision::Deny { ref reason } => {
+                policy.record(&request, &decision).await;
+                Some(DesktopOutput {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Action denied by approval policy: {reason}")),
+                })
+            }
+            ApprovalDecision::Ask { ref prompt } => {
+                // Don't record yet — record() should be called after user responds
+                Some(DesktopOutput {
+                    success: false,
+                    data: Some(serde_json::json!({
+                        "approval_required": true,
+                        "prompt": prompt,
+                    })),
+                    message: Some(format!("Approval required: {prompt}")),
+                })
+            }
         }
     }
 }
@@ -199,6 +263,43 @@ Examples:
     type Output = DesktopOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Check approval for sensitive (mutating) actions BEFORE touching
+        // the bridge. A denied action should be rejected immediately
+        // regardless of bridge availability. Read-only actions (screenshot,
+        // ocr, ax_tree, window_list, focus_window, canvas_*) skip approval.
+        let approval_check = match args.action.as_str() {
+            "click" => Some((
+                ActionType::DesktopClick,
+                format!(
+                    "({},{})",
+                    args.x.unwrap_or(0.0),
+                    args.y.unwrap_or(0.0)
+                ),
+            )),
+            "type_text" => Some((
+                ActionType::DesktopType,
+                args.text.clone().unwrap_or_default(),
+            )),
+            "key_combo" => Some((
+                ActionType::DesktopKeyCombo,
+                args.keys
+                    .as_ref()
+                    .map(|k| k.join("+"))
+                    .unwrap_or_default(),
+            )),
+            "launch_app" => Some((
+                ActionType::DesktopLaunchApp,
+                args.bundle_id.clone().unwrap_or_default(),
+            )),
+            _ => None,
+        };
+
+        if let Some((action_type, target)) = approval_check {
+            if let Some(out) = self.check_approval(action_type, &target).await {
+                return Ok(out);
+            }
+        }
+
         // Gracefully handle the case where the Desktop Bridge is not connected.
         if !self.client.is_available() {
             return Ok(DesktopOutput {
@@ -552,5 +653,185 @@ mod tests {
         args.text = Some("hello".into());
         let req = build_request(&args).unwrap();
         assert!(matches!(req, DesktopRequest::Paste { text } if text == "hello"));
+
+    // ── Approval policy tests ──────────────────────────────────────────
+
+    use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy};
+
+    /// A mock policy that returns a fixed decision for all checks.
+    struct MockPolicy {
+        decision: ApprovalDecision,
+    }
+
+    #[async_trait]
+    impl ApprovalPolicy for MockPolicy {
+        async fn check(&self, _request: &ActionRequest) -> ApprovalDecision {
+            self.decision.clone()
+        }
+        async fn record(&self, _request: &ActionRequest, _decision: &ApprovalDecision) {}
+    }
+
+    #[tokio::test]
+    async fn test_desktop_approval_deny_blocks_click() {
+        let policy = Arc::new(MockPolicy {
+            decision: ApprovalDecision::Deny {
+                reason: "click blocked".to_string(),
+            },
+        });
+        let tool = DesktopTool::new().with_approval_policy(policy);
+
+        let mut args = make_args("click");
+        args.x = Some(100.0);
+        args.y = Some(200.0);
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!output.success);
+        assert!(output
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Action denied"));
+    }
+
+    #[tokio::test]
+    async fn test_desktop_approval_deny_blocks_type_text() {
+        let policy = Arc::new(MockPolicy {
+            decision: ApprovalDecision::Deny {
+                reason: "type blocked".to_string(),
+            },
+        });
+        let tool = DesktopTool::new().with_approval_policy(policy);
+
+        let mut args = make_args("type_text");
+        args.text = Some("secret password".to_string());
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!output.success);
+        assert!(output
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Action denied"));
+    }
+
+    #[tokio::test]
+    async fn test_desktop_approval_deny_blocks_key_combo() {
+        let policy = Arc::new(MockPolicy {
+            decision: ApprovalDecision::Deny {
+                reason: "key combo blocked".to_string(),
+            },
+        });
+        let tool = DesktopTool::new().with_approval_policy(policy);
+
+        let mut args = make_args("key_combo");
+        args.keys = Some(vec!["cmd".into(), "q".into()]);
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!output.success);
+        assert!(output
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Action denied"));
+    }
+
+    #[tokio::test]
+    async fn test_desktop_approval_deny_blocks_launch_app() {
+        let policy = Arc::new(MockPolicy {
+            decision: ApprovalDecision::Deny {
+                reason: "launch blocked".to_string(),
+            },
+        });
+        let tool = DesktopTool::new().with_approval_policy(policy);
+
+        let mut args = make_args("launch_app");
+        args.bundle_id = Some("com.evil.malware".to_string());
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!output.success);
+        assert!(output
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Action denied"));
+    }
+
+    #[tokio::test]
+    async fn test_desktop_approval_ask_returns_prompt() {
+        let policy = Arc::new(MockPolicy {
+            decision: ApprovalDecision::Ask {
+                prompt: "Confirm click action".to_string(),
+            },
+        });
+        let tool = DesktopTool::new().with_approval_policy(policy);
+
+        let mut args = make_args("click");
+        args.x = Some(500.0);
+        args.y = Some(300.0);
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!output.success);
+        assert!(output
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Approval required"));
+        let data = output.data.unwrap();
+        assert_eq!(data["approval_required"], true);
+    }
+
+    #[tokio::test]
+    async fn test_desktop_approval_allows_screenshot() {
+        // Screenshot is read-only — should never be blocked even with a
+        // deny-all policy. The approval gate is not applied.
+        let policy = Arc::new(MockPolicy {
+            decision: ApprovalDecision::Deny {
+                reason: "everything denied".to_string(),
+            },
+        });
+        let tool = DesktopTool::new().with_approval_policy(policy);
+
+        let args = make_args("screenshot");
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        // Should NOT be "Action denied". It will fail on bridge not connected,
+        // which is the expected behavior (approval gate was not triggered).
+        assert!(!output.success);
+        assert!(output
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("bridge"));
+    }
+
+    #[tokio::test]
+    async fn test_desktop_approval_allows_ocr() {
+        let policy = Arc::new(MockPolicy {
+            decision: ApprovalDecision::Deny {
+                reason: "everything denied".to_string(),
+            },
+        });
+        let tool = DesktopTool::new().with_approval_policy(policy);
+
+        let args = make_args("ocr");
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!output.success);
+        assert!(output
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("bridge"));
+    }
+
+    #[tokio::test]
+    async fn test_desktop_no_policy_allows_all() {
+        // Without a policy, mutating actions should proceed as before.
+        let tool = DesktopTool::new();
+
+        let mut args = make_args("click");
+        args.x = Some(100.0);
+        args.y = Some(200.0);
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        // Should fail on "bridge not connected", NOT on approval
+        assert!(!output.success);
+        assert!(output
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("bridge"));
     }
 }
