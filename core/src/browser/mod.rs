@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod discovery;
 pub mod error;
 pub mod runtime;
