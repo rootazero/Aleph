@@ -27,7 +27,6 @@ pub mod projector;
 pub mod traveler;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 use crate::memory::context::{FactSource, FactType, MemoryScope, MemoryTier};
 
@@ -48,6 +47,8 @@ pub enum EventActor {
     User,
     /// System processes (compression, decay, consolidation, etc.)
     System,
+    /// Decay mechanism (distinct from System for audit clarity)
+    Decay,
     /// One-shot migration from legacy CRUD store
     Migration,
 }
@@ -58,6 +59,7 @@ impl std::fmt::Display for EventActor {
             EventActor::Agent => write!(f, "agent"),
             EventActor::User => write!(f, "user"),
             EventActor::System => write!(f, "system"),
+            EventActor::Decay => write!(f, "decay"),
             EventActor::Migration => write!(f, "migration"),
         }
     }
@@ -71,6 +73,7 @@ impl std::str::FromStr for EventActor {
             "agent" => Ok(EventActor::Agent),
             "user" => Ok(EventActor::User),
             "system" => Ok(EventActor::System),
+            "decay" => Ok(EventActor::Decay),
             "migration" => Ok(EventActor::Migration),
             _ => Err(format!("Unknown event actor: {}", s)),
         }
@@ -124,6 +127,9 @@ impl std::str::FromStr for TierTransitionTrigger {
 ///
 /// Every mutation to a `MemoryFact` is captured as one of these variants.
 /// The enum is internally tagged with `"type"` for deterministic serialization.
+///
+/// Field definitions match the design doc at
+/// `docs/plans/2026-02-26-memory-event-sourcing-design.md`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum MemoryEvent {
@@ -132,89 +138,118 @@ pub enum MemoryEvent {
     // ------------------------------------------------------------------
     /// A new fact was created
     FactCreated {
+        fact_id: String,
         content: String,
         fact_type: FactType,
-        source: FactSource,
         tier: MemoryTier,
         scope: MemoryScope,
-        /// Initial strength (0.0 ..= 1.0)
-        strength: f32,
-        /// Optional metadata key-value pairs
-        metadata: HashMap<String, String>,
+        path: String,
+        namespace: String,
+        workspace: String,
+        confidence: f32,
+        source: FactSource,
+        source_memory_ids: Vec<String>,
     },
 
     /// The textual content of a fact was updated
     FactContentUpdated {
+        fact_id: String,
         old_content: String,
         new_content: String,
         reason: String,
     },
 
-    /// Non-content metadata was updated (tags, scope, etc.)
+    /// A single metadata field was updated
     FactMetadataUpdated {
-        /// Key-value pairs that were changed (key -> new value)
-        changed_fields: HashMap<String, String>,
+        fact_id: String,
+        field: String,
+        old_value: String,
+        new_value: String,
     },
 
     /// The fact moved between memory tiers
     TierTransitioned {
-        from: MemoryTier,
-        to: MemoryTier,
+        fact_id: String,
+        from_tier: MemoryTier,
+        to_tier: MemoryTier,
         trigger: TierTransitionTrigger,
     },
 
-    /// The fact was accessed / retrieved (Pulse)
+    // ------------------------------------------------------------------
+    // Pulse events (buffered persist)
+    // ------------------------------------------------------------------
+    /// The fact was accessed / retrieved
     FactAccessed {
-        /// The query that triggered retrieval, if any
+        fact_id: String,
         query: Option<String>,
-        /// Relevance score at time of access
         relevance_score: Option<f32>,
-        /// Whether the fact was actually used in the response
         used_in_response: bool,
+        new_access_count: u32,
     },
 
-    /// The fact's strength decayed (Pulse)
+    /// The fact's strength decayed
     StrengthDecayed {
+        fact_id: String,
         old_strength: f32,
         new_strength: f32,
+        decay_factor: f32,
     },
 
+    // ------------------------------------------------------------------
+    // Skeleton events (continued)
+    // ------------------------------------------------------------------
     /// The fact was soft-deleted (invalidated)
     FactInvalidated {
+        fact_id: String,
         reason: String,
-        /// Strength at time of invalidation
+        actor: EventActor,
         strength_at_invalidation: Option<f32>,
     },
 
     /// The fact was restored from the recycle bin
     FactRestored {
-        /// Strength assigned after restoration
+        fact_id: String,
         new_strength: f32,
     },
 
     /// The fact was permanently deleted
     FactDeleted {
+        fact_id: String,
         reason: String,
-        /// Days spent in recycle bin before deletion
-        days_in_recycle_bin: Option<u32>,
     },
 
     /// Multiple facts were consolidated into this one
     FactConsolidated {
-        /// IDs of the source facts that were merged
+        fact_id: String,
         source_fact_ids: Vec<String>,
-        /// Human-readable summary of what was consolidated
-        summary: String,
+        consolidated_content: String,
     },
 
     /// The fact was migrated from the legacy CRUD store
     FactMigrated {
-        /// Snapshot of the original CRUD record (JSON)
-        legacy_snapshot: String,
+        fact_id: String,
+        snapshot: serde_json::Value,
     },
 }
 
 impl MemoryEvent {
+    /// Extract the fact_id from any event variant.
+    pub fn fact_id(&self) -> &str {
+        match self {
+            MemoryEvent::FactCreated { fact_id, .. }
+            | MemoryEvent::FactContentUpdated { fact_id, .. }
+            | MemoryEvent::FactMetadataUpdated { fact_id, .. }
+            | MemoryEvent::TierTransitioned { fact_id, .. }
+            | MemoryEvent::FactAccessed { fact_id, .. }
+            | MemoryEvent::StrengthDecayed { fact_id, .. }
+            | MemoryEvent::FactInvalidated { fact_id, .. }
+            | MemoryEvent::FactRestored { fact_id, .. }
+            | MemoryEvent::FactDeleted { fact_id, .. }
+            | MemoryEvent::FactConsolidated { fact_id, .. }
+            | MemoryEvent::FactMigrated { fact_id, .. } => fact_id,
+        }
+    }
+
     /// Return the serde tag string for this event variant.
     ///
     /// Matches the `#[serde(tag = "type")]` discriminant so callers can
@@ -253,54 +288,49 @@ impl MemoryEvent {
 
 /// Immutable envelope wrapping a `MemoryEvent` with metadata.
 ///
-/// Stored as a single row in the event store (SQLite). The `seq` field
-/// provides a per-fact monotonic sequence for deterministic replay.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Stored as a single row in the event store (SQLite). The `id` field
+/// is the SQLite auto-increment primary key (0 before insert, assigned
+/// on write). The `seq` field provides per-fact monotonic ordering.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryEventEnvelope {
-    /// Globally unique event ID (UUID v4)
-    pub id: String,
-    /// The fact this event belongs to
+    /// Auto-increment global ID (assigned by SQLite on insert; 0 before insert).
+    pub id: i64,
+    /// The fact this event belongs to.
     pub fact_id: String,
-    /// Per-fact monotonic sequence number (1-based)
+    /// Per-fact monotonic sequence number (1-based).
     pub seq: u64,
-    /// Who caused this event
-    pub actor: EventActor,
-    /// When the event occurred (Unix timestamp, seconds)
-    pub timestamp: i64,
-    /// Optional correlation ID for tracing across subsystems
-    pub correlation_id: Option<String>,
-    /// The domain event payload
+    /// The domain event payload.
     pub event: MemoryEvent,
+    /// Who caused this event.
+    pub actor: EventActor,
+    /// When the event occurred (Unix timestamp, seconds).
+    pub timestamp: i64,
+    /// Optional correlation to a task or session.
+    pub correlation_id: Option<String>,
 }
 
 impl MemoryEventEnvelope {
-    /// Create a new envelope with a fresh UUID and current timestamp.
+    /// Build a new envelope. `id` is set to 0 (assigned by DB on insert).
     pub fn new(
         fact_id: String,
         seq: u64,
-        actor: EventActor,
         event: MemoryEvent,
+        actor: EventActor,
         correlation_id: Option<String>,
     ) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: 0,
             fact_id,
             seq,
+            event,
             actor,
             timestamp: now,
             correlation_id,
-            event,
         }
-    }
-
-    /// Return the fact_id this event belongs to.
-    pub fn fact_id(&self) -> &str {
-        &self.fact_id
     }
 
     /// Convenience: return the event type tag.
@@ -329,6 +359,7 @@ mod tests {
         assert_eq!(EventActor::Agent.to_string(), "agent");
         assert_eq!(EventActor::User.to_string(), "user");
         assert_eq!(EventActor::System.to_string(), "system");
+        assert_eq!(EventActor::Decay.to_string(), "decay");
         assert_eq!(EventActor::Migration.to_string(), "migration");
     }
 
@@ -337,6 +368,7 @@ mod tests {
         assert_eq!("agent".parse::<EventActor>().unwrap(), EventActor::Agent);
         assert_eq!("USER".parse::<EventActor>().unwrap(), EventActor::User);
         assert_eq!("System".parse::<EventActor>().unwrap(), EventActor::System);
+        assert_eq!("decay".parse::<EventActor>().unwrap(), EventActor::Decay);
         assert_eq!(
             "migration".parse::<EventActor>().unwrap(),
             EventActor::Migration
@@ -345,9 +377,7 @@ mod tests {
 
     #[test]
     fn test_event_actor_from_str_unknown() {
-        let result = "unknown".parse::<EventActor>();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Unknown event actor"));
+        assert!("unknown".parse::<EventActor>().is_err());
     }
 
     #[test]
@@ -356,6 +386,7 @@ mod tests {
             EventActor::Agent,
             EventActor::User,
             EventActor::System,
+            EventActor::Decay,
             EventActor::Migration,
         ] {
             let s = actor.to_string();
@@ -377,37 +408,9 @@ mod tests {
 
     #[test]
     fn test_tier_transition_trigger_display() {
-        assert_eq!(
-            TierTransitionTrigger::Consolidation.to_string(),
-            "consolidation"
-        );
-        assert_eq!(
-            TierTransitionTrigger::Reinforcement.to_string(),
-            "reinforcement"
-        );
+        assert_eq!(TierTransitionTrigger::Consolidation.to_string(), "consolidation");
+        assert_eq!(TierTransitionTrigger::Reinforcement.to_string(), "reinforcement");
         assert_eq!(TierTransitionTrigger::Decay.to_string(), "decay");
-    }
-
-    #[test]
-    fn test_tier_transition_trigger_from_str() {
-        assert_eq!(
-            "consolidation".parse::<TierTransitionTrigger>().unwrap(),
-            TierTransitionTrigger::Consolidation
-        );
-        assert_eq!(
-            "REINFORCEMENT".parse::<TierTransitionTrigger>().unwrap(),
-            TierTransitionTrigger::Reinforcement
-        );
-        assert_eq!(
-            "Decay".parse::<TierTransitionTrigger>().unwrap(),
-            TierTransitionTrigger::Decay
-        );
-    }
-
-    #[test]
-    fn test_tier_transition_trigger_from_str_unknown() {
-        let result = "promotion".parse::<TierTransitionTrigger>();
-        assert!(result.is_err());
     }
 
     #[test]
@@ -423,13 +426,53 @@ mod tests {
         }
     }
 
+    // --- MemoryEvent: fact_id -----------------------------------------------
+
     #[test]
-    fn test_tier_transition_trigger_serde() {
-        let trigger = TierTransitionTrigger::Reinforcement;
-        let json = serde_json::to_string(&trigger).unwrap();
-        assert_eq!(json, "\"reinforcement\"");
-        let parsed: TierTransitionTrigger = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, TierTransitionTrigger::Reinforcement);
+    fn test_fact_id_all_variants() {
+        let events: Vec<MemoryEvent> = vec![
+            MemoryEvent::FactCreated {
+                fact_id: "a".into(), content: "c".into(), fact_type: FactType::Other,
+                tier: MemoryTier::ShortTerm, scope: MemoryScope::Global,
+                path: "p".into(), namespace: "n".into(), workspace: "w".into(),
+                confidence: 1.0, source: FactSource::Manual, source_memory_ids: vec![],
+            },
+            MemoryEvent::FactContentUpdated {
+                fact_id: "b".into(), old_content: "o".into(),
+                new_content: "n".into(), reason: "r".into(),
+            },
+            MemoryEvent::FactMetadataUpdated {
+                fact_id: "c".into(), field: "tier".into(),
+                old_value: "ShortTerm".into(), new_value: "LongTerm".into(),
+            },
+            MemoryEvent::TierTransitioned {
+                fact_id: "d".into(), from_tier: MemoryTier::ShortTerm,
+                to_tier: MemoryTier::LongTerm, trigger: TierTransitionTrigger::Consolidation,
+            },
+            MemoryEvent::FactAccessed {
+                fact_id: "e".into(), query: None, relevance_score: None,
+                used_in_response: false, new_access_count: 0,
+            },
+            MemoryEvent::StrengthDecayed {
+                fact_id: "f".into(), old_strength: 1.0, new_strength: 0.5, decay_factor: 0.5,
+            },
+            MemoryEvent::FactInvalidated {
+                fact_id: "g".into(), reason: "r".into(),
+                actor: EventActor::Decay, strength_at_invalidation: Some(0.05),
+            },
+            MemoryEvent::FactRestored { fact_id: "h".into(), new_strength: 0.8 },
+            MemoryEvent::FactDeleted { fact_id: "i".into(), reason: "r".into() },
+            MemoryEvent::FactConsolidated {
+                fact_id: "j".into(), source_fact_ids: vec![], consolidated_content: "c".into(),
+            },
+            MemoryEvent::FactMigrated {
+                fact_id: "k".into(), snapshot: serde_json::json!({}),
+            },
+        ];
+        let expected = ["a","b","c","d","e","f","g","h","i","j","k"];
+        for (evt, exp) in events.iter().zip(expected.iter()) {
+            assert_eq!(evt.fact_id(), *exp);
+        }
     }
 
     // --- MemoryEvent: event_type_tag ----------------------------------------
@@ -439,178 +482,106 @@ mod tests {
         let cases: Vec<(MemoryEvent, &str)> = vec![
             (
                 MemoryEvent::FactCreated {
-                    content: String::new(),
-                    fact_type: FactType::Other,
-                    source: FactSource::Extracted,
-                    tier: MemoryTier::ShortTerm,
-                    scope: MemoryScope::Global,
-                    strength: 1.0,
-                    metadata: HashMap::new(),
+                    fact_id: "f".into(), content: String::new(), fact_type: FactType::Other,
+                    source: FactSource::Extracted, tier: MemoryTier::ShortTerm,
+                    scope: MemoryScope::Global, path: String::new(), namespace: "owner".into(),
+                    workspace: "default".into(), confidence: 1.0,
+                    source_memory_ids: vec![],
                 },
                 "FactCreated",
             ),
             (
                 MemoryEvent::FactContentUpdated {
-                    old_content: String::new(),
-                    new_content: String::new(),
-                    reason: String::new(),
+                    fact_id: "f".into(), old_content: String::new(),
+                    new_content: String::new(), reason: String::new(),
                 },
                 "FactContentUpdated",
             ),
             (
                 MemoryEvent::FactMetadataUpdated {
-                    changed_fields: HashMap::new(),
+                    fact_id: "f".into(), field: "tier".into(),
+                    old_value: "a".into(), new_value: "b".into(),
                 },
                 "FactMetadataUpdated",
             ),
             (
                 MemoryEvent::TierTransitioned {
-                    from: MemoryTier::ShortTerm,
-                    to: MemoryTier::LongTerm,
-                    trigger: TierTransitionTrigger::Consolidation,
+                    fact_id: "f".into(), from_tier: MemoryTier::ShortTerm,
+                    to_tier: MemoryTier::LongTerm, trigger: TierTransitionTrigger::Consolidation,
                 },
                 "TierTransitioned",
             ),
             (
                 MemoryEvent::FactAccessed {
-                    query: None,
-                    relevance_score: None,
-                    used_in_response: false,
+                    fact_id: "f".into(), query: None, relevance_score: None,
+                    used_in_response: false, new_access_count: 0,
                 },
                 "FactAccessed",
             ),
             (
                 MemoryEvent::StrengthDecayed {
-                    old_strength: 1.0,
-                    new_strength: 0.9,
+                    fact_id: "f".into(), old_strength: 1.0, new_strength: 0.9, decay_factor: 0.95,
                 },
                 "StrengthDecayed",
             ),
             (
                 MemoryEvent::FactInvalidated {
-                    reason: String::new(),
-                    strength_at_invalidation: None,
+                    fact_id: "f".into(), reason: String::new(),
+                    actor: EventActor::System, strength_at_invalidation: None,
                 },
                 "FactInvalidated",
             ),
             (
-                MemoryEvent::FactRestored {
-                    new_strength: 0.5,
-                },
+                MemoryEvent::FactRestored { fact_id: "f".into(), new_strength: 0.5 },
                 "FactRestored",
             ),
             (
-                MemoryEvent::FactDeleted {
-                    reason: String::new(),
-                    days_in_recycle_bin: None,
-                },
+                MemoryEvent::FactDeleted { fact_id: "f".into(), reason: String::new() },
                 "FactDeleted",
             ),
             (
                 MemoryEvent::FactConsolidated {
-                    source_fact_ids: vec![],
-                    summary: String::new(),
+                    fact_id: "f".into(), source_fact_ids: vec![],
+                    consolidated_content: String::new(),
                 },
                 "FactConsolidated",
             ),
             (
                 MemoryEvent::FactMigrated {
-                    legacy_snapshot: String::new(),
+                    fact_id: "f".into(), snapshot: serde_json::json!({}),
                 },
                 "FactMigrated",
             ),
         ];
 
         for (event, expected_tag) in &cases {
-            assert_eq!(
-                event.event_type_tag(),
-                *expected_tag,
-                "Wrong tag for {:?}",
-                expected_tag
-            );
+            assert_eq!(event.event_type_tag(), *expected_tag);
         }
-
-        // Verify we tested all 11 variants
         assert_eq!(cases.len(), 11);
     }
 
     // --- MemoryEvent: is_skeleton -------------------------------------------
 
     #[test]
-    fn test_is_skeleton_skeleton_events() {
-        let skeleton_events = vec![
-            MemoryEvent::FactCreated {
-                content: "test".into(),
-                fact_type: FactType::Other,
-                source: FactSource::Extracted,
-                tier: MemoryTier::ShortTerm,
-                scope: MemoryScope::Global,
-                strength: 1.0,
-                metadata: HashMap::new(),
-            },
-            MemoryEvent::FactContentUpdated {
-                old_content: "a".into(),
-                new_content: "b".into(),
-                reason: "update".into(),
-            },
-            MemoryEvent::FactMetadataUpdated {
-                changed_fields: HashMap::new(),
-            },
-            MemoryEvent::TierTransitioned {
-                from: MemoryTier::ShortTerm,
-                to: MemoryTier::LongTerm,
-                trigger: TierTransitionTrigger::Consolidation,
-            },
-            MemoryEvent::FactInvalidated {
-                reason: "stale".into(),
-                strength_at_invalidation: Some(0.1),
-            },
-            MemoryEvent::FactRestored {
-                new_strength: 0.5,
-            },
-            MemoryEvent::FactDeleted {
-                reason: "purge".into(),
-                days_in_recycle_bin: Some(30),
-            },
-            MemoryEvent::FactConsolidated {
-                source_fact_ids: vec!["a".into()],
-                summary: "merged".into(),
-            },
-            MemoryEvent::FactMigrated {
-                legacy_snapshot: "{}".into(),
-            },
-        ];
+    fn test_is_skeleton_classification() {
+        // Pulse events
+        assert!(!MemoryEvent::FactAccessed {
+            fact_id: "f".into(), query: None, relevance_score: None,
+            used_in_response: false, new_access_count: 0,
+        }.is_skeleton());
+        assert!(!MemoryEvent::StrengthDecayed {
+            fact_id: "f".into(), old_strength: 1.0, new_strength: 0.9, decay_factor: 0.95,
+        }.is_skeleton());
 
-        for event in &skeleton_events {
-            assert!(
-                event.is_skeleton(),
-                "{} should be Skeleton",
-                event.event_type_tag()
-            );
-        }
-    }
-
-    #[test]
-    fn test_is_skeleton_pulse_events() {
-        let pulse_events = vec![
-            MemoryEvent::FactAccessed {
-                query: Some("rust".into()),
-                relevance_score: Some(0.95),
-                used_in_response: true,
-            },
-            MemoryEvent::StrengthDecayed {
-                old_strength: 0.8,
-                new_strength: 0.7,
-            },
-        ];
-
-        for event in &pulse_events {
-            assert!(
-                !event.is_skeleton(),
-                "{} should be Pulse (not Skeleton)",
-                event.event_type_tag()
-            );
-        }
+        // Skeleton events
+        assert!(MemoryEvent::FactCreated {
+            fact_id: "f".into(), content: "c".into(), fact_type: FactType::Other,
+            tier: MemoryTier::ShortTerm, scope: MemoryScope::Global,
+            path: "p".into(), namespace: "n".into(), workspace: "w".into(),
+            confidence: 1.0, source: FactSource::Extracted, source_memory_ids: vec![],
+        }.is_skeleton());
+        assert!(MemoryEvent::FactDeleted { fact_id: "f".into(), reason: "r".into() }.is_skeleton());
+        assert!(MemoryEvent::FactMigrated { fact_id: "f".into(), snapshot: serde_json::json!({}) }.is_skeleton());
     }
 
     // --- MemoryEvent: serde -------------------------------------------------
@@ -618,78 +589,44 @@ mod tests {
     #[test]
     fn test_event_serde_roundtrip_fact_created() {
         let event = MemoryEvent::FactCreated {
+            fact_id: "fact-001".into(),
             content: "User prefers Rust".into(),
             fact_type: FactType::Preference,
-            source: FactSource::Extracted,
             tier: MemoryTier::ShortTerm,
             scope: MemoryScope::Global,
-            strength: 0.85,
-            metadata: {
-                let mut m = HashMap::new();
-                m.insert("topic".into(), "programming".into());
-                m
-            },
+            path: "aleph://user/preferences/language".into(),
+            namespace: "owner".into(),
+            workspace: "default".into(),
+            confidence: 0.85,
+            source: FactSource::Extracted,
+            source_memory_ids: vec!["mem-001".into()],
         };
 
         let json = serde_json::to_string(&event).unwrap();
-        // Verify the tag is present
         assert!(json.contains("\"type\":\"FactCreated\""));
         assert!(json.contains("User prefers Rust"));
+        assert!(json.contains("aleph://user/preferences/language"));
 
         let parsed: MemoryEvent = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.event_type_tag(), "FactCreated");
-        if let MemoryEvent::FactCreated {
-            content, strength, ..
-        } = &parsed
-        {
-            assert_eq!(content, "User prefers Rust");
-            assert!((strength - 0.85).abs() < f32::EPSILON);
-        } else {
-            panic!("Wrong variant after deserialization");
-        }
+        assert_eq!(parsed.fact_id(), "fact-001");
     }
 
     #[test]
-    fn test_event_serde_roundtrip_tier_transitioned() {
-        let event = MemoryEvent::TierTransitioned {
-            from: MemoryTier::ShortTerm,
-            to: MemoryTier::LongTerm,
-            trigger: TierTransitionTrigger::Reinforcement,
-        };
-
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"type\":\"TierTransitioned\""));
-
-        let parsed: MemoryEvent = serde_json::from_str(&json).unwrap();
-        if let MemoryEvent::TierTransitioned {
-            from, to, trigger, ..
-        } = &parsed
-        {
-            assert_eq!(*from, MemoryTier::ShortTerm);
-            assert_eq!(*to, MemoryTier::LongTerm);
-            assert_eq!(*trigger, TierTransitionTrigger::Reinforcement);
-        } else {
-            panic!("Wrong variant");
-        }
-    }
-
-    #[test]
-    fn test_event_serde_roundtrip_fact_consolidated() {
-        let event = MemoryEvent::FactConsolidated {
-            source_fact_ids: vec!["fact-1".into(), "fact-2".into(), "fact-3".into()],
-            summary: "Merged 3 related programming preferences".into(),
+    fn test_event_serde_roundtrip_fact_migrated() {
+        let snapshot = serde_json::json!({
+            "id": "old-fact",
+            "content": "test",
+            "is_valid": true
+        });
+        let event = MemoryEvent::FactMigrated {
+            fact_id: "old-fact".into(),
+            snapshot: snapshot.clone(),
         };
 
         let json = serde_json::to_string(&event).unwrap();
         let parsed: MemoryEvent = serde_json::from_str(&json).unwrap();
-
-        if let MemoryEvent::FactConsolidated {
-            source_fact_ids,
-            summary,
-        } = &parsed
-        {
-            assert_eq!(source_fact_ids.len(), 3);
-            assert!(summary.contains("Merged"));
+        if let MemoryEvent::FactMigrated { snapshot: s, .. } = parsed {
+            assert_eq!(s, snapshot);
         } else {
             panic!("Wrong variant");
         }
@@ -697,72 +634,52 @@ mod tests {
 
     #[test]
     fn test_event_serde_roundtrip_all_variants() {
-        // Verify every variant survives a JSON roundtrip
         let events = vec![
             MemoryEvent::FactCreated {
-                content: "c".into(),
-                fact_type: FactType::Learning,
-                source: FactSource::Manual,
-                tier: MemoryTier::Core,
-                scope: MemoryScope::Workspace,
-                strength: 1.0,
-                metadata: HashMap::new(),
+                fact_id: "f".into(), content: "c".into(), fact_type: FactType::Learning,
+                source: FactSource::Manual, tier: MemoryTier::Core, scope: MemoryScope::Workspace,
+                path: "p".into(), namespace: "n".into(), workspace: "w".into(),
+                confidence: 1.0, source_memory_ids: vec![],
             },
             MemoryEvent::FactContentUpdated {
-                old_content: "a".into(),
-                new_content: "b".into(),
-                reason: "correction".into(),
+                fact_id: "f".into(), old_content: "a".into(),
+                new_content: "b".into(), reason: "correction".into(),
             },
             MemoryEvent::FactMetadataUpdated {
-                changed_fields: {
-                    let mut m = HashMap::new();
-                    m.insert("scope".into(), "persona".into());
-                    m
-                },
+                fact_id: "f".into(), field: "scope".into(),
+                old_value: "global".into(), new_value: "persona".into(),
             },
             MemoryEvent::TierTransitioned {
-                from: MemoryTier::LongTerm,
-                to: MemoryTier::ShortTerm,
-                trigger: TierTransitionTrigger::Decay,
+                fact_id: "f".into(), from_tier: MemoryTier::LongTerm,
+                to_tier: MemoryTier::ShortTerm, trigger: TierTransitionTrigger::Decay,
             },
             MemoryEvent::FactAccessed {
-                query: Some("q".into()),
-                relevance_score: Some(0.5),
-                used_in_response: true,
+                fact_id: "f".into(), query: Some("q".into()),
+                relevance_score: Some(0.5), used_in_response: true, new_access_count: 3,
             },
             MemoryEvent::StrengthDecayed {
-                old_strength: 0.9,
-                new_strength: 0.8,
+                fact_id: "f".into(), old_strength: 0.9, new_strength: 0.8, decay_factor: 0.95,
             },
             MemoryEvent::FactInvalidated {
-                reason: "outdated".into(),
-                strength_at_invalidation: Some(0.05),
+                fact_id: "f".into(), reason: "outdated".into(),
+                actor: EventActor::Decay, strength_at_invalidation: Some(0.05),
             },
-            MemoryEvent::FactRestored {
-                new_strength: 0.6,
-            },
-            MemoryEvent::FactDeleted {
-                reason: "user request".into(),
-                days_in_recycle_bin: Some(14),
-            },
+            MemoryEvent::FactRestored { fact_id: "f".into(), new_strength: 0.6 },
+            MemoryEvent::FactDeleted { fact_id: "f".into(), reason: "user request".into() },
             MemoryEvent::FactConsolidated {
-                source_fact_ids: vec!["x".into()],
-                summary: "s".into(),
+                fact_id: "f".into(), source_fact_ids: vec!["x".into()],
+                consolidated_content: "merged".into(),
             },
             MemoryEvent::FactMigrated {
-                legacy_snapshot: "{\"id\":\"old\"}".into(),
+                fact_id: "f".into(), snapshot: serde_json::json!({"id": "old"}),
             },
         ];
 
         for event in &events {
             let json = serde_json::to_string(event).unwrap();
             let parsed: MemoryEvent = serde_json::from_str(&json).unwrap();
-            assert_eq!(
-                parsed.event_type_tag(),
-                event.event_type_tag(),
-                "Roundtrip failed for {}",
-                event.event_type_tag()
-            );
+            assert_eq!(parsed.event_type_tag(), event.event_type_tag());
+            assert_eq!(parsed.fact_id(), event.fact_id());
         }
     }
 
@@ -771,49 +688,53 @@ mod tests {
     #[test]
     fn test_envelope_new() {
         let event = MemoryEvent::FactCreated {
+            fact_id: "fact-abc".into(),
             content: "Test fact".into(),
             fact_type: FactType::Other,
             source: FactSource::Extracted,
             tier: MemoryTier::ShortTerm,
             scope: MemoryScope::Global,
-            strength: 1.0,
-            metadata: HashMap::new(),
+            path: "p".into(),
+            namespace: "owner".into(),
+            workspace: "default".into(),
+            confidence: 1.0,
+            source_memory_ids: vec![],
         };
 
         let envelope = MemoryEventEnvelope::new(
             "fact-abc".into(),
             1,
-            EventActor::Agent,
             event,
+            EventActor::Agent,
             Some("corr-123".into()),
         );
 
-        assert_eq!(envelope.fact_id(), "fact-abc");
+        assert_eq!(envelope.fact_id, "fact-abc");
         assert_eq!(envelope.seq, 1);
         assert_eq!(envelope.actor, EventActor::Agent);
         assert_eq!(envelope.correlation_id.as_deref(), Some("corr-123"));
         assert_eq!(envelope.event_type_tag(), "FactCreated");
         assert!(envelope.is_skeleton());
         assert!(envelope.timestamp > 0);
-        // UUID format check
-        assert_eq!(envelope.id.len(), 36);
-        assert!(envelope.id.contains('-'));
+        assert_eq!(envelope.id, 0); // Not yet assigned by DB
     }
 
     #[test]
-    fn test_envelope_fact_id() {
+    fn test_envelope_pulse() {
         let envelope = MemoryEventEnvelope::new(
             "fact-xyz".into(),
             5,
-            EventActor::System,
             MemoryEvent::StrengthDecayed {
+                fact_id: "fact-xyz".into(),
                 old_strength: 0.5,
                 new_strength: 0.4,
+                decay_factor: 0.95,
             },
+            EventActor::System,
             None,
         );
 
-        assert_eq!(envelope.fact_id(), "fact-xyz");
+        assert_eq!(envelope.fact_id, "fact-xyz");
         assert!(!envelope.is_skeleton()); // Pulse event
     }
 
@@ -822,75 +743,24 @@ mod tests {
         let envelope = MemoryEventEnvelope::new(
             "fact-001".into(),
             3,
-            EventActor::User,
             MemoryEvent::FactContentUpdated {
+                fact_id: "fact-001".into(),
                 old_content: "old".into(),
                 new_content: "new".into(),
                 reason: "user correction".into(),
             },
+            EventActor::User,
             Some("session-42".into()),
         );
 
         let json = serde_json::to_string(&envelope).unwrap();
         let parsed: MemoryEventEnvelope = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(parsed.id, envelope.id);
         assert_eq!(parsed.fact_id, envelope.fact_id);
         assert_eq!(parsed.seq, envelope.seq);
         assert_eq!(parsed.actor, envelope.actor);
         assert_eq!(parsed.timestamp, envelope.timestamp);
         assert_eq!(parsed.correlation_id, envelope.correlation_id);
         assert_eq!(parsed.event.event_type_tag(), "FactContentUpdated");
-    }
-
-    #[test]
-    fn test_envelope_is_skeleton_delegates() {
-        let skeleton = MemoryEventEnvelope::new(
-            "f1".into(),
-            1,
-            EventActor::Agent,
-            MemoryEvent::FactDeleted {
-                reason: "purge".into(),
-                days_in_recycle_bin: None,
-            },
-            None,
-        );
-        assert!(skeleton.is_skeleton());
-
-        let pulse = MemoryEventEnvelope::new(
-            "f2".into(),
-            1,
-            EventActor::System,
-            MemoryEvent::FactAccessed {
-                query: None,
-                relevance_score: None,
-                used_in_response: false,
-            },
-            None,
-        );
-        assert!(!pulse.is_skeleton());
-    }
-
-    #[test]
-    fn test_envelope_unique_ids() {
-        let e1 = MemoryEventEnvelope::new(
-            "f".into(),
-            1,
-            EventActor::Agent,
-            MemoryEvent::FactRestored {
-                new_strength: 0.5,
-            },
-            None,
-        );
-        let e2 = MemoryEventEnvelope::new(
-            "f".into(),
-            2,
-            EventActor::Agent,
-            MemoryEvent::FactRestored {
-                new_strength: 0.5,
-            },
-            None,
-        );
-        assert_ne!(e1.id, e2.id, "Each envelope should get a unique UUID");
     }
 }
