@@ -4,6 +4,7 @@ import XCTest
 final class AlephTests: XCTestCase {
 
     /// Verify that the app module can be imported and basic types are accessible.
+    @MainActor
     func testAppDelegateExists() throws {
         let delegate = AppDelegate()
         XCTAssertNotNil(delegate, "AppDelegate should be instantiable")
@@ -11,6 +12,7 @@ final class AlephTests: XCTestCase {
 
     /// Verify that applicationShouldTerminateAfterLastWindowClosed returns false
     /// (menu bar app should stay alive when windows close).
+    @MainActor
     func testShouldNotTerminateAfterLastWindowClosed() throws {
         let delegate = AppDelegate()
         let result = delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared)
