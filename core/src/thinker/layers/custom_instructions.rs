@@ -1,0 +1,60 @@
+//! CustomInstructionsLayer — user-provided custom instructions (priority 1500)
+
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+
+pub struct CustomInstructionsLayer;
+
+impl PromptLayer for CustomInstructionsLayer {
+    fn name(&self) -> &'static str { "custom_instructions" }
+    fn priority(&self) -> u32 { 1500 }
+    fn paths(&self) -> &'static [AssemblyPath] {
+        &[
+            AssemblyPath::Basic,
+            AssemblyPath::Hydration,
+            AssemblyPath::Soul,
+            AssemblyPath::Context,
+            AssemblyPath::Cached,
+        ]
+    }
+    fn inject(&self, output: &mut String, input: &LayerInput) {
+        if let Some(instructions) = &input.config.custom_instructions {
+            output.push_str("## Additional Instructions\n");
+            output.push_str(instructions);
+            output.push_str("\n\n");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::thinker::prompt_builder::PromptConfig;
+
+    #[test]
+    fn test_custom_instructions_present() {
+        let layer = CustomInstructionsLayer;
+        let config = PromptConfig {
+            custom_instructions: Some("Always be concise.".to_string()),
+            ..Default::default()
+        };
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(out.contains("## Additional Instructions"));
+        assert!(out.contains("Always be concise."));
+    }
+
+    #[test]
+    fn test_custom_instructions_absent() {
+        let layer = CustomInstructionsLayer;
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(out.is_empty());
+    }
+}
