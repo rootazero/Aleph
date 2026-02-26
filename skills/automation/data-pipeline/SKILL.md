@@ -10,6 +10,9 @@ requirements:
   binaries:
     - jq
     - python3
+  platforms:
+    - macos
+    - linux
   install:
     - manager: brew
       package: jq

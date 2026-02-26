@@ -8,6 +8,10 @@ allowed-tools:
 requirements:
   binaries:
     - curl
+    - typst
+  platforms:
+    - macos
+    - linux
   install:
     - manager: brew
       package: typst

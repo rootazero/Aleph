@@ -9,6 +9,9 @@ requirements:
   binaries:
     - curl
     - python3
+  platforms:
+    - macos
+    - linux
   install:
     - manager: pip
       package: beautifulsoup4

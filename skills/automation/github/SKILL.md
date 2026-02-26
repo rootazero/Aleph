@@ -153,6 +153,28 @@ gh api graphql -f query='
 ' --jq '.data.repository.pullRequests.nodes[] | "\(.number): \(.title) (+\(.additions)/-\(.deletions))"'
 ```
 
+### Security Checks
+
+```bash
+# List repository secrets (names only, values are never exposed)
+gh secret list
+
+# Check Dependabot alerts for dependency vulnerabilities
+gh api repos/{owner}/{repo}/dependabot/alerts --jq '.[] | "\(.state): \(.security_advisory.summary) [\(.dependency.package.name)]"'
+
+# Audit branch protection rules on main
+gh api repos/{owner}/{repo}/branches/main/protection --jq '{
+  enforce_admins: .enforce_admins.enabled,
+  required_reviews: .required_pull_request_reviews.required_approving_review_count,
+  dismiss_stale: .required_pull_request_reviews.dismiss_stale_reviews,
+  require_ci: .required_status_checks.strict,
+  ci_contexts: .required_status_checks.contexts
+}'
+
+# List deploy keys
+gh api repos/{owner}/{repo}/keys --jq '.[] | "\(.title) (read_only: \(.read_only))"'
+```
+
 ### Release Management
 
 ```bash

@@ -9,6 +9,9 @@ requirements:
     - ssh
     - scp
     - rsync
+  platforms:
+    - macos
+    - linux
 triggers:
   - ssh
   - remote

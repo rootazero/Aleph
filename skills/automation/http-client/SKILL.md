@@ -7,6 +7,9 @@ cli-wrapper: true
 requirements:
   binaries:
     - curl
+  platforms:
+    - macos
+    - linux
 triggers:
   - curl
   - API test
@@ -21,6 +24,16 @@ triggers:
 ## When to Use
 
 Invoke this skill when testing APIs, debugging HTTP requests, or validating endpoint behavior. Uses curl exclusively — pre-installed on macOS/Linux, zero additional dependencies.
+
+## Prerequisites
+
+```bash
+# curl is pre-installed on macOS and Linux
+curl --version
+
+# jq recommended for response processing
+brew install jq
+```
 
 ## Core Operations
 

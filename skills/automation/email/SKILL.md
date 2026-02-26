@@ -7,6 +7,9 @@ cli-wrapper: true
 requirements:
   binaries:
     - curl
+  platforms:
+    - macos
+    - linux
 triggers:
   - email
   - send email
