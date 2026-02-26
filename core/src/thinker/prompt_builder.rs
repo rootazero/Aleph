@@ -750,6 +750,40 @@ impl PromptBuilder {
         prompt
     }
 
+    /// Build system prompt with hooks applied.
+    ///
+    /// Hooks are called in order: before_prompt_build on each hook,
+    /// then normal prompt building, then after_prompt_build on each hook.
+    pub fn build_system_prompt_with_hooks(
+        &self,
+        tools: &[ToolInfo],
+        soul: &SoulManifest,
+        hooks: &[Box<dyn crate::thinker::prompt_hooks::PromptHook>],
+    ) -> String {
+        // Clone config so hooks can modify it
+        let mut config = self.config.clone();
+
+        // Before hooks
+        for hook in hooks {
+            if let Err(e) = hook.before_prompt_build(&mut config) {
+                tracing::warn!(hook = hook.name(), error = %e, "Prompt hook before_build failed");
+            }
+        }
+
+        // Build with potentially modified config
+        let builder = PromptBuilder::new(config);
+        let mut prompt = builder.build_system_prompt_with_soul(tools, soul);
+
+        // After hooks
+        for hook in hooks {
+            if let Err(e) = hook.after_prompt_build(&mut prompt) {
+                tracing::warn!(hook = hook.name(), error = %e, "Prompt hook after_build failed");
+            }
+        }
+
+        prompt
+    }
+
     // ========== Environment Contract & Security Section Builders ==========
 
     /// Append environment contract section describing the current channel capabilities
@@ -1878,5 +1912,24 @@ mod tests {
         assert!(prompt.contains("anti-patterns"));
         assert!(prompt.contains("expertise"));
         assert!(prompt.contains("identity files"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_with_hooks() {
+        use crate::thinker::prompt_hooks::PromptHook;
+
+        struct AppendHook;
+        impl PromptHook for AppendHook {
+            fn after_prompt_build(&self, prompt: &mut String) -> crate::error::Result<()> {
+                prompt.push_str("\n## Custom Section\n");
+                Ok(())
+            }
+        }
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let soul = SoulManifest::default();
+        let hooks: Vec<Box<dyn PromptHook>> = vec![Box::new(AppendHook)];
+        let prompt = builder.build_system_prompt_with_hooks(&[], &soul, &hooks);
+        assert!(prompt.contains("## Custom Section"));
     }
 }

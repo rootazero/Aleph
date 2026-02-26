@@ -37,6 +37,7 @@ pub mod identity;
 pub mod interaction;
 pub mod model_router;
 pub mod prompt_builder;
+pub mod prompt_hooks;
 pub mod security_context;
 pub mod soul;
 pub mod prompt_sanitizer;
