@@ -1547,4 +1547,178 @@ mod tests {
         assert!(prompt.contains("[Source: <path>#<id>]"));
         assert!(prompt.contains("citation is mandatory"));
     }
+
+    // ========== Integration tests: full prompt assembly ==========
+
+    #[test]
+    fn test_full_prompt_with_all_enhancements_background_mode() {
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+        use crate::thinker::runtime_context::RuntimeContext;
+        use crate::thinker::security_context::SecurityContext;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+
+        // Build a Background-mode context (should trigger all 4 enhancements)
+        let interaction = InteractionManifest::new(InteractionParadigm::Background);
+        let security = SecurityContext::permissive();
+        let mut resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+
+        // Add RuntimeContext
+        resolved.runtime_context = Some(RuntimeContext {
+            os: "macOS 15.3".to_string(),
+            arch: "aarch64".to_string(),
+            shell: "zsh".to_string(),
+            working_dir: std::path::PathBuf::from("/workspace"),
+            repo_root: Some(std::path::PathBuf::from("/workspace")),
+            current_model: "claude-opus-4-6".to_string(),
+            hostname: "test-host".to_string(),
+        });
+
+        let prompt = builder.build_system_prompt_with_context(&resolved);
+
+        // 1. RuntimeContext should be present
+        assert!(
+            prompt.contains("## Runtime Environment"),
+            "Missing RuntimeContext section"
+        );
+        assert!(prompt.contains("os=macOS 15.3"), "Missing OS info");
+        assert!(
+            prompt.contains("model=claude-opus-4-6"),
+            "Missing model info"
+        );
+
+        // 2. Protocol tokens should be present (Background has SilentReply)
+        assert!(
+            prompt.contains("ALEPH_HEARTBEAT_OK"),
+            "Missing protocol tokens: ALEPH_HEARTBEAT_OK"
+        );
+        assert!(
+            prompt.contains("ALEPH_SILENT_COMPLETE"),
+            "Missing protocol tokens: ALEPH_SILENT_COMPLETE"
+        );
+
+        // 3. Operational guidelines should be present (Background mode)
+        assert!(
+            prompt.contains("System Operational Awareness"),
+            "Missing operational guidelines"
+        );
+        assert!(
+            prompt.contains("Diagnostic Capabilities"),
+            "Missing diagnostic capabilities in operational guidelines"
+        );
+
+        // 4. Citation standards should be present (always injected)
+        assert!(
+            prompt.contains("Citation Standards"),
+            "Missing citation standards"
+        );
+        assert!(
+            prompt.contains("citation is mandatory"),
+            "Missing citation requirement"
+        );
+
+        // Standard sections should still be present
+        assert!(prompt.contains("Your Role"), "Missing role section");
+        assert!(
+            prompt.contains("Response Format"),
+            "Missing response format section"
+        );
+
+        // Verify ordering: RuntimeContext -> Environment -> Protocol -> Guidelines -> Citations
+        let runtime_pos = prompt.find("## Runtime Environment").unwrap();
+        let env_pos = prompt.find("## Environment").unwrap();
+        let protocol_pos = prompt.find("Response Protocol Tokens").unwrap();
+        let guidelines_pos = prompt.find("System Operational Awareness").unwrap();
+        let citation_pos = prompt.find("Citation Standards").unwrap();
+
+        assert!(
+            runtime_pos < env_pos,
+            "RuntimeContext should appear before Environment contract"
+        );
+        assert!(
+            env_pos < protocol_pos,
+            "Environment should appear before Protocol tokens"
+        );
+        assert!(
+            protocol_pos < guidelines_pos,
+            "Protocol tokens should appear before Operational guidelines"
+        );
+        assert!(
+            guidelines_pos < citation_pos,
+            "Operational guidelines should appear before Citation standards"
+        );
+    }
+
+    #[test]
+    fn test_interactive_prompt_minimal_token_overhead() {
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+        use crate::thinker::runtime_context::RuntimeContext;
+        use crate::thinker::security_context::SecurityContext;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+
+        // Build a WebRich-mode context (interactive, not background)
+        let interaction = InteractionManifest::new(InteractionParadigm::WebRich);
+        let security = SecurityContext::permissive();
+        let mut resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+
+        // Add RuntimeContext (should still be included for interactive)
+        resolved.runtime_context = Some(RuntimeContext {
+            os: "linux".to_string(),
+            arch: "x86_64".to_string(),
+            shell: "bash".to_string(),
+            working_dir: std::path::PathBuf::from("/home/user"),
+            repo_root: None,
+            current_model: "gpt-4".to_string(),
+            hostname: "web-server".to_string(),
+        });
+
+        let prompt = builder.build_system_prompt_with_context(&resolved);
+
+        // 1. RuntimeContext SHOULD be present (always injected when provided)
+        assert!(
+            prompt.contains("## Runtime Environment"),
+            "RuntimeContext should be present in WebRich mode"
+        );
+        assert!(prompt.contains("os=linux"), "Missing OS info in WebRich mode");
+        assert!(
+            prompt.contains("model=gpt-4"),
+            "Missing model info in WebRich mode"
+        );
+
+        // 2. Protocol tokens should NOT be present (WebRich has no SilentReply)
+        assert!(
+            !prompt.contains("ALEPH_HEARTBEAT_OK"),
+            "Protocol tokens should NOT be present in WebRich mode"
+        );
+        assert!(
+            !prompt.contains("Response Protocol Tokens"),
+            "Protocol tokens section should NOT be present in WebRich mode"
+        );
+
+        // 3. Operational guidelines should NOT be present (WebRich is not Background/CLI)
+        assert!(
+            !prompt.contains("System Operational Awareness"),
+            "Operational guidelines should NOT be present in WebRich mode"
+        );
+
+        // 4. Citation standards SHOULD be present (always injected)
+        assert!(
+            prompt.contains("Citation Standards"),
+            "Citation standards should be present in WebRich mode"
+        );
+        assert!(
+            prompt.contains("citation is mandatory"),
+            "Citation requirement should be present in WebRich mode"
+        );
+
+        // Standard sections should be present
+        assert!(prompt.contains("Your Role"), "Missing role section");
+        assert!(
+            prompt.contains("Response Format"),
+            "Missing response format section"
+        );
+    }
 }
