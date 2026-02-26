@@ -182,6 +182,7 @@ impl AuditEntry {
 }
 
 use crate::error::AlephError;
+#[allow(deprecated)]
 use crate::memory::store::{AuditStore, MemoryBackend, MemoryStore};
 
 /// Logger for memory audit events
@@ -189,6 +190,7 @@ pub struct AuditLogger {
     db: MemoryBackend,
 }
 
+#[allow(deprecated)]
 impl AuditLogger {
     /// Create a new audit logger
     pub fn new(db: MemoryBackend) -> Self {
