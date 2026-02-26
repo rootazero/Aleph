@@ -1,14 +1,14 @@
 //! Embedding provider abstraction
 //!
-//! Defines the `EmbeddingProvider` trait that unifies local (fastembed)
-//! and remote (OpenAI-compatible) embedding backends.
+//! All embeddings go through remote OpenAI-compatible APIs.
+//! Local fastembed has been removed.
 
+use crate::config::types::memory::EmbeddingProviderConfig;
 use crate::error::AlephError;
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Abstract embedding provider
-///
-/// Implementations wrap specific backends (local fastembed, OpenAI API, etc.)
-/// behind a uniform async interface.
 #[async_trait::async_trait]
 pub trait EmbeddingProvider: Send + Sync {
     /// Generate embedding for a single text
@@ -20,11 +20,11 @@ pub trait EmbeddingProvider: Send + Sync {
     /// Get the output dimension of this provider
     fn dimensions(&self) -> usize;
 
-    /// Get the model name (e.g., "multilingual-e5-small")
+    /// Get the model name (e.g., "BAAI/bge-m3")
     fn model_name(&self) -> &str;
 
-    /// Get the provider type (e.g., "local", "openai", "custom")
-    fn provider_type(&self) -> &str;
+    /// Get the provider id (e.g., "siliconflow")
+    fn provider_id(&self) -> &str;
 }
 
 /// Truncate embedding to target dimension and L2 normalize.
@@ -46,57 +46,9 @@ pub fn truncate_and_normalize(embedding: Vec<f32>, target_dim: usize) -> Vec<f32
     }
 }
 
-use crate::memory::smart_embedder::SmartEmbedder;
-
-/// Local embedding provider wrapping SmartEmbedder (fastembed)
-///
-/// This is the default provider that uses a local multilingual-e5-small model.
-/// It supports TTL-based lazy loading and background cleanup.
-#[derive(Clone)]
-pub struct LocalEmbeddingProvider {
-    embedder: SmartEmbedder,
-}
-
-impl LocalEmbeddingProvider {
-    /// Create a new local provider from an existing SmartEmbedder
-    pub fn new(embedder: SmartEmbedder) -> Self {
-        Self { embedder }
-    }
-
-    /// Get a reference to the underlying SmartEmbedder
-    pub fn inner(&self) -> &SmartEmbedder {
-        &self.embedder
-    }
-}
-
-#[async_trait::async_trait]
-impl EmbeddingProvider for LocalEmbeddingProvider {
-    async fn embed(&self, text: &str) -> Result<Vec<f32>, AlephError> {
-        self.embedder.embed(text).await
-    }
-
-    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
-        self.embedder.embed_batch(texts).await
-    }
-
-    fn dimensions(&self) -> usize {
-        self.embedder.dimensions()
-    }
-
-    fn model_name(&self) -> &str {
-        self.embedder.model_name()
-    }
-
-    fn provider_type(&self) -> &str {
-        "local"
-    }
-}
-
-use std::time::Duration;
-
 /// Remote embedding provider using OpenAI-compatible API
 ///
-/// Works with OpenAI, Azure OpenAI, Ollama, vLLM, and any service
+/// Works with SiliconFlow, OpenAI, Ollama, and any service
 /// that implements the `/v1/embeddings` endpoint.
 pub struct RemoteEmbeddingProvider {
     client: reqwest::Client,
@@ -105,28 +57,22 @@ pub struct RemoteEmbeddingProvider {
     model: String,
     dimension: usize,
     batch_size: usize,
+    provider_id: String,
 }
 
 impl RemoteEmbeddingProvider {
-    /// Create from EmbeddingConfig
-    pub fn from_config(
-        config: &crate::config::types::memory::EmbeddingConfig,
-    ) -> Result<Self, AlephError> {
-        let api_key = if let Some(ref env_var) = config.api_key_env {
-            std::env::var(env_var).map_err(|_| {
-                AlephError::config(format!(
-                    "Environment variable {} not set for embedding API key",
-                    env_var
-                ))
-            })?
+    /// Create from EmbeddingProviderConfig
+    pub fn from_config(config: &EmbeddingProviderConfig) -> Result<Self, AlephError> {
+        // Resolve API key: direct value > env var > empty
+        let api_key = if let Some(ref key) = config.api_key {
+            if !key.is_empty() {
+                key.clone()
+            } else {
+                Self::resolve_env_key(&config.api_key_env)?
+            }
         } else {
-            String::new()
+            Self::resolve_env_key(&config.api_key_env)?
         };
-
-        let api_base = config
-            .api_base
-            .clone()
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(config.timeout_ms))
@@ -135,12 +81,37 @@ impl RemoteEmbeddingProvider {
 
         Ok(Self {
             client,
-            api_base,
+            api_base: config.api_base.clone(),
             api_key,
             model: config.model.clone(),
-            dimension: config.dimension as usize,
+            dimension: config.dimensions as usize,
             batch_size: config.batch_size as usize,
+            provider_id: config.id.clone(),
         })
+    }
+
+    fn resolve_env_key(env_var: &Option<String>) -> Result<String, AlephError> {
+        if let Some(ref var) = env_var {
+            match std::env::var(var) {
+                Ok(val) if !val.is_empty() => Ok(val),
+                _ => Ok(String::new()), // Not set — may be fine for Ollama
+            }
+        } else {
+            Ok(String::new())
+        }
+    }
+
+    /// Test connectivity by embedding a short text
+    pub async fn test_connection(&self) -> Result<(), AlephError> {
+        let result = self.embed("test").await?;
+        if result.len() != self.dimension {
+            return Err(AlephError::config(format!(
+                "Dimension mismatch: expected {}, got {}",
+                self.dimension,
+                result.len()
+            )));
+        }
+        Ok(())
     }
 
     /// Call the embeddings API for a batch of texts
@@ -242,34 +213,17 @@ impl EmbeddingProvider for RemoteEmbeddingProvider {
         &self.model
     }
 
-    fn provider_type(&self) -> &str {
-        "remote"
+    fn provider_id(&self) -> &str {
+        &self.provider_id
     }
 }
 
-use std::sync::Arc;
-
-/// Create an EmbeddingProvider from configuration
-///
-/// Returns a trait object that can be used for embedding operations.
-pub fn create_embedding_provider(
-    config: &crate::config::types::memory::EmbeddingConfig,
+/// Create an EmbeddingProvider from a provider config
+pub fn create_provider(
+    config: &EmbeddingProviderConfig,
 ) -> Result<Arc<dyn EmbeddingProvider>, AlephError> {
-    match config.provider.as_str() {
-        "local" => {
-            let cache_dir = SmartEmbedder::default_cache_dir()?;
-            let embedder = SmartEmbedder::new(cache_dir, crate::memory::DEFAULT_MODEL_TTL_SECS);
-            Ok(Arc::new(LocalEmbeddingProvider::new(embedder)))
-        }
-        "openai" | "custom" => {
-            let provider = RemoteEmbeddingProvider::from_config(config)?;
-            Ok(Arc::new(provider))
-        }
-        other => Err(AlephError::config(format!(
-            "Unknown embedding provider: '{}'. Supported: local, openai, custom",
-            other
-        ))),
-    }
+    let provider = RemoteEmbeddingProvider::from_config(config)?;
+    Ok(Arc::new(provider))
 }
 
 #[cfg(test)]
@@ -306,41 +260,6 @@ mod tests {
         assert_eq!(result, vec![0.0, 0.0]);
     }
 
-    #[tokio::test]
-    async fn test_local_provider_creation() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let embedder = SmartEmbedder::new(temp_dir.path().to_path_buf(), 60);
-        let provider = LocalEmbeddingProvider::new(embedder);
-
-        assert_eq!(provider.dimensions(), 384);
-        assert_eq!(provider.model_name(), "multilingual-e5-small");
-        assert_eq!(provider.provider_type(), "local");
-
-        provider.inner().shutdown();
-    }
-    #[test]
-    fn test_create_local_provider_config() {
-        let config = crate::config::types::memory::EmbeddingConfig::default();
-        assert_eq!(config.provider, "local");
-        assert_eq!(config.dimension, 384);
-    }
-
-    #[test]
-    fn test_unknown_provider_fails() {
-        let config = crate::config::types::memory::EmbeddingConfig {
-            provider: "unknown".to_string(),
-            ..crate::config::types::memory::EmbeddingConfig::default()
-        };
-        let result = create_embedding_provider(&config);
-        assert!(result.is_err());
-        let err = result.err().unwrap();
-        assert!(err.to_string().contains("Unknown embedding provider"));
-    }
-
-    // =========================================================================
-    // Mock provider for testing
-    // =========================================================================
-
     /// Mock embedding provider for tests
     pub struct MockEmbeddingProvider {
         dim: usize,
@@ -374,82 +293,8 @@ mod tests {
             &self.model
         }
 
-        fn provider_type(&self) -> &str {
+        fn provider_id(&self) -> &str {
             "mock"
         }
-    }
-
-    #[tokio::test]
-    #[ignore = "Requires LanceMemoryBackend"]
-    #[allow(unreachable_code, unused_variables, clippy::diverging_sub_expression)]
-    async fn test_full_embedding_evolution_flow() {
-        use crate::memory::context::{
-            FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer,
-            TemporalScope,
-        };
-        use crate::memory::embedding_migration::EmbeddingMigration;
-        use crate::memory::store::MemoryBackend;
-
-        // TODO: Create LanceMemoryBackend for test
-        let db: MemoryBackend = unimplemented!("Migrate test to use LanceMemoryBackend");
-
-        // 2. Insert a fact with old model metadata
-        let fact = MemoryFact {
-            id: "test-fact-1".to_string(),
-            content: "User prefers dark mode".to_string(),
-            fact_type: FactType::Preference,
-            embedding: Some(vec![0.5; 384]),
-            source_memory_ids: vec!["mem-1".to_string()],
-            created_at: 1000,
-            updated_at: 1000,
-            confidence: 0.9,
-            is_valid: true,
-            invalidation_reason: None,
-            decay_invalidated_at: None,
-            specificity: FactSpecificity::Pattern,
-            temporal_scope: TemporalScope::Contextual,
-            similarity_score: None,
-            path: "aleph://user/preferences/".to_string(),
-            layer: MemoryLayer::L2Detail,
-            category: MemoryCategory::Preferences,
-            fact_source: FactSource::Extracted,
-            content_hash: "abc123".to_string(),
-            parent_path: "aleph://user/".to_string(),
-            embedding_model: "old-model-v1".to_string(),
-            namespace: "owner".to_string(),
-            workspace: "default".to_string(),
-            tier: crate::memory::context::MemoryTier::ShortTerm,
-            scope: crate::memory::context::MemoryScope::Global,
-            persona_id: None,
-            strength: 1.0,
-            access_count: 0,
-            last_accessed_at: None,
-        };
-
-        crate::memory::store::MemoryStore::insert_fact(db.as_ref(), &fact)
-            .await
-            .unwrap();
-
-        // 3. Create a new provider (different model name)
-        let provider: Arc<dyn EmbeddingProvider> =
-            Arc::new(MockEmbeddingProvider::new(384, "new-model-v2"));
-
-        // 4. Check migration detects the mismatch
-        let migration = EmbeddingMigration::new(Arc::clone(&db), provider, 10);
-
-        let pending = migration.pending_count().await.unwrap();
-        assert_eq!(pending, 1, "Should detect 1 fact needing migration");
-
-        // 5. Run migration
-        let progress = migration.run_batch().await.unwrap();
-        assert_eq!(progress.migrated, 1);
-        assert_eq!(progress.remaining, 0);
-
-        // 6. Verify fact was updated
-        let updated = crate::memory::store::MemoryStore::get_fact(db.as_ref(), "test-fact-1")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(updated.embedding_model, "new-model-v2");
     }
 }

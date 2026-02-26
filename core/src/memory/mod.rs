@@ -28,7 +28,6 @@ pub mod context;
 pub mod decay;
 pub mod dreaming;
 pub mod lazy_decay;
-pub mod embedding;
 pub mod fact_retrieval;
 pub mod graph;
 pub mod hybrid_retrieval;
@@ -38,10 +37,8 @@ pub mod noise_filter;
 pub mod reranker;
 pub mod retrieval;
 pub mod scratchpad;
-pub mod smart_embedder;
-pub mod embedding_cache;
 pub mod embedding_provider;
-pub mod embedding_migration;
+pub mod embedding_manager;
 pub mod cli;
 pub mod transcript_indexer;
 pub mod context_comptroller;
@@ -96,11 +93,6 @@ pub use decay::{DecayConfig, MemoryStrength};
 pub use dreaming::{DailyInsight, DreamStatus, MemoryDecayReport, ensure_dream_daemon, record_activity};
 pub use lazy_decay::{LazyDecayEngine, DecayEvaluation};
 pub use graph::{GraphStore, ResolvedEntity, GraphDecayConfig, GraphDecayReport};
-#[deprecated(
-    since = "0.1.0",
-    note = "Use SmartEmbedder for TTL-based lazy loading with multilingual-e5-small"
-)]
-pub use embedding::EmbeddingModel;
 pub use fact_retrieval::{FactRetrieval, FactRetrievalConfig, RetrievalResult};
 pub use hybrid_retrieval::{HybridRetrieval, HybridSearchConfig, RetrievalStrategy};
 pub use ingestion::MemoryIngestion;
@@ -109,13 +101,11 @@ pub use noise_filter::{NoiseFilter, NoiseFilterConfig};
 pub use reranker::{NoOpReranker, Reranker, RerankResult};
 pub use retrieval::MemoryRetrieval;
 pub use scratchpad::{ScratchpadManager, ScratchpadConfig, SessionHistory};
-pub use smart_embedder::{SmartEmbedder, DEFAULT_MODEL_TTL_SECS, EMBEDDING_DIM};
-pub use embedding_cache::EmbeddingCache;
 pub use embedding_provider::{
-    EmbeddingProvider, LocalEmbeddingProvider, RemoteEmbeddingProvider,
-    create_embedding_provider, truncate_and_normalize,
+    EmbeddingProvider, RemoteEmbeddingProvider,
+    create_provider as create_embedding_provider, truncate_and_normalize,
 };
-pub use embedding_migration::{EmbeddingMigration, MigrationProgress};
+pub use embedding_manager::EmbeddingManager;
 pub use cli::{LockError, LockMode, MemoryLock};
 pub use transcript_indexer::{
     SemanticChunkConfig, SemanticChunker, TranscriptIndexer, TranscriptIndexerConfig,
