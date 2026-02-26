@@ -25,11 +25,15 @@ impl EmbeddingManager {
     /// Initialize the active provider from current settings.
     /// Returns Ok(()) even if no provider is configured (degrades gracefully).
     pub async fn init(&self) -> Result<(), AlephError> {
-        let settings = self.settings.read().await;
-        let active_id = &settings.active_provider_id;
+        let (active_id, config) = {
+            let settings = self.settings.read().await;
+            let active_id = settings.active_provider_id.clone();
+            let config = settings.providers.iter().find(|p| p.id == active_id).cloned();
+            (active_id, config)
+        }; // settings lock released
 
-        if let Some(config) = settings.providers.iter().find(|p| p.id == *active_id) {
-            match create_provider(config) {
+        if let Some(config) = config {
+            match create_provider(&config) {
                 Ok(provider) => {
                     *self.active_provider.write().await = Some(provider);
                     info!(provider_id = %active_id, "Embedding provider initialized");
@@ -59,19 +63,25 @@ impl EmbeddingManager {
 
     /// Switch the active provider. Returns true if vector store should be cleared.
     pub async fn switch_provider(&self, new_id: &str) -> Result<bool, AlephError> {
-        let mut settings = self.settings.write().await;
-        let old_id = settings.active_provider_id.clone();
+        // Extract config and old_id, then drop the settings lock before creating the provider.
+        // This avoids holding two write locks simultaneously.
+        let (config, old_id) = {
+            let settings = self.settings.read().await;
+            let old_id = settings.active_provider_id.clone();
+            let config = settings
+                .providers
+                .iter()
+                .find(|p| p.id == new_id)
+                .ok_or_else(|| AlephError::config(format!("Provider not found: {}", new_id)))?
+                .clone();
+            (config, old_id)
+        }; // settings lock released
 
-        let config = settings
-            .providers
-            .iter()
-            .find(|p| p.id == new_id)
-            .ok_or_else(|| AlephError::config(format!("Provider not found: {}", new_id)))?
-            .clone();
-
+        // Create provider before mutating settings — if this fails, nothing changes.
         let provider = create_provider(&config)?;
 
-        settings.active_provider_id = new_id.to_string();
+        // Now update both settings and active provider
+        self.settings.write().await.active_provider_id = new_id.to_string();
         *self.active_provider.write().await = Some(provider);
 
         let should_clear = old_id != new_id;
