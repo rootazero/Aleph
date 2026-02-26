@@ -814,6 +814,55 @@ impl PromptBuilder {
         prompt.push_str(&super::protocol_tokens::ProtocolToken::to_prompt_section());
     }
 
+    /// Append system operational awareness guidelines.
+    ///
+    /// Only injected for Background and CLI paradigms where the LLM
+    /// may need to detect and report system issues proactively.
+    pub fn append_operational_guidelines(
+        &self,
+        prompt: &mut String,
+        paradigm: super::interaction::InteractionParadigm,
+    ) {
+        match paradigm {
+            super::interaction::InteractionParadigm::Background
+            | super::interaction::InteractionParadigm::CLI => {}
+            _ => return, // Skip for Messaging, WebRich, Embedded
+        }
+
+        prompt.push_str("## System Operational Awareness\n\n");
+        prompt.push_str(
+            "You are aware of your own runtime environment and can monitor it proactively.\n\n",
+        );
+
+        prompt.push_str("### Diagnostic Capabilities (read-only, always allowed)\n");
+        prompt.push_str("- Check disk space: `df -h`\n");
+        prompt.push_str("- Check memory usage: `vm_stat` / `free -h`\n");
+        prompt.push_str("- Check running Aleph processes: `ps aux | grep aleph`\n");
+        prompt.push_str(
+            "- Check configuration validity: read config files and validate structure\n",
+        );
+        prompt.push_str("- Check Desktop Bridge status: query UDS socket availability\n");
+        prompt.push_str("- Check LanceDB health: verify database file accessibility\n\n");
+
+        prompt.push_str("### When You Detect Issues\n");
+        prompt.push_str(
+            "If you notice configuration conflicts, database issues, disconnected bridges,\n",
+        );
+        prompt.push_str("abnormal resource usage, or runtime capability degradation:\n\n");
+        prompt.push_str("**Action**: Report to the user with:\n");
+        prompt.push_str("1. What you observed (specific evidence)\n");
+        prompt.push_str("2. Potential impact\n");
+        prompt.push_str("3. Suggested remediation steps\n");
+        prompt.push_str("4. Do NOT execute remediation without explicit user approval\n\n");
+
+        prompt.push_str("### What You Must NEVER Do Autonomously\n");
+        prompt.push_str("- Restart Aleph services\n");
+        prompt.push_str("- Modify configuration files\n");
+        prompt.push_str("- Delete or compact databases\n");
+        prompt.push_str("- Kill processes\n");
+        prompt.push_str("- Change system settings\n\n");
+    }
+
     /// Build system prompt using ResolvedContext
     ///
     /// This is the new entry point that uses the two-phase filtered context
@@ -826,13 +875,14 @@ impl PromptBuilder {
     /// 6. Tools (using ctx.available_tools)
     /// 7. Security constraints (blocked tools, approval-required tools)
     /// 8. Protocol tokens (if applicable)
-    /// 9. Generation models
-    /// 10. Special actions
-    /// 11. Response format
-    /// 12. Guidelines
-    /// 13. Skill mode
-    /// 14. Custom instructions
-    /// 15. Language setting
+    /// 9. Operational guidelines (Background/CLI only)
+    /// 10. Generation models
+    /// 11. Special actions
+    /// 12. Response format
+    /// 13. Guidelines
+    /// 14. Skill mode
+    /// 15. Custom instructions
+    /// 16. Language setting
     pub fn build_system_prompt_with_context(&self, ctx: &ResolvedContext) -> String {
         let mut prompt = String::new();
 
@@ -869,25 +919,28 @@ impl PromptBuilder {
         // 8. Protocol tokens (replaces basic silent behavior with structured protocol)
         self.append_protocol_tokens(&mut prompt, &ctx.environment_contract);
 
-        // 9. Generation models
+        // 9. Operational guidelines (Background/CLI only)
+        self.append_operational_guidelines(&mut prompt, ctx.environment_contract.paradigm);
+
+        // 10. Generation models
         self.append_generation_models(&mut prompt);
 
-        // 10. Special actions
+        // 11. Special actions
         self.append_special_actions(&mut prompt);
 
-        // 11. Response format
+        // 12. Response format
         self.append_response_format(&mut prompt);
 
-        // 12. Guidelines
+        // 13. Guidelines
         self.append_guidelines(&mut prompt);
 
-        // 13. Skill mode
+        // 14. Skill mode
         self.append_skill_mode(&mut prompt);
 
-        // 14. Custom instructions
+        // 15. Custom instructions
         self.append_custom_instructions(&mut prompt);
 
-        // 15. Language setting
+        // 16. Language setting
         self.append_language_setting(&mut prompt);
 
         prompt
@@ -1421,5 +1474,45 @@ mod tests {
         builder.append_protocol_tokens(&mut prompt, &contract);
 
         assert!(!prompt.contains("ALEPH_HEARTBEAT_OK"));
+    }
+
+    #[test]
+    fn test_append_operational_guidelines_background() {
+        use crate::thinker::interaction::InteractionParadigm;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        builder.append_operational_guidelines(&mut prompt, InteractionParadigm::Background);
+
+        assert!(prompt.contains("System Operational Awareness"));
+        assert!(prompt.contains("Diagnostic Capabilities"));
+        assert!(prompt.contains("NEVER Do Autonomously"));
+    }
+
+    #[test]
+    fn test_append_operational_guidelines_cli() {
+        use crate::thinker::interaction::InteractionParadigm;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        builder.append_operational_guidelines(&mut prompt, InteractionParadigm::CLI);
+
+        // CLI should also get operational guidelines
+        assert!(prompt.contains("System Operational Awareness"));
+    }
+
+    #[test]
+    fn test_append_operational_guidelines_messaging_skipped() {
+        use crate::thinker::interaction::InteractionParadigm;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        builder.append_operational_guidelines(&mut prompt, InteractionParadigm::Messaging);
+
+        // Messaging should NOT get operational guidelines (save tokens)
+        assert!(!prompt.contains("System Operational Awareness"));
     }
 }
