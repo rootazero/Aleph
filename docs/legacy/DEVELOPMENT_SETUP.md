@@ -51,12 +51,7 @@ open Aleph.xcodeproj
 
 ## Node.js Environment
 
-Aleph uses `fnm` (Fast Node Manager) for Node.js version management.
-
-```bash
-# fnm is auto-installed by Aleph's runtime manager
-# Node.js binaries are stored in ~/.aleph/runtimes/fnm/
-```
+Aleph no longer bundles runtime managers. Install Node.js via your system package manager or `fnm`/`nvm` manually.
 
 ## Rust Toolchain
 

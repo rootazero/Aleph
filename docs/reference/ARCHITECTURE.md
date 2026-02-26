@@ -220,7 +220,7 @@ Thinker Decision (tool_use)
 | **mcp** | `core/src/mcp/` | MCP client implementation |
 | **routing** | `core/src/routing/` | Session key resolution |
 | **config** | `core/src/config/` | Configuration management |
-| **runtimes** | `core/src/runtimes/` | Runtime managers (uv, fnm, yt-dlp) |
+| **runtimes** | `core/src/runtimes/` | Capability ledger — probe, bootstrap, persist external tool status |
 
 ---
 
