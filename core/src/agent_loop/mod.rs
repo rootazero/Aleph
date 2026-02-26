@@ -63,6 +63,7 @@ pub mod meta_cognition_integration;
 pub mod overflow;
 pub mod question;
 pub mod reply_normalizer;
+pub mod session_protocol;
 pub mod session_sync;
 pub mod state;
 pub mod thinking;
