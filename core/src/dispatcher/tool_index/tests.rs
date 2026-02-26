@@ -779,14 +779,17 @@ mod tests {
 
     #[test]
     fn test_prompt_builder_hydrated_tools_empty() {
-        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+        use crate::thinker::prompt_builder::PromptConfig;
+        use crate::thinker::prompt_layer::{LayerInput, PromptLayer};
+        use crate::thinker::layers::HydratedToolsLayer;
         use crate::dispatcher::tool_index::HydrationResult;
 
-        let builder = PromptBuilder::new(PromptConfig::default());
-        let mut prompt = String::new();
+        let config = PromptConfig::default();
         let result = HydrationResult::empty();
+        let input = LayerInput::hydration(&config, &result);
+        let mut prompt = String::new();
 
-        builder.append_hydrated_tools(&mut prompt, &result);
+        HydratedToolsLayer.inject(&mut prompt, &input);
 
         assert!(prompt.contains("Available Tools"));
         assert!(prompt.contains("get_tool_schema"));
@@ -794,11 +797,12 @@ mod tests {
 
     #[test]
     fn test_prompt_builder_hydrated_tools_full_schema() {
-        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+        use crate::thinker::prompt_builder::PromptConfig;
+        use crate::thinker::prompt_layer::{LayerInput, PromptLayer};
+        use crate::thinker::layers::HydratedToolsLayer;
         use crate::dispatcher::tool_index::HydrationResult;
 
-        let builder = PromptBuilder::new(PromptConfig::default());
-        let mut prompt = String::new();
+        let prompt_config = PromptConfig::default();
 
         let config = ToolRetrievalConfig::default();
         let mut fact = MemoryFact::with_id(
@@ -817,7 +821,9 @@ mod tests {
             indexed_tool_names: vec![],
         };
 
-        builder.append_hydrated_tools(&mut prompt, &result);
+        let input = LayerInput::hydration(&prompt_config, &result);
+        let mut prompt = String::new();
+        HydratedToolsLayer.inject(&mut prompt, &input);
 
         assert!(prompt.contains("#### read_file"));
         assert!(prompt.contains("Read file from disk"));
@@ -827,11 +833,12 @@ mod tests {
 
     #[test]
     fn test_prompt_builder_hydrated_tools_summary() {
-        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+        use crate::thinker::prompt_builder::PromptConfig;
+        use crate::thinker::prompt_layer::{LayerInput, PromptLayer};
+        use crate::thinker::layers::HydratedToolsLayer;
         use crate::dispatcher::tool_index::HydrationResult;
 
-        let builder = PromptBuilder::new(PromptConfig::default());
-        let mut prompt = String::new();
+        let prompt_config = PromptConfig::default();
 
         let config = ToolRetrievalConfig::default();
         let mut fact = MemoryFact::with_id(
@@ -849,7 +856,9 @@ mod tests {
             indexed_tool_names: vec![],
         };
 
-        builder.append_hydrated_tools(&mut prompt, &result);
+        let input = LayerInput::hydration(&prompt_config, &result);
+        let mut prompt = String::new();
+        HydratedToolsLayer.inject(&mut prompt, &input);
 
         assert!(prompt.contains("summary"));
         assert!(prompt.contains("**search_code**"));
@@ -858,11 +867,12 @@ mod tests {
 
     #[test]
     fn test_prompt_builder_hydrated_tools_indexed() {
-        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+        use crate::thinker::prompt_builder::PromptConfig;
+        use crate::thinker::prompt_layer::{LayerInput, PromptLayer};
+        use crate::thinker::layers::HydratedToolsLayer;
         use crate::dispatcher::tool_index::HydrationResult;
 
-        let builder = PromptBuilder::new(PromptConfig::default());
-        let mut prompt = String::new();
+        let prompt_config = PromptConfig::default();
 
         let result = HydrationResult {
             full_schema_tools: vec![],
@@ -870,7 +880,9 @@ mod tests {
             indexed_tool_names: vec!["tool_a".to_string(), "tool_b".to_string()],
         };
 
-        builder.append_hydrated_tools(&mut prompt, &result);
+        let input = LayerInput::hydration(&prompt_config, &result);
+        let mut prompt = String::new();
+        HydratedToolsLayer.inject(&mut prompt, &input);
 
         assert!(prompt.contains("Additional Tools"));
         assert!(prompt.contains("tool_a"));

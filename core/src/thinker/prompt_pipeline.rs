@@ -3,6 +3,7 @@
 //! The pipeline holds an ordered list of [`PromptLayer`] implementations
 //! and executes them in priority order for a given [`AssemblyPath`].
 
+use super::layers::*;
 use super::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 
 /// Composable prompt assembly engine.
@@ -33,6 +34,53 @@ impl PromptPipeline {
             }
         }
         output
+    }
+
+    /// Create a pipeline pre-loaded with the 20 default layers.
+    ///
+    /// Layer order (by priority):
+    ///   50  SoulLayer
+    ///  100  RoleLayer
+    ///  200  RuntimeContextLayer
+    ///  300  EnvironmentLayer
+    ///  400  RuntimeCapabilitiesLayer
+    ///  500  ToolsLayer + HydratedToolsLayer
+    ///  600  SecurityLayer
+    ///  700  ProtocolTokensLayer
+    ///  800  OperationalGuidelinesLayer
+    ///  900  CitationStandardsLayer
+    /// 1000  GenerationModelsLayer
+    /// 1050  SkillInstructionsLayer
+    /// 1100  SpecialActionsLayer
+    /// 1200  ResponseFormatLayer
+    /// 1300  GuidelinesLayer
+    /// 1350  ThinkingGuidanceLayer
+    /// 1400  SkillModeLayer
+    /// 1500  CustomInstructionsLayer
+    /// 1600  LanguageLayer
+    pub fn default_layers() -> Self {
+        Self::new(vec![
+            Box::new(SoulLayer),
+            Box::new(RoleLayer),
+            Box::new(RuntimeContextLayer),
+            Box::new(EnvironmentLayer),
+            Box::new(RuntimeCapabilitiesLayer),
+            Box::new(ToolsLayer),
+            Box::new(HydratedToolsLayer),
+            Box::new(SecurityLayer),
+            Box::new(ProtocolTokensLayer),
+            Box::new(OperationalGuidelinesLayer),
+            Box::new(CitationStandardsLayer),
+            Box::new(GenerationModelsLayer),
+            Box::new(SkillInstructionsLayer),
+            Box::new(SpecialActionsLayer),
+            Box::new(ResponseFormatLayer),
+            Box::new(GuidelinesLayer),
+            Box::new(ThinkingGuidanceLayer),
+            Box::new(SkillModeLayer),
+            Box::new(CustomInstructionsLayer),
+            Box::new(LanguageLayer),
+        ])
     }
 
     /// Number of registered layers (test helper).
@@ -124,6 +172,19 @@ mod tests {
             stub("b", 2, &[AssemblyPath::Basic], ""),
         ]);
         assert_eq!(pipeline.layer_count(), 2);
+    }
+
+    #[test]
+    fn test_default_layers_count() {
+        let pipeline = PromptPipeline::default_layers();
+        assert_eq!(pipeline.layer_count(), 20);
+    }
+
+    #[test]
+    fn test_default_layers_sorted() {
+        let pipeline = PromptPipeline::default_layers();
+        let priorities: Vec<u32> = pipeline.layers.iter().map(|l| l.priority()).collect();
+        assert!(priorities.windows(2).all(|w| w[0] <= w[1]));
     }
 
     #[test]
