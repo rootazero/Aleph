@@ -32,6 +32,23 @@ impl DecisionParser {
 
     /// Parse LLM response into Thinking struct
     pub fn parse(&self, response: &str) -> Result<Thinking> {
+        // Check for protocol tokens before JSON parsing
+        if let Some(token) = super::protocol_tokens::ProtocolToken::parse(response) {
+            let decision = match token {
+                super::protocol_tokens::ProtocolToken::HeartbeatOk => Decision::HeartbeatOk,
+                super::protocol_tokens::ProtocolToken::SilentComplete => Decision::Silent,
+                super::protocol_tokens::ProtocolToken::NoReply => Decision::Silent,
+                super::protocol_tokens::ProtocolToken::NeedsAttention(msg) => {
+                    Decision::Complete { summary: format!("⚠️ Needs Attention: {}", msg) }
+                }
+            };
+            return Ok(Thinking {
+                reasoning: Some("Protocol token response".to_string()),
+                decision,
+                structured: None,
+            });
+        }
+
         // Try to extract JSON from response
         let json_str = match self.extract_json(response) {
             Ok(json) => json,
@@ -921,5 +938,56 @@ Now I need to write these to a file:
         // No reasoning means no structured thinking
         assert!(thinking.reasoning.is_none());
         assert!(thinking.structured.is_none());
+    }
+
+    #[test]
+    fn test_parse_protocol_token_heartbeat() {
+        let parser = DecisionParser::new();
+        let result = parser.parse("ALEPH_HEARTBEAT_OK");
+        assert!(result.is_ok());
+        let thinking = result.unwrap();
+        assert!(matches!(thinking.decision, Decision::HeartbeatOk));
+    }
+
+    #[test]
+    fn test_parse_protocol_token_silent_complete() {
+        let parser = DecisionParser::new();
+        let result = parser.parse("ALEPH_SILENT_COMPLETE");
+        assert!(result.is_ok());
+        let thinking = result.unwrap();
+        assert!(matches!(thinking.decision, Decision::Silent));
+    }
+
+    #[test]
+    fn test_parse_protocol_token_no_reply() {
+        let parser = DecisionParser::new();
+        let result = parser.parse("ALEPH_NO_REPLY");
+        assert!(result.is_ok());
+        let thinking = result.unwrap();
+        assert!(matches!(thinking.decision, Decision::Silent));
+    }
+
+    #[test]
+    fn test_parse_protocol_token_needs_attention() {
+        let parser = DecisionParser::new();
+        let result = parser.parse("ALEPH_NEEDS_ATTENTION: Database disk usage at 95%");
+        assert!(result.is_ok());
+        let thinking = result.unwrap();
+        if let Decision::Complete { summary } = thinking.decision {
+            assert!(summary.contains("Needs Attention"));
+            assert!(summary.contains("Database disk usage at 95%"));
+        } else {
+            panic!("Expected Complete decision for NeedsAttention token");
+        }
+    }
+
+    #[test]
+    fn test_parse_protocol_token_with_fallback() {
+        let parser = DecisionParser::new();
+        // parse_with_fallback should also handle tokens (via parse())
+        let result = parser.parse_with_fallback("  ALEPH_HEARTBEAT_OK  ");
+        assert!(result.is_ok());
+        let thinking = result.unwrap();
+        assert!(matches!(thinking.decision, Decision::HeartbeatOk));
     }
 }

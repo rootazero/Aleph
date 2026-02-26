@@ -38,6 +38,8 @@ pub mod model_router;
 pub mod prompt_builder;
 pub mod security_context;
 pub mod soul;
+pub mod protocol_tokens;
+pub mod runtime_context;
 pub mod streaming;
 pub mod tool_filter;
 
@@ -65,6 +67,8 @@ pub use context::{
     ContextAggregator, DisableReason, DisabledTool, EnvironmentContract, ResolvedContext,
 };
 pub use soul::{FormattingStyle, RelationshipMode, SoulLoadError, SoulManifest, SoulVoice, Verbosity};
+pub use protocol_tokens::ProtocolToken;
+pub use runtime_context::RuntimeContext;
 pub use identity::{IdentityResolver, IdentitySource, IdentitySourceType};
 
 use crate::agent_loop::{
