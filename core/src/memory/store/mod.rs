@@ -453,6 +453,10 @@ pub trait DreamStore: Send + Sync {
 ///
 /// Records all mutations (creation, update, invalidation, deletion) that
 /// happen to facts, providing a complete audit trail.
+#[deprecated(
+    since = "0.2.0",
+    note = "Use MemoryEventStore for event-sourced audit. AuditStore will be removed in a future release."
+)]
 #[async_trait]
 pub trait AuditStore: Send + Sync {
     /// Insert a new audit entry.
