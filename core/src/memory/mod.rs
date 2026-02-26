@@ -18,6 +18,7 @@
 pub mod adaptive_retrieval;
 pub mod ai_retrieval;
 pub mod audit;
+pub mod events;
 pub mod backup;
 pub mod augmentation;
 pub mod cleanup;
@@ -67,6 +68,9 @@ pub use backup::MemoryBackupService;
 pub use audit::{
     AuditAction, AuditActor, AuditDetails, AuditEntry, AuditLogger,
     ExplainedEvent, FactExplanation, ForgettingExplanation,
+};
+pub use events::{
+    EventActor, MemoryEvent, MemoryEventEnvelope, TierTransitionTrigger,
 };
 pub use augmentation::PromptAugmenter;
 pub use cleanup::CleanupService;
