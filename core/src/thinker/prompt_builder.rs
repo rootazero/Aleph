@@ -1280,7 +1280,9 @@ impl PromptBuilder {
         prompt: &mut String,
         profile: &crate::thinker::user_profile::UserProfile,
     ) {
-        let section = sanitize_for_prompt(&profile.to_prompt_section(), SanitizeLevel::Light);
+        // User profile is loaded from user-editable files → Moderate + Light
+        let section = sanitize_for_prompt(&profile.to_prompt_section(), SanitizeLevel::Moderate);
+        let section = sanitize_for_prompt(&section, SanitizeLevel::Light);
         prompt.push_str(&section);
     }
 }
