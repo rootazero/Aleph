@@ -7,6 +7,9 @@ cli-wrapper: true
 requirements:
   binaries:
     - ffmpeg
+  platforms:
+    - macos
+    - linux
   install:
     - manager: brew
       package: ffmpeg

@@ -50,7 +50,43 @@ say "Build complete. All tests passing."
 
 # Voice with specific voice
 say -v Samantha "Your deployment is ready."
+
+# List all available voices
+say -v '?'
+
+# Male voice (US English)
+say -v Alex "Server restart completed."
+
+# Female voice (UK English)
+say -v Kate "Deployment to staging is ready for review."
+
+# Compact voice (faster, lower quality, good for quick alerts)
+say -v Fred "Task done."
+
+# Chinese voice
+say -v Ting-Ting "构建完成，所有测试通过。"
+
+# Adjust speaking rate (words per minute, default ~175)
+say -r 250 "Quick notification, build passed."
+say -r 100 "Slow and clear: deployment failed, please investigate."
+
+# Save speech to audio file (for later playback or sending)
+say -v Samantha -o alert.aiff "Build 42 failed. Check CI logs."
+
+# Combine with notification for multi-modal alert
+osascript -e 'display notification "Build failed" with title "Aleph" sound name "Basso"' && say -v Samantha "Build failed. Please check the logs."
 ```
+
+#### Voice Use Cases
+
+| Use Case | Voice | Why |
+|----------|-------|-----|
+| Quick status alerts | `Fred` | Fast, low-overhead, no frills |
+| Important announcements | `Samantha` / `Alex` | Clear, natural-sounding |
+| Accessibility / hands-free | `Samantha` | Best macOS default for extended listening |
+| Chinese content | `Ting-Ting` | Native Mandarin voice |
+| Urgent warnings | `say -r 100` (slow) | Forces attention with deliberate pacing |
+| Audio logging | `say -o file.aiff` | Record alerts for async review |
 
 ### ntfy.sh (Zero-Config Push)
 
@@ -120,6 +156,21 @@ curl -s -X POST "$DISCORD_WEBHOOK" \
 - **Quiet hours**: Respect sleep schedules — defer non-urgent notifications.
 - **Duplicate channels**: Don't send the same alert to all channels simultaneously.
 - **Secrets in notifications**: Never include passwords, tokens, or keys in notification text.
+
+## Quick Reference
+
+| Task | Command |
+|------|---------|
+| Local popup notification | `osascript -e 'display notification "msg" with title "T"'` |
+| Notification with sound | `osascript -e 'display notification "msg" with title "T" sound name "Glass"'` |
+| Push to phone (ntfy) | `curl -d "msg" ntfy.sh/my-topic` |
+| Urgent push (bypass DND) | `curl -H "Priority: urgent" -d "msg" ntfy.sh/my-topic` |
+| Push with link | `curl -H "Click: URL" -d "msg" ntfy.sh/my-topic` |
+| Telegram message | `curl -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" -d '{"chat_id":"ID","text":"msg"}'` |
+| Slack webhook | `curl -X POST "$WEBHOOK" -H "Content-Type: application/json" -d '{"text":"msg"}'` |
+| Speak aloud | `say "message"` |
+| Speak with specific voice | `say -v Samantha "message"` |
+| Save speech to file | `say -o alert.aiff "message"` |
 
 ## Aleph Integration
 

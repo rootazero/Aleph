@@ -9,6 +9,9 @@ allowed-tools:
 requirements:
   binaries:
     - npx
+  platforms:
+    - macos
+    - linux
   install:
     - manager: brew
       package: node
