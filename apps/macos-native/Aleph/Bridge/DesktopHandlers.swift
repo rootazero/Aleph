@@ -20,6 +20,7 @@ extension BridgeServer {
         registerTypeTextHandler()
         registerKeyComboHandler()
         registerScrollHandler()
+        registerTrayUpdateStatusHandler()
     }
 
     // MARK: - Screenshot
@@ -258,6 +259,33 @@ extension BridgeServer {
             let amount = Int32(params["amount"]?.intValue ?? 3)
 
             return InputAutomation.scroll(direction: direction, amount: amount)
+        }
+    }
+
+    // MARK: - Tray Update Status
+
+    /// Register `tray.update_status` handler.
+    ///
+    /// Params:
+    /// - `status` (optional): Agent status string ("idle", "thinking", "acting", "error"). Default "idle".
+    /// - `tooltip` (optional): Explicit tooltip override.
+    ///
+    /// Posts `Notification.Name.updateTrayStatus` on the main thread so
+    /// `MenuBarController` (or `AppDelegate`) can update the status item.
+    private func registerTrayUpdateStatusHandler() {
+        register(method: BridgeMethod.trayUpdateStatus.rawValue) { params in
+            let status = params["status"]?.stringValue ?? "idle"
+            let tooltip = params["tooltip"]?.stringValue
+
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .updateTrayStatus,
+                    object: nil,
+                    userInfo: ["status": status, "tooltip": tooltip as Any]
+                )
+            }
+
+            return .success(AnyCodable(["updated": AnyCodable(true), "status": AnyCodable(status)]))
         }
     }
 }
