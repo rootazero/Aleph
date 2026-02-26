@@ -184,6 +184,9 @@ pub struct ResolvedContext {
     pub disabled_tools: Vec<DisabledTool>,
     /// Environment contract describing the working context
     pub environment_contract: EnvironmentContract,
+    /// Optional runtime context for micro-environmental awareness
+    #[serde(skip)]
+    pub runtime_context: Option<super::runtime_context::RuntimeContext>,
 }
 
 /// Context Aggregator for reconciling interaction and security layers
@@ -254,6 +257,7 @@ impl ContextAggregator {
             available_tools,
             disabled_tools,
             environment_contract,
+            runtime_context: None,
         }
     }
 

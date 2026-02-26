@@ -183,7 +183,7 @@ impl FactRetrieval {
         if !result.facts.is_empty() {
             context.push_str("## Known User Information\n\n");
             for fact in &result.facts {
-                context.push_str(&format!("- {}\n", fact.content));
+                context.push_str(&format!("- {}\n", format_fact_with_source(fact)));
             }
             context.push('\n');
         }
@@ -217,7 +217,7 @@ impl FactRetrieval {
         if !result.facts.is_empty() {
             context.push_str("## 已知用户信息\n\n");
             for fact in &result.facts {
-                context.push_str(&format!("- {}\n", fact.content));
+                context.push_str(&format!("- {}\n", format_fact_with_source(fact)));
             }
             context.push('\n');
         }
@@ -250,6 +250,18 @@ impl FactRetrieval {
     /// Get current configuration
     pub fn get_config(&self) -> &FactRetrievalConfig {
         &self.config
+    }
+}
+
+/// Format a single fact with source citation metadata.
+///
+/// Produces format: `[Source: path#id] content` for LLM citation.
+/// Falls back to `[Source: #id] content` when path is empty.
+fn format_fact_with_source(fact: &MemoryFact) -> String {
+    if fact.path.is_empty() {
+        format!("[Source: #{}] {}", fact.id, fact.content)
+    } else {
+        format!("[Source: {}#{}] {}", fact.path, fact.id, fact.content)
     }
 }
 
@@ -314,6 +326,9 @@ mod tests {
         assert!(context.contains("Known User Information"));
         assert!(context.contains("learning Rust"));
         assert!(context.contains("dark mode"));
+        // Verify source metadata is present (MemoryFact::new sets path from FactType)
+        assert!(context.contains("[Source: aleph://knowledge/learning/"));
+        assert!(context.contains("[Source: aleph://user/preferences/"));
     }
 
     #[tokio::test]
@@ -333,6 +348,51 @@ mod tests {
 
         assert!(context.contains("已知用户信息"));
         assert!(context.contains("学习 Rust"));
+        // Verify source metadata in Chinese format too
+        assert!(context.contains("[Source: aleph://knowledge/learning/"));
+    }
+
+    #[tokio::test]
+    async fn test_format_context_includes_source_citation() {
+        let mut fact = MemoryFact::new(
+            "User prefers dark mode".to_string(),
+            FactType::Preference,
+            vec!["mem-1".to_string()],
+        );
+        fact.path = "aleph://user/preferences/ui".to_string();
+
+        let result = RetrievalResult {
+            facts: vec![fact.clone()],
+            raw_memories: vec![],
+        };
+
+        let context = FactRetrieval::format_context(&result);
+
+        assert!(context.contains("[Source: aleph://user/preferences/ui#"));
+        assert!(context.contains("User prefers dark mode"));
+    }
+
+    #[tokio::test]
+    async fn test_format_fact_with_empty_path_fallback() {
+        let mut fact = MemoryFact::new(
+            "Some fact without path".to_string(),
+            FactType::Other,
+            vec!["mem-1".to_string()],
+        );
+        fact.path = String::new(); // Force empty path
+
+        let result = RetrievalResult {
+            facts: vec![fact.clone()],
+            raw_memories: vec![],
+        };
+
+        let context = FactRetrieval::format_context(&result);
+
+        // Should use fallback format with just #id
+        assert!(context.contains(&format!("[Source: #{}]", fact.id)));
+        assert!(context.contains("Some fact without path"));
+        // Should NOT contain double slash from empty path
+        assert!(!context.contains("[Source: #]"));
     }
 
     #[test]

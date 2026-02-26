@@ -140,6 +140,16 @@ impl PromptBuilder {
         }
     }
 
+    /// Append runtime context section (micro-environmental awareness)
+    pub fn append_runtime_context_section(
+        &self,
+        prompt: &mut String,
+        runtime_ctx: &super::runtime_context::RuntimeContext,
+    ) {
+        prompt.push_str(&runtime_ctx.to_prompt_section());
+        prompt.push_str("\n\n");
+    }
+
     /// Append available tools section
     fn append_tools(&self, prompt: &mut String, tools: &[ToolInfo]) {
         prompt.push_str("## Available Tools\n");
@@ -647,6 +657,9 @@ impl PromptBuilder {
         // Add skill mode instructions if enabled
         self.append_skill_mode(&mut prompt);
 
+        // Citation standards
+        self.append_citation_standards(&mut prompt);
+
         // Add custom instructions if configured
         self.append_custom_instructions(&mut prompt);
 
@@ -789,24 +802,104 @@ impl PromptBuilder {
         prompt.push_str("- Keep reasoning concise as it may not be visible to the user\n\n");
     }
 
+    /// Append protocol tokens section (replaces append_silent_behavior for protocol-aware mode)
+    ///
+    /// When SilentReply capability is active, injects structured protocol tokens
+    /// that the LLM can use as minimal-cost responses in background mode.
+    pub fn append_protocol_tokens(
+        &self,
+        prompt: &mut String,
+        contract: &EnvironmentContract,
+    ) {
+        if !contract.active_capabilities.contains(&Capability::SilentReply) {
+            return;
+        }
+        prompt.push_str(&super::protocol_tokens::ProtocolToken::to_prompt_section());
+    }
+
+    /// Append system operational awareness guidelines.
+    ///
+    /// Only injected for Background and CLI paradigms where the LLM
+    /// may need to detect and report system issues proactively.
+    pub fn append_operational_guidelines(
+        &self,
+        prompt: &mut String,
+        paradigm: super::interaction::InteractionParadigm,
+    ) {
+        match paradigm {
+            super::interaction::InteractionParadigm::Background
+            | super::interaction::InteractionParadigm::CLI => {}
+            _ => return, // Skip for Messaging, WebRich, Embedded
+        }
+
+        prompt.push_str("## System Operational Awareness\n\n");
+        prompt.push_str(
+            "You are aware of your own runtime environment and can monitor it proactively.\n\n",
+        );
+
+        prompt.push_str("### Diagnostic Capabilities (read-only, always allowed)\n");
+        prompt.push_str("- Check disk space: `df -h`\n");
+        prompt.push_str("- Check memory usage: `vm_stat` / `free -h`\n");
+        prompt.push_str("- Check running Aleph processes: `ps aux | grep aleph`\n");
+        prompt.push_str(
+            "- Check configuration validity: read config files and validate structure\n",
+        );
+        prompt.push_str("- Check Desktop Bridge status: query UDS socket availability\n");
+        prompt.push_str("- Check LanceDB health: verify database file accessibility\n\n");
+
+        prompt.push_str("### When You Detect Issues\n");
+        prompt.push_str(
+            "If you notice configuration conflicts, database issues, disconnected bridges,\n",
+        );
+        prompt.push_str("abnormal resource usage, or runtime capability degradation:\n\n");
+        prompt.push_str("**Action**: Report to the user with:\n");
+        prompt.push_str("1. What you observed (specific evidence)\n");
+        prompt.push_str("2. Potential impact\n");
+        prompt.push_str("3. Suggested remediation steps\n");
+        prompt.push_str("4. Do NOT execute remediation without explicit user approval\n\n");
+
+        prompt.push_str("### What You Must NEVER Do Autonomously\n");
+        prompt.push_str("- Restart Aleph services\n");
+        prompt.push_str("- Modify configuration files\n");
+        prompt.push_str("- Delete or compact databases\n");
+        prompt.push_str("- Kill processes\n");
+        prompt.push_str("- Change system settings\n\n");
+    }
+
+    /// Append memory citation standards.
+    ///
+    /// Always injected — citation standards are valuable in all interaction modes.
+    pub fn append_citation_standards(&self, prompt: &mut String) {
+        prompt.push_str("## Citation Standards\n\n");
+        prompt.push_str("When referencing information from memory or knowledge base:\n");
+        prompt.push_str("- Include source reference in format: `[Source: <path>#<id>]` or `[Source: <path>#L<line>]`\n");
+        prompt.push_str("- Sources are provided in the context metadata — do not fabricate source paths\n");
+        prompt.push_str("- If multiple sources support a claim, cite the most specific one\n");
+        prompt.push_str("- For real-time observations (current tool output, live data), no citation needed\n");
+        prompt.push_str("- For recalled facts, prior decisions, or historical context, citation is mandatory\n\n");
+    }
+
     /// Build system prompt using ResolvedContext
     ///
     /// This is the new entry point that uses the two-phase filtered context
     /// from the ContextAggregator. It builds the complete system prompt with:
     /// 1. Role definition
     /// 2. Core instructions
-    /// 3. Environment contract (paradigm, capabilities, constraints)
-    /// 4. Runtime capabilities
-    /// 5. Tools (using ctx.available_tools)
-    /// 6. Security constraints (blocked tools, approval-required tools)
-    /// 7. Silent behavior (if applicable)
-    /// 8. Generation models
-    /// 9. Special actions
-    /// 10. Response format
-    /// 11. Guidelines
-    /// 12. Skill mode
-    /// 13. Custom instructions
-    /// 14. Language setting
+    /// 3. Runtime context (micro-environmental awareness, optional)
+    /// 4. Environment contract (paradigm, capabilities, constraints)
+    /// 5. Runtime capabilities
+    /// 6. Tools (using ctx.available_tools)
+    /// 7. Security constraints (blocked tools, approval-required tools)
+    /// 8. Protocol tokens (if applicable)
+    /// 9. Operational guidelines (Background/CLI only)
+    /// 10. Citation standards
+    /// 11. Generation models
+    /// 12. Special actions
+    /// 13. Response format
+    /// 14. Guidelines
+    /// 15. Skill mode
+    /// 16. Custom instructions
+    /// 17. Language setting
     pub fn build_system_prompt_with_context(&self, ctx: &ResolvedContext) -> String {
         let mut prompt = String::new();
 
@@ -819,44 +912,55 @@ impl PromptBuilder {
         prompt.push_str("- Decide the SINGLE next action to take\n");
         prompt.push_str("- Execute until the task is complete or you need user input\n\n");
 
-        // 3. Environment contract (NEW)
+        // 3. Runtime context (micro-environmental awareness)
+        if let Some(ref runtime_ctx) = ctx.runtime_context {
+            self.append_runtime_context_section(&mut prompt, runtime_ctx);
+        }
+
+        // 4. Environment contract
         self.append_environment_contract(&mut prompt, &ctx.environment_contract);
 
-        // 4. Runtime capabilities
+        // 5. Runtime capabilities
         self.append_runtime_capabilities(&mut prompt);
 
-        // 5. Tools (using available_tools from context)
+        // 6. Tools (using available_tools from context)
         self.append_tools(&mut prompt, &ctx.available_tools);
 
-        // 6. Security constraints (NEW)
+        // 7. Security constraints
         self.append_security_constraints(
             &mut prompt,
             &ctx.disabled_tools,
             &ctx.environment_contract.security_notes,
         );
 
-        // 7. Silent behavior (NEW - if applicable)
-        self.append_silent_behavior(&mut prompt, &ctx.environment_contract);
+        // 8. Protocol tokens (replaces basic silent behavior with structured protocol)
+        self.append_protocol_tokens(&mut prompt, &ctx.environment_contract);
 
-        // 8. Generation models
+        // 9. Operational guidelines (Background/CLI only)
+        self.append_operational_guidelines(&mut prompt, ctx.environment_contract.paradigm);
+
+        // 10. Citation standards (always injected)
+        self.append_citation_standards(&mut prompt);
+
+        // 11. Generation models
         self.append_generation_models(&mut prompt);
 
-        // 9. Special actions
+        // 12. Special actions
         self.append_special_actions(&mut prompt);
 
-        // 10. Response format
+        // 13. Response format
         self.append_response_format(&mut prompt);
 
-        // 11. Guidelines
+        // 14. Guidelines
         self.append_guidelines(&mut prompt);
 
-        // 12. Skill mode
+        // 15. Skill mode
         self.append_skill_mode(&mut prompt);
 
-        // 13. Custom instructions
+        // 16. Custom instructions
         self.append_custom_instructions(&mut prompt);
 
-        // 14. Language setting
+        // 17. Language setting
         self.append_language_setting(&mut prompt);
 
         prompt
@@ -1261,5 +1365,360 @@ mod tests {
         // Both soul and thinking guidance should be present
         assert!(prompt.contains("# Identity"));
         assert!(prompt.contains("## Thinking Transparency"));
+    }
+
+    #[test]
+    fn test_append_runtime_context_section() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        let ctx = crate::thinker::runtime_context::RuntimeContext {
+            os: "macOS 15.3".to_string(),
+            arch: "aarch64".to_string(),
+            shell: "zsh".to_string(),
+            working_dir: std::path::PathBuf::from("/workspace"),
+            repo_root: Some(std::path::PathBuf::from("/workspace")),
+            current_model: "claude-opus-4-6".to_string(),
+            hostname: "test-host".to_string(),
+        };
+
+        builder.append_runtime_context_section(&mut prompt, &ctx);
+
+        assert!(prompt.contains("## Runtime Environment"));
+        assert!(prompt.contains("os=macOS 15.3"));
+        assert!(prompt.contains("arch=aarch64"));
+        assert!(prompt.contains("shell=zsh"));
+        assert!(prompt.contains("cwd=/workspace"));
+        assert!(prompt.contains("repo=/workspace"));
+        assert!(prompt.contains("model=claude-opus-4-6"));
+        assert!(prompt.contains("host=test-host"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_with_context_includes_runtime_context() {
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+        use crate::thinker::security_context::SecurityContext;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+
+        // Build a ResolvedContext with runtime_context set
+        let interaction = InteractionManifest::new(InteractionParadigm::WebRich);
+        let security = SecurityContext::permissive();
+        let mut ctx = ContextAggregator::resolve(&interaction, &security, &[]);
+
+        ctx.runtime_context = Some(crate::thinker::runtime_context::RuntimeContext {
+            os: "linux".to_string(),
+            arch: "x86_64".to_string(),
+            shell: "bash".to_string(),
+            working_dir: std::path::PathBuf::from("/home/user"),
+            repo_root: None,
+            current_model: "gpt-4".to_string(),
+            hostname: "server-01".to_string(),
+        });
+
+        let prompt = builder.build_system_prompt_with_context(&ctx);
+
+        // Runtime context should be present
+        assert!(prompt.contains("## Runtime Environment"));
+        assert!(prompt.contains("os=linux"));
+        assert!(prompt.contains("model=gpt-4"));
+
+        // Runtime context should appear before environment contract
+        let runtime_pos = prompt.find("## Runtime Environment").unwrap();
+        let env_pos = prompt.find("## Environment").unwrap();
+        assert!(
+            runtime_pos < env_pos,
+            "Runtime context should appear before environment contract"
+        );
+    }
+
+    #[test]
+    fn test_build_system_prompt_with_context_no_runtime_context() {
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+        use crate::thinker::security_context::SecurityContext;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+
+        let interaction = InteractionManifest::new(InteractionParadigm::WebRich);
+        let security = SecurityContext::permissive();
+        let ctx = ContextAggregator::resolve(&interaction, &security, &[]);
+
+        // runtime_context should be None by default
+        assert!(ctx.runtime_context.is_none());
+
+        let prompt = builder.build_system_prompt_with_context(&ctx);
+
+        // Runtime context section should NOT be present
+        assert!(!prompt.contains("## Runtime Environment"));
+    }
+
+    #[test]
+    fn test_append_protocol_tokens_with_silent_reply() {
+        use crate::thinker::context::EnvironmentContract;
+        use crate::thinker::interaction::{Capability, InteractionConstraints, InteractionParadigm};
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        let contract = EnvironmentContract {
+            paradigm: InteractionParadigm::Background,
+            active_capabilities: vec![Capability::SilentReply],
+            constraints: InteractionConstraints::default(),
+            security_notes: vec![],
+        };
+
+        builder.append_protocol_tokens(&mut prompt, &contract);
+
+        assert!(prompt.contains("ALEPH_HEARTBEAT_OK"));
+        assert!(prompt.contains("ALEPH_SILENT_COMPLETE"));
+        assert!(prompt.contains("Response Protocol Tokens"));
+    }
+
+    #[test]
+    fn test_append_protocol_tokens_without_silent_reply() {
+        use crate::thinker::context::EnvironmentContract;
+        use crate::thinker::interaction::{InteractionConstraints, InteractionParadigm};
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        let contract = EnvironmentContract {
+            paradigm: InteractionParadigm::CLI,
+            active_capabilities: vec![],
+            constraints: InteractionConstraints::default(),
+            security_notes: vec![],
+        };
+
+        builder.append_protocol_tokens(&mut prompt, &contract);
+
+        assert!(!prompt.contains("ALEPH_HEARTBEAT_OK"));
+    }
+
+    #[test]
+    fn test_append_operational_guidelines_background() {
+        use crate::thinker::interaction::InteractionParadigm;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        builder.append_operational_guidelines(&mut prompt, InteractionParadigm::Background);
+
+        assert!(prompt.contains("System Operational Awareness"));
+        assert!(prompt.contains("Diagnostic Capabilities"));
+        assert!(prompt.contains("NEVER Do Autonomously"));
+    }
+
+    #[test]
+    fn test_append_operational_guidelines_cli() {
+        use crate::thinker::interaction::InteractionParadigm;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        builder.append_operational_guidelines(&mut prompt, InteractionParadigm::CLI);
+
+        // CLI should also get operational guidelines
+        assert!(prompt.contains("System Operational Awareness"));
+    }
+
+    #[test]
+    fn test_append_operational_guidelines_messaging_skipped() {
+        use crate::thinker::interaction::InteractionParadigm;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        builder.append_operational_guidelines(&mut prompt, InteractionParadigm::Messaging);
+
+        // Messaging should NOT get operational guidelines (save tokens)
+        assert!(!prompt.contains("System Operational Awareness"));
+    }
+
+    #[test]
+    fn test_append_citation_standards() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        builder.append_citation_standards(&mut prompt);
+
+        assert!(prompt.contains("## Citation Standards"));
+        assert!(prompt.contains("[Source: <path>#<id>]"));
+        assert!(prompt.contains("citation is mandatory"));
+    }
+
+    // ========== Integration tests: full prompt assembly ==========
+
+    #[test]
+    fn test_full_prompt_with_all_enhancements_background_mode() {
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+        use crate::thinker::runtime_context::RuntimeContext;
+        use crate::thinker::security_context::SecurityContext;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+
+        // Build a Background-mode context (should trigger all 4 enhancements)
+        let interaction = InteractionManifest::new(InteractionParadigm::Background);
+        let security = SecurityContext::permissive();
+        let mut resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+
+        // Add RuntimeContext
+        resolved.runtime_context = Some(RuntimeContext {
+            os: "macOS 15.3".to_string(),
+            arch: "aarch64".to_string(),
+            shell: "zsh".to_string(),
+            working_dir: std::path::PathBuf::from("/workspace"),
+            repo_root: Some(std::path::PathBuf::from("/workspace")),
+            current_model: "claude-opus-4-6".to_string(),
+            hostname: "test-host".to_string(),
+        });
+
+        let prompt = builder.build_system_prompt_with_context(&resolved);
+
+        // 1. RuntimeContext should be present
+        assert!(
+            prompt.contains("## Runtime Environment"),
+            "Missing RuntimeContext section"
+        );
+        assert!(prompt.contains("os=macOS 15.3"), "Missing OS info");
+        assert!(
+            prompt.contains("model=claude-opus-4-6"),
+            "Missing model info"
+        );
+
+        // 2. Protocol tokens should be present (Background has SilentReply)
+        assert!(
+            prompt.contains("ALEPH_HEARTBEAT_OK"),
+            "Missing protocol tokens: ALEPH_HEARTBEAT_OK"
+        );
+        assert!(
+            prompt.contains("ALEPH_SILENT_COMPLETE"),
+            "Missing protocol tokens: ALEPH_SILENT_COMPLETE"
+        );
+
+        // 3. Operational guidelines should be present (Background mode)
+        assert!(
+            prompt.contains("System Operational Awareness"),
+            "Missing operational guidelines"
+        );
+        assert!(
+            prompt.contains("Diagnostic Capabilities"),
+            "Missing diagnostic capabilities in operational guidelines"
+        );
+
+        // 4. Citation standards should be present (always injected)
+        assert!(
+            prompt.contains("Citation Standards"),
+            "Missing citation standards"
+        );
+        assert!(
+            prompt.contains("citation is mandatory"),
+            "Missing citation requirement"
+        );
+
+        // Standard sections should still be present
+        assert!(prompt.contains("Your Role"), "Missing role section");
+        assert!(
+            prompt.contains("Response Format"),
+            "Missing response format section"
+        );
+
+        // Verify ordering: RuntimeContext -> Environment -> Protocol -> Guidelines -> Citations
+        let runtime_pos = prompt.find("## Runtime Environment").unwrap();
+        let env_pos = prompt.find("## Environment").unwrap();
+        let protocol_pos = prompt.find("Response Protocol Tokens").unwrap();
+        let guidelines_pos = prompt.find("System Operational Awareness").unwrap();
+        let citation_pos = prompt.find("Citation Standards").unwrap();
+
+        assert!(
+            runtime_pos < env_pos,
+            "RuntimeContext should appear before Environment contract"
+        );
+        assert!(
+            env_pos < protocol_pos,
+            "Environment should appear before Protocol tokens"
+        );
+        assert!(
+            protocol_pos < guidelines_pos,
+            "Protocol tokens should appear before Operational guidelines"
+        );
+        assert!(
+            guidelines_pos < citation_pos,
+            "Operational guidelines should appear before Citation standards"
+        );
+    }
+
+    #[test]
+    fn test_interactive_prompt_minimal_token_overhead() {
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+        use crate::thinker::runtime_context::RuntimeContext;
+        use crate::thinker::security_context::SecurityContext;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+
+        // Build a WebRich-mode context (interactive, not background)
+        let interaction = InteractionManifest::new(InteractionParadigm::WebRich);
+        let security = SecurityContext::permissive();
+        let mut resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+
+        // Add RuntimeContext (should still be included for interactive)
+        resolved.runtime_context = Some(RuntimeContext {
+            os: "linux".to_string(),
+            arch: "x86_64".to_string(),
+            shell: "bash".to_string(),
+            working_dir: std::path::PathBuf::from("/home/user"),
+            repo_root: None,
+            current_model: "gpt-4".to_string(),
+            hostname: "web-server".to_string(),
+        });
+
+        let prompt = builder.build_system_prompt_with_context(&resolved);
+
+        // 1. RuntimeContext SHOULD be present (always injected when provided)
+        assert!(
+            prompt.contains("## Runtime Environment"),
+            "RuntimeContext should be present in WebRich mode"
+        );
+        assert!(prompt.contains("os=linux"), "Missing OS info in WebRich mode");
+        assert!(
+            prompt.contains("model=gpt-4"),
+            "Missing model info in WebRich mode"
+        );
+
+        // 2. Protocol tokens should NOT be present (WebRich has no SilentReply)
+        assert!(
+            !prompt.contains("ALEPH_HEARTBEAT_OK"),
+            "Protocol tokens should NOT be present in WebRich mode"
+        );
+        assert!(
+            !prompt.contains("Response Protocol Tokens"),
+            "Protocol tokens section should NOT be present in WebRich mode"
+        );
+
+        // 3. Operational guidelines should NOT be present (WebRich is not Background/CLI)
+        assert!(
+            !prompt.contains("System Operational Awareness"),
+            "Operational guidelines should NOT be present in WebRich mode"
+        );
+
+        // 4. Citation standards SHOULD be present (always injected)
+        assert!(
+            prompt.contains("Citation Standards"),
+            "Citation standards should be present in WebRich mode"
+        );
+        assert!(
+            prompt.contains("citation is mandatory"),
+            "Citation requirement should be present in WebRich mode"
+        );
+
+        // Standard sections should be present
+        assert!(prompt.contains("Your Role"), "Missing role section");
+        assert!(
+            prompt.contains("Response Format"),
+            "Missing response format section"
+        );
     }
 }
