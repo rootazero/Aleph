@@ -453,6 +453,10 @@ pub trait DreamStore: Send + Sync {
 ///
 /// Records all mutations (creation, update, invalidation, deletion) that
 /// happen to facts, providing a complete audit trail.
+#[deprecated(
+    since = "0.2.0",
+    note = "Use MemoryEventStore for event-sourced audit. AuditStore will be removed in a future release."
+)]
 #[async_trait]
 pub trait AuditStore: Send + Sync {
     /// Insert a new audit entry.
@@ -492,6 +496,74 @@ pub trait CompressionStore: Send + Sync {
         &self,
         session: &CompressionSession,
     ) -> Result<(), AlephError>;
+}
+
+// ---------------------------------------------------------------------------
+// MemoryEventStore -- Event sourcing persistence trait
+// ---------------------------------------------------------------------------
+
+/// Append-only event log for memory domain events.
+///
+/// This is the **source of truth** for all fact mutations. Events are
+/// stored in SQLite and projected to LanceDB for search.
+#[async_trait]
+pub trait MemoryEventStore: Send + Sync {
+    // -- Write ---------------------------------------------------------------
+
+    /// Append a single event. Returns the assigned global ID.
+    async fn append_event(
+        &self,
+        envelope: &crate::memory::events::MemoryEventEnvelope,
+    ) -> Result<i64, AlephError>;
+
+    /// Batch-append events (for Pulse flush and migration).
+    async fn append_events(
+        &self,
+        envelopes: &[crate::memory::events::MemoryEventEnvelope],
+    ) -> Result<(), AlephError>;
+
+    // -- Read by fact --------------------------------------------------------
+
+    /// Load all events for a fact, ordered by seq.
+    async fn get_events_for_fact(
+        &self,
+        fact_id: &str,
+    ) -> Result<Vec<crate::memory::events::MemoryEventEnvelope>, AlephError>;
+
+    /// Load events for a fact since a given sequence number.
+    async fn get_events_since_seq(
+        &self,
+        fact_id: &str,
+        since_seq: u64,
+    ) -> Result<Vec<crate::memory::events::MemoryEventEnvelope>, AlephError>;
+
+    // -- Time travel ---------------------------------------------------------
+
+    /// Load all events for a fact up to a given timestamp.
+    async fn get_events_until(
+        &self,
+        fact_id: &str,
+        until_timestamp: i64,
+    ) -> Result<Vec<crate::memory::events::MemoryEventEnvelope>, AlephError>;
+
+    /// Load all events within a time range (across all facts).
+    async fn get_events_in_range(
+        &self,
+        from_timestamp: i64,
+        to_timestamp: i64,
+        limit: usize,
+    ) -> Result<Vec<crate::memory::events::MemoryEventEnvelope>, AlephError>;
+
+    // -- Statistics ----------------------------------------------------------
+
+    /// Get the latest sequence number for a fact (0 if no events).
+    async fn get_latest_seq(&self, fact_id: &str) -> Result<u64, AlephError>;
+
+    /// Count total events, optionally filtered by event type tag.
+    async fn count_events(
+        &self,
+        event_type_filter: Option<&str>,
+    ) -> Result<usize, AlephError>;
 }
 
 // ---------------------------------------------------------------------------
