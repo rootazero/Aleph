@@ -320,7 +320,7 @@ impl MemoryEventEnvelope {
     ) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_else(|_| std::time::Duration::from_secs(0))
             .as_secs() as i64;
         Self {
             id: 0,
@@ -411,6 +411,12 @@ mod tests {
         assert_eq!(TierTransitionTrigger::Consolidation.to_string(), "consolidation");
         assert_eq!(TierTransitionTrigger::Reinforcement.to_string(), "reinforcement");
         assert_eq!(TierTransitionTrigger::Decay.to_string(), "decay");
+    }
+
+    #[test]
+    fn test_tier_transition_trigger_from_str_unknown() {
+        assert!("unknown_trigger".parse::<TierTransitionTrigger>().is_err());
+        assert!("INVALID".parse::<TierTransitionTrigger>().is_err());
     }
 
     #[test]
@@ -609,6 +615,28 @@ mod tests {
 
         let parsed: MemoryEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.fact_id(), "fact-001");
+    }
+
+    #[test]
+    fn test_event_serde_roundtrip_fact_migrated_with_type_field() {
+        // Edge case: snapshot contains a "type" field that could conflict with serde tag
+        let snapshot = serde_json::json!({
+            "type": "old_event_type",
+            "id": "old-fact",
+            "content": "test"
+        });
+        let event = MemoryEvent::FactMigrated {
+            fact_id: "old-fact".into(),
+            snapshot: snapshot.clone(),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: MemoryEvent = serde_json::from_str(&json).unwrap();
+        if let MemoryEvent::FactMigrated { snapshot: s, .. } = parsed {
+            assert_eq!(s["type"].as_str(), Some("old_event_type"));
+        } else {
+            panic!("Wrong variant");
+        }
     }
 
     #[test]
