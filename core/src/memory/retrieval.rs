@@ -7,7 +7,7 @@ use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::dreaming::record_activity;
 use crate::memory::graph::GraphStore;
-use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
 use crate::memory::store::types::MemoryFilter;
 use crate::memory::store::{MemoryBackend, SessionStore};
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
 #[derive(Clone)]
 pub struct MemoryRetrieval {
     database: MemoryBackend,
-    embedder: Arc<SmartEmbedder>,
+    embedder: Arc<dyn EmbeddingProvider>,
     config: Arc<MemoryConfig>,
     graph_store: Option<GraphStore>,
 }
@@ -26,7 +26,7 @@ impl MemoryRetrieval {
     /// Create new retrieval service
     pub fn new(
         database: MemoryBackend,
-        embedder: Arc<SmartEmbedder>,
+        embedder: Arc<dyn EmbeddingProvider>,
         config: Arc<MemoryConfig>,
     ) -> Self {
         // NOTE: DreamDaemon and GraphStore are SQLite-based and will be migrated
@@ -273,9 +273,9 @@ mod tests {
         )
     }
 
-    fn create_test_model() -> Arc<SmartEmbedder> {
-        let cache_dir = SmartEmbedder::default_cache_dir().unwrap();
-        Arc::new(SmartEmbedder::new(cache_dir, 300))
+    fn create_test_model() -> Arc<dyn EmbeddingProvider> {
+        use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
+        Arc::new(MockEmbeddingProvider::new(1024, "mock-model"))
     }
 
     fn create_test_config() -> Arc<MemoryConfig> {

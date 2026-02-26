@@ -180,24 +180,35 @@ pub struct P2IntelligentRouter {
 }
 
 impl P2IntelligentRouter {
-    /// Create a new P2 router with default configuration
-    pub fn new(config: P2RouterConfig) -> Result<Self, P2RouterError> {
+    /// Create a new P2 router with an embedding provider for semantic caching.
+    ///
+    /// If `embedding_provider` is `None` and cache is enabled, the cache will
+    /// be disabled automatically.
+    pub fn new(
+        config: P2RouterConfig,
+        embedding_provider: Option<Arc<dyn crate::memory::EmbeddingProvider>>,
+    ) -> Self {
         let analyzer = PromptAnalyzer::new(config.prompt_analysis.clone());
 
         let cache = if config.semantic_cache.enabled {
-            Some(Arc::new(
-                SemanticCacheManager::new(config.semantic_cache.clone())
-                    .map_err(|e| P2RouterError::CacheInitFailed(e.to_string()))?,
-            ))
+            if let Some(provider) = embedding_provider {
+                Some(Arc::new(SemanticCacheManager::new(
+                    provider,
+                    config.semantic_cache.clone(),
+                )))
+            } else {
+                tracing::warn!("Semantic cache enabled but no embedding provider supplied; cache disabled");
+                None
+            }
         } else {
             None
         };
 
-        Ok(Self {
+        Self {
             analyzer,
             cache,
             config,
-        })
+        }
     }
 
     /// Create without cache (for testing or lightweight usage)

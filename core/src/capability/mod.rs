@@ -40,7 +40,7 @@ use crate::config::{McpConfig, MemoryConfig, SkillsConfig};
 use crate::error::Result;
 use crate::mcp::McpClient;
 use crate::memory::store::MemoryBackend;
-use crate::memory::{FactRetrieval, FactRetrievalConfig, SmartEmbedder};
+use crate::memory::{EmbeddingProvider, FactRetrieval, FactRetrievalConfig};
 use crate::payload::{AgentPayload, Capability};
 use crate::skills::SkillsRegistry;
 use std::sync::Arc;
@@ -54,6 +54,8 @@ pub struct CapabilityExecutor {
     memory_db: Option<MemoryBackend>,
     /// Memory configuration
     memory_config: Option<Arc<MemoryConfig>>,
+    /// Embedding provider for memory retrieval
+    embedder: Option<Arc<dyn EmbeddingProvider>>,
     /// Skills registry for Skills capability
     skills_registry: Option<Arc<SkillsRegistry>>,
     /// Skills configuration
@@ -92,6 +94,7 @@ impl CapabilityExecutor {
         Self {
             memory_db,
             memory_config,
+            embedder: None,
             skills_registry: None,
             skills_config: None,
             mcp_client: None,
@@ -104,6 +107,12 @@ impl CapabilityExecutor {
             ai_retrieval_max_candidates: 20,
             ai_retrieval_fallback_count: 3,
         }
+    }
+
+    /// Configure embedding provider
+    pub fn with_embedder(mut self, embedder: Option<Arc<dyn EmbeddingProvider>>) -> Self {
+        self.embedder = embedder;
+        self
     }
 
     /// Configure MCP capability
@@ -261,9 +270,11 @@ impl CapabilityExecutor {
             "Retrieving memory (fact-first strategy)"
         );
 
-        // Initialize embedding model
-        let cache_dir = SmartEmbedder::default_cache_dir()?;
-        let embedder = SmartEmbedder::new(cache_dir, crate::memory::DEFAULT_MODEL_TTL_SECS);
+        // Get embedding provider
+        let Some(embedder) = &self.embedder else {
+            warn!("Memory capability requested but no embedding provider configured");
+            return Ok(payload);
+        };
 
         // Configure fact retrieval with user settings
         let retrieval_config = FactRetrievalConfig {
@@ -273,7 +284,7 @@ impl CapabilityExecutor {
         };
 
         // Create fact retrieval service
-        let fact_retrieval = FactRetrieval::new(Arc::clone(db), embedder, retrieval_config);
+        let fact_retrieval = FactRetrieval::new(Arc::clone(db), Arc::clone(embedder), retrieval_config);
 
         // Retrieve using fact-first strategy
         let result = fact_retrieval.retrieve(query).await?;

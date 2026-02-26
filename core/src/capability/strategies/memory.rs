@@ -9,7 +9,7 @@ use crate::config::MemoryConfig;
 use crate::error::{AlephError, Result};
 use crate::memory::{ai_retrieval::AiMemoryRetriever, ContextAnchor as MemoryContextAnchor};
 use crate::memory::store::{MemoryBackend, SessionStore};
-use crate::memory::{MemoryRetrieval, SmartEmbedder, DEFAULT_MODEL_TTL_SECS};
+use crate::memory::{EmbeddingProvider, MemoryRetrieval};
 use crate::payload::{AgentPayload, Capability};
 use crate::providers::AiProvider;
 use async_trait::async_trait;
@@ -26,6 +26,8 @@ pub struct MemoryStrategy {
     memory_db: Option<MemoryBackend>,
     /// Memory configuration
     memory_config: Option<Arc<MemoryConfig>>,
+    /// Embedding provider for vector search
+    embedder: Option<Arc<dyn EmbeddingProvider>>,
     /// AI provider for AI-based retrieval (optional)
     ai_provider: Option<Arc<dyn AiProvider>>,
     /// Enable AI-based retrieval
@@ -49,6 +51,7 @@ impl MemoryStrategy {
         Self {
             memory_db,
             memory_config,
+            embedder: None,
             ai_provider: None,
             use_ai_retrieval: false,
             ai_retrieval_timeout: Duration::from_millis(3000),
@@ -56,6 +59,12 @@ impl MemoryStrategy {
             ai_retrieval_fallback_count: 3,
             exclusion_set: Vec::new(),
         }
+    }
+
+    /// Configure embedding provider
+    pub fn with_embedder(mut self, embedder: Option<Arc<dyn EmbeddingProvider>>) -> Self {
+        self.embedder = embedder;
+        self
     }
 
     /// Configure AI-based retrieval
@@ -97,15 +106,9 @@ impl CapabilityStrategy for MemoryStrategy {
     }
 
     fn validate_config(&self) -> Result<()> {
-        // Check if embedding model cache directory exists when db is configured
-        if self.memory_db.is_some() {
-            match SmartEmbedder::default_cache_dir() {
-                Ok(cache_dir) => {
-                    // Note: directory is created on-demand, so we don't check existence
-                    debug!(cache_dir = %cache_dir.display(), "Embedding cache directory configured");
-                }
-                Err(e) => return Err(e),
-            }
+        // Check if embedding provider is configured when db is present
+        if self.memory_db.is_some() && self.embedder.is_none() {
+            debug!("Memory database configured but no embedding provider set");
         }
 
         // If AI retrieval is enabled, verify provider is configured
@@ -190,16 +193,18 @@ impl CapabilityStrategy for MemoryStrategy {
             payload.meta.timestamp,
         );
 
-        // Initialize embedding model
-        let cache_dir = SmartEmbedder::default_cache_dir()?;
-        let embedder = Arc::new(SmartEmbedder::new(cache_dir, DEFAULT_MODEL_TTL_SECS));
+        // Get embedding provider
+        let Some(embedder) = &self.embedder else {
+            warn!("Memory capability requested but no embedding provider configured");
+            return Ok(payload);
+        };
 
         // Choose retrieval strategy
         let memories = if self.use_ai_retrieval {
-            self.execute_ai_retrieval(db, config, &embedder, &memory_anchor, query)
+            self.execute_ai_retrieval(db, config, embedder, &memory_anchor, query)
                 .await?
         } else {
-            self.execute_embedding_retrieval(db, config, &embedder, &memory_anchor, query)
+            self.execute_embedding_retrieval(db, config, embedder, &memory_anchor, query)
                 .await?
         };
 
@@ -226,7 +231,7 @@ impl MemoryStrategy {
         &self,
         db: &MemoryBackend,
         config: &Arc<MemoryConfig>,
-        embedder: &Arc<SmartEmbedder>,
+        embedder: &Arc<dyn EmbeddingProvider>,
         anchor: &MemoryContextAnchor,
         query: &str,
     ) -> Result<Vec<crate::memory::MemoryEntry>> {
@@ -280,7 +285,7 @@ impl MemoryStrategy {
         &self,
         db: &MemoryBackend,
         config: &Arc<MemoryConfig>,
-        embedder: &Arc<SmartEmbedder>,
+        embedder: &Arc<dyn EmbeddingProvider>,
         anchor: &MemoryContextAnchor,
         query: &str,
     ) -> Result<Vec<crate::memory::MemoryEntry>> {

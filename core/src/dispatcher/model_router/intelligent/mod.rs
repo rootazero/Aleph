@@ -22,6 +22,6 @@ pub use routing::{IntelligentRouter, IntelligentRoutingConfig, IntelligentRoutin
 pub use semantic_cache::{
     cosine_similarity, hash_prompt, normalize_prompt, prompt_preview, CacheEntry, CacheHit,
     CacheHitType, CacheMetadata, CacheStats, CachedResponse, EmbeddingError, EvictionPolicy,
-    FastEmbedEmbedder, InMemoryVectorStore, SemanticCacheConfig, SemanticCacheError,
+    BridgeEmbedder, InMemoryVectorStore, SemanticCacheConfig, SemanticCacheError,
     SemanticCacheManager, TextEmbedder,
 };

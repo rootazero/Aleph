@@ -6,7 +6,8 @@
 use crate::error::AlephError;
 use crate::memory::context::{MemoryEntry, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
-use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
+use std::sync::Arc;
 use crate::memory::store::types::{MemoryFilter, SearchFilter};
 use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
 
@@ -55,7 +56,7 @@ impl RetrievalResult {
 /// Fact-first retrieval service
 pub struct FactRetrieval {
     database: MemoryBackend,
-    embedder: SmartEmbedder,
+    embedder: Arc<dyn EmbeddingProvider>,
     config: FactRetrievalConfig,
 }
 
@@ -63,7 +64,7 @@ impl FactRetrieval {
     /// Create a new fact retrieval service
     pub fn new(
         database: MemoryBackend,
-        embedder: SmartEmbedder,
+        embedder: Arc<dyn EmbeddingProvider>,
         config: FactRetrievalConfig,
     ) -> Self {
         Self {
@@ -74,7 +75,7 @@ impl FactRetrieval {
     }
 
     /// Create with default configuration
-    pub fn with_defaults(database: MemoryBackend, embedder: SmartEmbedder) -> Self {
+    pub fn with_defaults(database: MemoryBackend, embedder: Arc<dyn EmbeddingProvider>) -> Self {
         Self::new(database, embedder, FactRetrievalConfig::default())
     }
 
@@ -274,13 +275,13 @@ mod tests {
     use tempfile::tempdir;
 
     async fn create_test_retrieval() -> (FactRetrieval, MemoryBackend) {
+        use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
+
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
         let database: MemoryBackend = Arc::new(LanceMemoryBackend::open_or_create(&path).await.unwrap());
 
-        let cache_dir = temp_dir.path().join("models");
-        std::fs::create_dir_all(&cache_dir).unwrap();
-        let embedder = SmartEmbedder::new(cache_dir, 300);
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
 
         // Leak the temp_dir to prevent cleanup during test
         std::mem::forget(temp_dir);

@@ -5,7 +5,8 @@
 use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryFact, FactSpecificity, TemporalScope};
 use crate::memory::store::{MemoryBackend, MemoryStore};
-use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
+use std::sync::Arc;
 
 /// Filter options for listing facts
 #[derive(Debug, Clone, Default)]
@@ -324,7 +325,7 @@ impl MemoryCommands {
         &self,
         content: &str,
         fact_type: FactType,
-        embedder: Option<&SmartEmbedder>,
+        embedder: Option<&Arc<dyn EmbeddingProvider>>,
     ) -> Result<String, AlephError> {
         // Generate embedding if embedder is available
         let embedding = if let Some(emb) = embedder {
@@ -354,7 +355,7 @@ impl MemoryCommands {
         &self,
         id: &str,
         new_content: &str,
-        embedder: Option<&SmartEmbedder>,
+        embedder: Option<&Arc<dyn EmbeddingProvider>>,
     ) -> Result<String, AlephError> {
         // Resolve ID (support prefix match)
         let full_id = self.resolve_fact_id(id).await?;
@@ -465,7 +466,7 @@ impl MemoryCommands {
     pub async fn import(
         &self,
         json: &str,
-        embedder: Option<&SmartEmbedder>,
+        embedder: Option<&Arc<dyn EmbeddingProvider>>,
     ) -> Result<ImportResult, AlephError> {
         let export: FactExport = serde_json::from_str(json)
             .map_err(|e| AlephError::other(format!("Failed to parse JSON: {}", e)))?;

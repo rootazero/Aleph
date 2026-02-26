@@ -41,7 +41,7 @@ mod types;
 mod utils;
 
 // Re-export all public types for backward compatibility
-pub use embedder::{EmbeddingError, FastEmbedEmbedder, TextEmbedder};
+pub use embedder::{BridgeEmbedder, EmbeddingError, TextEmbedder};
 pub use manager::SemanticCacheManager;
 pub use store::InMemoryVectorStore;
 pub use types::{

@@ -7,7 +7,7 @@
 //! - Ensuring core tools are always included
 
 use crate::error::AlephError;
-use crate::memory::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
 use super::config::ToolRetrievalConfig;
 use super::retrieval::{HydratedTool, ToolRetrieval};
 use std::sync::Arc;
@@ -110,14 +110,14 @@ impl HydrationResult {
 /// Hydration Pipeline for integrating semantic tool retrieval into Agent Loop
 ///
 /// The pipeline:
-/// 1. Embeds the user query using SmartEmbedder
+/// 1. Embeds the user query using EmbeddingProvider
 /// 2. Retrieves semantically similar tools from the tool index
 /// 3. Classifies tools by hydration level based on similarity score
 /// 4. Ensures core tools are always included with full schema
 pub struct HydrationPipeline {
     retrieval: ToolRetrieval,
     config: HydrationPipelineConfig,
-    embedder: Arc<SmartEmbedder>,
+    embedder: Arc<dyn EmbeddingProvider>,
 }
 
 impl HydrationPipeline {
@@ -125,7 +125,7 @@ impl HydrationPipeline {
     pub fn new(
         retrieval: ToolRetrieval,
         config: HydrationPipelineConfig,
-        embedder: Arc<SmartEmbedder>,
+        embedder: Arc<dyn EmbeddingProvider>,
     ) -> Self {
         Self {
             retrieval,
@@ -135,7 +135,7 @@ impl HydrationPipeline {
     }
 
     /// Create with default config
-    pub fn with_defaults(retrieval: ToolRetrieval, embedder: Arc<SmartEmbedder>) -> Self {
+    pub fn with_defaults(retrieval: ToolRetrieval, embedder: Arc<dyn EmbeddingProvider>) -> Self {
         Self::new(retrieval, HydrationPipelineConfig::default(), embedder)
     }
 

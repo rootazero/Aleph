@@ -112,7 +112,7 @@ impl ConflictDetector {
             .database
             .find_similar_facts(
                 embedding,
-                crate::memory::EMBEDDING_DIM as u32,
+                embedding.len() as u32,
                 &filter,
                 self.config.similarity_threshold,
                 20, // reasonable limit
@@ -230,7 +230,7 @@ mod tests {
             FactType::Preference,
             vec!["mem-1".to_string()],
         )
-        .with_embedding(vec![0.1; crate::memory::EMBEDDING_DIM]);
+        .with_embedding(vec![0.1; 1024]);
 
         let resolutions = detector.resolve_conflicts(&fact).await.unwrap();
 
@@ -250,7 +250,7 @@ mod tests {
             FactType::Learning,
             vec!["mem-old".to_string()],
         )
-        .with_embedding(vec![0.5; crate::memory::EMBEDDING_DIM]);
+        .with_embedding(vec![0.5; 1024]);
 
         database.insert_fact(&old_fact).await.unwrap();
 
@@ -262,7 +262,7 @@ mod tests {
             FactType::Learning,
             vec!["mem-new".to_string()],
         )
-        .with_embedding(vec![0.5; crate::memory::EMBEDDING_DIM]); // Same embedding = conflict
+        .with_embedding(vec![0.5; 1024]); // Same embedding = conflict
 
         let resolutions = detector.resolve_conflicts(&new_fact).await.unwrap();
 

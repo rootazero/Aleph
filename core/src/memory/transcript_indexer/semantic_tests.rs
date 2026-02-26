@@ -3,13 +3,17 @@
 use std::sync::Arc;
 use tempfile::tempdir;
 
-use crate::memory::{SemanticChunkConfig, SemanticChunker, SmartEmbedder};
+use crate::memory::{EmbeddingProvider, SemanticChunkConfig, SemanticChunker};
+use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
 
 #[tokio::test]
 #[ignore = "Requires model download"]
 async fn test_semantic_chunking_basic() {
     let temp_dir = tempdir().unwrap();
-    let embedder = Arc::new(SmartEmbedder::new(temp_dir.path().to_path_buf(), 300));
+    let embedder = {
+        let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+        mock
+    };
 
     let config = SemanticChunkConfig::default();
     let chunker = SemanticChunker::new(embedder, config);
@@ -29,7 +33,10 @@ async fn test_semantic_chunking_basic() {
 #[ignore = "Requires model download"]
 async fn test_semantic_chunking_single_topic() {
     let temp_dir = tempdir().unwrap();
-    let embedder = Arc::new(SmartEmbedder::new(temp_dir.path().to_path_buf(), 300));
+    let embedder = {
+        let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+        mock
+    };
 
     let config = SemanticChunkConfig::default();
     let chunker = SemanticChunker::new(embedder, config);
@@ -47,7 +54,10 @@ async fn test_semantic_chunking_single_topic() {
 #[ignore = "Requires model download"]
 async fn test_semantic_chunking_empty() {
     let temp_dir = tempdir().unwrap();
-    let embedder = Arc::new(SmartEmbedder::new(temp_dir.path().to_path_buf(), 300));
+    let embedder = {
+        let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+        mock
+    };
 
     let config = SemanticChunkConfig::default();
     let chunker = SemanticChunker::new(embedder, config);
@@ -60,7 +70,10 @@ async fn test_semantic_chunking_empty() {
 #[ignore = "Requires model download"]
 async fn test_semantic_chunking_config() {
     let temp_dir = tempdir().unwrap();
-    let embedder = Arc::new(SmartEmbedder::new(temp_dir.path().to_path_buf(), 300));
+    let embedder = {
+        let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+        mock
+    };
 
     // High similarity threshold = fewer boundaries
     let config = SemanticChunkConfig {

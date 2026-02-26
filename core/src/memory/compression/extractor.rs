@@ -18,7 +18,7 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
     format!("{}...", &s[..end_byte])
 }
 use crate::memory::context::{FactType, MemoryEntry, MemoryFact};
-use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -45,12 +45,12 @@ struct ExtractionResponse {
 /// Extracts facts from conversations using LLM
 pub struct FactExtractor {
     provider: Arc<dyn AiProvider>,
-    embedder: SmartEmbedder,
+    embedder: Arc<dyn EmbeddingProvider>,
 }
 
 impl FactExtractor {
     /// Create a new fact extractor
-    pub fn new(provider: Arc<dyn AiProvider>, embedder: SmartEmbedder) -> Self {
+    pub fn new(provider: Arc<dyn AiProvider>, embedder: Arc<dyn EmbeddingProvider>) -> Self {
         Self { provider, embedder }
     }
 
@@ -328,10 +328,10 @@ mod tests {
 
     fn create_test_extractor() -> FactExtractor {
         use crate::providers::create_mock_provider;
+        use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
 
         let provider = create_mock_provider();
-        let cache_dir = std::path::PathBuf::from("/tmp/test_models");
-        let embedder = SmartEmbedder::new(cache_dir, 300);
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
 
         FactExtractor::new(provider, embedder)
     }

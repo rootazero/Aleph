@@ -6,7 +6,7 @@
 use crate::error::{AlephError, Result};
 use crate::memory::cortex::{Experience, ParameterMapping, ReplayMatch};
 use crate::memory::store::MemoryBackend;
-use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
 use std::sync::Arc;
 use tracing::{debug, info};
 
@@ -34,7 +34,7 @@ impl Default for ExperienceReplayConfig {
 /// L1.5 Experience Replay Layer
 pub struct ExperienceReplayLayer {
     _db: MemoryBackend,
-    embedder: Arc<SmartEmbedder>,
+    embedder: Arc<dyn EmbeddingProvider>,
     config: ExperienceReplayConfig,
 }
 
@@ -42,7 +42,7 @@ impl ExperienceReplayLayer {
     /// Create a new Experience Replay Layer
     pub fn new(
         db: MemoryBackend,
-        embedder: Arc<SmartEmbedder>,
+        embedder: Arc<dyn EmbeddingProvider>,
         config: ExperienceReplayConfig,
     ) -> Self {
         Self {
@@ -254,7 +254,9 @@ mod tests {
     async fn test_extract_with_regex() {
         let (db, temp) = create_test_db().await;
         let cache_dir = temp.path().join("embedder_cache");
-        let embedder = Arc::new(SmartEmbedder::new(cache_dir, 3600));
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
+            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(1024, "mock-model"),
+        );
         let config = ExperienceReplayConfig::default();
         let layer = ExperienceReplayLayer::new(db, embedder, config);
 
@@ -269,7 +271,9 @@ mod tests {
     async fn test_extract_after_keyword() {
         let (db, temp) = create_test_db().await;
         let cache_dir = temp.path().join("embedder_cache");
-        let embedder = Arc::new(SmartEmbedder::new(cache_dir, 3600));
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
+            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(1024, "mock-model"),
+        );
         let config = ExperienceReplayConfig::default();
         let layer = ExperienceReplayLayer::new(db, embedder, config);
 

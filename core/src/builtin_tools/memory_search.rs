@@ -5,7 +5,6 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info};
 
@@ -13,8 +12,8 @@ use super::error::ToolError;
 use crate::error::Result;
 use crate::memory::store::MemoryBackend;
 use crate::memory::{
-    ComptrollerConfig, ContextComptroller, FactRetrieval, FactRetrievalConfig, TokenBudget,
-    TranscriptIndexer, SmartEmbedder,
+    ComptrollerConfig, ContextComptroller, EmbeddingProvider, FactRetrieval, FactRetrievalConfig,
+    TokenBudget, TranscriptIndexer,
 };
 use crate::tools::AlephTool;
 
@@ -117,13 +116,7 @@ impl MemorySearchTool {
         Returns both compressed facts and raw transcripts with redundancy elimination.";
 
     /// Create a new MemorySearchTool instance
-    pub fn new(database: MemoryBackend) -> Self {
-        // Create embedder with default cache dir and TTL
-        let cache_dir = std::env::var("ALEPH_MODEL_CACHE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_models"));
-        let embedder = Arc::new(SmartEmbedder::new(cache_dir, 300));
-
+    pub fn new_with_embedder(database: MemoryBackend, embedder: Arc<dyn EmbeddingProvider>) -> Self {
         let fact_config = FactRetrievalConfig {
             max_facts: 10,
             max_raw_fallback: 10,
@@ -131,7 +124,7 @@ impl MemorySearchTool {
         };
         let fact_retrieval = Arc::new(FactRetrieval::new(
             database.clone(),
-            (*embedder).clone(),
+            Arc::clone(&embedder),
             fact_config,
         ));
 

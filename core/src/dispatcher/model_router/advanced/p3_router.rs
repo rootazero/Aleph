@@ -41,7 +41,7 @@
 //! ```rust,ignore
 //! use alephcore::dispatcher::model_router::{P3IntelligentRouter, P3RouterConfig};
 //!
-//! let router = P3IntelligentRouter::new(config)?;
+//! let router = P3IntelligentRouter::new(config, None)?;
 //!
 //! // Pre-route with A/B and ensemble consideration
 //! let result = router.pre_route("Complex reasoning task...", &TaskIntent::Reasoning).await?;
@@ -245,9 +245,11 @@ pub struct P3IntelligentRouter {
 
 impl P3IntelligentRouter {
     /// Create a new P3 router
-    pub fn new(config: P3RouterConfig) -> Result<Self, P3RouterError> {
-        let p2_router =
-            P2IntelligentRouter::new(config.p2_config.clone()).map_err(P3RouterError::P2Error)?;
+    pub fn new(
+        config: P3RouterConfig,
+        embedding_provider: Option<std::sync::Arc<dyn crate::memory::EmbeddingProvider>>,
+    ) -> Result<Self, P3RouterError> {
+        let p2_router = P2IntelligentRouter::new(config.p2_config.clone(), embedding_provider);
 
         let ab_engine = if config.ab_testing_enabled {
             Some(Arc::new(ABTestingEngine::new(vec![])))
@@ -654,7 +656,7 @@ mod tests {
     #[tokio::test]
     async fn test_p3_router_creation() {
         let config = P3RouterConfig::default();
-        let router = P3IntelligentRouter::new(config);
+        let router = P3IntelligentRouter::new(config, None);
         assert!(router.is_ok());
 
         let router = router.unwrap();
@@ -668,7 +670,7 @@ mod tests {
             ab_testing_enabled: true,
             ..Default::default()
         };
-        let router = P3IntelligentRouter::new(config).unwrap();
+        let router = P3IntelligentRouter::new(config, None).unwrap();
         assert!(router.ab_engine().is_some());
     }
 
@@ -678,7 +680,7 @@ mod tests {
             ensemble_enabled: true,
             ..Default::default()
         };
-        let router = P3IntelligentRouter::new(config).unwrap();
+        let router = P3IntelligentRouter::new(config, None).unwrap();
         assert!(router.ensemble_engine().is_some());
     }
 
@@ -689,7 +691,7 @@ mod tests {
             ensemble_enabled: true,
             ..Default::default()
         };
-        let router = P3IntelligentRouter::new(config).unwrap();
+        let router = P3IntelligentRouter::new(config, None).unwrap();
         assert!(router.ab_engine().is_some());
         assert!(router.ensemble_engine().is_some());
     }

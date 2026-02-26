@@ -6,7 +6,7 @@ use crate::config::MemoryConfig;
 use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::dreaming::{ensure_dream_daemon, record_activity};
-use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
 use crate::memory::store::{MemoryBackend, SessionStore};
 use crate::memory::noise_filter::NoiseFilter;
 use crate::utils::pii::scrub_pii;
@@ -18,7 +18,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct MemoryIngestion {
     database: MemoryBackend,
-    embedder: Arc<SmartEmbedder>,
+    embedder: Arc<dyn EmbeddingProvider>,
     config: Arc<MemoryConfig>,
     noise_filter: NoiseFilter,
 }
@@ -27,7 +27,7 @@ impl MemoryIngestion {
     /// Create new ingestion service
     pub fn new(
         database: MemoryBackend,
-        embedder: Arc<SmartEmbedder>,
+        embedder: Arc<dyn EmbeddingProvider>,
         config: Arc<MemoryConfig>,
     ) -> Self {
         ensure_dream_daemon(database.clone(), Arc::clone(&config));
@@ -163,9 +163,9 @@ mod tests {
     }
 
     // Helper to create test embedding model
-    fn create_test_model() -> Arc<SmartEmbedder> {
-        let cache_dir = SmartEmbedder::default_cache_dir().unwrap();
-        Arc::new(SmartEmbedder::new(cache_dir, 300))
+    fn create_test_model() -> Arc<dyn EmbeddingProvider> {
+        use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
+        Arc::new(MockEmbeddingProvider::new(1024, "mock-model"))
     }
 
     // Helper to create test config
@@ -224,7 +224,7 @@ mod tests {
             .unwrap();
 
         // Retrieve and verify PII was scrubbed
-        let embedding = vec![0.0; crate::memory::EMBEDDING_DIM]; // Dummy query embedding
+        let embedding = vec![0.0; 1024]; // Dummy query embedding
         let filter = crate::memory::store::types::MemoryFilter::for_context(
             &context.app_bundle_id,
             &context.window_title,
@@ -295,7 +295,7 @@ mod tests {
             .unwrap();
 
         // Retrieve memory and verify embedding exists
-        let query_embedding = vec![0.0; crate::memory::EMBEDDING_DIM];
+        let query_embedding = vec![0.0; 1024];
         let filter = crate::memory::store::types::MemoryFilter::for_context(
             &context.app_bundle_id,
             &context.window_title,
@@ -310,7 +310,7 @@ mod tests {
         assert!(memories[0].embedding.is_some());
         assert_eq!(
             memories[0].embedding.as_ref().unwrap().len(),
-            crate::memory::EMBEDDING_DIM
+            1024
         );
     }
 

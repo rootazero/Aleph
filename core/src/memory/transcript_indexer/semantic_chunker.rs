@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::memory::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
 use crate::Result;
 
 /// Configuration for semantic chunking
@@ -30,13 +30,13 @@ impl Default for SemanticChunkConfig {
 
 /// Semantic chunker that uses embeddings to detect semantic boundaries
 pub struct SemanticChunker {
-    embedder: Arc<SmartEmbedder>,
+    embedder: Arc<dyn EmbeddingProvider>,
     config: SemanticChunkConfig,
 }
 
 impl SemanticChunker {
     /// Create a new semantic chunker
-    pub fn new(embedder: Arc<SmartEmbedder>, config: SemanticChunkConfig) -> Self {
+    pub fn new(embedder: Arc<dyn EmbeddingProvider>, config: SemanticChunkConfig) -> Self {
         Self { embedder, config }
     }
 
@@ -219,10 +219,11 @@ mod tests {
     #[test]
     fn test_split_sentences() {
         let config = SemanticChunkConfig::default();
-        let embedder = Arc::new(SmartEmbedder::new(
-            std::path::PathBuf::from("/tmp/models"),
-            300,
-        ));
+        let embedder = {
+            use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
+            let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+            mock
+        };
         let chunker = SemanticChunker::new(embedder, config);
 
         let text = "This is sentence one. This is sentence two! Is this sentence three?";
@@ -237,10 +238,11 @@ mod tests {
     #[test]
     fn test_split_sentences_chinese() {
         let config = SemanticChunkConfig::default();
-        let embedder = Arc::new(SmartEmbedder::new(
-            std::path::PathBuf::from("/tmp/models"),
-            300,
-        ));
+        let embedder = {
+            use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
+            let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+            mock
+        };
         let chunker = SemanticChunker::new(embedder, config);
 
         let text = "这是第一句。这是第二句！这是第三句？";
@@ -255,10 +257,11 @@ mod tests {
     #[test]
     fn test_estimate_tokens() {
         let config = SemanticChunkConfig::default();
-        let embedder = Arc::new(SmartEmbedder::new(
-            std::path::PathBuf::from("/tmp/models"),
-            300,
-        ));
+        let embedder = {
+            use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
+            let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+            mock
+        };
         let chunker = SemanticChunker::new(embedder, config);
 
         let text = "This is a test"; // 14 characters

@@ -5,7 +5,7 @@
 //! rules from accumulating in the system.
 
 use crate::error::AlephError;
-use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
 use std::sync::Arc;
 
 use super::types::BehavioralAnchor;
@@ -39,12 +39,12 @@ pub struct ConflictReport {
 /// Detector for semantic conflicts between behavioral anchors
 pub struct ConflictDetector {
     /// Embedding model for semantic similarity
-    embedder: Arc<SmartEmbedder>,
+    embedder: Arc<dyn EmbeddingProvider>,
 }
 
 impl ConflictDetector {
     /// Create a new conflict detector with the given embedder
-    pub fn new(embedder: Arc<SmartEmbedder>) -> Self {
+    pub fn new(embedder: Arc<dyn EmbeddingProvider>) -> Self {
         Self { embedder }
     }
 

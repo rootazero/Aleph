@@ -1,6 +1,10 @@
 //! Text embedding generation
 //!
-//! Contains the TextEmbedder trait and FastEmbedEmbedder implementation.
+//! Contains the TextEmbedder trait and BridgeEmbedder adapter that bridges
+//! the memory module's EmbeddingProvider to the semantic cache's TextEmbedder.
+
+use std::sync::Arc;
+use crate::memory::EmbeddingProvider;
 
 // =============================================================================
 // Text Embedder Trait
@@ -39,62 +43,24 @@ pub trait TextEmbedder: Send + Sync {
 }
 
 // =============================================================================
-// FastEmbed Embedder
+// Bridge Embedder — adapts EmbeddingProvider to TextEmbedder
 // =============================================================================
 
-/// Text embedder using fastembed library
-pub struct FastEmbedEmbedder {
-    model: fastembed::TextEmbedding,
-    model_name: String,
-    dimensions: usize,
+/// Adapter that wraps `Arc<dyn EmbeddingProvider>` (memory module) to implement
+/// `TextEmbedder` (semantic cache module).
+pub struct BridgeEmbedder {
+    inner: Arc<dyn EmbeddingProvider>,
 }
 
-impl FastEmbedEmbedder {
-    /// Create a new FastEmbed embedder with the default model
-    pub fn new() -> Result<Self, EmbeddingError> {
-        Self::with_model("bge-small-zh-v1.5")
-    }
-
-    /// Create a new FastEmbed embedder with a specific model
-    pub fn with_model(model_name: &str) -> Result<Self, EmbeddingError> {
-        // Map model name to fastembed model type
-        let model_type = match model_name {
-            "bge-small-zh-v1.5" => fastembed::EmbeddingModel::BGESmallZHV15,
-            "bge-small-en-v1.5" => fastembed::EmbeddingModel::BGESmallENV15,
-            "bge-base-en-v1.5" => fastembed::EmbeddingModel::BGEBaseENV15,
-            _ => {
-                return Err(EmbeddingError::ModelLoadFailed(format!(
-                    "Unknown model: {}. Supported: bge-small-zh-v1.5, bge-small-en-v1.5, bge-base-en-v1.5",
-                    model_name
-                )));
-            }
-        };
-
-        let init_options =
-            fastembed::InitOptions::new(model_type).with_show_download_progress(false);
-
-        let model = fastembed::TextEmbedding::try_new(init_options).map_err(|e| {
-            EmbeddingError::ModelLoadFailed(format!("Failed to load fastembed model: {}", e))
-        })?;
-
-        // Get dimensions based on model
-        let dimensions = match model_name {
-            "bge-small-zh-v1.5" => 512,
-            "bge-small-en-v1.5" => 384,
-            "bge-base-en-v1.5" => 768,
-            _ => 512,
-        };
-
-        Ok(Self {
-            model,
-            model_name: model_name.to_string(),
-            dimensions,
-        })
+impl BridgeEmbedder {
+    /// Create a new bridge embedder from an EmbeddingProvider
+    pub fn new(provider: Arc<dyn EmbeddingProvider>) -> Self {
+        Self { inner: provider }
     }
 }
 
 #[async_trait::async_trait]
-impl TextEmbedder for FastEmbedEmbedder {
+impl TextEmbedder for BridgeEmbedder {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         if text.is_empty() {
             return Err(EmbeddingError::InvalidInput(
@@ -102,16 +68,10 @@ impl TextEmbedder for FastEmbedEmbedder {
             ));
         }
 
-        let texts = vec![text.to_string()];
-        let embeddings = self
-            .model
-            .embed(texts, None)
-            .map_err(|e| EmbeddingError::GenerationFailed(e.to_string()))?;
-
-        embeddings
-            .into_iter()
-            .next()
-            .ok_or_else(|| EmbeddingError::GenerationFailed("No embedding generated".to_string()))
+        self.inner
+            .embed(text)
+            .await
+            .map_err(|e| EmbeddingError::GenerationFailed(e.to_string()))
     }
 
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
@@ -119,17 +79,17 @@ impl TextEmbedder for FastEmbedEmbedder {
             return Ok(Vec::new());
         }
 
-        let texts: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
-        self.model
-            .embed(texts, None)
+        self.inner
+            .embed_batch(texts)
+            .await
             .map_err(|e| EmbeddingError::GenerationFailed(e.to_string()))
     }
 
     fn dimensions(&self) -> usize {
-        self.dimensions
+        self.inner.dimensions()
     }
 
     fn model_name(&self) -> &str {
-        &self.model_name
+        self.inner.model_name()
     }
 }
