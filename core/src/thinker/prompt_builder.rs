@@ -1195,6 +1195,15 @@ impl PromptBuilder {
     ) {
         prompt.push_str(&guide.to_prompt_section());
     }
+
+    /// Append user profile section to the prompt.
+    pub fn append_user_profile(
+        &self,
+        prompt: &mut String,
+        profile: &crate::thinker::user_profile::UserProfile,
+    ) {
+        prompt.push_str(&profile.to_prompt_section());
+    }
 }
 
 /// Message type for LLM conversation
