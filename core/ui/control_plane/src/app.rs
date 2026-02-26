@@ -74,6 +74,7 @@ fn AppContent() -> impl IntoView {
                         <Route path=path!("/settings/behavior") view=BehaviorView />
                         <Route path=path!("/settings/search") view=SearchView />
                         <Route path=path!("/settings/providers") view=ProvidersView />
+                        <Route path=path!("/settings/embedding-providers") view=EmbeddingProvidersView />
                         <Route path=path!("/settings/generation-providers") view=GenerationProvidersView />
                         <Route path=path!("/settings/agent") view=AgentView />
                         <Route path=path!("/settings/routing") view=RoutingRulesView />
