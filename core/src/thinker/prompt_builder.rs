@@ -799,6 +799,21 @@ impl PromptBuilder {
         prompt.push_str("- Keep reasoning concise as it may not be visible to the user\n\n");
     }
 
+    /// Append protocol tokens section (replaces append_silent_behavior for protocol-aware mode)
+    ///
+    /// When SilentReply capability is active, injects structured protocol tokens
+    /// that the LLM can use as minimal-cost responses in background mode.
+    pub fn append_protocol_tokens(
+        &self,
+        prompt: &mut String,
+        contract: &EnvironmentContract,
+    ) {
+        if !contract.active_capabilities.contains(&Capability::SilentReply) {
+            return;
+        }
+        prompt.push_str(&super::protocol_tokens::ProtocolToken::to_prompt_section());
+    }
+
     /// Build system prompt using ResolvedContext
     ///
     /// This is the new entry point that uses the two-phase filtered context
@@ -810,7 +825,7 @@ impl PromptBuilder {
     /// 5. Runtime capabilities
     /// 6. Tools (using ctx.available_tools)
     /// 7. Security constraints (blocked tools, approval-required tools)
-    /// 8. Silent behavior (if applicable)
+    /// 8. Protocol tokens (if applicable)
     /// 9. Generation models
     /// 10. Special actions
     /// 11. Response format
@@ -851,8 +866,8 @@ impl PromptBuilder {
             &ctx.environment_contract.security_notes,
         );
 
-        // 8. Silent behavior (if applicable)
-        self.append_silent_behavior(&mut prompt, &ctx.environment_contract);
+        // 8. Protocol tokens (replaces basic silent behavior with structured protocol)
+        self.append_protocol_tokens(&mut prompt, &ctx.environment_contract);
 
         // 9. Generation models
         self.append_generation_models(&mut prompt);
@@ -1364,5 +1379,47 @@ mod tests {
 
         // Runtime context section should NOT be present
         assert!(!prompt.contains("## Runtime Environment"));
+    }
+
+    #[test]
+    fn test_append_protocol_tokens_with_silent_reply() {
+        use crate::thinker::context::EnvironmentContract;
+        use crate::thinker::interaction::{Capability, InteractionConstraints, InteractionParadigm};
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        let contract = EnvironmentContract {
+            paradigm: InteractionParadigm::Background,
+            active_capabilities: vec![Capability::SilentReply],
+            constraints: InteractionConstraints::default(),
+            security_notes: vec![],
+        };
+
+        builder.append_protocol_tokens(&mut prompt, &contract);
+
+        assert!(prompt.contains("ALEPH_HEARTBEAT_OK"));
+        assert!(prompt.contains("ALEPH_SILENT_COMPLETE"));
+        assert!(prompt.contains("Response Protocol Tokens"));
+    }
+
+    #[test]
+    fn test_append_protocol_tokens_without_silent_reply() {
+        use crate::thinker::context::EnvironmentContract;
+        use crate::thinker::interaction::{InteractionConstraints, InteractionParadigm};
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        let contract = EnvironmentContract {
+            paradigm: InteractionParadigm::CLI,
+            active_capabilities: vec![],
+            constraints: InteractionConstraints::default(),
+            security_notes: vec![],
+        };
+
+        builder.append_protocol_tokens(&mut prompt, &contract);
+
+        assert!(!prompt.contains("ALEPH_HEARTBEAT_OK"));
     }
 }
