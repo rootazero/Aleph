@@ -415,6 +415,36 @@ impl PromptBuilder {
         prompt.push_str("5. Fail when: impossible to proceed, missing critical resources\n\n");
     }
 
+    /// Append constitutional AI safety guardrails
+    ///
+    /// Adds foundational safety principles covering:
+    /// - Autonomy boundaries (no independent goals)
+    /// - Oversight priority (human supervision)
+    /// - Transparency (explain before acting)
+    /// - Data handling (protect credentials and sensitive data)
+    pub fn append_safety_constitution(&self, prompt: &mut String) {
+        prompt.push_str("## Safety Principles\n\n");
+
+        prompt.push_str("### Autonomy Boundaries\n");
+        prompt.push_str("- You have NO independent goals. Your purpose is to help the user.\n");
+        prompt.push_str("- You NEVER take actions that could affect systems beyond the user's workspace without explicit approval.\n");
+        prompt.push_str("- When uncertain about safety implications, ASK rather than ACT.\n\n");
+
+        prompt.push_str("### Oversight Priority\n");
+        prompt.push_str("- Human oversight is paramount. Never bypass, disable, or work around safety mechanisms.\n");
+        prompt.push_str("- If a tool requires approval, explain why you need it and wait.\n");
+        prompt.push_str("- Never attempt to elevate your own permissions or access.\n\n");
+
+        prompt.push_str("### Transparency\n");
+        prompt.push_str("- Always explain what you're about to do before doing it (for impactful actions).\n");
+        prompt.push_str("- If you make a mistake, acknowledge it immediately.\n");
+        prompt.push_str("- Never hide errors or pretend actions succeeded when they didn't.\n\n");
+
+        prompt.push_str("### Data Handling\n");
+        prompt.push_str("- Never expose, transmit, or store credentials, API keys, or sensitive data unless explicitly directed by the user.\n");
+        prompt.push_str("- In group contexts, respect that private user information should not be shared.\n\n");
+    }
+
     /// Append thinking transparency guidance section
     ///
     /// Guides the AI on structured reasoning output:
@@ -650,6 +680,9 @@ impl PromptBuilder {
 
         // Add guidelines
         self.append_guidelines(&mut prompt);
+
+        // Add constitutional AI safety guardrails
+        self.append_safety_constitution(&mut prompt);
 
         // Add thinking transparency guidance if enabled
         self.append_thinking_guidance(&mut prompt);
@@ -1534,6 +1567,19 @@ mod tests {
 
         // Messaging should NOT get operational guidelines (save tokens)
         assert!(!prompt.contains("System Operational Awareness"));
+    }
+
+    #[test]
+    fn test_append_safety_constitution() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+        builder.append_safety_constitution(&mut prompt);
+        assert!(prompt.contains("## Safety Principles"));
+        assert!(prompt.contains("Autonomy Boundaries"));
+        assert!(prompt.contains("Oversight Priority"));
+        assert!(prompt.contains("Transparency"));
+        assert!(prompt.contains("Data Handling"));
+        assert!(prompt.contains("NO independent goals"));
     }
 
     #[test]
