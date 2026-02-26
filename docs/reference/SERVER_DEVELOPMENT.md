@@ -186,6 +186,29 @@ npm run build:css
 - 生产优化：minified，仅包含使用的类
 - 嵌入二进制：通过 rust-embed 打包进可执行文件
 
+### macOS Native App
+
+```bash
+# Build macOS app (requires Xcode + xcodegen)
+cd apps/macos-native && scripts/build-macos.sh
+
+# Development build
+cd apps/macos-native && xcodegen generate && xcodebuild -scheme Aleph -configuration Debug build
+
+# Run tests
+cd apps/macos-native && xcodebuild -scheme Aleph -configuration Debug test -destination 'platform=macOS'
+```
+
+### Pure Server Install (no desktop)
+
+```bash
+# Install via curl (downloads latest release)
+curl -fsSL https://raw.githubusercontent.com/user/aleph/main/scripts/install.sh | bash
+
+# Or build from source
+cargo build --bin aleph-server --release
+```
+
 ## 发布流程
 
 ### 1. 准备发布
