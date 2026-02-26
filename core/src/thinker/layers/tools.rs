@@ -1,4 +1,4 @@
-//! ToolsLayer + HydratedToolsLayer — tool discovery and injection (priority 500)
+//! ToolsLayer + HydratedToolsLayer — tool discovery and injection (priority 500/501)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 
@@ -60,14 +60,15 @@ impl PromptLayer for ToolsLayer {
 }
 
 // ---------------------------------------------------------------------------
-// HydratedToolsLayer — Hydration path only
+// HydratedToolsLayer — Hydration path only (priority 501 to avoid ambiguity
+// with ToolsLayer, even though they are mutually exclusive by path)
 // ---------------------------------------------------------------------------
 
 pub struct HydratedToolsLayer;
 
 impl PromptLayer for HydratedToolsLayer {
     fn name(&self) -> &'static str { "hydrated_tools" }
-    fn priority(&self) -> u32 { 500 }
+    fn priority(&self) -> u32 { 501 }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Hydration]
     }
