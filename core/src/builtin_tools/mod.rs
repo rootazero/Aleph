@@ -55,6 +55,7 @@ pub mod mcp_resource;
 pub mod mcp_prompt;
 pub mod desktop;
 pub mod browser;
+pub mod soul_update;
 pub mod vision;
 
 pub use atomic_ops::{AtomicOpsArgs, AtomicOpsOutput, AtomicOpsTool};
@@ -83,6 +84,7 @@ pub use mcp_resource::{McpReadResourceArgs, McpReadResourceOutput, McpReadResour
 pub use mcp_prompt::{McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, PromptOutputMessage};
 pub use desktop::{DesktopArgs, DesktopOutput, DesktopTool};
 pub use browser::{BrowserAction, BrowserArgs, BrowserOutput, BrowserTool};
+pub use soul_update::{SoulField, SoulOperation, SoulUpdateArgs, SoulUpdateOutput, SoulUpdateTool};
 pub use vision::{VisionAction, VisionArgs, VisionOutput, VisionTool};
 
 // Message tool re-exports
