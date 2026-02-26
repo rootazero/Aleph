@@ -267,6 +267,12 @@ impl StateDatabase {
         Ok(result.unwrap_or(0) as u64)
     }
 
+    /// Check if any FactMigrated events exist (indicates migration has been run).
+    pub async fn has_migration_events(&self) -> Result<bool, AlephError> {
+        let count = self.count_memory_events(Some("FactMigrated")).await?;
+        Ok(count > 0)
+    }
+
     /// Count total memory events, optionally filtered by event type.
     pub async fn count_memory_events(
         &self,

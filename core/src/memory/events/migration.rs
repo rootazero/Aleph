@@ -40,6 +40,33 @@ impl EventSourcingMigration {
         Self { db }
     }
 
+    /// Run migration only if no migration events exist.
+    ///
+    /// This is designed to be called at server startup. If migration events
+    /// already exist, this is a no-op.
+    ///
+    /// Returns the migration report (or a report with all zeros if skipped).
+    pub async fn run_if_needed(&self, facts: &[MemoryFact]) -> Result<MigrationReport, AlephError> {
+        let has_events = self.db.has_migration_events().await?;
+        if has_events {
+            tracing::info!("Event sourcing migration already completed, skipping");
+            return Ok(MigrationReport {
+                migrated: 0,
+                skipped: facts.len(),
+                total: facts.len(),
+            });
+        }
+
+        let report = self.migrate_facts(facts).await?;
+        tracing::info!(
+            migrated = report.migrated,
+            skipped = report.skipped,
+            total = report.total,
+            "Event sourcing migration completed"
+        );
+        Ok(report)
+    }
+
     /// Migrate a list of existing MemoryFacts into event-sourced form.
     ///
     /// For each fact:
@@ -216,6 +243,22 @@ mod tests {
         } else {
             panic!("Expected FactMigrated");
         }
+    }
+
+    #[tokio::test]
+    async fn test_run_if_needed_skips_when_already_migrated() {
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        let migration = EventSourcingMigration::new(db.clone());
+        let facts = vec![make_test_fact("f1", "Fact 1", true)];
+
+        // First run should migrate
+        let r1 = migration.run_if_needed(&facts).await.unwrap();
+        assert_eq!(r1.migrated, 1);
+
+        // Second run should skip entirely
+        let r2 = migration.run_if_needed(&facts).await.unwrap();
+        assert_eq!(r2.migrated, 0);
+        assert_eq!(r2.skipped, 1);
     }
 
     #[tokio::test]
