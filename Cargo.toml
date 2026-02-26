@@ -67,9 +67,6 @@ base64 = "0.22"
 async-trait = "0.1"
 futures = "0.3"
 
-# Embedding
-fastembed = "4"
-
 # Archive handling
 zip = "2.2"
 flate2 = "1.0"

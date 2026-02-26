@@ -16,9 +16,6 @@ pub struct MemoryConfig {
     /// Enable/disable memory module
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    /// Embedding model name
-    #[serde(default = "default_embedding_model")]
-    pub embedding_model: String,
     /// Maximum number of past interactions to retrieve
     #[serde(default = "default_max_context_items")]
     pub max_context_items: u32,
@@ -82,7 +79,7 @@ pub struct MemoryConfig {
     // ========================================
     /// Embedding provider configuration
     #[serde(default)]
-    pub embedding: EmbeddingConfig,
+    pub embedding: EmbeddingSettings,
 
     // ========================================
     // LanceDB Settings
@@ -126,14 +123,6 @@ pub struct MemoryConfig {
     #[serde(default = "default_dedup_similarity_threshold")]
     pub dedup_similarity_threshold: f32,
 
-    /// Embedding cache maximum entries.
-    #[serde(default = "default_embedding_cache_max_size")]
-    pub embedding_cache_max_size: usize,
-
-    /// Embedding cache TTL in seconds.
-    #[serde(default = "default_embedding_cache_ttl_seconds")]
-    pub embedding_cache_ttl_seconds: u64,
-
     // ========================================
     // Backup
     // ========================================
@@ -147,49 +136,139 @@ pub struct MemoryConfig {
 }
 
 // =============================================================================
-// EmbeddingConfig
+// EmbeddingProviderConfig & EmbeddingSettings
 // =============================================================================
 
-/// Embedding provider configuration
-///
-/// Supports local (fastembed) and remote (OpenAI-compatible) embedding providers.
+/// Preset type for embedding providers
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingPreset {
+    SiliconFlow,
+    OpenAi,
+    Ollama,
+    Custom,
+}
+
+impl std::fmt::Display for EmbeddingPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SiliconFlow => write!(f, "SiliconFlow"),
+            Self::OpenAi => write!(f, "OpenAI"),
+            Self::Ollama => write!(f, "Ollama"),
+            Self::Custom => write!(f, "Custom"),
+        }
+    }
+}
+
+/// Configuration for a single embedding provider
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct EmbeddingConfig {
-    /// Embedding provider: "local" (fastembed) or "openai" / "remote"
-    #[serde(default = "default_embedding_provider")]
-    pub provider: String,
-    /// Model name for embedding
-    #[serde(default = "default_embedding_model_name")]
-    pub model: String,
-    /// Embedding vector dimension
-    #[serde(default = "default_embedding_dimension")]
-    pub dimension: u32,
-    /// Environment variable name for API key (remote providers)
+pub struct EmbeddingProviderConfig {
+    /// Unique identifier: "siliconflow", "openai", "ollama", "custom-xxx"
+    pub id: String,
+    /// Display name
+    pub name: String,
+    /// Preset type
+    pub preset: EmbeddingPreset,
+    /// API endpoint (e.g., "https://api.siliconflow.cn/v1")
+    pub api_base: String,
+    /// Environment variable name for API key
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
-    /// Base URL for remote embedding API
+    /// Direct API key (for settings UI; prefer api_key_env in production)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_base: Option<String>,
-    /// Request timeout in milliseconds
-    #[serde(default = "default_embedding_timeout_ms")]
-    pub timeout_ms: u64,
+    pub api_key: Option<String>,
+    /// Model name (e.g., "BAAI/bge-m3")
+    pub model: String,
+    /// Output vector dimensions
+    pub dimensions: u32,
     /// Batch size for embedding requests
     #[serde(default = "default_embedding_batch_size")]
     pub batch_size: u32,
+    /// Request timeout in milliseconds
+    #[serde(default = "default_embedding_timeout_ms")]
+    pub timeout_ms: u64,
 }
 
-impl Default for EmbeddingConfig {
-    fn default() -> Self {
+impl EmbeddingProviderConfig {
+    /// Create a SiliconFlow preset
+    pub fn siliconflow() -> Self {
         Self {
-            provider: default_embedding_provider(),
-            model: default_embedding_model_name(),
-            dimension: default_embedding_dimension(),
-            api_key_env: None,
-            api_base: None,
-            timeout_ms: default_embedding_timeout_ms(),
+            id: "siliconflow".to_string(),
+            name: "SiliconFlow".to_string(),
+            preset: EmbeddingPreset::SiliconFlow,
+            api_base: "https://api.siliconflow.cn/v1".to_string(),
+            api_key_env: Some("SILICONFLOW_API_KEY".to_string()),
+            api_key: None,
+            model: "BAAI/bge-m3".to_string(),
+            dimensions: 1024,
             batch_size: default_embedding_batch_size(),
+            timeout_ms: default_embedding_timeout_ms(),
         }
     }
+
+    /// Create an OpenAI preset
+    pub fn openai() -> Self {
+        Self {
+            id: "openai".to_string(),
+            name: "OpenAI".to_string(),
+            preset: EmbeddingPreset::OpenAi,
+            api_base: "https://api.openai.com/v1".to_string(),
+            api_key_env: Some("OPENAI_API_KEY".to_string()),
+            api_key: None,
+            model: "text-embedding-3-small".to_string(),
+            dimensions: 1536,
+            batch_size: default_embedding_batch_size(),
+            timeout_ms: default_embedding_timeout_ms(),
+        }
+    }
+
+    /// Create an Ollama preset
+    pub fn ollama() -> Self {
+        Self {
+            id: "ollama".to_string(),
+            name: "Ollama".to_string(),
+            preset: EmbeddingPreset::Ollama,
+            api_base: "http://localhost:11434/v1".to_string(),
+            api_key_env: None,
+            api_key: None,
+            model: "nomic-embed-text".to_string(),
+            dimensions: 768,
+            batch_size: default_embedding_batch_size(),
+            timeout_ms: default_embedding_timeout_ms(),
+        }
+    }
+}
+
+/// Top-level embedding settings with multi-provider support
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EmbeddingSettings {
+    /// Configured embedding providers
+    #[serde(default = "default_embedding_providers")]
+    pub providers: Vec<EmbeddingProviderConfig>,
+    /// ID of the active provider
+    #[serde(default = "default_active_provider_id")]
+    pub active_provider_id: String,
+}
+
+impl Default for EmbeddingSettings {
+    fn default() -> Self {
+        Self {
+            providers: default_embedding_providers(),
+            active_provider_id: default_active_provider_id(),
+        }
+    }
+}
+
+fn default_embedding_providers() -> Vec<EmbeddingProviderConfig> {
+    vec![
+        EmbeddingProviderConfig::siliconflow(),
+        EmbeddingProviderConfig::openai(),
+        EmbeddingProviderConfig::ollama(),
+    ]
+}
+
+fn default_active_provider_id() -> String {
+    "siliconflow".to_string()
 }
 
 // =============================================================================
@@ -328,9 +407,6 @@ pub fn default_enabled() -> bool {
     true
 }
 
-pub fn default_embedding_model() -> String {
-    "bge-small-zh-v1.5".to_string()
-}
 
 pub fn default_max_context_items() -> u32 {
     5
@@ -398,18 +474,6 @@ pub fn default_raw_memory_fallback_count() -> u32 {
 }
 
 // Embedding configuration defaults
-pub fn default_embedding_provider() -> String {
-    "local".to_string()
-}
-
-pub fn default_embedding_model_name() -> String {
-    "multilingual-e5-small".to_string()
-}
-
-pub fn default_embedding_dimension() -> u32 {
-    384
-}
-
 pub fn default_embedding_timeout_ms() -> u64 {
     10000 // 10 seconds
 }
@@ -487,17 +551,14 @@ pub fn default_fts_tokenizer() -> String {
 }
 
 
-// Scoring, retrieval gate, noise filter, cache & backup defaults
+// Scoring, retrieval gate, noise filter & backup defaults
 fn default_dedup_similarity_threshold() -> f32 { 0.95 }
-fn default_embedding_cache_max_size() -> usize { 256 }
-fn default_embedding_cache_ttl_seconds() -> u64 { 1800 }
 fn default_backup_enabled() -> bool { true }
 fn default_backup_max_files() -> usize { 7 }
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             enabled: default_enabled(),
-            embedding_model: default_embedding_model(),
             max_context_items: default_max_context_items(),
             retention_days: default_retention_days(),
             vector_db: default_vector_db(),
@@ -522,7 +583,7 @@ impl Default for MemoryConfig {
             max_facts_in_context: default_max_facts_in_context(),
             raw_memory_fallback_count: default_raw_memory_fallback_count(),
             // Embedding settings
-            embedding: EmbeddingConfig::default(),
+            embedding: EmbeddingSettings::default(),
             // LanceDB settings
             lancedb: LanceDbConfig::default(),
             dreaming: DreamingConfig::default(),
@@ -532,10 +593,8 @@ impl Default for MemoryConfig {
             scoring_pipeline: crate::memory::scoring_pipeline::config::ScoringPipelineConfig::default(),
             adaptive_retrieval: crate::memory::adaptive_retrieval::AdaptiveRetrievalConfig::default(),
             noise_filter: crate::memory::noise_filter::NoiseFilterConfig::default(),
-            // Storage & cache
+            // Storage
             dedup_similarity_threshold: default_dedup_similarity_threshold(),
-            embedding_cache_max_size: default_embedding_cache_max_size(),
-            embedding_cache_ttl_seconds: default_embedding_cache_ttl_seconds(),
             // Backup
             backup_enabled: default_backup_enabled(),
             backup_max_files: default_backup_max_files(),
