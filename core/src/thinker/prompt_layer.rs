@@ -1,0 +1,78 @@
+//! PromptLayer trait — the composable unit of prompt assembly
+
+use crate::agent_loop::ToolInfo;
+use crate::dispatcher::tool_index::HydrationResult;
+use super::context::ResolvedContext;
+use super::prompt_builder::PromptConfig;
+use super::soul::SoulManifest;
+
+/// Which assembly path a layer participates in.
+///
+/// The pipeline filters layers by the active path so that only
+/// relevant sections are injected into the final system prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AssemblyPath {
+    /// Minimal prompt — tools only, no hydration / soul / context.
+    Basic,
+    /// Hydration-based prompt — tools come from semantic retrieval.
+    Hydration,
+    /// Soul-enriched prompt — includes identity / personality.
+    Soul,
+    /// Context-aware prompt — includes environment / security context.
+    Context,
+    /// Pre-cached prompt — used when prompt caching is active.
+    Cached,
+}
+
+/// Everything a layer might need to produce its output.
+///
+/// Each constructor pre-fills only the fields relevant to a given
+/// assembly path; the rest stay `None`.
+pub struct LayerInput<'a> {
+    pub config: &'a PromptConfig,
+    pub tools: Option<&'a [ToolInfo]>,
+    pub hydration: Option<&'a HydrationResult>,
+    pub soul: Option<&'a SoulManifest>,
+    pub context: Option<&'a ResolvedContext>,
+}
+
+impl<'a> LayerInput<'a> {
+    /// Input for the `Basic` path — config + tool list.
+    pub fn basic(config: &'a PromptConfig, tools: &'a [ToolInfo]) -> Self {
+        Self { config, tools: Some(tools), hydration: None, soul: None, context: None }
+    }
+
+    /// Input for the `Hydration` path — config + hydration result.
+    pub fn hydration(config: &'a PromptConfig, hydration: &'a HydrationResult) -> Self {
+        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None }
+    }
+
+    /// Input for the `Soul` path — config + tools + soul manifest.
+    pub fn soul(config: &'a PromptConfig, tools: &'a [ToolInfo], soul: &'a SoulManifest) -> Self {
+        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None }
+    }
+
+    /// Input for the `Context` path — config + resolved context.
+    pub fn context(config: &'a PromptConfig, ctx: &'a ResolvedContext) -> Self {
+        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx) }
+    }
+}
+
+/// A composable unit of prompt assembly.
+///
+/// Each layer appends its contribution to the system prompt string.
+/// Layers declare which assembly paths they participate in and a
+/// numeric priority that controls ordering (lower = earlier).
+pub trait PromptLayer: Send + Sync {
+    /// Human-readable name for debugging / logging.
+    fn name(&self) -> &'static str;
+
+    /// Sort key — layers are executed in ascending priority order.
+    fn priority(&self) -> u32;
+
+    /// Which assembly paths this layer participates in.
+    fn paths(&self) -> &'static [AssemblyPath];
+
+    /// Append this layer's content to `output`.
+    fn inject(&self, output: &mut String, input: &LayerInput);
+}

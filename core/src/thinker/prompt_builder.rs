@@ -9,6 +9,8 @@ use crate::dispatcher::tool_index::HydrationResult;
 
 use super::context::{DisableReason, DisabledTool, EnvironmentContract, ResolvedContext};
 use super::interaction::Capability;
+use super::prompt_layer::{AssemblyPath, LayerInput};
+use super::prompt_pipeline::PromptPipeline;
 use super::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 use super::soul::SoulManifest;
 
@@ -82,41 +84,20 @@ impl Default for PromptConfig {
 /// Prompt builder for Agent Loop thinking
 pub struct PromptBuilder {
     config: PromptConfig,
+    pipeline: PromptPipeline,
 }
 
 impl PromptBuilder {
     /// Create a new prompt builder
     pub fn new(config: PromptConfig) -> Self {
-        Self { config }
+        let pipeline = PromptPipeline::default_layers();
+        Self { config, pipeline }
     }
 
     /// Build the system prompt
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
-        let mut prompt = String::new();
-
-        // Role definition
-        prompt.push_str("You are an AI assistant executing tasks step by step.\n\n");
-
-        // Core instructions
-        prompt.push_str("## Your Role\n");
-        prompt.push_str("- Observe the current state and history\n");
-        prompt.push_str("- Decide the SINGLE next action to take\n");
-        prompt.push_str("- Execute until the task is complete or you need user input\n\n");
-
-        // Build dynamic content using shared helpers
-        self.append_runtime_capabilities(&mut prompt);
-        self.append_tools(&mut prompt, tools);
-        self.append_generation_models(&mut prompt);
-        self.append_skill_instructions(&mut prompt);
-        self.append_special_actions(&mut prompt);
-        self.append_response_format(&mut prompt);
-        self.append_guidelines(&mut prompt);
-        self.append_thinking_guidance(&mut prompt);
-        self.append_skill_mode(&mut prompt);
-        self.append_custom_instructions(&mut prompt);
-        self.append_language_setting(&mut prompt);
-
-        prompt
+        let input = LayerInput::basic(&self.config, tools);
+        self.pipeline.execute(AssemblyPath::Basic, &input)
     }
 
     // ========== Shared prompt section builders ==========
@@ -246,51 +227,8 @@ impl PromptBuilder {
     /// instead of the traditional ToolInfo array, enabling semantic tool
     /// selection based on query relevance.
     pub fn build_system_prompt_with_hydration(&self, hydration: &HydrationResult) -> String {
-        let mut prompt = String::new();
-
-        // Role definition
-        prompt.push_str("You are an AI assistant executing tasks step by step.\n\n");
-
-        // Core instructions
-        prompt.push_str("## Your Role\n");
-        prompt.push_str("- Observe the current state and history\n");
-        prompt.push_str("- Decide the SINGLE next action to take\n");
-        prompt.push_str("- Execute until the task is complete or you need user input\n\n");
-
-        // Runtime capabilities
-        self.append_runtime_capabilities(&mut prompt);
-
-        // Hydrated tools (semantic retrieval)
-        self.append_hydrated_tools(&mut prompt, hydration);
-
-        // Generation models
-        self.append_generation_models(&mut prompt);
-
-        // Skill instructions from SkillSystem v2
-        self.append_skill_instructions(&mut prompt);
-
-        // Special actions
-        self.append_special_actions(&mut prompt);
-
-        // Response format
-        self.append_response_format(&mut prompt);
-
-        // Guidelines
-        self.append_guidelines(&mut prompt);
-
-        // Thinking guidance
-        self.append_thinking_guidance(&mut prompt);
-
-        // Skill mode
-        self.append_skill_mode(&mut prompt);
-
-        // Custom instructions
-        self.append_custom_instructions(&mut prompt);
-
-        // Language setting
-        self.append_language_setting(&mut prompt);
-
-        prompt
+        let input = LayerInput::hydration(&self.config, hydration);
+        self.pipeline.execute(AssemblyPath::Hydration, &input)
     }
 
     /// Append special actions section
@@ -715,63 +653,8 @@ impl PromptBuilder {
     /// This is the primary entry point when using the Embodiment Engine.
     /// Soul content appears at the very top of the prompt for highest priority.
     pub fn build_system_prompt_with_soul(&self, tools: &[ToolInfo], soul: &SoulManifest) -> String {
-        let mut prompt = String::with_capacity(16384);
-
-        // Soul section at the very top (highest priority)
-        self.append_soul_section(&mut prompt, soul);
-
-        // Role definition
-        prompt.push_str("You are an AI assistant executing tasks step by step.\n\n");
-
-        // Core instructions
-        prompt.push_str("## Your Role\n");
-        prompt.push_str("- Observe the current state and history\n");
-        prompt.push_str("- Decide the SINGLE next action to take\n");
-        prompt.push_str("- Execute until the task is complete or you need user input\n\n");
-
-        // Add runtime capabilities if configured
-        self.append_runtime_capabilities(&mut prompt);
-
-        // Add tools section
-        self.append_tools(&mut prompt, tools);
-
-        // Add generation models if configured
-        self.append_generation_models(&mut prompt);
-
-        // Add special actions
-        self.append_special_actions(&mut prompt);
-
-        // Add response format
-        self.append_response_format(&mut prompt);
-
-        // Add guidelines
-        self.append_guidelines(&mut prompt);
-
-        // Add constitutional AI safety guardrails
-        self.append_safety_constitution(&mut prompt);
-
-        // Add memory-first guidance (search before answering, store after learning)
-        self.append_memory_guidance(&mut prompt);
-
-        // Add soul continuity guidance (gradual self-evolution)
-        self.append_soul_continuity(&mut prompt);
-
-        // Add thinking transparency guidance if enabled
-        self.append_thinking_guidance(&mut prompt);
-
-        // Add skill mode instructions if enabled
-        self.append_skill_mode(&mut prompt);
-
-        // Citation standards
-        self.append_citation_standards(&mut prompt);
-
-        // Add custom instructions if configured
-        self.append_custom_instructions(&mut prompt);
-
-        // Add language setting
-        self.append_language_setting(&mut prompt);
-
-        prompt
+        let input = LayerInput::soul(&self.config, tools, soul);
+        self.pipeline.execute(AssemblyPath::Soul, &input)
     }
 
     /// Build system prompt with hooks applied.
@@ -1022,88 +905,12 @@ impl PromptBuilder {
     /// Build system prompt using ResolvedContext
     ///
     /// This is the new entry point that uses the two-phase filtered context
-    /// from the ContextAggregator. It builds the complete system prompt with:
-    /// 1. Role definition
-    /// 2. Core instructions
-    /// 3. Runtime context (micro-environmental awareness, optional)
-    /// 4. Environment contract (paradigm, capabilities, constraints)
-    /// 5. Runtime capabilities
-    /// 6. Tools (using ctx.available_tools)
-    /// 7. Security constraints (blocked tools, approval-required tools)
-    /// 8. Protocol tokens (if applicable)
-    /// 9. Operational guidelines (Background/CLI only)
-    /// 10. Citation standards
-    /// 11. Generation models
-    /// 12. Special actions
-    /// 13. Response format
-    /// 14. Guidelines
-    /// 15. Skill mode
-    /// 16. Custom instructions
-    /// 17. Language setting
+    /// from the ContextAggregator. The pipeline layers handle all sections
+    /// (runtime context, environment, security, protocol tokens, etc.)
+    /// in priority order.
     pub fn build_system_prompt_with_context(&self, ctx: &ResolvedContext) -> String {
-        let mut prompt = String::new();
-
-        // 1. Role definition
-        prompt.push_str("You are an AI assistant executing tasks step by step.\n\n");
-
-        // 2. Core instructions
-        prompt.push_str("## Your Role\n");
-        prompt.push_str("- Observe the current state and history\n");
-        prompt.push_str("- Decide the SINGLE next action to take\n");
-        prompt.push_str("- Execute until the task is complete or you need user input\n\n");
-
-        // 3. Runtime context (micro-environmental awareness)
-        if let Some(ref runtime_ctx) = ctx.runtime_context {
-            self.append_runtime_context_section(&mut prompt, runtime_ctx);
-        }
-
-        // 4. Environment contract
-        self.append_environment_contract(&mut prompt, &ctx.environment_contract);
-
-        // 5. Runtime capabilities
-        self.append_runtime_capabilities(&mut prompt);
-
-        // 6. Tools (using available_tools from context)
-        self.append_tools(&mut prompt, &ctx.available_tools);
-
-        // 7. Security constraints
-        self.append_security_constraints(
-            &mut prompt,
-            &ctx.disabled_tools,
-            &ctx.environment_contract.security_notes,
-        );
-
-        // 8. Protocol tokens (replaces basic silent behavior with structured protocol)
-        self.append_protocol_tokens(&mut prompt, &ctx.environment_contract);
-
-        // 9. Operational guidelines (Background/CLI only)
-        self.append_operational_guidelines(&mut prompt, ctx.environment_contract.paradigm);
-
-        // 10. Citation standards (always injected)
-        self.append_citation_standards(&mut prompt);
-
-        // 11. Generation models
-        self.append_generation_models(&mut prompt);
-
-        // 12. Special actions
-        self.append_special_actions(&mut prompt);
-
-        // 13. Response format
-        self.append_response_format(&mut prompt);
-
-        // 14. Guidelines
-        self.append_guidelines(&mut prompt);
-
-        // 15. Skill mode
-        self.append_skill_mode(&mut prompt);
-
-        // 16. Custom instructions
-        self.append_custom_instructions(&mut prompt);
-
-        // 17. Language setting
-        self.append_language_setting(&mut prompt);
-
-        prompt
+        let input = LayerInput::context(&self.config, ctx);
+        self.pipeline.execute(AssemblyPath::Context, &input)
     }
 
     /// Build two-part system prompt for Anthropic cache optimization
@@ -1115,11 +922,9 @@ impl PromptBuilder {
     /// This maximizes Anthropic's prompt cache hit rate by keeping
     /// the frequently-repeated header separate from dynamic content.
     pub fn build_system_prompt_cached(&self, tools: &[ToolInfo]) -> Vec<SystemPromptPart> {
-        // Part 1: Static header (cacheable)
-        let header = self.build_static_header();
-
-        // Part 2: Dynamic content (not cacheable)
-        let dynamic = self.build_dynamic_content(tools);
+        let header = Self::build_static_header();
+        let input = LayerInput::basic(&self.config, tools);
+        let dynamic = self.pipeline.execute(AssemblyPath::Cached, &input);
 
         vec![
             SystemPromptPart {
@@ -1136,7 +941,7 @@ impl PromptBuilder {
     /// Build the static header portion of the system prompt
     ///
     /// This content is stable across invocations and can be cached.
-    fn build_static_header(&self) -> String {
+    fn build_static_header() -> String {
         let mut prompt = String::new();
 
         // Role definition
@@ -1154,26 +959,6 @@ impl PromptBuilder {
         prompt.push_str("1. What is the current state?\n");
         prompt.push_str("2. What is the next logical step?\n");
         prompt.push_str("3. Which tool is most appropriate?\n\n");
-
-        prompt
-    }
-
-    /// Build the dynamic content portion of the system prompt
-    ///
-    /// This content varies based on available tools, runtimes, and configuration.
-    fn build_dynamic_content(&self, tools: &[ToolInfo]) -> String {
-        let mut prompt = String::new();
-
-        // Use shared helper methods to avoid duplication
-        self.append_runtime_capabilities(&mut prompt);
-        self.append_tools(&mut prompt, tools);
-        self.append_generation_models(&mut prompt);
-        self.append_special_actions(&mut prompt);
-        self.append_response_format(&mut prompt);
-        self.append_guidelines(&mut prompt);
-        self.append_skill_mode(&mut prompt);
-        self.append_custom_instructions(&mut prompt);
-        self.append_language_setting(&mut prompt);
 
         prompt
     }
@@ -1385,48 +1170,9 @@ fn format_attachment(attachment: &MediaAttachment) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::thinker::soul::{SoulVoice, Verbosity};
+    use super::super::soul::{SoulVoice, Verbosity};
 
-    #[test]
-    fn test_append_soul_section_empty() {
-        let builder = PromptBuilder::new(PromptConfig::default());
-        let mut prompt = String::new();
-        let soul = SoulManifest::default();
-
-        builder.append_soul_section(&mut prompt, &soul);
-
-        // Empty soul should produce no output
-        assert!(prompt.is_empty());
-    }
-
-    #[test]
-    fn test_append_soul_section_basic() {
-        let builder = PromptBuilder::new(PromptConfig::default());
-        let mut prompt = String::new();
-
-        let soul = SoulManifest {
-            identity: "I am a test assistant.".to_string(),
-            voice: SoulVoice {
-                tone: "friendly".to_string(),
-                verbosity: Verbosity::Balanced,
-                ..Default::default()
-            },
-            directives: vec!["Be helpful".to_string()],
-            anti_patterns: vec!["Don't be rude".to_string()],
-            ..Default::default()
-        };
-
-        builder.append_soul_section(&mut prompt, &soul);
-
-        assert!(prompt.contains("# Identity"));
-        assert!(prompt.contains("I am a test assistant"));
-        assert!(prompt.contains("Communication Style"));
-        assert!(prompt.contains("friendly"));
-        assert!(prompt.contains("Behavioral Directives"));
-        assert!(prompt.contains("Be helpful"));
-        assert!(prompt.contains("What I Never Do"));
-        assert!(prompt.contains("Don't be rude"));
-    }
+    // ========== Integration tests: public API via Pipeline ==========
 
     #[test]
     fn test_build_system_prompt_with_soul() {
@@ -1451,24 +1197,6 @@ mod tests {
         // Standard sections should still be present
         assert!(prompt.contains("Response Format"));
         assert!(prompt.contains("JSON"));
-    }
-
-    #[test]
-    fn test_soul_section_with_expertise() {
-        let builder = PromptBuilder::new(PromptConfig::default());
-        let mut prompt = String::new();
-
-        let soul = SoulManifest {
-            identity: "Expert assistant.".to_string(),
-            expertise: vec!["Rust".to_string(), "Python".to_string()],
-            ..Default::default()
-        };
-
-        builder.append_soul_section(&mut prompt, &soul);
-
-        assert!(prompt.contains("Areas of Expertise"));
-        assert!(prompt.contains("- Rust"));
-        assert!(prompt.contains("- Python"));
     }
 
     #[test]
@@ -1527,33 +1255,6 @@ mod tests {
         // Both soul and thinking guidance should be present
         assert!(prompt.contains("# Identity"));
         assert!(prompt.contains("## Thinking Transparency"));
-    }
-
-    #[test]
-    fn test_append_runtime_context_section() {
-        let builder = PromptBuilder::new(PromptConfig::default());
-        let mut prompt = String::new();
-
-        let ctx = crate::thinker::runtime_context::RuntimeContext {
-            os: "macOS 15.3".to_string(),
-            arch: "aarch64".to_string(),
-            shell: "zsh".to_string(),
-            working_dir: std::path::PathBuf::from("/workspace"),
-            repo_root: Some(std::path::PathBuf::from("/workspace")),
-            current_model: "claude-opus-4-6".to_string(),
-            hostname: "test-host".to_string(),
-        };
-
-        builder.append_runtime_context_section(&mut prompt, &ctx);
-
-        assert!(prompt.contains("## Runtime Environment"));
-        assert!(prompt.contains("os=macOS 15.3"));
-        assert!(prompt.contains("arch=aarch64"));
-        assert!(prompt.contains("shell=zsh"));
-        assert!(prompt.contains("cwd=/workspace"));
-        assert!(prompt.contains("repo=/workspace"));
-        assert!(prompt.contains("model=claude-opus-4-6"));
-        assert!(prompt.contains("host=test-host"));
     }
 
     #[test]
