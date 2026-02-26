@@ -21,6 +21,8 @@ extension BridgeServer {
         registerKeyComboHandler()
         registerScrollHandler()
         registerTrayUpdateStatusHandler()
+        registerWebviewHandlers()
+        registerCanvasHandlers()
     }
 
     // MARK: - Screenshot
@@ -288,4 +290,180 @@ extension BridgeServer {
             return .success(AnyCodable(["updated": AnyCodable(true), "status": AnyCodable(status)]))
         }
     }
+
+    // MARK: - WebView Handlers
+
+    /// Register `webview.show`, `webview.hide`, and `webview.navigate` handlers.
+    ///
+    /// These handlers post notifications so that the UI layer (HaloWindow,
+    /// SettingsWindow) can respond on the main thread.
+    private func registerWebviewHandlers() {
+        // webview.show — show a named webview (halo or settings)
+        // Params: { "label": "halo"|"settings", "url": "http://..." (optional) }
+        register(method: BridgeMethod.webviewShow.rawValue) { params in
+            let label = params["label"]?.stringValue ?? "halo"
+            let url = params["url"]?.stringValue
+
+            var userInfo: [String: Any] = ["label": label]
+            if let url = url { userInfo["url"] = url }
+
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .webviewShow,
+                    object: nil,
+                    userInfo: userInfo
+                )
+            }
+
+            return .success(AnyCodable(["shown": AnyCodable(true), "label": AnyCodable(label)]))
+        }
+
+        // webview.hide — hide a named webview
+        // Params: { "label": "halo"|"settings" }
+        register(method: BridgeMethod.webviewHide.rawValue) { params in
+            let label = params["label"]?.stringValue ?? "halo"
+
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .webviewHide,
+                    object: nil,
+                    userInfo: ["label": label]
+                )
+            }
+
+            return .success(AnyCodable(["hidden": AnyCodable(true), "label": AnyCodable(label)]))
+        }
+
+        // webview.navigate — navigate a named webview to a URL
+        // Params: { "label": "halo"|"settings", "url": "http://..." }
+        register(method: BridgeMethod.webviewNavigate.rawValue) { params in
+            let label = params["label"]?.stringValue ?? "halo"
+            guard let url = params["url"]?.stringValue else {
+                return .failure(.init(
+                    code: .internal,
+                    message: "Missing required param: url (string)"
+                ))
+            }
+
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .webviewNavigate,
+                    object: nil,
+                    userInfo: ["label": label, "url": url]
+                )
+            }
+
+            return .success(AnyCodable(["navigated": AnyCodable(true), "label": AnyCodable(label)]))
+        }
+    }
+
+    // MARK: - Canvas Handlers
+
+    /// Register `desktop.canvas_show`, `desktop.canvas_hide`, and
+    /// `desktop.canvas_update` handlers.
+    ///
+    /// These handlers post notifications so that CanvasOverlay can respond
+    /// on the main thread.
+    private func registerCanvasHandlers() {
+        // desktop.canvas_show — show the canvas overlay with HTML and position
+        // Params: { "html": "<h1>Hi</h1>", "position": { "x": 100, "y": 100, "width": 400, "height": 300 } }
+        register(method: BridgeMethod.canvasShow.rawValue) { params in
+            let html = params["html"]?.stringValue ?? "<html><body></body></html>"
+
+            let pos = params["position"]?.dictValue
+            let x = pos?["x"]?.doubleValue ?? 100.0
+            let y = pos?["y"]?.doubleValue ?? 100.0
+            let width = pos?["width"]?.doubleValue ?? 400.0
+            let height = pos?["height"]?.doubleValue ?? 600.0
+
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .canvasShow,
+                    object: nil,
+                    userInfo: [
+                        "html": html,
+                        "x": x,
+                        "y": y,
+                        "width": width,
+                        "height": height,
+                    ]
+                )
+            }
+
+            return .success(AnyCodable([
+                "visible": AnyCodable(true),
+                "position": AnyCodable([
+                    "x": AnyCodable(x),
+                    "y": AnyCodable(y),
+                    "width": AnyCodable(width),
+                    "height": AnyCodable(height),
+                ]),
+            ]))
+        }
+
+        // desktop.canvas_hide — hide the canvas overlay
+        register(method: BridgeMethod.canvasHide.rawValue) { _ in
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .canvasHide,
+                    object: nil
+                )
+            }
+
+            return .success(AnyCodable(["visible": AnyCodable(false)]))
+        }
+
+        // desktop.canvas_update — apply an A2UI patch to the canvas
+        // Params: { "patch": [{"type": "surfaceUpdate", "content": "<p>Updated</p>"}] }
+        register(method: BridgeMethod.canvasUpdate.rawValue) { params in
+            guard let patchArray = params["patch"]?.arrayValue else {
+                return .failure(.init(
+                    code: .internal,
+                    message: "Missing required param: patch (array)"
+                ))
+            }
+
+            // Serialize patch back to JSON string for JS evaluation
+            let encoder = JSONEncoder()
+            guard let patchData = try? encoder.encode(patchArray),
+                  let patchJSON = String(data: patchData, encoding: .utf8) else {
+                return .failure(.init(
+                    code: .internal,
+                    message: "Failed to serialize patch to JSON"
+                ))
+            }
+
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .canvasUpdate,
+                    object: nil,
+                    userInfo: ["patch": patchJSON]
+                )
+            }
+
+            return .success(AnyCodable(["patched": AnyCodable(true)]))
+        }
+    }
+}
+
+// MARK: - Notification Names (WebView + Canvas)
+
+extension Notification.Name {
+    /// Posted by `webview.show` handler. UserInfo: `["label": String, "url": String?]`.
+    static let webviewShow = Notification.Name("com.aleph.webviewShow")
+
+    /// Posted by `webview.hide` handler. UserInfo: `["label": String]`.
+    static let webviewHide = Notification.Name("com.aleph.webviewHide")
+
+    /// Posted by `webview.navigate` handler. UserInfo: `["label": String, "url": String]`.
+    static let webviewNavigate = Notification.Name("com.aleph.webviewNavigate")
+
+    /// Posted by `desktop.canvas_show` handler. UserInfo: `["html": String, "x": Double, "y": Double, "width": Double, "height": Double]`.
+    static let canvasShow = Notification.Name("com.aleph.canvasShow")
+
+    /// Posted by `desktop.canvas_hide` handler.
+    static let canvasHide = Notification.Name("com.aleph.canvasHide")
+
+    /// Posted by `desktop.canvas_update` handler. UserInfo: `["patch": String]` (JSON string).
+    static let canvasUpdate = Notification.Name("com.aleph.canvasUpdate")
 }
