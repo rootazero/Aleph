@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import AppKit
 
 /// Registers all desktop capability handlers on the BridgeServer.
 ///
