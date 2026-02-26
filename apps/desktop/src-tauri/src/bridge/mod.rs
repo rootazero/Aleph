@@ -1,8 +1,9 @@
-//! Desktop Bridge — UDS JSON-RPC 2.0 server
+//! Desktop Bridge — UDS JSON-RPC 2.0 server for Linux/Windows.
 //!
-//! Symmetric with macOS Swift DesktopBridgeServer.
 //! Listens on ~/.aleph/bridge.sock, dispatches JSON-RPC requests
 //! to perception/action handlers.
+//!
+//! Note: macOS uses a native Swift bridge (`apps/macos-native/`).
 
 mod action;
 mod canvas;
@@ -223,7 +224,8 @@ fn handle_handshake(params: serde_json::Value) -> Result<serde_json::Value, (i32
         json!({"name": "focus_window", "version": "1.0"}),
     ];
 
-    #[cfg(target_os = "macos")]
+    // Windows provides OCR and AX inspection capabilities
+    #[cfg(target_os = "windows")]
     {
         capabilities.push(json!({"name": "ocr", "version": "1.0"}));
         capabilities.push(json!({"name": "ax_inspect", "version": "1.0"}));

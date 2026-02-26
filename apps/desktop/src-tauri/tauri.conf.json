@@ -9,7 +9,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "macOSPrivateApi": true,
+    "macOSPrivateApi": false,
     "windows": [
       {
         "label": "halo",
@@ -53,7 +53,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "targets": ["dmg", "nsis", "deb", "appimage"],
+    "targets": ["nsis", "deb", "appimage"],
     "category": "Productivity",
     "shortDescription": "AI-powered system assistant",
     "longDescription": "Aleph is a system-level AI middleware that brings AI intelligence directly to your cursor without context switching.",
@@ -69,11 +69,7 @@
         "type": "downloadBootstrapper"
       }
     },
-    "macOS": {
-      "minimumSystemVersion": "10.15",
-      "entitlements": "./entitlements.plist",
-      "frameworks": []
-    },
+    "resources": ["binaries/aleph-server*"],
     "linux": {
       "deb": {
         "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
