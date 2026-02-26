@@ -472,6 +472,21 @@ impl PromptBuilder {
         prompt.push_str("- Update existing facts rather than creating duplicates\n\n");
     }
 
+    /// Append soul continuity guidance to the system prompt
+    ///
+    /// Instructs the AI to incrementally evolve its soul manifest
+    /// based on interactions, rather than rewriting identity wholesale.
+    pub fn append_soul_continuity(&self, prompt: &mut String) {
+        prompt.push_str(
+            "## Soul Continuity\n\n\
+             Your identity files are your persistent memory of who you are.\n\
+             - After meaningful interactions that reveal new preferences, update your soul\n\
+             - After corrections from the user (\"don't do that\"), add anti-patterns\n\
+             - After discovering new expertise areas, extend your expertise list\n\
+             - Rule: Changes are gradual. Never rewrite your entire identity at once.\n\n"
+        );
+    }
+
     /// Append thinking transparency guidance section
     ///
     /// Guides the AI on structured reasoning output:
@@ -713,6 +728,9 @@ impl PromptBuilder {
 
         // Add memory-first guidance (search before answering, store after learning)
         self.append_memory_guidance(&mut prompt);
+
+        // Add soul continuity guidance (gradual self-evolution)
+        self.append_soul_continuity(&mut prompt);
 
         // Add thinking transparency guidance if enabled
         self.append_thinking_guidance(&mut prompt);
@@ -1848,5 +1866,17 @@ mod tests {
         builder.append_channel_behavior(&mut prompt, &guide);
         assert!(prompt.contains("## Channel: Terminal"));
         assert!(!prompt.contains("Group Chat Rules"));
+    }
+
+    #[test]
+    fn test_append_soul_continuity() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+        builder.append_soul_continuity(&mut prompt);
+        assert!(prompt.contains("## Soul Continuity"));
+        assert!(prompt.contains("gradual"));
+        assert!(prompt.contains("anti-patterns"));
+        assert!(prompt.contains("expertise"));
+        assert!(prompt.contains("identity files"));
     }
 }

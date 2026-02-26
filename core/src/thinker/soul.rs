@@ -201,6 +201,9 @@ impl SoulManifest {
                 serde_json::from_str(&content).map_err(|e| SoulLoadError::Parse(e.to_string()))
             }
             "toml" => toml::from_str(&content).map_err(|e| SoulLoadError::Parse(e.to_string())),
+            "yaml" | "yml" => {
+                serde_yaml::from_str(&content).map_err(|e| SoulLoadError::Parse(e.to_string()))
+            }
             "md" | "markdown" => Self::from_markdown(&content),
             _ => Err(SoulLoadError::UnsupportedFormat(ext.to_string())),
         }
@@ -351,6 +354,43 @@ impl SoulManifest {
                 }
             })
             .collect()
+    }
+
+    /// Save soul manifest to a file path
+    ///
+    /// Uses YAML frontmatter format (.md/.yaml/.yml) or JSON (.json) or TOML (.toml).
+    /// Default format is YAML if no recognized extension.
+    pub fn save_to_file(&self, path: &Path) -> Result<(), SoulLoadError> {
+        use std::fs;
+
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("yaml");
+
+        let content = match ext {
+            "json" => serde_json::to_string_pretty(self)
+                .map_err(|e| SoulLoadError::Parse(format!("JSON serialize error: {}", e)))?,
+            "toml" => toml::to_string_pretty(self)
+                .map_err(|e| SoulLoadError::Parse(format!("TOML serialize error: {}", e)))?,
+            "yaml" | "yml" => {
+                // Pure YAML format
+                serde_yaml::to_string(self)
+                    .map_err(|e| SoulLoadError::Parse(format!("YAML serialize error: {}", e)))?
+            }
+            _ => {
+                // Default: YAML frontmatter format (for .md and unknown extensions)
+                let yaml = serde_yaml::to_string(self)
+                    .map_err(|e| SoulLoadError::Parse(format!("YAML serialize error: {}", e)))?;
+                format!("---\n{}---\n", yaml)
+            }
+        };
+
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).map_err(SoulLoadError::Io)?;
+            }
+        }
+
+        fs::write(path, content).map_err(SoulLoadError::Io)
     }
 
     /// Merge with another soul manifest (self takes priority)
