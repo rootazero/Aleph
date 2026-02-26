@@ -4,7 +4,10 @@ use crate::world::{AlephWorld, MemoryContext};
 use alephcore::memory::store::types::SearchFilter;
 use alephcore::memory::store::{MemoryBackend, MemoryStore, SessionStore, StoreStats};
 use alephcore::memory::store::LanceMemoryBackend;
-use alephcore::memory::{FactType, MemoryEntry, NamespaceScope, EMBEDDING_DIM};
+use alephcore::memory::{FactType, MemoryEntry, NamespaceScope};
+
+/// Default embedding dimension for tests (matches SiliconFlow bge-m3 default)
+const EMBEDDING_DIM: usize = 1024;
 use alephcore::MemoryStats;
 use alephcore::memory::store::types::ScoredFact;
 use alephcore::memory::MemoryFact;

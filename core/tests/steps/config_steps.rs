@@ -85,11 +85,11 @@ async fn then_smart_flow_enabled(w: &mut AlephWorld) {
 
 // ═══ Then Steps - MemoryConfig ═══
 
-#[then(expr = "the embedding_model should be {string}")]
-async fn then_embedding_model(w: &mut AlephWorld, expected: String) {
+#[then(expr = "the active_embedding_provider should be {string}")]
+async fn then_active_embedding_provider(w: &mut AlephWorld, expected: String) {
     let ctx = w.config.as_ref().expect("Config context not initialized");
     let mem = ctx.memory_config.as_ref().expect("MemoryConfig not initialized");
-    assert_eq!(mem.embedding_model, expected);
+    assert_eq!(mem.embedding.active_provider_id, expected);
 }
 
 #[then(expr = "max_context_items should be {int}")]

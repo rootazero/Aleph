@@ -241,10 +241,10 @@ pub struct SemanticCacheConfig {
     /// Enable semantic caching
     pub enabled: bool,
 
-    /// Embedding model name (for fastembed)
+    /// Embedding model name (legacy — actual model comes from active EmbeddingProvider)
     pub embedding_model: String,
 
-    /// Embedding dimensions (384 for bge-small)
+    /// Embedding dimensions (legacy — actual dimensions come from active EmbeddingProvider)
     pub embedding_dimensions: usize,
 
     /// Minimum cosine similarity for cache hit

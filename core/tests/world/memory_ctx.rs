@@ -2,10 +2,13 @@
 
 use alephcore::memory::store::{LanceMemoryBackend, MemoryBackend};
 use alephcore::memory::{
-    ContextAnchor, FactSpecificity, FactType, MemoryEntry, MemoryFact, MemoryIngestion,
-    MemoryLayer, MemoryRetrieval, MemoryScope, MemoryTier, PromptAugmenter, SmartEmbedder,
-    TemporalScope, EMBEDDING_DIM,
+    ContextAnchor, EmbeddingProvider, FactSpecificity, FactType, MemoryEntry, MemoryFact,
+    MemoryIngestion, MemoryLayer, MemoryRetrieval, MemoryScope, MemoryTier, PromptAugmenter,
+    TemporalScope,
 };
+
+/// Default embedding dimension for tests (matches SiliconFlow bge-m3 default)
+const EMBEDDING_DIM: usize = 1024;
 use alephcore::resilience::database::StateDatabase;
 use alephcore::{MemoryConfig, MemoryStats};
 use std::sync::Arc;
@@ -29,8 +32,8 @@ pub struct MemoryContext {
     pub fts_query: Option<String>,
 
     // === Integration Testing ===
-    /// Smart embedder for embedding generation
-    pub embedder: Option<Arc<SmartEmbedder>>,
+    /// Embedding provider for embedding generation
+    pub embedder: Option<Arc<dyn EmbeddingProvider>>,
     /// Memory configuration
     pub config: Option<Arc<MemoryConfig>>,
     /// Memory ingestion service
@@ -153,10 +156,12 @@ impl MemoryContext {
         self.memory_backend = Some(lance_db);
     }
 
-    /// Initialize the smart embedder (requires embedding model)
+    /// Initialize a mock embedding provider for testing
     pub fn init_embedder(&mut self) {
-        let cache_dir = SmartEmbedder::default_cache_dir().expect("Failed to get cache dir");
-        self.embedder = Some(Arc::new(SmartEmbedder::new(cache_dir, 300)));
+        self.embedder = Some(Arc::new(TestMockEmbeddingProvider {
+            dim: EMBEDDING_DIM,
+            model: "test-model".to_string(),
+        }));
     }
 
     /// Create default memory config with threshold 0.0 for testing
@@ -232,5 +237,34 @@ impl MemoryContext {
             app_bundle_id.to_string(),
             window_title.to_string(),
         ));
+    }
+}
+
+/// Mock embedding provider for integration tests
+struct TestMockEmbeddingProvider {
+    dim: usize,
+    model: String,
+}
+
+#[async_trait::async_trait]
+impl EmbeddingProvider for TestMockEmbeddingProvider {
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>, alephcore::AlephError> {
+        Ok(vec![0.1; self.dim])
+    }
+
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, alephcore::AlephError> {
+        Ok(texts.iter().map(|_| vec![0.1; self.dim]).collect())
+    }
+
+    fn dimensions(&self) -> usize {
+        self.dim
+    }
+
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+
+    fn provider_id(&self) -> &str {
+        "mock"
     }
 }
