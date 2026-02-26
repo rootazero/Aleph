@@ -70,6 +70,14 @@ pub use audit::{
     ExplainedEvent, FactExplanation, ForgettingExplanation,
 };
 pub use events::{
+    commands::{
+        ApplyDecayCommand, ConsolidateCommand, CreateFactCommand, DeleteFactCommand,
+        InvalidateFactCommand, RecordAccessCommand, RestoreFactCommand, UpdateContentCommand,
+    },
+    handler::MemoryCommandHandler,
+    migration::{EventSourcingMigration, MigrationReport},
+    projector::EventProjector,
+    traveler::MemoryTimeTraveler,
     EventActor, MemoryEvent, MemoryEventEnvelope, TierTransitionTrigger,
 };
 pub use augmentation::PromptAugmenter;
