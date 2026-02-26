@@ -370,6 +370,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::memory_config;
     use alephcore::gateway::handlers::security_config;
     use alephcore::gateway::handlers::generation_providers;
+    use alephcore::gateway::handlers::embedding_providers;
     use alephcore::gateway::handlers::agent_config;
     use alephcore::gateway::handlers::general_config;
     use alephcore::gateway::handlers::shortcuts_config;
@@ -423,6 +424,16 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "generation_providers.delete", generation_providers::handle_delete, config, event_bus);
     register_handler!(server, "generation_providers.setDefault", generation_providers::handle_set_default, config, event_bus);
     register_handler!(server, "generation_providers.test", generation_providers::handle_test_connection, config);
+
+    // Embedding providers
+    register_handler!(server, "embedding_providers.list", embedding_providers::handle_list, config);
+    register_handler!(server, "embedding_providers.get", embedding_providers::handle_get, config);
+    register_handler!(server, "embedding_providers.add", embedding_providers::handle_add, config, event_bus);
+    register_handler!(server, "embedding_providers.update", embedding_providers::handle_update, config, event_bus);
+    register_handler!(server, "embedding_providers.remove", embedding_providers::handle_remove, config, event_bus);
+    register_handler!(server, "embedding_providers.setActive", embedding_providers::handle_set_active, config, event_bus);
+    register_handler!(server, "embedding_providers.test", embedding_providers::handle_test, config);
+    register_handler!(server, "embedding_providers.presets", embedding_providers::handle_presets);
 
     // Agent config
     register_handler!(server, "agent_config.get", agent_config::handle_get, config);
