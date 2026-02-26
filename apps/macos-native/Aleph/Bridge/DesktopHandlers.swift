@@ -13,6 +13,13 @@ extension BridgeServer {
         registerScreenshotHandler()
         registerOCRHandler()
         registerAxTreeHandler()
+        registerWindowListHandler()
+        registerFocusWindowHandler()
+        registerLaunchAppHandler()
+        registerClickHandler()
+        registerTypeTextHandler()
+        registerKeyComboHandler()
+        registerScrollHandler()
     }
 
     // MARK: - Screenshot
@@ -91,6 +98,56 @@ extension BridgeServer {
             let maxDepth = params["max_depth"]?.intValue ?? 5
 
             return AccessibilityService.inspect(bundleId: bundleId, maxDepth: maxDepth)
+        }
+    }
+
+    // MARK: - Window List
+
+    /// Register `desktop.window_list` handler.
+    ///
+    /// No params required. Returns an array of on-screen normal windows
+    /// with pid, app_name, window_id, title, and bounds.
+    private func registerWindowListHandler() {
+        register(method: BridgeMethod.windowList.rawValue) { _ in
+            WindowManager.listWindows()
+        }
+    }
+
+    // MARK: - Focus Window
+
+    /// Register `desktop.focus_window` handler.
+    ///
+    /// Params:
+    /// - `pid` (required): Process identifier of the target application.
+    private func registerFocusWindowHandler() {
+        register(method: BridgeMethod.focusWindow.rawValue) { params in
+            guard let pid = params["pid"]?.intValue else {
+                return .failure(.init(
+                    code: .internal,
+                    message: "Missing required param: pid (integer)"
+                ))
+            }
+
+            return WindowManager.focusWindow(pid: pid_t(pid))
+        }
+    }
+
+    // MARK: - Launch App
+
+    /// Register `desktop.launch_app` handler.
+    ///
+    /// Params:
+    /// - `bundle_id` (required): Bundle identifier of the app to launch.
+    private func registerLaunchAppHandler() {
+        register(method: BridgeMethod.launchApp.rawValue) { params in
+            guard let bundleId = params["bundle_id"]?.stringValue else {
+                return .failure(.init(
+                    code: .internal,
+                    message: "Missing required param: bundle_id (string)"
+                ))
+            }
+
+            return WindowManager.launchApp(bundleId: bundleId)
         }
     }
 }
