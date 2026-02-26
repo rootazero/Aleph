@@ -58,6 +58,7 @@ pub mod context_provider;
 pub mod decision;
 pub mod events;
 pub mod guards;
+pub mod heartbeat;
 pub mod message_builder;
 pub mod meta_cognition_integration;
 pub mod overflow;
