@@ -36,6 +36,9 @@ pub mod identity;
 pub mod interaction;
 pub mod model_router;
 pub mod prompt_builder;
+pub mod prompt_layer;
+pub mod prompt_pipeline;
+pub mod layers;
 pub mod security_context;
 pub mod soul;
 pub mod protocol_tokens;
@@ -58,6 +61,8 @@ pub use model_router::{ModelId, RoutingCondition, RoutingRule, ThinkerModelSelec
 #[deprecated(since = "0.2.0", note = "Use ThinkerModelSelector instead")]
 pub type ModelRouter = ThinkerModelSelector;
 pub use prompt_builder::{Message, MessageRole, PromptBuilder, PromptConfig};
+pub use prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+pub use prompt_pipeline::PromptPipeline;
 pub use tool_filter::{IntentFilterConfig, IntentFilterResult, ToolFilter, ToolFilterConfig};
 pub use interaction::{Capability, InteractionConstraints, InteractionManifest, InteractionParadigm};
 pub use security_context::{
