@@ -50,6 +50,7 @@
 
 // Submodules
 pub mod answer;
+pub mod bootstrap;
 pub mod builder;
 pub mod callback;
 pub mod config;
