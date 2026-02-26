@@ -789,14 +789,14 @@ mod tests {
 
         let args = make_args("screenshot");
         let output = AlephTool::call(&tool, args).await.unwrap();
-        // Should NOT be "Action denied". It will fail on bridge not connected,
+        // Should NOT be "Action denied". It will fail on bridge/app not available,
         // which is the expected behavior (approval gate was not triggered).
         assert!(!output.success);
-        assert!(output
-            .message
-            .as_deref()
-            .unwrap()
-            .contains("bridge"));
+        let msg = output.message.as_deref().unwrap();
+        assert!(
+            !msg.contains("Action denied"),
+            "Read-only action should bypass approval gate, got: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -811,11 +811,11 @@ mod tests {
         let args = make_args("ocr");
         let output = AlephTool::call(&tool, args).await.unwrap();
         assert!(!output.success);
-        assert!(output
-            .message
-            .as_deref()
-            .unwrap()
-            .contains("bridge"));
+        let msg = output.message.as_deref().unwrap();
+        assert!(
+            !msg.contains("Action denied"),
+            "Read-only action should bypass approval gate, got: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -827,12 +827,12 @@ mod tests {
         args.x = Some(100.0);
         args.y = Some(200.0);
         let output = AlephTool::call(&tool, args).await.unwrap();
-        // Should fail on "bridge not connected", NOT on approval
+        // Should fail on bridge/app not available, NOT on approval
         assert!(!output.success);
-        assert!(output
-            .message
-            .as_deref()
-            .unwrap()
-            .contains("bridge"));
+        let msg = output.message.as_deref().unwrap();
+        assert!(
+            !msg.contains("Action denied") && !msg.contains("Approval required"),
+            "Without policy, should not hit approval gate, got: {msg}"
+        );
     }
 }
