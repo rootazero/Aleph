@@ -20,7 +20,7 @@ Aleph is a Monorepo with platform-specific directories:
 | **Memory** | Dual-layer (Raw + Facts), compression, SIMD |
 | **Routing** | dispatcher/ (planner, scheduler, executor, model_router), intent/ (3 layers) |
 | **Tools** | mcp/, skills/, search/ (6 providers), video/, vision/ |
-| **Runtime** | runtimes/ (uv, fnm, yt-dlp, ffmpeg) |
+| **Runtime** | runtimes/ (capability ledger — probe, bootstrap, persist) |
 | **Infra** | services/, event/ (GlobalBus), conversation/, payload/, three_layer/, thinker/ |
 | **Permission** | permission/ (rules, config, manager), question/ (structured Q&A) |
 | **Compressor** | compressor/ (SmartCompactor, TurnProtector, ToolTruncator) |
@@ -229,9 +229,9 @@ aleph/
 │       │   ├── skill_reader.rs        # read_skill, list_skills tools (NEW)
 │       │   └── generation/            # Generation tool wrappers
 │       │
-│       ├── runtimes/                  # Runtime managers
-│       │   ├── mod.rs, registry.rs, manager.rs, manifest.rs
-│       │   ├── download.rs, uv.rs, fnm.rs, ytdlp.rs, ffmpeg.rs
+│       ├── runtimes/                  # Capability ledger (probe, bootstrap, persist)
+│       │   ├── mod.rs, bootstrap.rs, capability.rs, ensure.rs
+│       │   ├── ledger.rs, manifest.rs, probe.rs
 │       │
 │       ├── search/                    # 6 search providers
 │       │   ├── mod.rs, registry.rs, types.rs

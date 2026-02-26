@@ -43,7 +43,7 @@ Use trait-based abstractions for all core components:
 - DO NOT create permanent GUI windows (violates "Ghost" philosophy)
 - DO NOT hardcode AI providers (must be config-driven)
 - DO NOT bypass RigAgentManager for AI calls
-- DO NOT manually manage runtime installations (use RuntimeRegistry)
+- DO NOT embed heavy runtime managers in core (use CapabilityLedger + shell bootstrap)
 
 ### macOS Specific
 - DO NOT use SwiftUI App lifecycle on macOS 26+ (use main.swift + NSApplicationMain)

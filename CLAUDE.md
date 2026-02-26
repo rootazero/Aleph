@@ -239,7 +239,6 @@ aleph/
 │       ├── exec/                   # Shell 执行安全 (17 files)
 │       ├── mcp/                    # MCP 协议客户端
 │       ├── routing/                # Session Key 路由 (6 variants)
-│       ├── runtimes/               # 运行时管理 (uv, fnm, yt-dlp)
 │       ├── config/                 # 配置系统 + 热重载
 │       └── lib.rs                  # 60+ public modules
 ├── apps/
@@ -330,9 +329,6 @@ plugin-wasm = ["extism"]
 ```
 
 ### Environment
-
-- Python path: ~/.uv/python3/bin/python
-- Install Python package: cd ~/.uv/python3 && uv pip install <package>
 
 ### Git Worktree 操作规范
 
