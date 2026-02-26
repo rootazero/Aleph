@@ -15,7 +15,7 @@ use crate::memory::context::{CompressionResult, CompressionSession};
 use crate::memory::events::handler::MemoryCommandHandler;
 use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore, CompressionStore};
 use crate::memory::graph::GraphStore;
-use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
 use crate::memory::vfs::L1Generator;
 use crate::providers::AiProvider;
 use std::collections::HashSet;
@@ -70,7 +70,7 @@ impl CompressionService {
     pub fn new(
         database: MemoryBackend,
         provider: Arc<dyn AiProvider>,
-        embedder: SmartEmbedder,
+        embedder: Arc<dyn EmbeddingProvider>,
         config: CompressionConfig,
     ) -> Self {
         Self::new_with_backend(database, provider, embedder, config, None)
@@ -80,7 +80,7 @@ impl CompressionService {
     pub fn new_with_backend(
         database: MemoryBackend,
         provider: Arc<dyn AiProvider>,
-        embedder: SmartEmbedder,
+        embedder: Arc<dyn EmbeddingProvider>,
         config: CompressionConfig,
         memory_backend: Option<MemoryBackend>,
     ) -> Self {
@@ -91,7 +91,7 @@ impl CompressionService {
             Arc::new(L1Generator::new(
                 backend,
                 Arc::clone(&provider),
-                embedder.clone(),
+                Arc::clone(&embedder),
             ))
         });
 
@@ -525,9 +525,9 @@ mod tests {
             Arc::new(crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap());
 
         let provider = create_mock_provider();
-        let cache_dir = temp_dir.path().join("models");
-        std::fs::create_dir_all(&cache_dir).unwrap();
-        let embedder = SmartEmbedder::new(cache_dir, 300);
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
+            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(1024, "mock-model"),
+        );
 
         let config = CompressionConfig::default();
 

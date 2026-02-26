@@ -76,7 +76,7 @@ pub use resilience::{
 // Re-export from intelligent (P2)
 pub use intelligent::{
     CacheEntry, CacheHit, CacheHitType, CacheMetadata, CacheStats, CachedResponse,
-    ComplexityWeights, ContextSize, Domain, EmbeddingError, EvictionPolicy, FastEmbedEmbedder,
+    ComplexityWeights, ContextSize, Domain, EmbeddingError, EvictionPolicy, BridgeEmbedder,
     InMemoryVectorStore, IntelligentRouter, IntelligentRoutingConfig, IntelligentRoutingResult,
     Language, P2IntelligentRouter, P2RouterConfig, P2RouterError, PreRouteResult, PromptAnalysisError,
     PromptAnalyzer, PromptAnalyzerConfig, PromptFeatures, ReasoningLevel, RoutingDecision,

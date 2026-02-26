@@ -121,7 +121,7 @@ impl ToolRetrieval {
         );
         let scored = self.db.vector_search(
             query_embedding,
-            crate::memory::EMBEDDING_DIM as u32,
+            query_embedding.len() as u32,
             &filter,
             candidate_limit,
         ).await?;
@@ -162,7 +162,7 @@ impl ToolRetrieval {
         );
         let scored = self.db.hybrid_search(&crate::memory::store::HybridSearchParams {
             embedding: query_embedding,
-            dim_hint: crate::memory::EMBEDDING_DIM as u32,
+            dim_hint: query_embedding.len() as u32,
             query_text,
             vector_weight: 0.7,
             text_weight: 0.3,

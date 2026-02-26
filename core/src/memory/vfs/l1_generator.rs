@@ -8,7 +8,7 @@
 use crate::error::AlephError;
 use crate::memory::context::{compute_parent_path, FactSpecificity, FactType, TemporalScope};
 use crate::memory::namespace::NamespaceScope;
-use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::vfs::compute_directory_hash;
 use crate::memory::workspace::WorkspaceFilter;
@@ -26,7 +26,7 @@ use std::sync::Arc;
 pub struct L1Generator {
     database: MemoryBackend,
     provider: Arc<dyn AiProvider>,
-    embedder: SmartEmbedder,
+    embedder: Arc<dyn EmbeddingProvider>,
 }
 
 impl L1Generator {
@@ -34,7 +34,7 @@ impl L1Generator {
     pub fn new(
         database: MemoryBackend,
         provider: Arc<dyn AiProvider>,
-        embedder: SmartEmbedder,
+        embedder: Arc<dyn EmbeddingProvider>,
     ) -> Self {
         Self {
             database,
@@ -250,10 +250,13 @@ mod tests {
             .await
             .unwrap();
 
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
+            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(1024, "mock-model"),
+        );
         let generator = L1Generator::new(
             db,
             crate::providers::create_mock_provider(),
-            SmartEmbedder::new(temp_dir.path().join("embed-cache"), 300),
+            embedder,
         );
 
         let facts = generator

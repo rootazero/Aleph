@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::memory::store::MemoryBackend;
-use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
 use std::sync::Arc;
 
 use super::config::TranscriptIndexerConfig;
@@ -14,7 +14,7 @@ impl TranscriptIndexer {
     /// Create new indexer with default config
     pub fn new(
         _database: MemoryBackend,
-        _embedder: Arc<SmartEmbedder>,
+        _embedder: Arc<dyn EmbeddingProvider>,
     ) -> Self {
         Self {
             config: TranscriptIndexerConfig::default(),
@@ -24,7 +24,7 @@ impl TranscriptIndexer {
     /// Create with custom config
     pub fn with_config(
         _database: MemoryBackend,
-        _embedder: Arc<SmartEmbedder>,
+        _embedder: Arc<dyn EmbeddingProvider>,
         config: TranscriptIndexerConfig,
     ) -> Self {
         Self {

@@ -8,10 +8,9 @@ use crate::memory::cortex::{
     ClusteringConfig, ClusteringService, CortexDreamingConfig, CortexDreamingService,
     DistillationConfig, DistillationService, PatternExtractor, PatternExtractorConfig,
 };
-use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
 use crate::memory::store::MemoryBackend;
 use crate::memory::value_estimator::cortex::CortexValueEstimator;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -29,10 +28,6 @@ pub struct CortexConfig {
     pub dreaming: CortexDreamingConfig,
     /// Clustering service configuration
     pub clustering: ClusteringConfig,
-    /// Embedder cache directory
-    pub embedder_cache_dir: PathBuf,
-    /// Embedder TTL in seconds
-    pub embedder_ttl_secs: u64,
 }
 
 impl Default for CortexConfig {
@@ -43,8 +38,6 @@ impl Default for CortexConfig {
             pattern_extraction: PatternExtractorConfig::default(),
             dreaming: CortexDreamingConfig::default(),
             clustering: ClusteringConfig::default(),
-            embedder_cache_dir: std::env::temp_dir().join("aleph_embedder"),
-            embedder_ttl_secs: 3600,
         }
     }
 }
@@ -53,7 +46,7 @@ impl Default for CortexConfig {
 pub struct CortexIntegration {
     config: CortexConfig,
     db: MemoryBackend,
-    embedder: Arc<SmartEmbedder>,
+    embedder: Arc<dyn EmbeddingProvider>,
     distillation_service: Arc<RwLock<DistillationService>>,
     pattern_extractor: Arc<PatternExtractor>,
     dreaming_service: Option<CortexDreamingService>,
@@ -63,14 +56,8 @@ pub struct CortexIntegration {
 
 impl CortexIntegration {
     /// Create a new Cortex integration
-    pub fn new(config: CortexConfig, db: MemoryBackend) -> Self {
+    pub fn new(config: CortexConfig, db: MemoryBackend, embedder: Arc<dyn EmbeddingProvider>) -> Self {
         info!("Initializing Cortex Integration");
-
-        // Create embedder
-        let embedder = Arc::new(SmartEmbedder::new(
-            config.embedder_cache_dir.clone(),
-            config.embedder_ttl_secs,
-        ));
 
         // Create distillation service
         let (distillation_service, _rx) =
@@ -165,7 +152,7 @@ impl CortexIntegration {
     }
 
     /// Get reference to embedder
-    pub fn embedder(&self) -> Arc<SmartEmbedder> {
+    pub fn embedder(&self) -> Arc<dyn EmbeddingProvider> {
         self.embedder.clone()
     }
 
@@ -202,13 +189,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_cortex_integration_lifecycle() {
-        let (db, temp) = create_test_db().await;
-        let config = CortexConfig {
-            embedder_cache_dir: temp.path().join("embedder"),
-            ..CortexConfig::default()
-        };
+        let (db, _temp) = create_test_db().await;
+        let config = CortexConfig::default();
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
+            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(1024, "mock-model"),
+        );
 
-        let mut cortex = CortexIntegration::new(config, db);
+        let mut cortex = CortexIntegration::new(config, db, embedder);
 
         // Start services
         cortex.start().await.unwrap();
@@ -224,14 +211,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_cortex_integration_disabled() {
-        let (db, temp) = create_test_db().await;
+        let (db, _temp) = create_test_db().await;
         let config = CortexConfig {
             enabled: false,
-            embedder_cache_dir: temp.path().join("embedder"),
             ..CortexConfig::default()
         };
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
+            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(1024, "mock-model"),
+        );
 
-        let mut cortex = CortexIntegration::new(config, db);
+        let mut cortex = CortexIntegration::new(config, db, embedder);
 
         // Start should succeed but do nothing
         cortex.start().await.unwrap();

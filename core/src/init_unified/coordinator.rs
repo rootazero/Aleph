@@ -5,14 +5,13 @@ use crate::config::Config;
 use crate::utils::paths::get_config_dir;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Initialization phase identifier
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InitPhase {
     Directories,
     Config,
-    EmbeddingModel,
     Database,
     Runtimes,
     Skills,
@@ -23,7 +22,6 @@ impl InitPhase {
         match self {
             Self::Directories => "directories",
             Self::Config => "config",
-            Self::EmbeddingModel => "embedding_model",
             Self::Database => "database",
             Self::Runtimes => "runtimes",
             Self::Skills => "skills",
@@ -34,7 +32,6 @@ impl InitPhase {
         match self {
             Self::Directories => "Creating directories",
             Self::Config => "Generating configuration",
-            Self::EmbeddingModel => "Downloading embedding model",
             Self::Database => "Initializing database",
             Self::Runtimes => "Installing runtimes",
             Self::Skills => "Installing skills",
@@ -82,7 +79,6 @@ impl InitializationCoordinator {
         let phases = [
             InitPhase::Directories,
             InitPhase::Config,
-            InitPhase::EmbeddingModel,
             InitPhase::Database,
             InitPhase::Runtimes,
             InitPhase::Skills,
@@ -143,7 +139,6 @@ impl InitializationCoordinator {
         match phase {
             InitPhase::Directories => self.create_directories().await,
             InitPhase::Config => self.generate_config().await,
-            InitPhase::EmbeddingModel => self.download_embedding_model().await,
             InitPhase::Database => self.initialize_database().await,
             InitPhase::Runtimes => self.install_runtimes().await,
             InitPhase::Skills => self.install_skills().await,
@@ -177,14 +172,6 @@ impl InitializationCoordinator {
                     if db_path.exists() {
                         if let Err(e) = tokio::fs::remove_file(&db_path).await {
                             warn!(error = %e, path = ?db_path, "Failed to remove database during rollback");
-                        }
-                    }
-                }
-                "embedding_model" => {
-                    let models_dir = self.config_dir.join("models");
-                    if models_dir.exists() {
-                        if let Err(e) = tokio::fs::remove_dir_all(&models_dir).await {
-                            warn!(error = %e, dir = ?models_dir, "Failed to remove models directory during rollback");
                         }
                     }
                 }
@@ -258,63 +245,7 @@ impl InitializationCoordinator {
     }
 
     // =========================================================================
-    // Phase 3: Download embedding model
-    // =========================================================================
-
-    async fn download_embedding_model(&self) -> Result<(), InitError> {
-        use crate::memory::EmbeddingModel as AlephEmbeddingModel;
-        use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-
-        info!("Downloading embedding model bge-small-zh-v1.5...");
-
-        // Report progress
-        if let Some(h) = &self.handler {
-            h.on_phase_progress(
-                "embedding_model".to_string(),
-                0.0,
-                "Initializing model download...".to_string(),
-            );
-        }
-
-        // Get our custom cache directory (same as EmbeddingModel uses at runtime)
-        // This ensures consistency: ~/.aleph/models/fastembed/
-        let cache_dir = AlephEmbeddingModel::get_default_model_path().map_err(|e| {
-            InitError::new(
-                "embedding_model",
-                format!("Failed to get model path: {}", e),
-            )
-        })?;
-
-        // Ensure cache directory exists
-        tokio::fs::create_dir_all(&cache_dir).await.map_err(|e| {
-            InitError::new(
-                "embedding_model",
-                format!("Failed to create model directory: {}", e),
-            )
-        })?;
-
-        debug!(cache_dir = %cache_dir.display(), "Using cache directory for embedding model");
-
-        // fastembed handles download automatically
-        // Model is cached in our custom directory for consistency
-        let _model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::BGESmallZHV15)
-                .with_cache_dir(cache_dir)
-                .with_show_download_progress(true),
-        )
-        .map_err(|e| {
-            InitError::new(
-                "embedding_model",
-                format!("Failed to download model: {}", e),
-            )
-        })?;
-
-        info!("Embedding model downloaded successfully");
-        Ok(())
-    }
-
-    // =========================================================================
-    // Phase 4: Initialize database
+    // Phase 3: Initialize database
     // =========================================================================
 
     async fn initialize_database(&self) -> Result<(), InitError> {
@@ -333,7 +264,7 @@ impl InitializationCoordinator {
     }
 
     // =========================================================================
-    // Phase 5: Install runtimes (parallel installation)
+    // Phase 4: Install runtimes (parallel installation)
     // =========================================================================
 
     async fn install_runtimes(&self) -> Result<(), InitError> {
@@ -359,7 +290,7 @@ impl InitializationCoordinator {
     }
 
     // =========================================================================
-    // Phase 6: Install skills
+    // Phase 5: Install skills
     // =========================================================================
 
     async fn install_skills(&self) -> Result<(), InitError> {

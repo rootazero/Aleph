@@ -227,7 +227,7 @@ pub fn create_provider(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -261,13 +261,13 @@ mod tests {
     }
 
     /// Mock embedding provider for tests
-    pub struct MockEmbeddingProvider {
+    pub(crate) struct MockEmbeddingProvider {
         dim: usize,
         model: String,
     }
 
     impl MockEmbeddingProvider {
-        pub fn new(dim: usize, model: &str) -> Self {
+        pub(crate) fn new(dim: usize, model: &str) -> Self {
             Self {
                 dim,
                 model: model.to_string(),

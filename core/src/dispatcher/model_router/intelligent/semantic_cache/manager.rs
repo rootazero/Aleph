@@ -5,13 +5,14 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use super::embedder::{FastEmbedEmbedder, TextEmbedder};
+use super::embedder::{BridgeEmbedder, TextEmbedder};
 use super::store::InMemoryVectorStore;
 use super::types::{
     CacheEntry, CacheHit, CacheHitType, CacheMetadata, CacheStats, CachedResponse,
     SemanticCacheConfig, SemanticCacheError,
 };
 use super::utils::{hash_prompt, prompt_preview};
+use crate::memory::EmbeddingProvider;
 
 // =============================================================================
 // Semantic Cache Manager
@@ -30,19 +31,19 @@ pub struct SemanticCacheManager {
 }
 
 impl SemanticCacheManager {
-    /// Create a new semantic cache manager
-    pub fn new(config: SemanticCacheConfig) -> Result<Self, SemanticCacheError> {
-        // Create embedder
-        let embedder = FastEmbedEmbedder::with_model(&config.embedding_model)
-            .map_err(|e| SemanticCacheError::InitializationFailed(e.to_string()))?;
-
+    /// Create a new semantic cache manager with an embedding provider
+    pub fn new(
+        embedding_provider: Arc<dyn EmbeddingProvider>,
+        config: SemanticCacheConfig,
+    ) -> Self {
+        let embedder = BridgeEmbedder::new(embedding_provider);
         let store = InMemoryVectorStore::new(config.clone());
 
-        Ok(Self {
+        Self {
             embedder: Arc::new(embedder),
             store: Arc::new(store),
             config,
-        })
+        }
     }
 
     /// Create with a custom embedder (for testing)

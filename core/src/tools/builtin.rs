@@ -132,8 +132,9 @@ impl AlephToolServer {
     pub fn with_memory_search(
         self,
         database: crate::memory::store::MemoryBackend,
+        embedder: std::sync::Arc<dyn crate::memory::EmbeddingProvider>,
     ) -> Self {
-        self.tool(MemorySearchTool::new(database))
+        self.tool(MemorySearchTool::new_with_embedder(database, embedder))
     }
 
     /// Register MCP resource reading tool

@@ -16,14 +16,14 @@ fn test_config_deserialization() {
     let config: Config = serde_json::from_str(json).unwrap();
     assert_eq!(config.default_hotkey, "Grave");
     // memory field should use default
-    assert_eq!(config.memory.embedding_model, "bge-small-zh-v1.5");
+    assert_eq!(config.memory.embedding.active_provider_id, "siliconflow");
 }
 
 #[test]
 fn test_memory_config_serialization() {
     let mem_config = MemoryConfig::default();
     let json = serde_json::to_string(&mem_config).unwrap();
-    assert!(json.contains("bge-small-zh-v1.5"));
+    assert!(json.contains("BAAI/bge-m3")); // default siliconflow model
     assert!(json.contains("lancedb"));
     assert!(json.contains("dreaming"));
 }
@@ -32,12 +32,14 @@ fn test_memory_config_serialization() {
 fn test_memory_config_deserialization() {
     let json = r#"{
         "enabled": false,
-        "embedding_model": "custom-model",
         "max_context_items": 10,
         "retention_days": 30,
         "vector_db": "lancedb",
         "similarity_threshold": 0.8,
         "excluded_apps": ["com.example.app"],
+        "embedding": {
+            "active_provider_id": "openai"
+        },
         "dreaming": {
             "enabled": false,
             "idle_threshold_seconds": 120,
@@ -59,7 +61,7 @@ fn test_memory_config_deserialization() {
     }"#;
     let config: MemoryConfig = serde_json::from_str(json).unwrap();
     assert!(!config.enabled);
-    assert_eq!(config.embedding_model, "custom-model");
+    assert_eq!(config.embedding.active_provider_id, "openai");
     assert_eq!(config.max_context_items, 10);
     assert_eq!(config.retention_days, 30);
     assert_eq!(config.vector_db, "lancedb");

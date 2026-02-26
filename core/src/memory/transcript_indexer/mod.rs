@@ -16,7 +16,8 @@ mod semantic_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::smart_embedder::SmartEmbedder;
+    use crate::memory::EmbeddingProvider;
+    use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
     use crate::memory::store::{LanceMemoryBackend, MemoryBackend};
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -41,7 +42,10 @@ mod tests {
 
         let temp_dir = tempdir().unwrap();
         let db = create_test_db(temp_dir.path());
-        let embedder = Arc::new(SmartEmbedder::new(temp_dir.path().to_path_buf(), 300));
+        let embedder = {
+            let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+            mock
+        };
 
         let indexer = TranscriptIndexer::with_config(db, embedder, config);
 
@@ -60,7 +64,10 @@ mod tests {
     fn test_indexer_estimate_tokens() {
         let temp_dir = tempdir().unwrap();
         let db = create_test_db(temp_dir.path());
-        let embedder = Arc::new(SmartEmbedder::new(temp_dir.path().to_path_buf(), 300));
+        let embedder = {
+            let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+            mock
+        };
 
         let indexer = TranscriptIndexer::new(db, embedder);
 

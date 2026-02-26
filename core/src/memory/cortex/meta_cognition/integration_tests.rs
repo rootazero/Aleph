@@ -7,10 +7,9 @@
 use super::*;
 use crate::memory::cortex::types::{Experience, EvolutionStatus};
 use crate::memory::store::{LanceMemoryBackend, MemoryBackend};
-use crate::memory::smart_embedder::SmartEmbedder;
+use crate::memory::EmbeddingProvider;
 use rusqlite::Connection;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -38,9 +37,9 @@ fn create_test_anchor_store() -> Arc<RwLock<AnchorStore>> {
 }
 
 /// Create a test embedder for semantic operations
-fn create_test_embedder() -> Arc<SmartEmbedder> {
-    let cache_dir = PathBuf::from("/tmp/aleph_test_embeddings");
-    Arc::new(SmartEmbedder::new(cache_dir, 300))
+fn create_test_embedder() -> Arc<dyn EmbeddingProvider> {
+    use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
+    Arc::new(MockEmbeddingProvider::new(1024, "mock-model"))
 }
 
 /// Create a test failure signal
