@@ -157,6 +157,10 @@ pub struct DreamDaemon {
     window_start: NaiveTime,
     window_end: NaiveTime,
     is_running: AtomicBool,
+    /// Optional event-sourcing command handler. When present, decay mutations
+    /// are recorded as `StrengthDecayed` events in addition to the direct
+    /// LanceDB update path.
+    command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
 }
 
 impl DreamDaemon {
@@ -177,7 +181,18 @@ impl DreamDaemon {
             window_start,
             window_end,
             is_running: AtomicBool::new(false),
+            command_handler: None,
         })
+    }
+
+    /// Attach an event-sourcing command handler so that decay mutations are
+    /// also recorded as `StrengthDecayed` events.
+    pub fn with_command_handler(
+        mut self,
+        handler: Arc<crate::memory::events::handler::MemoryCommandHandler>,
+    ) -> Self {
+        self.command_handler = Some(handler);
+        self
     }
 
     /// Start background scheduling task.
@@ -412,13 +427,51 @@ impl DreamDaemon {
         }
 
         report.graph_decay = self.graph_store.apply_decay(&self.graph_decay).await?;
-        let decayed_count = self.database.apply_fact_decay(
-            self.memory_decay.half_life_days,
-            self.memory_decay.min_strength,
-        ).await?;
-        report.memory_decay = MemoryDecayReport {
-            updated_facts: decayed_count as u64,
-            pruned_facts: 0, // Not tracked separately in new API
+
+        // Apply fact decay — always update LanceDB directly,
+        // and optionally emit StrengthDecayed events for audit.
+        let decay_factor = self.memory_decay.half_life_days;
+        let min_strength = self.memory_decay.min_strength;
+
+        if let Some(handler) = &self.command_handler {
+            // Pre-compute per-fact decay data so we can emit events.
+            let valid_facts = self.database.get_all_facts(false).await?;
+            let decay_tuples: Vec<(String, f32, f32)> = valid_facts
+                .iter()
+                .filter_map(|fact| {
+                    let new_conf = fact.confidence * decay_factor;
+                    // Only record facts that actually change.
+                    if (new_conf - fact.confidence).abs() > f32::EPSILON {
+                        Some((fact.id.clone(), fact.confidence, new_conf))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if !decay_tuples.is_empty() {
+                use crate::memory::events::commands::ApplyDecayCommand;
+                let _ = handler
+                    .apply_decay(ApplyDecayCommand {
+                        fact_ids_with_strength: decay_tuples,
+                        decay_factor,
+                        correlation_id: None,
+                    })
+                    .await?;
+            }
+
+            // Still apply the actual LanceDB update.
+            let decayed_count = self.database.apply_fact_decay(decay_factor, min_strength).await?;
+            report.memory_decay = MemoryDecayReport {
+                updated_facts: decayed_count as u64,
+                pruned_facts: 0,
+            };
+        } else {
+            let decayed_count = self.database.apply_fact_decay(decay_factor, min_strength).await?;
+            report.memory_decay = MemoryDecayReport {
+                updated_facts: decayed_count as u64,
+                pruned_facts: 0,
+            };
         };
 
         if activity_detected(activity_snapshot) {

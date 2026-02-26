@@ -18,6 +18,7 @@ use crate::memory::audit::AuditEntry;
 use crate::memory::context::{FactStats, FactType, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::types::{ScoredFact, SearchFilter};
+#[allow(deprecated)]
 use crate::memory::store::{AuditStore, HybridSearchParams, MemoryStore, PathEntry};
 
 use super::arrow_convert::{facts_to_record_batch, record_batch_to_facts};
@@ -600,6 +601,7 @@ impl LanceMemoryBackend {
 // AuditStore implementation
 // ============================================================================
 
+#[allow(deprecated)]
 #[async_trait]
 impl AuditStore for LanceMemoryBackend {
     async fn insert_audit_entry(&self, _entry: &AuditEntry) -> Result<(), AlephError> {

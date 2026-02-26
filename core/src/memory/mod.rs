@@ -12,12 +12,13 @@
 //! - `MemoryStore`: Fact CRUD, vector search, path operations
 //! - `SessionStore`: Session memory management, compression tracking
 //! - `GraphStore`: Entity relationship graph operations
-//! - `DreamStore`, `AuditStore`, `CompressionStore`: Specialized operations
+//! - `DreamStore`, `AuditStore` (deprecated), `CompressionStore`: Specialized operations
 
 // Public submodules
 pub mod adaptive_retrieval;
 pub mod ai_retrieval;
 pub mod audit;
+pub mod events;
 pub mod backup;
 pub mod augmentation;
 pub mod cleanup;
@@ -67,6 +68,17 @@ pub use backup::MemoryBackupService;
 pub use audit::{
     AuditAction, AuditActor, AuditDetails, AuditEntry, AuditLogger,
     ExplainedEvent, FactExplanation, ForgettingExplanation,
+};
+pub use events::{
+    commands::{
+        ApplyDecayCommand, ConsolidateCommand, CreateFactCommand, DeleteFactCommand,
+        InvalidateFactCommand, RecordAccessCommand, RestoreFactCommand, UpdateContentCommand,
+    },
+    handler::MemoryCommandHandler,
+    migration::{EventSourcingMigration, MigrationReport},
+    projector::EventProjector,
+    traveler::MemoryTimeTraveler,
+    EventActor, MemoryEvent, MemoryEventEnvelope, TierTransitionTrigger,
 };
 pub use augmentation::PromptAugmenter;
 pub use cleanup::CleanupService;
