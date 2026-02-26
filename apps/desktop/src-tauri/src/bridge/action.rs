@@ -214,44 +214,11 @@ pub fn handle_scroll(params: Value) -> Result<Value, (i32, String)> {
 /// Handle `desktop.launch_app` — launch an application
 ///
 /// Params:
-/// - `bundle_id`: string (macOS) — e.g. "com.apple.Safari"
 /// - `app_name`: string (Windows/Linux) — e.g. "notepad" or "firefox"
 ///
-/// On macOS: uses `open -b <bundle_id>`
 /// On Windows: uses `cmd /C start "" "<app_name>"`
 /// On Linux: uses `xdg-open <app_name>` or direct exec
 pub fn handle_launch_app(params: Value) -> Result<Value, (i32, String)> {
-    #[cfg(target_os = "macos")]
-    {
-        let bundle_id = params
-            .get("bundle_id")
-            .and_then(|v| v.as_str())
-            .or_else(|| params.get("app_name").and_then(|v| v.as_str()))
-            .ok_or_else(|| {
-                (
-                    ERR_INTERNAL,
-                    "Missing 'bundle_id' or 'app_name' parameter".to_string(),
-                )
-            })?;
-
-        let output = std::process::Command::new("open")
-            .arg("-b")
-            .arg(bundle_id)
-            .output()
-            .map_err(|e| (ERR_INTERNAL, format!("Failed to launch app: {e}")))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err((
-                ERR_INTERNAL,
-                format!("Failed to launch '{}': {}", bundle_id, stderr.trim()),
-            ));
-        }
-
-        info!(bundle_id, "App launched (macOS)");
-        Ok(json!({"launched": true, "bundle_id": bundle_id}))
-    }
-
     #[cfg(target_os = "windows")]
     {
         let app_name = params
@@ -312,8 +279,9 @@ pub fn handle_launch_app(params: Value) -> Result<Value, (i32, String)> {
         Ok(json!({"launched": true, "app_name": app_name}))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
+        let _ = params;
         Err((
             ERR_INTERNAL,
             "launch_app not supported on this platform".to_string(),
@@ -327,11 +295,6 @@ pub fn handle_launch_app(params: Value) -> Result<Value, (i32, String)> {
 ///
 /// Returns: `{ "windows": [{ "id", "title", "owner", "pid" }] }`
 pub fn handle_window_list(_params: Value) -> Result<Value, (i32, String)> {
-    #[cfg(target_os = "macos")]
-    {
-        macos_window_list()
-    }
-
     #[cfg(target_os = "windows")]
     {
         windows_window_list()
@@ -342,7 +305,7 @@ pub fn handle_window_list(_params: Value) -> Result<Value, (i32, String)> {
         linux_window_list()
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         Err((
             aleph_protocol::desktop_bridge::ERR_NOT_IMPLEMENTED,
@@ -354,17 +317,12 @@ pub fn handle_window_list(_params: Value) -> Result<Value, (i32, String)> {
 /// Handle `desktop.focus_window` — bring a window's owning application to front.
 ///
 /// Params:
-/// - `window_id`: u64 — the window ID to focus (CGWindowID on macOS, HWND on Windows, XID on Linux)
+/// - `window_id`: u64 — the window ID to focus (HWND on Windows, XID on Linux)
 pub fn handle_focus_window(params: Value) -> Result<Value, (i32, String)> {
     let window_id = params
         .get("window_id")
         .and_then(|v| v.as_u64())
         .ok_or_else(|| (ERR_INTERNAL, "Missing or invalid 'window_id' parameter".to_string()))?;
-
-    #[cfg(target_os = "macos")]
-    {
-        macos_focus_window(window_id as u32)
-    }
 
     #[cfg(target_os = "windows")]
     {
@@ -376,7 +334,7 @@ pub fn handle_focus_window(params: Value) -> Result<Value, (i32, String)> {
         linux_focus_window(window_id)
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         let _ = window_id;
         Err((
@@ -384,119 +342,6 @@ pub fn handle_focus_window(params: Value) -> Result<Value, (i32, String)> {
             "focus_window not implemented on this platform".into(),
         ))
     }
-}
-
-#[cfg(target_os = "macos")]
-fn macos_window_list() -> Result<Value, (i32, String)> {
-    use core_foundation::array::CFArray;
-    use core_foundation::base::TCFType;
-    use core_foundation::dictionary::CFDictionary;
-    use core_graphics::display::{
-        kCGNullWindowID, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
-        CGWindowListCopyWindowInfo,
-    };
-    use core_graphics::window::{
-        kCGWindowName, kCGWindowNumber, kCGWindowOwnerName, kCGWindowOwnerPID,
-    };
-
-    let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
-    let window_info = unsafe { CGWindowListCopyWindowInfo(options, kCGNullWindowID) };
-    if window_info.is_null() {
-        return Err((ERR_INTERNAL, "Failed to list windows".into()));
-    }
-
-    let info_array: CFArray = unsafe { TCFType::wrap_under_create_rule(window_info) };
-    let mut windows = Vec::new();
-
-    for i in 0..info_array.len() {
-        let dict_ptr = unsafe { *info_array.get_unchecked(i) };
-        let dict: CFDictionary =
-            unsafe { TCFType::wrap_under_get_rule(dict_ptr as *const _ as _) };
-
-        let id = unsafe { get_cf_number(&dict, kCGWindowNumber) }.unwrap_or(0);
-        let title = unsafe { get_cf_string(&dict, kCGWindowName) }.unwrap_or_default();
-        let owner = unsafe { get_cf_string(&dict, kCGWindowOwnerName) }.unwrap_or_default();
-        let pid = unsafe { get_cf_number(&dict, kCGWindowOwnerPID) }.unwrap_or(0);
-
-        windows.push(json!({
-            "id": id,
-            "title": title,
-            "owner": owner,
-            "pid": pid,
-        }));
-    }
-
-    info!(count = windows.len(), "Window list retrieved");
-    Ok(json!({ "windows": windows }))
-}
-
-#[cfg(target_os = "macos")]
-fn macos_focus_window(window_id: u32) -> Result<Value, (i32, String)> {
-    use core_foundation::array::CFArray;
-    use core_foundation::base::TCFType;
-    use core_foundation::dictionary::CFDictionary;
-    use core_graphics::display::{kCGWindowListOptionAll, CGWindowListCopyWindowInfo};
-    use core_graphics::window::kCGWindowOwnerPID;
-
-    // Find the PID for this window
-    let window_info =
-        unsafe { CGWindowListCopyWindowInfo(kCGWindowListOptionAll, window_id) };
-    if window_info.is_null() {
-        return Err((ERR_INTERNAL, format!("Window {} not found", window_id)));
-    }
-
-    let info_array: CFArray = unsafe { TCFType::wrap_under_create_rule(window_info) };
-    if info_array.len() == 0 {
-        return Err((ERR_INTERNAL, format!("Window {} not found", window_id)));
-    }
-
-    let dict_ptr = unsafe { *info_array.get_unchecked(0) };
-    let dict: CFDictionary =
-        unsafe { TCFType::wrap_under_get_rule(dict_ptr as *const _ as _) };
-    let pid = unsafe { get_cf_number(&dict, kCGWindowOwnerPID) }
-        .ok_or_else(|| (ERR_INTERNAL, format!("Cannot determine PID for window {}", window_id)))?;
-
-    // Activate the application owning this window
-    unsafe {
-        let cls = objc::runtime::Class::get("NSRunningApplication")
-            .ok_or_else(|| (ERR_INTERNAL, "NSRunningApplication class not found".to_string()))?;
-        let app: *mut objc::runtime::Object =
-            msg_send![cls, runningApplicationWithProcessIdentifier: pid as i32];
-        if app.is_null() {
-            return Err((ERR_INTERNAL, format!("No running application with PID {}", pid)));
-        }
-        // NSApplicationActivateAllWindows (1) | NSApplicationActivateIgnoringOtherApps (2) = 3
-        let _: bool = msg_send![app, activateWithOptions: 3u64];
-    }
-
-    info!(window_id, pid, "Window focused");
-    Ok(json!({ "focused": window_id }))
-}
-
-/// Extract an integer value from a CFDictionary by CFString key reference.
-#[cfg(target_os = "macos")]
-fn get_cf_number(
-    dict: &core_foundation::dictionary::CFDictionary,
-    key: core_foundation::string::CFStringRef,
-) -> Option<i64> {
-    use core_foundation::base::TCFType;
-    use core_foundation::number::CFNumber;
-    dict.find(key as *const _)
-        .map(|v| unsafe { CFNumber::wrap_under_get_rule(*v as *const _) })
-        .and_then(|n| n.to_i64())
-}
-
-/// Extract a string value from a CFDictionary by CFString key reference.
-#[cfg(target_os = "macos")]
-fn get_cf_string(
-    dict: &core_foundation::dictionary::CFDictionary,
-    key: core_foundation::string::CFStringRef,
-) -> Option<String> {
-    use core_foundation::base::TCFType;
-    use core_foundation::string::CFString;
-    dict.find(key as *const _)
-        .map(|v| unsafe { CFString::wrap_under_get_rule(*v as *const _) })
-        .map(|s| s.to_string())
 }
 
 // ── Windows window management ────────────────────────────────────

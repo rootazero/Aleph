@@ -44,22 +44,6 @@ pub fn get_cursor_position() -> Result<Position> {
         })
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        #[allow(deprecated)] // cocoa crate deprecated in favor of objc2-app-kit
-        {
-            use cocoa::appkit::NSEvent;
-            use cocoa::base::nil;
-            use cocoa::foundation::NSPoint;
-
-            let location: NSPoint = unsafe { NSEvent::mouseLocation(nil) };
-            Ok(Position {
-                x: location.x as i32,
-                y: location.y as i32,
-            })
-        }
-    }
-
     #[cfg(target_os = "linux")]
     {
         // TODO: Implement for Linux using X11 or Wayland
@@ -193,7 +177,7 @@ pub async fn save_settings(new_settings: Settings) -> Result<()> {
     settings::save_settings(&new_settings)?;
 
     // Handle launch at login change
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         // The actual autostart management is handled by tauri-plugin-autostart
         // We just log the intention here; the frontend should use the plugin directly
