@@ -445,6 +445,33 @@ impl PromptBuilder {
         prompt.push_str("- In group contexts, respect that private user information should not be shared.\n\n");
     }
 
+    /// Append memory-first guidance to the system prompt
+    ///
+    /// Instructs the AI to proactively search persistent memory before
+    /// answering context-dependent questions, and to store new facts
+    /// discovered during conversations.
+    pub fn append_memory_guidance(&self, prompt: &mut String) {
+        prompt.push_str("## Memory Protocol\n\n");
+        prompt.push_str("You have persistent memory across sessions. Use it.\n\n");
+
+        prompt.push_str("### Before Answering\n");
+        prompt.push_str("When the user asks about past work, preferences, or context:\n");
+        prompt.push_str("1. FIRST use `memory_search` to recall relevant facts\n");
+        prompt.push_str("2. THEN answer with recalled context\n");
+        prompt.push_str("3. ALWAYS cite sources: [Source: <path>#<id>]\n\n");
+
+        prompt.push_str("### After Learning\n");
+        prompt.push_str("When you discover new facts worth remembering:\n");
+        prompt.push_str("- User preferences → use `memory_store` with category \"user_preference\"\n");
+        prompt.push_str("- Project decisions → use `memory_store` with category \"project_decision\"\n");
+        prompt.push_str("- Task outcomes → use `memory_store` with category \"task_outcome\"\n\n");
+
+        prompt.push_str("### Memory Hygiene\n");
+        prompt.push_str("- Don't store trivial or temporary information\n");
+        prompt.push_str("- Don't store information the user explicitly asks you to forget\n");
+        prompt.push_str("- Update existing facts rather than creating duplicates\n\n");
+    }
+
     /// Append thinking transparency guidance section
     ///
     /// Guides the AI on structured reasoning output:
@@ -683,6 +710,9 @@ impl PromptBuilder {
 
         // Add constitutional AI safety guardrails
         self.append_safety_constitution(&mut prompt);
+
+        // Add memory-first guidance (search before answering, store after learning)
+        self.append_memory_guidance(&mut prompt);
 
         // Add thinking transparency guidance if enabled
         self.append_thinking_guidance(&mut prompt);
@@ -1580,6 +1610,18 @@ mod tests {
         assert!(prompt.contains("Transparency"));
         assert!(prompt.contains("Data Handling"));
         assert!(prompt.contains("NO independent goals"));
+    }
+
+    #[test]
+    fn test_append_memory_guidance() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+        builder.append_memory_guidance(&mut prompt);
+        assert!(prompt.contains("## Memory Protocol"));
+        assert!(prompt.contains("Before Answering"));
+        assert!(prompt.contains("memory_search"));
+        assert!(prompt.contains("After Learning"));
+        assert!(prompt.contains("Memory Hygiene"));
     }
 
     #[test]
