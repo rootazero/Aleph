@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::error::AlephError;
 use crate::memory::context::{
-    compute_parent_path, FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact,
+    compute_parent_path, FactSpecificity, MemoryFact,
     MemoryLayer, MemoryScope, MemoryTier, TemporalScope,
 };
 use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
@@ -259,6 +259,7 @@ impl EventProjector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::context::MemoryCategory;
     use crate::memory::events::*;
 
     /// Helper: create a `MemoryEventEnvelope` wrapping a `FactCreated` event.
