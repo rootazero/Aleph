@@ -140,6 +140,16 @@ impl PromptBuilder {
         }
     }
 
+    /// Append runtime context section (micro-environmental awareness)
+    pub fn append_runtime_context_section(
+        &self,
+        prompt: &mut String,
+        runtime_ctx: &super::runtime_context::RuntimeContext,
+    ) {
+        prompt.push_str(&runtime_ctx.to_prompt_section());
+        prompt.push_str("\n\n");
+    }
+
     /// Append available tools section
     fn append_tools(&self, prompt: &mut String, tools: &[ToolInfo]) {
         prompt.push_str("## Available Tools\n");
@@ -795,18 +805,19 @@ impl PromptBuilder {
     /// from the ContextAggregator. It builds the complete system prompt with:
     /// 1. Role definition
     /// 2. Core instructions
-    /// 3. Environment contract (paradigm, capabilities, constraints)
-    /// 4. Runtime capabilities
-    /// 5. Tools (using ctx.available_tools)
-    /// 6. Security constraints (blocked tools, approval-required tools)
-    /// 7. Silent behavior (if applicable)
-    /// 8. Generation models
-    /// 9. Special actions
-    /// 10. Response format
-    /// 11. Guidelines
-    /// 12. Skill mode
-    /// 13. Custom instructions
-    /// 14. Language setting
+    /// 3. Runtime context (micro-environmental awareness, optional)
+    /// 4. Environment contract (paradigm, capabilities, constraints)
+    /// 5. Runtime capabilities
+    /// 6. Tools (using ctx.available_tools)
+    /// 7. Security constraints (blocked tools, approval-required tools)
+    /// 8. Silent behavior (if applicable)
+    /// 9. Generation models
+    /// 10. Special actions
+    /// 11. Response format
+    /// 12. Guidelines
+    /// 13. Skill mode
+    /// 14. Custom instructions
+    /// 15. Language setting
     pub fn build_system_prompt_with_context(&self, ctx: &ResolvedContext) -> String {
         let mut prompt = String::new();
 
@@ -819,44 +830,49 @@ impl PromptBuilder {
         prompt.push_str("- Decide the SINGLE next action to take\n");
         prompt.push_str("- Execute until the task is complete or you need user input\n\n");
 
-        // 3. Environment contract (NEW)
+        // 3. Runtime context (micro-environmental awareness)
+        if let Some(ref runtime_ctx) = ctx.runtime_context {
+            self.append_runtime_context_section(&mut prompt, runtime_ctx);
+        }
+
+        // 4. Environment contract
         self.append_environment_contract(&mut prompt, &ctx.environment_contract);
 
-        // 4. Runtime capabilities
+        // 5. Runtime capabilities
         self.append_runtime_capabilities(&mut prompt);
 
-        // 5. Tools (using available_tools from context)
+        // 6. Tools (using available_tools from context)
         self.append_tools(&mut prompt, &ctx.available_tools);
 
-        // 6. Security constraints (NEW)
+        // 7. Security constraints
         self.append_security_constraints(
             &mut prompt,
             &ctx.disabled_tools,
             &ctx.environment_contract.security_notes,
         );
 
-        // 7. Silent behavior (NEW - if applicable)
+        // 8. Silent behavior (if applicable)
         self.append_silent_behavior(&mut prompt, &ctx.environment_contract);
 
-        // 8. Generation models
+        // 9. Generation models
         self.append_generation_models(&mut prompt);
 
-        // 9. Special actions
+        // 10. Special actions
         self.append_special_actions(&mut prompt);
 
-        // 10. Response format
+        // 11. Response format
         self.append_response_format(&mut prompt);
 
-        // 11. Guidelines
+        // 12. Guidelines
         self.append_guidelines(&mut prompt);
 
-        // 12. Skill mode
+        // 13. Skill mode
         self.append_skill_mode(&mut prompt);
 
-        // 13. Custom instructions
+        // 14. Custom instructions
         self.append_custom_instructions(&mut prompt);
 
-        // 14. Language setting
+        // 15. Language setting
         self.append_language_setting(&mut prompt);
 
         prompt
@@ -1261,5 +1277,92 @@ mod tests {
         // Both soul and thinking guidance should be present
         assert!(prompt.contains("# Identity"));
         assert!(prompt.contains("## Thinking Transparency"));
+    }
+
+    #[test]
+    fn test_append_runtime_context_section() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        let ctx = crate::thinker::runtime_context::RuntimeContext {
+            os: "macOS 15.3".to_string(),
+            arch: "aarch64".to_string(),
+            shell: "zsh".to_string(),
+            working_dir: std::path::PathBuf::from("/workspace"),
+            repo_root: Some(std::path::PathBuf::from("/workspace")),
+            current_model: "claude-opus-4-6".to_string(),
+            hostname: "test-host".to_string(),
+        };
+
+        builder.append_runtime_context_section(&mut prompt, &ctx);
+
+        assert!(prompt.contains("## Runtime Environment"));
+        assert!(prompt.contains("os=macOS 15.3"));
+        assert!(prompt.contains("arch=aarch64"));
+        assert!(prompt.contains("shell=zsh"));
+        assert!(prompt.contains("cwd=/workspace"));
+        assert!(prompt.contains("repo=/workspace"));
+        assert!(prompt.contains("model=claude-opus-4-6"));
+        assert!(prompt.contains("host=test-host"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_with_context_includes_runtime_context() {
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+        use crate::thinker::security_context::SecurityContext;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+
+        // Build a ResolvedContext with runtime_context set
+        let interaction = InteractionManifest::new(InteractionParadigm::WebRich);
+        let security = SecurityContext::permissive();
+        let mut ctx = ContextAggregator::resolve(&interaction, &security, &[]);
+
+        ctx.runtime_context = Some(crate::thinker::runtime_context::RuntimeContext {
+            os: "linux".to_string(),
+            arch: "x86_64".to_string(),
+            shell: "bash".to_string(),
+            working_dir: std::path::PathBuf::from("/home/user"),
+            repo_root: None,
+            current_model: "gpt-4".to_string(),
+            hostname: "server-01".to_string(),
+        });
+
+        let prompt = builder.build_system_prompt_with_context(&ctx);
+
+        // Runtime context should be present
+        assert!(prompt.contains("## Runtime Environment"));
+        assert!(prompt.contains("os=linux"));
+        assert!(prompt.contains("model=gpt-4"));
+
+        // Runtime context should appear before environment contract
+        let runtime_pos = prompt.find("## Runtime Environment").unwrap();
+        let env_pos = prompt.find("## Environment").unwrap();
+        assert!(
+            runtime_pos < env_pos,
+            "Runtime context should appear before environment contract"
+        );
+    }
+
+    #[test]
+    fn test_build_system_prompt_with_context_no_runtime_context() {
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+        use crate::thinker::security_context::SecurityContext;
+
+        let builder = PromptBuilder::new(PromptConfig::default());
+
+        let interaction = InteractionManifest::new(InteractionParadigm::WebRich);
+        let security = SecurityContext::permissive();
+        let ctx = ContextAggregator::resolve(&interaction, &security, &[]);
+
+        // runtime_context should be None by default
+        assert!(ctx.runtime_context.is_none());
+
+        let prompt = builder.build_system_prompt_with_context(&ctx);
+
+        // Runtime context section should NOT be present
+        assert!(!prompt.contains("## Runtime Environment"));
     }
 }
