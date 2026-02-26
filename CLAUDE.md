@@ -243,7 +243,8 @@ aleph/
 │       └── lib.rs                  # 60+ public modules
 ├── apps/
 │   ├── cli/                        # Rust CLI 客户端
-│   └── desktop/                    # Cross-platform Tauri Bridge (aleph-bridge)
+│   ├── desktop/                    # Tauri Bridge - Linux/Windows (aleph-bridge)
+│   └── macos-native/              # Native macOS app (Swift/Xcode)
 ├── docs/                           # 文档
 │   ├── reference/                  # 核心架构文档
 │   │   ├── ARCHITECTURE.md         # 完整架构
@@ -275,7 +276,7 @@ aleph/
 | **Embedding** | fastembed (bge-small-zh-v1.5, 本地) |
 | **Providers** | Claude, GPT-4, Gemini, Ollama, DeepSeek, Moonshot |
 | **Plugins** | Extism (WASM), Node.js IPC |
-| **Desktop App** | Tauri (cross-platform bridge) |
+| **Desktop App** | macOS: Native Swift/Xcode, Linux/Windows: Tauri |
 | **Schema** | schemars (JSON Schema 自动生成) |
 
 ---
