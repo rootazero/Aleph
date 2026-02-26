@@ -267,6 +267,33 @@ impl StateDatabase {
                 ON memory_audit_log(action);
 
             -- ================================================================
+            -- Memory Event Sourcing (append-only event log)
+            -- ================================================================
+
+            CREATE TABLE IF NOT EXISTS memory_events (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                fact_id        TEXT NOT NULL,
+                seq            INTEGER NOT NULL,
+                event_type     TEXT NOT NULL,
+                event_json     TEXT NOT NULL,
+                actor          TEXT NOT NULL,
+                tier           TEXT NOT NULL,
+                timestamp      INTEGER NOT NULL,
+                correlation_id TEXT,
+
+                UNIQUE(fact_id, seq)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_me_fact_id
+                ON memory_events(fact_id);
+            CREATE INDEX IF NOT EXISTS idx_me_timestamp
+                ON memory_events(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_me_event_type
+                ON memory_events(event_type);
+            CREATE INDEX IF NOT EXISTS idx_me_correlation
+                ON memory_events(correlation_id);
+
+            -- ================================================================
             -- sqlite-vec Virtual Tables: created dynamically via vec_schema_sql()
             -- ================================================================
 

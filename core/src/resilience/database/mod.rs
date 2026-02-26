@@ -9,6 +9,7 @@
 /// Schema migration utilities are in the `migration` submodule.
 
 mod events;
+mod memory_events;
 pub mod migration;
 mod sessions;
 mod state_database;
