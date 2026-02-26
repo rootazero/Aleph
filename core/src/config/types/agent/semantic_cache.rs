@@ -30,7 +30,7 @@ pub struct SemanticCacheConfigToml {
     #[serde(default = "default_semantic_cache_enabled")]
     pub enabled: bool,
 
-    /// Embedding model to use (default: fastembed built-in)
+    /// Embedding model name (legacy — actual model comes from active EmbeddingProvider)
     #[serde(default = "default_embedding_model")]
     pub embedding_model: String,
 

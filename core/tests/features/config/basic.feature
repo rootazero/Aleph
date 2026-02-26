@@ -15,7 +15,7 @@ Feature: Basic Configuration
   Scenario: Memory config has expected defaults
     Given a default MemoryConfig
     Then memory should be enabled
-    And the embedding_model should be "bge-small-zh-v1.5"
+    And the active_embedding_provider should be "siliconflow"
     And max_context_items should be 5
     And retention_days should be 90
     And vector_db should be "lancedb"
