@@ -41,7 +41,7 @@ final class GlobalShortcuts {
                     }
                     return nil // Consume the event
                 }
-                return Unmanaged.passRetained(event)
+                return Unmanaged.passUnretained(event)
             },
             userInfo: nil
         ) else {
