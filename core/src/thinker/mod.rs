@@ -30,6 +30,7 @@
 //! ```
 
 pub mod cache;
+pub mod channel_behavior;
 pub mod context;
 pub mod decision_parser;
 pub mod identity;
