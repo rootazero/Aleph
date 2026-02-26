@@ -12,6 +12,7 @@ use super::scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig
 use super::signal_detector::{CompressionPriority, SignalDetector};
 use crate::error::AlephError;
 use crate::memory::context::{CompressionResult, CompressionSession};
+use crate::memory::events::handler::MemoryCommandHandler;
 use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore, CompressionStore};
 use crate::memory::graph::GraphStore;
 use crate::memory::smart_embedder::SmartEmbedder;
@@ -58,6 +59,7 @@ pub struct CompressionService {
     signal_detector: SignalDetector,
     graph_store: GraphStore,
     l1_generator: Option<Arc<L1Generator>>,
+    command_handler: Option<Arc<MemoryCommandHandler>>,
 }
 
 impl CompressionService {
@@ -114,7 +116,17 @@ impl CompressionService {
             signal_detector: SignalDetector::new(),
             graph_store,
             l1_generator,
+            command_handler: None,
         }
+    }
+
+    /// Attach an event-sourcing command handler.
+    ///
+    /// When present, fact creation during compression goes through the
+    /// event sourcing pipeline instead of direct `insert_fact`.
+    pub fn with_command_handler(mut self, handler: Arc<MemoryCommandHandler>) -> Self {
+        self.command_handler = Some(handler);
+        self
     }
 
     /// Execute a compression operation
@@ -175,8 +187,34 @@ impl CompressionService {
                 .await?;
             total_invalidated += invalidated;
 
-            // Store the new fact
-            match self.database.insert_fact(&fact).await {
+            // Store the new fact — through event sourcing when available,
+            // otherwise fall back to direct insert.
+            let store_result = if let Some(handler) = &self.command_handler {
+                use crate::memory::events::commands::CreateFactCommand;
+                use crate::memory::events::EventActor;
+
+                handler
+                    .create_fact(CreateFactCommand {
+                        content: fact.content.clone(),
+                        fact_type: fact.fact_type.clone(),
+                        tier: fact.tier.clone(),
+                        scope: fact.scope.clone(),
+                        path: fact.path.clone(),
+                        namespace: fact.namespace.clone(),
+                        workspace: fact.workspace.clone(),
+                        confidence: fact.confidence,
+                        source: fact.fact_source.clone(),
+                        source_memory_ids: fact.source_memory_ids.clone(),
+                        actor: EventActor::System,
+                        correlation_id: None,
+                    })
+                    .await
+                    .map(|_id| ())
+            } else {
+                self.database.insert_fact(&fact).await
+            };
+
+            match store_result {
                 Ok(_) => {
                     stored_fact_ids.push(fact.id.clone());
                     affected_paths.insert(fact.path.clone());
