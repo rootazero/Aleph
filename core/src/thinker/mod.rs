@@ -38,6 +38,7 @@ pub mod model_router;
 pub mod prompt_builder;
 pub mod security_context;
 pub mod soul;
+pub mod prompt_sanitizer;
 pub mod protocol_tokens;
 pub mod runtime_context;
 pub mod streaming;
