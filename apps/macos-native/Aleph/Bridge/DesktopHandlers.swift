@@ -150,4 +150,114 @@ extension BridgeServer {
             return WindowManager.launchApp(bundleId: bundleId)
         }
     }
+
+    // MARK: - Click
+
+    /// Register `desktop.click` handler.
+    ///
+    /// Params:
+    /// - `x` (required): Screen X coordinate (double).
+    /// - `y` (required): Screen Y coordinate (double).
+    /// - `button` (optional): `"left"` (default), `"right"`, or `"middle"`.
+    private func registerClickHandler() {
+        register(method: BridgeMethod.click.rawValue) { params in
+            guard let x = params["x"]?.doubleValue else {
+                return .failure(.init(
+                    code: .internal,
+                    message: "Missing or invalid 'x' parameter"
+                ))
+            }
+            guard let y = params["y"]?.doubleValue else {
+                return .failure(.init(
+                    code: .internal,
+                    message: "Missing or invalid 'y' parameter"
+                ))
+            }
+            let button = params["button"]?.stringValue ?? "left"
+
+            return InputAutomation.click(x: x, y: y, button: button)
+        }
+    }
+
+    // MARK: - Type Text
+
+    /// Register `desktop.type_text` handler.
+    ///
+    /// Params:
+    /// - `text` (required): The text string to type.
+    private func registerTypeTextHandler() {
+        register(method: BridgeMethod.typeText.rawValue) { params in
+            guard let text = params["text"]?.stringValue else {
+                return .failure(.init(
+                    code: .internal,
+                    message: "Missing or invalid 'text' parameter"
+                ))
+            }
+
+            return InputAutomation.typeText(text)
+        }
+    }
+
+    // MARK: - Key Combo
+
+    /// Register `desktop.key_combo` handler.
+    ///
+    /// Accepts two formats:
+    /// 1. New format: `{ "modifiers": ["meta", "shift"], "key": "c" }`
+    /// 2. Legacy format: `{ "keys": ["cmd", "c"] }` — last element is the main key.
+    ///
+    /// Modifier names: "meta"/"command"/"cmd"/"super", "shift", "control"/"ctrl", "alt"/"option".
+    private func registerKeyComboHandler() {
+        register(method: BridgeMethod.keyCombo.rawValue) { params in
+            // Try legacy format first: flat "keys" array
+            if let keysArray = params["keys"]?.arrayValue {
+                let strs = keysArray.compactMap { $0.stringValue }
+                guard !strs.isEmpty else {
+                    return .failure(.init(
+                        code: .internal,
+                        message: "Empty 'keys' array"
+                    ))
+                }
+
+                // Last element is the main key, all preceding are modifiers
+                let modifiers = Array(strs.dropLast())
+                let key = strs.last!
+
+                return InputAutomation.keyCombo(modifiers: modifiers, key: key)
+            }
+
+            // New format: separate "modifiers" + "key"
+            guard let key = params["key"]?.stringValue else {
+                return .failure(.init(
+                    code: .internal,
+                    message: "Missing 'key' parameter (or use legacy 'keys' array)"
+                ))
+            }
+
+            let modifiers: [String]
+            if let modArray = params["modifiers"]?.arrayValue {
+                modifiers = modArray.compactMap { $0.stringValue }
+            } else {
+                modifiers = []
+            }
+
+            return InputAutomation.keyCombo(modifiers: modifiers, key: key)
+        }
+    }
+
+    // MARK: - Scroll
+
+    /// Register `desktop.scroll` handler.
+    ///
+    /// Params:
+    /// - `direction` (optional): `"up"`, `"down"` (default), `"left"`, or `"right"`.
+    /// - `amount` (optional): Number of scroll ticks (default 3).
+    private func registerScrollHandler() {
+        register(method: BridgeMethod.scroll.rawValue) { params in
+            let direction = params["direction"]?.stringValue ?? "down"
+            let amount = Int32(params["amount"]?.intValue ?? 3)
+
+            return InputAutomation.scroll(direction: direction, amount: amount)
+        }
+    }
 }
