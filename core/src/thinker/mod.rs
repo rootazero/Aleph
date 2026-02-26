@@ -44,6 +44,7 @@ pub mod protocol_tokens;
 pub mod runtime_context;
 pub mod streaming;
 pub mod tool_filter;
+pub mod user_profile;
 
 use std::sync::Arc;
 
