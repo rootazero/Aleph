@@ -13,6 +13,7 @@ pub enum SettingsTab {
 
     // AI
     Providers,
+    EmbeddingProviders,
     GenerationProviders,
     Memory,
 
@@ -42,6 +43,7 @@ impl SettingsTab {
             Self::Shortcuts => "/settings/shortcuts",
             Self::Behavior => "/settings/behavior",
             Self::Providers => "/settings/providers",
+            Self::EmbeddingProviders => "/settings/embedding-providers",
             Self::GenerationProviders => "/settings/generation-providers",
             Self::Memory => "/settings/memory",
             Self::Mcp => "/settings/mcp",
@@ -65,6 +67,7 @@ impl SettingsTab {
             Self::Shortcuts => "Shortcuts",
             Self::Behavior => "Behavior",
             Self::Providers => "AI Providers",
+            Self::EmbeddingProviders => "Embedding",
             Self::GenerationProviders => "Generation Providers",
             Self::Memory => "Memory & Knowledge",
             Self::Mcp => "MCP Plugins",
@@ -88,6 +91,7 @@ impl SettingsTab {
             Self::Shortcuts => r#"<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/>"#,
             Self::Behavior => r#"<path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"/><path d="M12 6v6l4 2"/>"#,
             Self::Providers => r#"<path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>"#,
+            Self::EmbeddingProviders => r#"<circle cx="12" cy="12" r="2"/><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><line x1="12" y1="10" x2="12" y2="14"/><line x1="7.5" y1="7.5" x2="10.5" y2="10.5"/><line x1="13.5" y1="10.5" x2="16.5" y2="7.5"/><line x1="7.5" y1="16.5" x2="10.5" y2="13.5"/><line x1="13.5" y1="13.5" x2="16.5" y2="16.5"/>"#,
             Self::GenerationProviders => r#"<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>"#,
             Self::Memory => r#"<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>"#,
             Self::Mcp => r#"<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>"#,
@@ -125,6 +129,7 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
         label: "AI",
         tabs: &[
             SettingsTab::Providers,
+            SettingsTab::EmbeddingProviders,
             SettingsTab::GenerationProviders,
             SettingsTab::Memory,
         ],
