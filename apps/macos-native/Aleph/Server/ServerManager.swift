@@ -82,6 +82,16 @@ final class ServerManager: ObservableObject {
         state = .running
     }
 
+    /// Synchronous termination: sends SIGTERM to the server process.
+    ///
+    /// Use this during `applicationWillTerminate` when there is no time
+    /// to wait for the async graceful shutdown. The OS will clean up the
+    /// child process after the parent exits.
+    func terminateNow() {
+        guard let proc = process, proc.isRunning else { return }
+        proc.terminate()
+    }
+
     /// Graceful stop: SIGTERM -> 5s wait -> SIGKILL.
     func stop() async {
         guard let proc = process, proc.isRunning else {

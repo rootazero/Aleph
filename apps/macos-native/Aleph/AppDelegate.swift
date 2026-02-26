@@ -62,10 +62,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Unregister global shortcuts
         globalShortcuts.unregister()
 
-        // Stop server manager (async, fire-and-forget during termination)
-        Task { @MainActor in
-            await serverManager.stop()
-        }
+        // Send SIGTERM to server (synchronous — no time for async graceful stop)
+        serverManager.terminateNow()
     }
 
     // MARK: - Service Startup
