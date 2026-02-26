@@ -657,6 +657,9 @@ impl PromptBuilder {
         // Add skill mode instructions if enabled
         self.append_skill_mode(&mut prompt);
 
+        // Citation standards
+        self.append_citation_standards(&mut prompt);
+
         // Add custom instructions if configured
         self.append_custom_instructions(&mut prompt);
 
@@ -863,6 +866,19 @@ impl PromptBuilder {
         prompt.push_str("- Change system settings\n\n");
     }
 
+    /// Append memory citation standards.
+    ///
+    /// Always injected — citation standards are valuable in all interaction modes.
+    pub fn append_citation_standards(&self, prompt: &mut String) {
+        prompt.push_str("## Citation Standards\n\n");
+        prompt.push_str("When referencing information from memory or knowledge base:\n");
+        prompt.push_str("- Include source reference in format: `[Source: <path>#<id>]` or `[Source: <path>#L<line>]`\n");
+        prompt.push_str("- Sources are provided in the context metadata — do not fabricate source paths\n");
+        prompt.push_str("- If multiple sources support a claim, cite the most specific one\n");
+        prompt.push_str("- For real-time observations (current tool output, live data), no citation needed\n");
+        prompt.push_str("- For recalled facts, prior decisions, or historical context, citation is mandatory\n\n");
+    }
+
     /// Build system prompt using ResolvedContext
     ///
     /// This is the new entry point that uses the two-phase filtered context
@@ -876,13 +892,14 @@ impl PromptBuilder {
     /// 7. Security constraints (blocked tools, approval-required tools)
     /// 8. Protocol tokens (if applicable)
     /// 9. Operational guidelines (Background/CLI only)
-    /// 10. Generation models
-    /// 11. Special actions
-    /// 12. Response format
-    /// 13. Guidelines
-    /// 14. Skill mode
-    /// 15. Custom instructions
-    /// 16. Language setting
+    /// 10. Citation standards
+    /// 11. Generation models
+    /// 12. Special actions
+    /// 13. Response format
+    /// 14. Guidelines
+    /// 15. Skill mode
+    /// 16. Custom instructions
+    /// 17. Language setting
     pub fn build_system_prompt_with_context(&self, ctx: &ResolvedContext) -> String {
         let mut prompt = String::new();
 
@@ -922,25 +939,28 @@ impl PromptBuilder {
         // 9. Operational guidelines (Background/CLI only)
         self.append_operational_guidelines(&mut prompt, ctx.environment_contract.paradigm);
 
-        // 10. Generation models
+        // 10. Citation standards (always injected)
+        self.append_citation_standards(&mut prompt);
+
+        // 11. Generation models
         self.append_generation_models(&mut prompt);
 
-        // 11. Special actions
+        // 12. Special actions
         self.append_special_actions(&mut prompt);
 
-        // 12. Response format
+        // 13. Response format
         self.append_response_format(&mut prompt);
 
-        // 13. Guidelines
+        // 14. Guidelines
         self.append_guidelines(&mut prompt);
 
-        // 14. Skill mode
+        // 15. Skill mode
         self.append_skill_mode(&mut prompt);
 
-        // 15. Custom instructions
+        // 16. Custom instructions
         self.append_custom_instructions(&mut prompt);
 
-        // 16. Language setting
+        // 17. Language setting
         self.append_language_setting(&mut prompt);
 
         prompt
@@ -1514,5 +1534,17 @@ mod tests {
 
         // Messaging should NOT get operational guidelines (save tokens)
         assert!(!prompt.contains("System Operational Awareness"));
+    }
+
+    #[test]
+    fn test_append_citation_standards() {
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let mut prompt = String::new();
+
+        builder.append_citation_standards(&mut prompt);
+
+        assert!(prompt.contains("## Citation Standards"));
+        assert!(prompt.contains("[Source: <path>#<id>]"));
+        assert!(prompt.contains("citation is mandatory"));
     }
 }
