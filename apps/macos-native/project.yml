@@ -1,0 +1,74 @@
+name: Aleph
+options:
+  bundleIdPrefix: com.aleph
+  deploymentTarget:
+    macOS: "13.0"
+  xcodeVersion: "15.0"
+  generateEmptyDirectories: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: "Automatic"
+    PRODUCT_NAME: "Aleph"
+
+targets:
+  Aleph:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: Aleph
+        excludes:
+          - "*.entitlements"
+    settings:
+      base:
+        INFOPLIST_FILE: Aleph/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Aleph/Aleph.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.aleph.app
+        PRODUCT_NAME: "Aleph"
+        COMBINE_HIDPI_IMAGES: true
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/../Frameworks"
+    info:
+      path: Aleph/Info.plist
+      properties:
+        CFBundleName: Aleph
+        CFBundleDisplayName: Aleph
+        CFBundleIdentifier: com.aleph.app
+        CFBundleVersion: "1"
+        CFBundleShortVersionString: "0.1.0"
+        CFBundlePackageType: APPL
+        CFBundleExecutable: Aleph
+        LSMinimumSystemVersion: "13.0"
+        LSUIElement: true
+        LSApplicationCategoryType: "public.app-category.productivity"
+        NSHumanReadableCopyright: "Copyright © 2026 Aleph. All rights reserved."
+    entitlements:
+      path: Aleph/Aleph.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+        com.apple.security.automation.apple-events: true
+    scheme:
+      testTargets:
+        - AlephTests
+
+  AlephTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: AlephTests
+    dependencies:
+      - target: Aleph
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.aleph.app.tests
+        PRODUCT_MODULE_NAME: AlephTests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Aleph.app/Contents/MacOS/Aleph"
+        BUNDLE_LOADER: "$(TEST_HOST)"
