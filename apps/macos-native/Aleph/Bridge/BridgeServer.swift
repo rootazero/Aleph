@@ -295,6 +295,10 @@ final class BridgeServer {
                 AnyCodable(["name": AnyCodable("focus_window"), "version": AnyCodable("1.0")]),
                 AnyCodable(["name": AnyCodable("ocr"), "version": AnyCodable("1.0")]),
                 AnyCodable(["name": AnyCodable("ax_inspect"), "version": AnyCodable("1.0")]),
+                AnyCodable(["name": AnyCodable("pim_calendar"), "version": AnyCodable("1.0")]),
+                AnyCodable(["name": AnyCodable("pim_reminders"), "version": AnyCodable("1.0")]),
+                AnyCodable(["name": AnyCodable("pim_notes"), "version": AnyCodable("1.0")]),
+                AnyCodable(["name": AnyCodable("pim_contacts"), "version": AnyCodable("1.0")]),
             ]
 
             let result: [String: AnyCodable] = [
