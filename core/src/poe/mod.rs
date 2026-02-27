@@ -111,6 +111,7 @@ pub mod handler_types;
 pub mod interceptor;
 pub mod manager;
 pub mod manifest;
+pub mod prompt_context;
 pub mod services;
 pub mod trust;
 pub mod types;
@@ -167,6 +168,9 @@ pub use contract::{
     PrepareResult, RejectRequest, RejectResult, SignRequest, SignResult,
 };
 pub use contract_store::PendingContractStore;
+
+// Prompt context
+pub use prompt_context::PoePromptContext;
 
 // Trust evaluation (progressive auto-approval)
 pub use trust::{
