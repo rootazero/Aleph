@@ -48,6 +48,10 @@ targets:
         LSUIElement: true
         LSApplicationCategoryType: "public.app-category.productivity"
         NSHumanReadableCopyright: "Copyright © 2026 Aleph. All rights reserved."
+        NSCalendarsFullAccessUsageDescription: "Aleph needs calendar access to help you manage events and schedules."
+        NSRemindersFullAccessUsageDescription: "Aleph needs reminders access to help you manage tasks and to-dos."
+        NSContactsUsageDescription: "Aleph needs contacts access to help you find and manage people."
+        NSAppleEventsUsageDescription: "Aleph needs automation access to interact with Notes and other apps."
     entitlements:
       path: Aleph/Aleph.entitlements
       properties:
