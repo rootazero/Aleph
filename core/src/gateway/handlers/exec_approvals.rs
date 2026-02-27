@@ -168,7 +168,7 @@ async fn handle_approval_request(
     request: JsonRpcRequest,
     manager: Arc<ExecApprovalManager>,
 ) -> JsonRpcResponse {
-    let params: ApprovalRequestParams = match parse_params(&request) {
+    let params: ApprovalRequestParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -226,7 +226,7 @@ async fn handle_approval_resolve(
     request: JsonRpcRequest,
     manager: Arc<ExecApprovalManager>,
 ) -> JsonRpcResponse {
-    let params: ApprovalResolveParams = match parse_params(&request) {
+    let params: ApprovalResolveParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -266,7 +266,7 @@ async fn handle_approvals_set(
     request: JsonRpcRequest,
     manager: Arc<ExecApprovalManager>,
 ) -> JsonRpcResponse {
-    let params: ApprovalsSetParams = match parse_params(&request) {
+    let params: ApprovalsSetParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -304,7 +304,7 @@ async fn handle_callback(
     request: JsonRpcRequest,
     manager: Arc<ExecApprovalManager>,
 ) -> JsonRpcResponse {
-    let params: CallbackHandleParams = match parse_params(&request) {
+    let params: CallbackHandleParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -350,26 +350,6 @@ async fn handle_callback(
                 decision: None,
             }),
         )
-    }
-}
-
-/// Parse params from request
-// JsonRpcResponse is 152+ bytes but boxing it would complicate all handler call sites
-#[allow(clippy::result_large_err)]
-fn parse_params<T: for<'de> Deserialize<'de>>(request: &JsonRpcRequest) -> Result<T, JsonRpcResponse> {
-    match &request.params {
-        Some(params) => serde_json::from_value(params.clone()).map_err(|e| {
-            JsonRpcResponse::error(
-                request.id.clone(),
-                INVALID_PARAMS,
-                format!("Invalid params: {}", e),
-            )
-        }),
-        None => Err(JsonRpcResponse::error(
-            request.id.clone(),
-            INVALID_PARAMS,
-            "Missing params",
-        )),
     }
 }
 

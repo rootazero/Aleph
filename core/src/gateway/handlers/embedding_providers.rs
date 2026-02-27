@@ -62,20 +62,9 @@ pub async fn handle_get(
         id: String,
     }
 
-    let params: Params = match request.params {
-        Some(p) => match serde_json::from_value(p) {
-            Ok(params) => params,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                )
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params")
-        }
+    let params: Params = match super::parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     let cfg = config.read().await;
@@ -111,20 +100,9 @@ pub async fn handle_add(
         config: EmbeddingProviderConfig,
     }
 
-    let params: Params = match request.params {
-        Some(p) => match serde_json::from_value(p) {
-            Ok(params) => params,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                )
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params")
-        }
+    let params: Params = match super::parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     let provider_config = params.config;
@@ -176,20 +154,9 @@ pub async fn handle_update(
         config: EmbeddingProviderConfig,
     }
 
-    let params: Params = match request.params {
-        Some(p) => match serde_json::from_value(p) {
-            Ok(params) => params,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                )
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params")
-        }
+    let params: Params = match super::parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     {
@@ -242,20 +209,9 @@ pub async fn handle_remove(
         id: String,
     }
 
-    let params: Params = match request.params {
-        Some(p) => match serde_json::from_value(p) {
-            Ok(params) => params,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                )
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params")
-        }
+    let params: Params = match super::parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     {
@@ -319,20 +275,9 @@ pub async fn handle_set_active(
         id: String,
     }
 
-    let params: Params = match request.params {
-        Some(p) => match serde_json::from_value(p) {
-            Ok(params) => params,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                )
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params")
-        }
+    let params: Params = match super::parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     {
@@ -386,20 +331,9 @@ pub async fn handle_test(
         config: Option<EmbeddingProviderConfig>,
     }
 
-    let params: Params = match request.params {
-        Some(p) => match serde_json::from_value(p) {
-            Ok(params) => params,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                )
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params")
-        }
+    let params: Params = match super::parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Resolve the provider config to test
