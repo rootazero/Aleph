@@ -28,16 +28,11 @@ use super::LanceMemoryBackend;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Map a lancedb error to an AlephError.
-fn lance_err(msg: impl std::fmt::Display) -> AlephError {
-    AlephError::config(format!("LanceDB error: {}", msg))
-}
-
 /// Collect a LanceDB query stream into a vector of RecordBatches.
 async fn collect_batches(
     stream: lancedb::arrow::SendableRecordBatchStream,
 ) -> Result<Vec<RecordBatch>, AlephError> {
-    stream.try_collect().await.map_err(lance_err)
+    stream.try_collect().await.map_err(super::lance_err)
 }
 
 /// Execute a filtered scan and return all matching facts.
@@ -57,7 +52,7 @@ async fn scan_facts(
 
     query = query.select(Select::All);
 
-    let stream = query.execute().await.map_err(lance_err)?;
+    let stream = query.execute().await.map_err(super::lance_err)?;
     let batches = collect_batches(stream).await?;
 
     let mut facts = Vec::new();
@@ -79,7 +74,7 @@ async fn add_batch(
         .add(batches)
         .execute()
         .await
-        .map_err(lance_err)?;
+        .map_err(super::lance_err)?;
     Ok(())
 }
 
@@ -147,7 +142,7 @@ impl MemoryStore for LanceMemoryBackend {
         self.facts_table
             .delete(&format!("id = '{}'", id))
             .await
-            .map_err(lance_err)?;
+            .map_err(super::lance_err)?;
         Ok(())
     }
 
@@ -174,7 +169,7 @@ impl MemoryStore for LanceMemoryBackend {
             .facts_table
             .query()
             .nearest_to(embedding)
-            .map_err(lance_err)?
+            .map_err(super::lance_err)?
             .column(&column_name)
             .limit(limit);
 
@@ -182,7 +177,7 @@ impl MemoryStore for LanceMemoryBackend {
             query = query.only_if(f);
         }
 
-        let stream = query.execute().await.map_err(lance_err)?;
+        let stream = query.execute().await.map_err(super::lance_err)?;
         let batches = collect_batches(stream).await?;
 
         let mut results = Vec::new();
@@ -217,7 +212,7 @@ impl MemoryStore for LanceMemoryBackend {
             query = query.only_if(f);
         }
 
-        let stream = query.execute().await.map_err(lance_err)?;
+        let stream = query.execute().await.map_err(super::lance_err)?;
         let batches = collect_batches(stream).await?;
 
         let mut results = Vec::new();
@@ -246,7 +241,7 @@ impl MemoryStore for LanceMemoryBackend {
             .query()
             .full_text_search(fts_query)
             .nearest_to(params.embedding)
-            .map_err(lance_err)?
+            .map_err(super::lance_err)?
             .column(&column_name)
             .limit(params.limit);
 
