@@ -112,6 +112,7 @@ pub mod interceptor;
 pub mod manager;
 pub mod manifest;
 pub mod prompt_context;
+pub mod prompt_layer;
 pub mod services;
 pub mod trust;
 pub mod types;
@@ -171,6 +172,9 @@ pub use contract_store::PendingContractStore;
 
 // Prompt context
 pub use prompt_context::PoePromptContext;
+
+// Prompt layer (for PromptPipeline injection)
+pub use prompt_layer::PoePromptLayer;
 
 // Trust evaluation (progressive auto-approval)
 pub use trust::{
