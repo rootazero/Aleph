@@ -10,6 +10,7 @@
 
 mod events;
 mod memory_events;
+mod poe_contracts;
 mod poe_events;
 mod poe_trust;
 pub mod migration;
@@ -18,5 +19,6 @@ mod state_database;
 mod tasks;
 mod traces;
 
+pub use poe_contracts::PoeContractRow;
 pub use poe_trust::TrustScoreRow;
 pub use state_database::{MemoryStats, StateDatabase, DEFAULT_EMBEDDING_DIM};
