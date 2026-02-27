@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 #[cfg(feature = "plugin-wasm")]
-use extism::{host_fn, UserData};
+use extism::host_fn;
 
 #[cfg(feature = "plugin-wasm")]
 use super::capability_kernel::WasmCapabilityKernel;
