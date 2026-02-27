@@ -19,7 +19,12 @@ final class NotesService {
     private let logger = Logger(subsystem: "com.aleph.app", category: "NotesService")
 
     /// Delimiter between fields within a single record.
-    private let fieldDelimiter = "|||"
+    /// Uses ASCII Unit Separator (U+001F) which cannot appear in user text,
+    /// avoiding collision with note body content.
+    private let fieldDelimiter = "\u{001F}"
+
+    /// The AppleScript expression that produces the field delimiter character.
+    private let asFieldDelim = "(ASCII character 31)"
 
     /// Delimiter between records (lines).
     private let recordDelimiter = "\n"
@@ -46,12 +51,13 @@ final class NotesService {
 
         let script = """
         tell application "Notes"
+            set d to \(asFieldDelim)
             set output to ""
             repeat with n in notes of \(target)
                 set noteId to id of n
                 set noteTitle to name of n
                 set noteMod to modification date of n
-                set output to output & noteId & "\(fieldDelimiter)" & noteTitle & "\(fieldDelimiter)" & (noteMod as text) & "\n"
+                set output to output & noteId & d & noteTitle & d & (noteMod as text) & "\n"
             end repeat
             return output
         end tell
@@ -105,13 +111,14 @@ final class NotesService {
 
         let script = """
         tell application "Notes"
+            set d to \(asFieldDelim)
             set n to first note whose id is "\(noteId.escapeAppleScript())"
             set noteId to id of n
             set noteTitle to name of n
             set noteBody to plaintext of n
             set noteMod to modification date of n
             set noteFolder to name of container of n
-            return noteId & "\(fieldDelimiter)" & noteTitle & "\(fieldDelimiter)" & noteBody & "\(fieldDelimiter)" & (noteMod as text) & "\(fieldDelimiter)" & noteFolder
+            return noteId & d & noteTitle & d & noteBody & d & (noteMod as text) & d & noteFolder
         end tell
         """
 
@@ -181,13 +188,14 @@ final class NotesService {
 
         let script = """
         tell application "Notes"
+            set d to \(asFieldDelim)
             set newNote to make new note at \(target) with properties {name:"\(title.escapeAppleScript())", body:"\(htmlBody.escapeAppleScript())"}
             set noteId to id of newNote
             set noteTitle to name of newNote
             set noteBody to plaintext of newNote
             set noteMod to modification date of newNote
             set noteFolder to name of container of newNote
-            return noteId & "\(fieldDelimiter)" & noteTitle & "\(fieldDelimiter)" & noteBody & "\(fieldDelimiter)" & (noteMod as text) & "\(fieldDelimiter)" & noteFolder
+            return noteId & d & noteTitle & d & noteBody & d & (noteMod as text) & d & noteFolder
         end tell
         """
 
@@ -263,6 +271,7 @@ final class NotesService {
 
         let script = """
         tell application "Notes"
+            set d to \(asFieldDelim)
             set n to first note whose id is "\(noteId.escapeAppleScript())"
             \(updateStatements)
             set noteId to id of n
@@ -270,7 +279,7 @@ final class NotesService {
             set noteBody to plaintext of n
             set noteMod to modification date of n
             set noteFolder to name of container of n
-            return noteId & "\(fieldDelimiter)" & noteTitle & "\(fieldDelimiter)" & noteBody & "\(fieldDelimiter)" & (noteMod as text) & "\(fieldDelimiter)" & noteFolder
+            return noteId & d & noteTitle & d & noteBody & d & (noteMod as text) & d & noteFolder
         end tell
         """
 
@@ -351,11 +360,12 @@ final class NotesService {
     func listFolders(params: [String: AnyCodable]) -> Result<AnyCodable, BridgeServer.HandlerError> {
         let script = """
         tell application "Notes"
+            set d to \(asFieldDelim)
             set output to ""
             repeat with f in folders
                 set folderId to id of f
                 set folderName to name of f
-                set output to output & folderId & "\(fieldDelimiter)" & folderName & "\n"
+                set output to output & folderId & d & folderName & "\n"
             end repeat
             return output
         end tell
@@ -442,12 +452,16 @@ private extension String {
 
     /// Escape special characters for embedding in an AppleScript quoted string.
     ///
-    /// Escapes backslashes and double-quotes so the string can be safely
-    /// placed inside `"..."` in AppleScript source.
+    /// Escapes backslashes, double-quotes, and control characters (`\r`, `\n`,
+    /// `\t`) so the string can be safely placed inside `"..."` in AppleScript
+    /// source without breaking syntax or enabling injection.
     func escapeAppleScript() -> String {
         self
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\t", with: "\\t")
     }
 
     /// Escape HTML special characters for embedding in Notes.app HTML body.
