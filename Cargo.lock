@@ -247,6 +247,7 @@ name = "alephcore"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "aho-corasick",
  "aleph-protocol",
  "aleph-sdk",
  "anyhow",
@@ -294,6 +295,7 @@ dependencies = [
  "notify",
  "notify-debouncer-full",
  "once_cell",
+ "percent-encoding",
  "plist",
  "portable-pty",
  "printpdf",

@@ -3,10 +3,12 @@
 //! Provides sandboxed execution of WASM plugins with permission-based
 //! access to host functions.
 
+mod allowlist;
 mod capabilities;
 mod limits;
 mod permissions;
 
+pub use allowlist::{AllowlistError, AllowlistValidator};
 pub use capabilities::WasmCapabilities;
 pub use limits::WasmResourceLimits;
 pub use permissions::PermissionChecker;
