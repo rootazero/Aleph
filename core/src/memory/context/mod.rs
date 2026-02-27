@@ -90,7 +90,7 @@ pub struct MemoryEntry {
     pub user_input: String,
     /// AI response
     pub ai_output: String,
-    /// Vector embedding (384-dim for multilingual-e5-small)
+    /// Vector embedding (dimension varies by provider: 768, 1024, 1536)
     pub embedding: Option<Vec<f32>>,
     /// Access control scope: "owner", "guest:xxx", "shared"
     pub namespace: String,

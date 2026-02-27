@@ -519,7 +519,7 @@ mod tests {
         let retrieval = HybridRetrieval::with_defaults(db);
 
         // Search with empty database should return empty results
-        let query_embedding = vec![0.1f32; 384];
+        let query_embedding = vec![0.1f32; 1024];
         let results = retrieval.search_facts(&query_embedding, "test query").await;
 
         // Should not error, just return empty
@@ -539,13 +539,13 @@ mod tests {
             "The user prefers Rust for systems programming".to_string(),
             FactType::Preference,
             vec!["mem-1".to_string()],
-        ).with_embedding(vec![0.1f32; 384]);
+        ).with_embedding(vec![0.1f32; 1024]);
 
         let fact2 = MemoryFact::new(
             "The user is learning TypeScript".to_string(),
             FactType::Learning,
             vec!["mem-2".to_string()],
-        ).with_embedding(vec![0.2f32; 384]);
+        ).with_embedding(vec![0.2f32; 1024]);
 
         db.insert_fact(&fact1).await.unwrap();
         db.insert_fact(&fact2).await.unwrap();
@@ -553,7 +553,7 @@ mod tests {
         let retrieval = HybridRetrieval::with_defaults(db);
 
         // Search with query embedding similar to first fact
-        let query_embedding = vec![0.1f32; 384];
+        let query_embedding = vec![0.1f32; 1024];
         let results = retrieval.search_facts(&query_embedding, "Rust programming").await.unwrap();
 
         // Should find facts
@@ -575,14 +575,14 @@ mod tests {
             "Test fact content".to_string(),
             FactType::Other,
             vec![],
-        ).with_embedding(vec![0.5f32; 384]);
+        ).with_embedding(vec![0.5f32; 1024]);
 
         db.insert_fact(&fact).await.unwrap();
 
         let retrieval = HybridRetrieval::with_defaults(db);
 
         // Search with empty query text (triggers vector-only fallback)
-        let query_embedding = vec![0.5f32; 384];
+        let query_embedding = vec![0.5f32; 1024];
         let results = retrieval.search_facts(&query_embedding, "").await.unwrap();
 
         // Should still find facts via vector search
@@ -598,7 +598,7 @@ mod tests {
 
         // Insert multiple facts
         for i in 0..5 {
-            let mut embedding = vec![0.0f32; 384];
+            let mut embedding = vec![0.0f32; 1024];
             embedding[0] = (i as f32) * 0.1;
 
             let fact = MemoryFact::new(
@@ -613,7 +613,7 @@ mod tests {
         let retrieval = HybridRetrieval::with_defaults(db);
 
         // Search with limit of 2
-        let query_embedding = vec![0.0f32; 384];
+        let query_embedding = vec![0.0f32; 1024];
         let results = retrieval.search_facts_with_limit(&query_embedding, "", 2).await.unwrap();
 
         // Should return at most 2 results

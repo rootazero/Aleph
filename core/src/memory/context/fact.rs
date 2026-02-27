@@ -39,7 +39,7 @@ pub struct MemoryFact {
     pub content: String,
     /// Type classification
     pub fact_type: FactType,
-    /// Vector embedding (384-dim for multilingual-e5-small)
+    /// Vector embedding (dimension varies by provider: 768, 1024, 1536)
     pub embedding: Option<Vec<f32>>,
     /// Source memory IDs for traceability
     pub source_memory_ids: Vec<String>,

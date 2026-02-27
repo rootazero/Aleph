@@ -12,11 +12,14 @@ use arrow_array::{
     RecordBatch, StringArray,
 };
 
+use tracing::warn;
+
 use crate::error::AlephError;
 use crate::memory::context::{
     ContextAnchor, FactSource, FactSpecificity, FactType, MemoryCategory, MemoryEntry, MemoryFact,
     MemoryLayer, MemoryScope, MemoryTier, TemporalScope,
 };
+use crate::memory::embedding_provider::truncate_and_normalize;
 use crate::memory::store::{GraphEdge, GraphNode};
 
 use super::schema::{facts_schema, graph_edges_schema, graph_nodes_schema, memories_schema};
@@ -121,6 +124,46 @@ fn read_nullable_i64(array: &Int64Array, i: usize) -> Option<i64> {
     }
 }
 
+/// Supported standard embedding dimensions.
+const STANDARD_DIMS: &[usize] = &[768, 1024, 1536];
+
+/// Normalize a non-standard embedding to the nearest smaller supported dimension.
+///
+/// - If the dimension exactly matches a standard size, returns it unchanged.
+/// - If larger than 768 but not a standard size, truncates + normalizes to
+///   the nearest smaller standard dimension.
+/// - If smaller than 768, returns `None` (too small to store usefully).
+fn normalize_embedding(embedding: &[f32]) -> Option<Vec<f32>> {
+    let dim = embedding.len();
+
+    // Exact match — no normalization needed
+    if STANDARD_DIMS.contains(&dim) {
+        return Some(embedding.to_vec());
+    }
+
+    // Find the largest standard dim that is strictly smaller
+    let target = STANDARD_DIMS
+        .iter()
+        .rev()
+        .find(|&&d| d < dim)
+        .copied();
+
+    match target {
+        Some(target_dim) => {
+            warn!(
+                original_dim = dim,
+                target_dim,
+                "Non-standard embedding dimension, truncating to nearest supported size"
+            );
+            Some(truncate_and_normalize(embedding.to_vec(), target_dim))
+        }
+        None => {
+            warn!(dim, "Embedding dimension too small for any supported column, skipping storage");
+            None
+        }
+    }
+}
+
 // ============================================================================
 // MemoryFact <-> RecordBatch
 // ============================================================================
@@ -217,34 +260,29 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
             .collect::<Vec<_>>(),
     );
 
-    // Vector columns
-    let embeddings_384: Vec<Option<&[f32]>> = facts
+    // Vector columns (multi-dimension coexistence).
+    // Non-standard dimensions are normalized (truncated + L2-normalized) to
+    // the nearest smaller supported size (768, 1024, 1536).
+    let normalized: Vec<Option<Vec<f32>>> = facts
         .iter()
-        .map(|f| {
-            f.embedding
-                .as_deref()
-                .filter(|e| e.len() == 384)
-        })
+        .map(|f| f.embedding.as_deref().and_then(normalize_embedding))
         .collect();
-    let vec_384 = build_vector_column(&embeddings_384, 384)?;
 
-    let embeddings_1024: Vec<Option<&[f32]>> = facts
+    let embeddings_768: Vec<Option<&[f32]>> = normalized
         .iter()
-        .map(|f| {
-            f.embedding
-                .as_deref()
-                .filter(|e| e.len() == 1024)
-        })
+        .map(|e| e.as_deref().filter(|v| v.len() == 768))
+        .collect();
+    let vec_768 = build_vector_column(&embeddings_768, 768)?;
+
+    let embeddings_1024: Vec<Option<&[f32]>> = normalized
+        .iter()
+        .map(|e| e.as_deref().filter(|v| v.len() == 1024))
         .collect();
     let vec_1024 = build_vector_column(&embeddings_1024, 1024)?;
 
-    let embeddings_1536: Vec<Option<&[f32]>> = facts
+    let embeddings_1536: Vec<Option<&[f32]>> = normalized
         .iter()
-        .map(|f| {
-            f.embedding
-                .as_deref()
-                .filter(|e| e.len() == 1536)
-        })
+        .map(|e| e.as_deref().filter(|v| v.len() == 1536))
         .collect();
     let vec_1536 = build_vector_column(&embeddings_1536, 1536)?;
 
@@ -282,7 +320,7 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
             Arc::new(strength_arr),              // 27 strength
             Arc::new(access_count_arr),          // 28 access_count
             Arc::new(last_accessed_at_arr),      // 29 last_accessed_at
-            Arc::new(vec_384),                   // 30 vec_384
+            Arc::new(vec_768),                   // 30 vec_768
             Arc::new(vec_1024),                  // 31 vec_1024
             Arc::new(vec_1536),                  // 32 vec_1536
         ],
@@ -331,7 +369,7 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
     let last_accessed_at_col = col::<Int64Array>(batch, "last_accessed_at").ok();
 
     // Vector columns (optional — may not all be present).
-    let vec_384_col = col::<FixedSizeListArray>(batch, "vec_384").ok();
+    let vec_768_col = col::<FixedSizeListArray>(batch, "vec_768").ok();
     let vec_1024_col = col::<FixedSizeListArray>(batch, "vec_1024").ok();
     let vec_1536_col = col::<FixedSizeListArray>(batch, "vec_1536").ok();
 
@@ -345,8 +383,8 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
             .map(|c| MemoryCategory::from_str_or_default(c.value(i)))
             .unwrap_or_else(|| fact_type.default_category());
 
-        // Determine embedding: prefer vec_384, then 1024, then 1536.
-        let embedding = vec_384_col
+        // Determine embedding: prefer vec_768, then 1024, then 1536.
+        let embedding = vec_768_col
             .and_then(|c| read_vector(c, i))
             .or_else(|| vec_1024_col.and_then(|c| read_vector(c, i)))
             .or_else(|| vec_1536_col.and_then(|c| read_vector(c, i)));
@@ -621,9 +659,9 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
     // Vector column
     let embeddings: Vec<Option<&[f32]>> = memories
         .iter()
-        .map(|m| m.embedding.as_deref().filter(|e| e.len() == 384))
+        .map(|m| m.embedding.as_deref().filter(|e| e.len() == 768))
         .collect();
-    let vec_384 = build_vector_column(&embeddings, 384)?;
+    let vec_768 = build_vector_column(&embeddings, 768)?;
 
     let batch = RecordBatch::try_new(
         schema,
@@ -638,7 +676,7 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
             Arc::new(session_key_arr),  // 7 session_key
             Arc::new(namespace_arr),    // 8 namespace
             Arc::new(workspace_arr),    // 9 workspace
-            Arc::new(vec_384),          // 10 vec_384
+            Arc::new(vec_768),          // 10 vec_768
         ],
     )
     .map_err(conv_err)?;
@@ -663,7 +701,7 @@ pub fn record_batch_to_memories(batch: &RecordBatch) -> Result<Vec<MemoryEntry>,
     // namespace and workspace columns (with fallback for backward compatibility)
     let namespace_col = col::<StringArray>(batch, "namespace").ok();
     let workspace_col = col::<StringArray>(batch, "workspace").ok();
-    let vec_384_col = col::<FixedSizeListArray>(batch, "vec_384").ok();
+    let vec_768_col = col::<FixedSizeListArray>(batch, "vec_768").ok();
 
     let mut entries = Vec::with_capacity(n);
     for i in 0..n {
@@ -678,7 +716,7 @@ pub fn record_batch_to_memories(batch: &RecordBatch) -> Result<Vec<MemoryEntry>,
             topic_id,
         };
 
-        let embedding = vec_384_col.and_then(|c| read_vector(c, i));
+        let embedding = vec_768_col.and_then(|c| read_vector(c, i));
 
         entries.push(MemoryEntry {
             id: id_col.value(i).to_string(),
@@ -720,8 +758,8 @@ mod tests {
         fact.temporal_scope = TemporalScope::Permanent;
         fact.fact_source = FactSource::Extracted;
         fact.content_hash = "abc123".to_string();
-        fact.embedding_model = "bge-small-zh-v1.5".to_string();
-        fact.embedding = Some(vec![0.1_f32; 384]);
+        fact.embedding_model = "BAAI/bge-m3".to_string();
+        fact.embedding = Some(vec![0.1_f32; 1024]);
         fact.path = "aleph://user/preferences/coding/".to_string();
         fact.parent_path = "aleph://user/preferences/".to_string();
         fact.created_at = 1700000000;
@@ -778,7 +816,7 @@ mod tests {
 
         // Embedding roundtrip
         let emb = f.embedding.as_ref().expect("should have embedding");
-        assert_eq!(emb.len(), 384);
+        assert_eq!(emb.len(), 1024);
         assert!((emb[0] - 0.1).abs() < f32::EPSILON);
     }
 
@@ -950,7 +988,7 @@ mod tests {
             context,
             user_input: "What is Rust?".to_string(),
             ai_output: "Rust is a systems programming language.".to_string(),
-            embedding: Some(vec![0.5_f32; 384]),
+            embedding: Some(vec![0.5_f32; 768]),
             namespace: "owner".to_string(),
             workspace: "default".to_string(),
             similarity_score: None,
@@ -972,7 +1010,7 @@ mod tests {
         assert_eq!(m.ai_output, entry.ai_output);
 
         let emb = m.embedding.as_ref().expect("should have embedding");
-        assert_eq!(emb.len(), 384);
+        assert_eq!(emb.len(), 768);
         assert!((emb[0] - 0.5).abs() < f32::EPSILON);
     }
 
@@ -1027,5 +1065,116 @@ mod tests {
         assert!((out[0].strength - 0.75).abs() < 0.001);
         assert_eq!(out[0].access_count, 5);
         assert_eq!(out[0].last_accessed_at, Some(1700000000));
+    }
+
+    #[test]
+    fn fact_roundtrip_768_dim_embedding() {
+        let mut fact = make_fact_no_embedding();
+        fact.embedding = Some(vec![0.2_f32; 768]);
+        fact.embedding_model = "nomic-embed-text".to_string();
+
+        let batch = facts_to_record_batch(std::slice::from_ref(&fact)).unwrap();
+        let out = record_batch_to_facts(&batch).unwrap();
+
+        let emb = out[0].embedding.as_ref().expect("should have 768-dim embedding");
+        assert_eq!(emb.len(), 768);
+        assert!((emb[0] - 0.2).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn fact_roundtrip_1536_dim_embedding() {
+        let mut fact = make_fact_no_embedding();
+        fact.embedding = Some(vec![0.3_f32; 1536]);
+        fact.embedding_model = "text-embedding-3-small".to_string();
+
+        let batch = facts_to_record_batch(std::slice::from_ref(&fact)).unwrap();
+        let out = record_batch_to_facts(&batch).unwrap();
+
+        let emb = out[0].embedding.as_ref().expect("should have 1536-dim embedding");
+        assert_eq!(emb.len(), 1536);
+        assert!((emb[0] - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn fact_nonstandard_dim_truncation_512_drops() {
+        // 512-dim is smaller than the minimum supported (768), should be dropped
+        let mut fact = make_fact_no_embedding();
+        fact.embedding = Some(vec![0.5_f32; 512]);
+
+        let batch = facts_to_record_batch(std::slice::from_ref(&fact)).unwrap();
+        let out = record_batch_to_facts(&batch).unwrap();
+
+        assert!(out[0].embedding.is_none(), "512-dim should be dropped (< 768)");
+    }
+
+    #[test]
+    fn fact_nonstandard_dim_truncation_900_to_768() {
+        // 900-dim should truncate to 768
+        let mut fact = make_fact_no_embedding();
+        fact.embedding = Some(vec![1.0_f32; 900]);
+
+        let batch = facts_to_record_batch(std::slice::from_ref(&fact)).unwrap();
+        let out = record_batch_to_facts(&batch).unwrap();
+
+        let emb = out[0].embedding.as_ref().expect("should have truncated embedding");
+        assert_eq!(emb.len(), 768);
+    }
+
+    #[test]
+    fn fact_nonstandard_dim_truncation_2048_to_1536() {
+        // 2048-dim should truncate to 1536
+        let mut fact = make_fact_no_embedding();
+        fact.embedding = Some(vec![1.0_f32; 2048]);
+
+        let batch = facts_to_record_batch(std::slice::from_ref(&fact)).unwrap();
+        let out = record_batch_to_facts(&batch).unwrap();
+
+        let emb = out[0].embedding.as_ref().expect("should have truncated embedding");
+        assert_eq!(emb.len(), 1536);
+    }
+
+    #[test]
+    fn fact_multi_dimension_coexistence() {
+        // Two facts with different embedding dimensions should both survive roundtrip
+        let mut fact_768 = make_fact_no_embedding();
+        fact_768.id = "fact-768".to_string();
+        fact_768.embedding = Some(vec![0.1_f32; 768]);
+
+        let mut fact_1024 = make_fact_no_embedding();
+        fact_1024.id = "fact-1024".to_string();
+        fact_1024.embedding = Some(vec![0.2_f32; 1024]);
+
+        let batch = facts_to_record_batch(&[fact_768, fact_1024]).unwrap();
+        let out = record_batch_to_facts(&batch).unwrap();
+
+        assert_eq!(out.len(), 2);
+        let emb_768 = out[0].embedding.as_ref().expect("768-dim should survive");
+        assert_eq!(emb_768.len(), 768);
+        let emb_1024 = out[1].embedding.as_ref().expect("1024-dim should survive");
+        assert_eq!(emb_1024.len(), 1024);
+    }
+
+    #[test]
+    fn normalize_embedding_standard_dims() {
+        // Standard dimensions should pass through unchanged
+        assert_eq!(normalize_embedding(&vec![1.0; 768]).unwrap().len(), 768);
+        assert_eq!(normalize_embedding(&vec![1.0; 1024]).unwrap().len(), 1024);
+        assert_eq!(normalize_embedding(&vec![1.0; 1536]).unwrap().len(), 1536);
+    }
+
+    #[test]
+    fn normalize_embedding_too_small() {
+        assert!(normalize_embedding(&vec![1.0; 384]).is_none());
+        assert!(normalize_embedding(&vec![1.0; 100]).is_none());
+    }
+
+    #[test]
+    fn normalize_embedding_nonstandard() {
+        // 900 → 768
+        assert_eq!(normalize_embedding(&vec![1.0; 900]).unwrap().len(), 768);
+        // 1200 → 1024
+        assert_eq!(normalize_embedding(&vec![1.0; 1200]).unwrap().len(), 1024);
+        // 2048 → 1536
+        assert_eq!(normalize_embedding(&vec![1.0; 2048]).unwrap().len(), 1536);
     }
 }

@@ -28,7 +28,7 @@ mod tests {
             FactType::Preference,
             vec!["mem-1".to_string()],
         )
-        .with_embedding(vec![0.1; 384])
+        .with_embedding(vec![0.1; 1024])
         .with_score(0.9);
 
         let entry_id = uuid::Uuid::new_v4().to_string();
@@ -38,7 +38,7 @@ mod tests {
             "I really prefer Rust".to_string(),
             "Rust is great for systems programming".to_string(),
         );
-        transcript.embedding = Some(vec![0.1; 384]);
+        transcript.embedding = Some(vec![0.1; 1024]);
         transcript.similarity_score = Some(0.85);
 
         let result = RetrievalResult {
@@ -60,7 +60,7 @@ mod tests {
         let comptroller = ContextComptroller::new(config);
 
         // Create unrelated fact and transcript with different embeddings
-        let mut fact_embedding = vec![0.0; 384];
+        let mut fact_embedding = vec![0.0; 1024];
         fact_embedding[0] = 1.0;  // Point in first dimension
 
         let fact = MemoryFact::new(
@@ -77,7 +77,7 @@ mod tests {
             "What is Rust?".to_string(),
             "Rust is a systems language".to_string(),
         );
-        let mut transcript_embedding = vec![0.0; 384];
+        let mut transcript_embedding = vec![0.0; 1024];
         transcript_embedding[1] = 1.0;  // Point in second dimension (orthogonal)
         transcript.embedding = Some(transcript_embedding);
 
@@ -107,7 +107,7 @@ mod tests {
                 FactType::Preference,
                 vec![],
             );
-            fact.embedding = Some(vec![0.1 * (i as f32); 384]);
+            fact.embedding = Some(vec![0.1 * (i as f32); 1024]);
             fact.similarity_score = Some(0.9 - (i as f32) * 0.1);  // Decreasing scores
             facts.push(fact);
         }
@@ -121,7 +121,7 @@ mod tests {
                 format!("Question {}", i),
                 format!("Answer {}", i),
             );
-            transcript.embedding = Some(vec![0.2 * (i as f32); 384]);
+            transcript.embedding = Some(vec![0.2 * (i as f32); 1024]);
             transcript.similarity_score = Some(0.8 - (i as f32) * 0.1);  // Decreasing scores
             transcripts.push(transcript);
         }
@@ -160,7 +160,7 @@ mod tests {
             vec![],
         );
         fact1.similarity_score = Some(0.3);
-        fact1.embedding = Some(vec![0.1; 384]);
+        fact1.embedding = Some(vec![0.1; 1024]);
 
         let mut fact2 = MemoryFact::new(
             "High priority fact".to_string(),
@@ -168,7 +168,7 @@ mod tests {
             vec![],
         );
         fact2.similarity_score = Some(0.9);
-        fact2.embedding = Some(vec![0.2; 384]);
+        fact2.embedding = Some(vec![0.2; 1024]);
 
         let result = RetrievalResult {
             facts: vec![fact1, fact2],

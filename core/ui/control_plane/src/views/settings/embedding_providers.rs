@@ -320,7 +320,6 @@ fn ProviderDetailPanel(
     let (action_error, set_action_error) = create_signal(Option::<String>::None);
     let (test_result, set_test_result) = create_signal(Option::<(bool, String)>::None);
     let (save_success, set_save_success) = create_signal(false);
-    let (should_clear_warning, set_should_clear_warning) = create_signal(false);
 
     // Build config from current field values (captured clones, not provider directly)
     let build_config = {
@@ -402,15 +401,11 @@ fn ProviderDetailPanel(
         let id = provider_id_for_activate.clone();
         set_activating.set(true);
         set_action_error.set(None);
-        set_should_clear_warning.set(false);
 
         spawn_local(async move {
             match EmbeddingProvidersApi::set_active(&state, &id).await {
-                Ok(should_clear) => {
+                Ok(()) => {
                     set_activating.set(false);
-                    if should_clear {
-                        set_should_clear_warning.set(true);
-                    }
                     on_reload();
                 }
                 Err(e) => {
@@ -531,15 +526,6 @@ fn ProviderDetailPanel(
                     />
                 </div>
             </div>
-
-            // Should-clear warning
-            {move || should_clear_warning.get().then(|| view! {
-                <div class="p-3 bg-warning-subtle border border-warning/20 rounded">
-                    <p class="text-sm text-warning">
-                        "Provider dimensions changed. The vector store may need to be rebuilt."
-                    </p>
-                </div>
-            })}
 
             // Test result
             {move || {

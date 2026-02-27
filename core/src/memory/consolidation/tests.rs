@@ -21,11 +21,11 @@ fn create_test_fact(
 ) -> MemoryFact {
     let category = fact_type.default_category();
 
-    // Create 384-dim embedding based on content hash
-    let mut embedding = vec![0.0; 384];
-    let hash = content.len() % 384;
+    // Create 1024-dim embedding based on content hash
+    let mut embedding = vec![0.0; 1024];
+    let hash = content.len() % 1024;
     embedding[hash] = 1.0;
-    if hash + 1 < 384 {
+    if hash + 1 < 1024 {
         embedding[hash + 1] = 0.5;
     }
 
@@ -270,7 +270,7 @@ async fn test_analyzer_consolidation() -> Result<()> {
     let mut fact2 = create_test_fact("f2", "User enjoys coffee", FactType::Preference, 0.85, 10);
 
     // Make embeddings very similar
-    let similar_embedding = vec![1.0; 384];
+    let similar_embedding = vec![1.0; 1024];
     fact1.embedding = Some(similar_embedding.clone());
     fact2.embedding = Some(similar_embedding);
 

@@ -156,7 +156,7 @@ pub fn migrate_add_experience_replays(conn: &Connection) -> Result<(), AlephErro
 
             -- Virtual table for vector search on intent_vector
             CREATE VIRTUAL TABLE IF NOT EXISTS experiences_vec USING vec0(
-                embedding float[384]
+                embedding float[1024]
             );
             "#,
         )

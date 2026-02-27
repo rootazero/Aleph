@@ -1246,15 +1246,14 @@ impl EmbeddingProvidersApi {
         Ok(())
     }
 
-    /// Set a provider as the active embedding provider
-    /// Returns whether the vector store should be cleared (dimensions changed)
-    pub async fn set_active(state: &DashboardState, id: &str) -> Result<bool, String> {
+    /// Set a provider as the active embedding provider.
+    ///
+    /// Multi-dimension vector columns allow seamless provider switching
+    /// without clearing the vector store.
+    pub async fn set_active(state: &DashboardState, id: &str) -> Result<(), String> {
         let params = serde_json::json!({ "id": id });
-        let result = state.rpc_call("embedding_providers.setActive", params).await?;
-        result
-            .get("should_clear")
-            .and_then(|v| v.as_bool())
-            .ok_or_else(|| "Invalid response: missing should_clear".to_string())
+        state.rpc_call("embedding_providers.setActive", params).await?;
+        Ok(())
     }
 
     /// Test an embedding provider's connectivity

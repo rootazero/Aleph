@@ -24,7 +24,7 @@ async fn test_full_memory_lifecycle() {
     // -----------------------------------------------------------------------
     // 1. Insert facts with embeddings
     // -----------------------------------------------------------------------
-    let embedding_a = vec![0.5f32; 384];
+    let embedding_a = vec![0.5f32; 1024];
     let mut fact1 = MemoryFact::new(
         "Aleph uses WebSocket for gateway".to_string(),
         FactType::Project,
@@ -40,7 +40,7 @@ async fn test_full_memory_lifecycle() {
         FactType::Learning,
         vec![],
     );
-    fact2.embedding = Some(vec![0.3f32; 384]);
+    fact2.embedding = Some(vec![0.3f32; 1024]);
     fact2.embedding_model = "test-model".to_string();
     fact2.content_hash = "hash-2".to_string();
     backend.insert_fact(&fact2).await.unwrap();
@@ -54,7 +54,7 @@ async fn test_full_memory_lifecycle() {
         ContextAnchor::with_timestamp("com.test".to_string(), "test.txt".to_string(), 1700000000),
         "What is Aleph?".to_string(),
         "Aleph is an AI assistant".to_string(),
-        vec![0.4f32; 384],
+        vec![0.4f32; 1024],
     );
     backend.insert_memory(&mem1).await.unwrap();
 
@@ -79,11 +79,11 @@ async fn test_full_memory_lifecycle() {
     // 3. Vector search — verify results
     // -----------------------------------------------------------------------
     let results = backend
-        .vector_search(&embedding_a, 384, &SearchFilter::new(), 10)
+        .vector_search(&embedding_a, 1024, &SearchFilter::new(), 10)
         .await
         .unwrap();
     assert!(!results.is_empty(), "vector search should return results");
-    // The closest match to embedding_a ([0.5; 384]) should be fact1
+    // The closest match to embedding_a ([0.5; 1024]) should be fact1
     assert_eq!(
         results[0].fact.content, "Aleph uses WebSocket for gateway",
         "closest vector match should be fact1"
@@ -165,7 +165,7 @@ async fn test_ensure_indexes_idempotent() {
         FactType::Other,
         vec![],
     );
-    fact.embedding = Some(vec![0.1f32; 384]);
+    fact.embedding = Some(vec![0.1f32; 1024]);
     fact.content_hash = "hash-test".to_string();
     fact.embedding_model = "test".to_string();
     backend.insert_fact(&fact).await.unwrap();
@@ -188,7 +188,7 @@ async fn test_ensure_indexes_idempotent() {
         ContextAnchor::with_timestamp("com.test".to_string(), "test".to_string(), 0),
         "input".to_string(),
         "output".to_string(),
-        vec![0.1f32; 384],
+        vec![0.1f32; 1024],
     );
     backend.insert_memory(&mem).await.unwrap();
 
