@@ -113,6 +113,7 @@ pub mod manager;
 pub mod manifest;
 pub mod meta_cognition;
 pub mod prompt_context;
+pub mod projectors;
 pub mod prompt_layer;
 pub mod services;
 pub mod trust;

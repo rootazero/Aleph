@@ -128,6 +128,30 @@ pub fn memories_schema() -> Arc<Schema> {
     ]))
 }
 
+/// Schema for the `poe_experiences` table (14 columns).
+///
+/// Stores crystallized POE execution experiences for experience replay.
+/// Vector columns enable similarity search for matching past experiences.
+pub fn poe_experiences_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("task_id", DataType::Utf8, false),
+        Field::new("objective", DataType::Utf8, false),
+        Field::new("pattern_id", DataType::Utf8, false),
+        Field::new("tool_sequence_json", DataType::Utf8, false),
+        Field::new("parameter_mapping", DataType::Utf8, true),
+        Field::new("satisfaction", DataType::Float32, false),
+        Field::new("distance_score", DataType::Float32, false),
+        Field::new("attempts", DataType::UInt8, false),
+        Field::new("duration_ms", DataType::UInt64, false),
+        Field::new("created_at", DataType::Int64, false),
+        // Multi-dimension vectors (same pattern as facts table)
+        vector_field("vec_768", 768),
+        vector_field("vec_1024", 1024),
+        vector_field("vec_1536", 1536),
+    ]))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -276,5 +300,32 @@ mod tests {
         assert!(schema.field_with_name("strength").is_ok());
         assert!(schema.field_with_name("access_count").is_ok());
         assert!(schema.field_with_name("last_accessed_at").is_ok());
+    }
+
+    #[test]
+    fn poe_experiences_schema_is_valid() {
+        let schema = poe_experiences_schema();
+        assert_eq!(schema.fields().len(), 14);
+    }
+
+    #[test]
+    fn poe_experiences_schema_has_vector_columns() {
+        let schema = poe_experiences_schema();
+        for name in &["vec_768", "vec_1024", "vec_1536"] {
+            let field = schema.field_with_name(name).unwrap();
+            assert!(matches!(field.data_type(), DataType::FixedSizeList(_, _)));
+        }
+    }
+
+    #[test]
+    fn poe_experiences_schema_required_fields() {
+        let schema = poe_experiences_schema();
+        let required = ["id", "task_id", "objective", "pattern_id", "satisfaction", "distance_score", "attempts", "duration_ms", "created_at"];
+        for name in &required {
+            let field = schema.field_with_name(name).unwrap_or_else(|_| {
+                panic!("poe_experiences schema must contain column '{}'", name);
+            });
+            assert!(!field.is_nullable(), "column '{}' should NOT be nullable", name);
+        }
     }
 }
