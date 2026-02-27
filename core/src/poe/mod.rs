@@ -164,6 +164,24 @@ pub use crystallization::{
     ExperienceRecorder, NoOpRecorder,
 };
 
+// Crystallization submodules (migrated from Cortex)
+pub use crystallization::experience::{
+    DistillationMode, DistillationTask, EnvironmentContext, EvolutionStatus,
+    Experience as CortexExperience, ExperienceBuilder, ParameterConfig, ParameterMapping,
+};
+pub use crystallization::distillation::{
+    DistillationConfig, DistillationPriority, DistillationService,
+};
+pub use crystallization::pattern_extractor::{
+    ExtractedPattern, PatternExtractor, PatternExtractorConfig,
+};
+pub use crystallization::clustering::{
+    Cluster, ClusteringConfig, ClusteringService,
+};
+pub use crystallization::dreaming::{
+    CortexDreamingConfig, CortexDreamingService, DreamingMetrics,
+};
+
 // Contract signing workflow
 pub use contract::{
     ContractContext, ContractSummary, PendingContract, PendingResult,
