@@ -4,8 +4,8 @@
 //! for complex cases (currently stubbed).
 //! Extracted from core/src/memory/cortex/meta_cognition/injection.rs.
 
+use super::reactive::LLMConfig;
 use crate::error::AlephError;
-use crate::memory::cortex::meta_cognition::reactive::LLMConfig;
 use std::collections::HashSet;
 
 /// Extracts relevant tags from user intent
@@ -40,7 +40,7 @@ impl TagExtractor {
     ///
     /// ```no_run
     /// # use alephcore::poe::meta_cognition::tag_extractor::TagExtractor;
-    /// # use alephcore::memory::cortex::meta_cognition::reactive::LLMConfig;
+    /// # use alephcore::poe::meta_cognition::reactive::LLMConfig;
     /// # let llm_config = LLMConfig { model: "claude-3-5-sonnet-20241022".to_string(), temperature: 0.0 };
     /// let extractor = TagExtractor::new(llm_config);
     /// let tags = extractor.extract_tags("Run Python script on macOS").unwrap();
