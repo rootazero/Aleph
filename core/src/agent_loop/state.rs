@@ -32,6 +32,8 @@ pub struct LoopState {
     pub history_summary: String,
     /// Step index up to which history has been compressed
     pub compressed_until_step: usize,
+    /// POE hint for next Think step (consumed once, then cleared)
+    pub poe_hint: Option<String>,
 }
 
 impl LoopState {
@@ -47,6 +49,7 @@ impl LoopState {
             started_at: Instant::now(),
             history_summary: String::new(),
             compressed_until_step: 0,
+            poe_hint: None,
         }
     }
 
@@ -81,6 +84,16 @@ impl LoopState {
         } else {
             &self.steps[self.steps.len() - window_size..]
         }
+    }
+
+    /// Set a POE hint for the next Think step.
+    pub fn set_poe_hint(&mut self, hint: String) {
+        self.poe_hint = Some(hint);
+    }
+
+    /// Take the POE hint (consuming it).
+    pub fn take_poe_hint(&mut self) -> Option<String> {
+        self.poe_hint.take()
     }
 
     /// Get elapsed time since session start

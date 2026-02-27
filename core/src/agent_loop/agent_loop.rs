@@ -18,6 +18,7 @@ use super::session_sync::SessionSync;
 use super::state::{LoopState, LoopStep, RequestContext};
 use super::traits::{ActionExecutor, CompressorTrait, ThinkerTrait};
 use super::events::AgentLoopEvent;
+use crate::poe::StepDirective;
 
 /// Extract file paths from tool arguments
 fn extract_affected_files(arguments: &serde_json::Value) -> Vec<String> {
@@ -780,6 +781,43 @@ where
 
                 // Update last_tool for next iteration's LoopContinue event
                 last_tool = Some(tool_name.clone());
+            }
+
+            // ===== POE Interceptor: Evaluate Step =====
+            let step_snapshot = LoopStep {
+                step_id: state.step_count,
+                observation_summary: String::new(),
+                thinking: thinking.clone(),
+                action: action.clone(),
+                result: result.clone(),
+                tokens_used: 0,
+                duration_ms,
+            };
+            let directive = callback.on_step_evaluate(&step_snapshot, &state).await;
+
+            match directive {
+                StepDirective::Continue => { /* no intervention */ }
+                StepDirective::ContinueWithHint { hint } => {
+                    state.set_poe_hint(hint);
+                }
+                StepDirective::SuggestStrategySwitch { reason, suggestion } => {
+                    let violation = GuardViolation::PoeStrategySwitch {
+                        reason: reason.clone(),
+                        suggestion: suggestion.clone(),
+                    };
+                    callback.on_guard_triggered(&violation).await;
+                    self.compaction_trigger
+                        .emit_loop_stop(StopReason::Error(reason))
+                        .await;
+                    return LoopResult::GuardTriggered(violation);
+                }
+                StepDirective::Abort { reason } => {
+                    callback.on_aborted().await;
+                    self.compaction_trigger
+                        .emit_loop_stop(StopReason::Error(reason.clone()))
+                        .await;
+                    return LoopResult::PoeAborted { reason };
+                }
             }
 
             // ===== Feedback (Update State) =====
