@@ -11,6 +11,7 @@
 //! - **Telegram**: Telegram Bot API integration (requires `telegram` feature)
 //! - **Discord**: Discord Bot API integration (requires `discord` feature)
 //! - **Slack**: Slack Socket Mode + REST API integration (requires `slack` feature)
+//! - **Email**: IMAP + SMTP email integration (requires `email` feature)
 
 pub mod cli;
 
@@ -29,6 +30,9 @@ pub mod whatsapp;
 #[cfg(feature = "slack")]
 pub mod slack;
 
+#[cfg(feature = "email")]
+pub mod email;
+
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
 #[cfg(target_os = "macos")]
@@ -45,3 +49,6 @@ pub use whatsapp::{WhatsAppChannel, WhatsAppChannelFactory, WhatsAppConfig};
 
 #[cfg(feature = "slack")]
 pub use slack::{SlackChannel, SlackChannelFactory, SlackConfig};
+
+#[cfg(feature = "email")]
+pub use email::{EmailChannel, EmailChannelFactory, EmailConfig};

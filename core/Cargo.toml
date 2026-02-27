@@ -23,8 +23,10 @@ discord = ["dep:serenity", "gateway"]
 whatsapp = ["gateway"]
 # Slack channel support (Socket Mode + REST API)
 slack = ["gateway"]
+# Email channel support (IMAP + SMTP)
+email = ["gateway", "dep:lettre", "dep:mail-parser", "dep:async-imap", "dep:async-native-tls"]
 # All messaging channels
-all-channels = ["telegram", "discord", "whatsapp", "slack"]
+all-channels = ["telegram", "discord", "whatsapp", "slack", "email"]
 # Cron job scheduling
 cron = ["dep:cron", "dep:chrono-tz", "dep:sysinfo", "gateway"]
 # CLI interactive prompts (inquire for rich user questions)
@@ -48,7 +50,7 @@ test-helpers = []
 # - core-foundation/core-graphics → no longer needed
 
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util", "signal", "net"] }
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-util = { version = "0.7", features = ["rt", "compat"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 # Protocol types (shared with clients)
@@ -188,6 +190,11 @@ rust-embed = { version = "8.0", features = ["compression"], optional = true }
 # Channel dependencies (optional)
 teloxide = { version = "0.13", features = ["macros"], optional = true }
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "rustls_backend", "model"], optional = true }
+# Email channel dependencies (optional)
+lettre = { version = "0.11", default-features = false, features = ["tokio1-native-tls", "builder", "smtp-transport"], optional = true }
+mail-parser = { version = "0.9", optional = true }
+async-imap = { version = "0.10", optional = true }
+async-native-tls = { version = "0.5", optional = true }
 
 # Cron dependencies (optional)
 cron = { version = "0.13", optional = true }
