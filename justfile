@@ -61,8 +61,37 @@ macos: _ensure-server
 
 # Build WASM Panel UI only
 wasm:
-    cd {{wasm_dir}} && trunk build --release
-    @echo "✓ WASM: {{wasm_dist}}/"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{wasm_dist}}
+    # 1. Tailwind CSS
+    (cd {{wasm_dir}} && npm run build:css)
+    # 2. Compile Rust → WASM
+    cargo build -p aleph-control-plane --target wasm32-unknown-unknown --release
+    # 3. Generate JS bindings
+    wasm-bindgen --target web --no-typescript \
+        --out-dir {{wasm_dist}} --out-name aleph_dashboard \
+        target/wasm32-unknown-unknown/release/aleph_dashboard.wasm
+    # 4. Runtime index.html
+    cat > {{wasm_dist}}/index.html << 'HTMLEOF'
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Aleph Dashboard</title>
+        <link rel="stylesheet" href="/tailwind.css" />
+      </head>
+      <body class="bg-surface text-text-primary">
+        <noscript>This application requires JavaScript to run.</noscript>
+        <script type="module">
+          import init from '/aleph_dashboard.js';
+          await init('/aleph_dashboard_bg.wasm');
+        </script>
+      </body>
+    </html>
+    HTMLEOF
+    echo "✓ WASM: {{wasm_dist}}/"
 
 # Run Xcode build only (assumes server binary exists in Resources)
 xcode:
@@ -96,7 +125,7 @@ test:
 deps:
     #!/usr/bin/env bash
     ok=true
-    for cmd in cargo trunk wasm-bindgen xcodegen xcodebuild; do
+    for cmd in cargo wasm-bindgen npm xcodegen xcodebuild; do
         if command -v "$cmd" &>/dev/null; then
             printf "  ✓ %-16s %s\n" "$cmd" "$(which $cmd)"
         else
