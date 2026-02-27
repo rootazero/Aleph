@@ -11,6 +11,11 @@ use lancedb::Table;
 
 use crate::error::AlephError;
 
+/// Map a LanceDB error to an AlephError.
+pub(crate) fn lance_err(msg: impl std::fmt::Display) -> AlephError {
+    AlephError::config(format!("LanceDB error: {}", msg))
+}
+
 pub mod arrow_convert;
 pub mod facts;
 pub mod graph;

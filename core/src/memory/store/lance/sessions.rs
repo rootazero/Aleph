@@ -23,16 +23,11 @@ use super::LanceMemoryBackend;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Map a lancedb error to an AlephError.
-fn lance_err(msg: impl std::fmt::Display) -> AlephError {
-    AlephError::config(format!("LanceDB error: {}", msg))
-}
-
 /// Collect a LanceDB query stream into a vector of RecordBatches.
 async fn collect_batches(
     stream: lancedb::arrow::SendableRecordBatchStream,
 ) -> Result<Vec<RecordBatch>, AlephError> {
-    stream.try_collect().await.map_err(lance_err)
+    stream.try_collect().await.map_err(super::lance_err)
 }
 
 /// Insert a RecordBatch into a LanceDB table.
@@ -43,7 +38,7 @@ async fn add_batch(table: &lancedb::Table, batch: RecordBatch) -> Result<(), Ale
         .add(batches)
         .execute()
         .await
-        .map_err(lance_err)?;
+        .map_err(super::lance_err)?;
     Ok(())
 }
 
@@ -64,7 +59,7 @@ async fn scan_memories(
 
     query = query.select(Select::All);
 
-    let stream = query.execute().await.map_err(lance_err)?;
+    let stream = query.execute().await.map_err(super::lance_err)?;
     let batches = collect_batches(stream).await?;
 
     let mut entries = Vec::new();
@@ -75,30 +70,13 @@ async fn scan_memories(
     Ok(entries)
 }
 
-/// Count rows in a LanceDB table.
-async fn count_rows(table: &lancedb::Table) -> Result<usize, AlephError> {
-    let stream = table
-        .query()
-        .select(Select::columns(&["id"]))
-        .execute()
-        .await
-        .map_err(lance_err)?;
-    let batches = collect_batches(stream).await?;
-    Ok(batches.iter().map(|b| b.num_rows()).sum())
-}
-
-/// Count rows in a LanceDB table with a filter.
-async fn count_rows_with_filter(
-    table: &lancedb::Table,
-    filter: &str,
-) -> Result<usize, AlephError> {
-    let stream = table
-        .query()
-        .only_if(filter)
-        .select(Select::columns(&["id"]))
-        .execute()
-        .await
-        .map_err(lance_err)?;
+/// Count rows in a LanceDB table with an optional filter.
+async fn count_rows(table: &lancedb::Table, filter: Option<&str>) -> Result<usize, AlephError> {
+    let mut query = table.query().select(Select::columns(&["id"]));
+    if let Some(f) = filter {
+        query = query.only_if(f);
+    }
+    let stream = query.execute().await.map_err(super::lance_err)?;
     let batches = collect_batches(stream).await?;
     Ok(batches.iter().map(|b| b.num_rows()).sum())
 }
@@ -142,7 +120,7 @@ impl SessionStore for LanceMemoryBackend {
             .memories_table
             .query()
             .nearest_to(embedding)
-            .map_err(lance_err)?
+            .map_err(super::lance_err)?
             .column("vec_768")
             .limit(limit);
 
@@ -150,7 +128,7 @@ impl SessionStore for LanceMemoryBackend {
             query = query.only_if(f);
         }
 
-        let stream = query.execute().await.map_err(lance_err)?;
+        let stream = query.execute().await.map_err(super::lance_err)?;
         let batches = collect_batches(stream).await?;
 
         let mut results = Vec::new();
@@ -205,16 +183,16 @@ impl SessionStore for LanceMemoryBackend {
         self.memories_table
             .delete(&format!("id = '{}'", id))
             .await
-            .map_err(lance_err)?;
+            .map_err(super::lance_err)?;
         Ok(())
     }
 
     async fn get_stats(&self) -> Result<StoreStats, AlephError> {
-        let total_facts = count_rows(&self.facts_table).await?;
-        let valid_facts = count_rows_with_filter(&self.facts_table, "is_valid = true").await?;
-        let total_memories = count_rows(&self.memories_table).await?;
-        let total_graph_nodes = count_rows(&self.nodes_table).await?;
-        let total_graph_edges = count_rows(&self.edges_table).await?;
+        let total_facts = count_rows(&self.facts_table, None).await?;
+        let valid_facts = count_rows(&self.facts_table, Some("is_valid = true")).await?;
+        let total_memories = count_rows(&self.memories_table, None).await?;
+        let total_graph_nodes = count_rows(&self.nodes_table, None).await?;
+        let total_graph_edges = count_rows(&self.edges_table, None).await?;
 
         Ok(StoreStats {
             total_facts,
@@ -251,13 +229,13 @@ impl SessionStore for LanceMemoryBackend {
     ) -> Result<u64, AlephError> {
         // Count rows that will be deleted.
         let filter = format!("timestamp < {}", cutoff_timestamp);
-        let count = count_rows_with_filter(&self.memories_table, &filter).await? as u64;
+        let count = count_rows(&self.memories_table, Some(&filter)).await? as u64;
 
         if count > 0 {
             self.memories_table
                 .delete(&filter)
                 .await
-                .map_err(lance_err)?;
+                .map_err(super::lance_err)?;
         }
 
         Ok(count)
@@ -278,13 +256,13 @@ impl SessionStore for LanceMemoryBackend {
         };
 
         let count =
-            count_rows_with_filter(&self.memories_table, &filter).await? as u64;
+            count_rows(&self.memories_table, Some(&filter)).await? as u64;
 
         if count > 0 {
             self.memories_table
                 .delete(&filter)
                 .await
-                .map_err(lance_err)?;
+                .map_err(super::lance_err)?;
         }
 
         Ok(count)

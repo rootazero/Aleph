@@ -23,16 +23,11 @@ use super::LanceMemoryBackend;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Map a lancedb error to an AlephError.
-fn lance_err(msg: impl std::fmt::Display) -> AlephError {
-    AlephError::config(format!("LanceDB error: {}", msg))
-}
-
 /// Collect a LanceDB query stream into a vector of RecordBatches.
 async fn collect_batches(
     stream: lancedb::arrow::SendableRecordBatchStream,
 ) -> Result<Vec<RecordBatch>, AlephError> {
-    stream.try_collect().await.map_err(lance_err)
+    stream.try_collect().await.map_err(super::lance_err)
 }
 
 /// Insert a RecordBatch into a LanceDB table.
@@ -43,7 +38,7 @@ async fn add_batch(table: &lancedb::Table, batch: RecordBatch) -> Result<(), Ale
         .add(batches)
         .execute()
         .await
-        .map_err(lance_err)?;
+        .map_err(super::lance_err)?;
     Ok(())
 }
 
@@ -64,7 +59,7 @@ async fn scan_nodes(
 
     query = query.select(Select::All);
 
-    let stream = query.execute().await.map_err(lance_err)?;
+    let stream = query.execute().await.map_err(super::lance_err)?;
     let batches = collect_batches(stream).await?;
 
     let mut nodes = Vec::new();
@@ -92,7 +87,7 @@ async fn scan_edges(
 
     query = query.select(Select::All);
 
-    let stream = query.execute().await.map_err(lance_err)?;
+    let stream = query.execute().await.map_err(super::lance_err)?;
     let batches = collect_batches(stream).await?;
 
     let mut edges = Vec::new();
@@ -116,7 +111,7 @@ impl GraphStore for LanceMemoryBackend {
             self.nodes_table
                 .delete(&format!("id = '{}'", node.id))
                 .await
-                .map_err(lance_err)?;
+                .map_err(super::lance_err)?;
         }
 
         let batch = graph_nodes_to_record_batch(std::slice::from_ref(node))?;
@@ -137,7 +132,7 @@ impl GraphStore for LanceMemoryBackend {
             self.edges_table
                 .delete(&format!("id = '{}'", edge.id))
                 .await
-                .map_err(lance_err)?;
+                .map_err(super::lance_err)?;
         }
 
         let batch = graph_edges_to_record_batch(std::slice::from_ref(edge))?;
@@ -257,7 +252,7 @@ impl GraphStore for LanceMemoryBackend {
             self.nodes_table
                 .delete(&format!("id = '{}'", id))
                 .await
-                .map_err(lance_err)?;
+                .map_err(super::lance_err)?;
         }
 
         // Update decayed nodes (delete + re-insert)
@@ -265,7 +260,7 @@ impl GraphStore for LanceMemoryBackend {
             self.nodes_table
                 .delete(&format!("id = '{}'", node.id))
                 .await
-                .map_err(lance_err)?;
+                .map_err(super::lance_err)?;
             let batch = graph_nodes_to_record_batch(std::slice::from_ref(node))?;
             add_batch(&self.nodes_table, batch).await?;
         }
@@ -296,7 +291,7 @@ impl GraphStore for LanceMemoryBackend {
             self.edges_table
                 .delete(&format!("id = '{}'", id))
                 .await
-                .map_err(lance_err)?;
+                .map_err(super::lance_err)?;
         }
 
         // Update decayed edges (delete + re-insert)
@@ -304,7 +299,7 @@ impl GraphStore for LanceMemoryBackend {
             self.edges_table
                 .delete(&format!("id = '{}'", edge.id))
                 .await
-                .map_err(lance_err)?;
+                .map_err(super::lance_err)?;
             let batch = graph_edges_to_record_batch(std::slice::from_ref(edge))?;
             add_batch(&self.edges_table, batch).await?;
         }
