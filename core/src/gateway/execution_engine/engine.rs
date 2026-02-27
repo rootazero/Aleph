@@ -1,0 +1,511 @@
+//! Full ExecutionEngine with AgentLoop integration
+//!
+//! Provides the `ExecutionEngine<P, R>` struct that bridges Gateway requests
+//! to the actual agent loop infrastructure using Thinker, Executor, and tools.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use tokio::sync::{mpsc, watch, RwLock};
+use tracing::{debug, error, info, warn};
+
+use super::{ActiveRun, ExecutionEngineConfig, ExecutionError, RunRequest, RunState, RunStatus};
+use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
+use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, RunSummary, StreamEvent};
+use crate::gateway::execution_adapter::ExecutionAdapter;
+use crate::gateway::loop_callback_adapter::EventEmittingCallback;
+
+use crate::agent_loop::{AgentLoop, LoopConfig, LoopResult, RequestContext, RunContext};
+use crate::compressor::NoOpCompressor;
+use crate::dispatcher::UnifiedTool;
+use crate::executor::{SingleStepExecutor, ToolRegistry};
+use crate::gateway::handlers::plugins::get_extension_manager;
+use crate::thinker::{
+    PromptConfig, ProviderRegistry as ThinkerProviderRegistry, SingleProviderRegistry, Thinker,
+    ThinkerConfig,
+};
+use aleph_protocol::IdentityContext;
+
+/// Execution engine that bridges Gateway to agent_loop
+pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> {
+    config: ExecutionEngineConfig,
+    active_runs: Arc<RwLock<HashMap<String, ActiveRun>>>,
+    /// Provider registry for LLM access
+    provider_registry: Arc<P>,
+    /// Tool registry for tool execution
+    tool_registry: Arc<R>,
+    /// Available tools for all agents
+    tools: Arc<Vec<UnifiedTool>>,
+    /// Session manager for identity context
+    session_manager: Arc<crate::gateway::SessionManager>,
+}
+
+impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
+    /// Create a new execution engine with full AgentLoop integration
+    pub fn new(
+        config: ExecutionEngineConfig,
+        provider_registry: Arc<P>,
+        tool_registry: Arc<R>,
+        tools: Vec<UnifiedTool>,
+        session_manager: Arc<crate::gateway::SessionManager>,
+    ) -> Self {
+        Self {
+            config,
+            active_runs: Arc::new(RwLock::new(HashMap::new())),
+            provider_registry,
+            tool_registry,
+            tools: Arc::new(tools),
+            session_manager,
+        }
+    }
+
+    /// Format history for AgentLoop
+    fn format_history(&self, history: &[crate::gateway::agent_instance::SessionMessage]) -> String {
+        let mut formatted = String::new();
+        for msg in history {
+            let role = match msg.role {
+                MessageRole::User => "User",
+                MessageRole::Assistant => "Assistant",
+                MessageRole::System => "System",
+                MessageRole::Tool => "Tool",
+            };
+            formatted.push_str(&format!("{}: {}\n", role, msg.content));
+        }
+        formatted
+    }
+
+    /// Execute a run request
+    ///
+    /// Returns a stream of events for the run.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The run request containing input and metadata
+    /// * `agent` - The agent instance to execute with
+    /// * `emitter` - Event emitter for streaming events
+    pub async fn execute<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<E>,
+    ) -> Result<(), ExecutionError> {
+        let run_id = request.run_id.clone();
+
+        // Check concurrent run limit
+        {
+            let runs = self.active_runs.read().await;
+            let agent_runs = runs
+                .values()
+                .filter(|r| r.request.session_key.agent_id() == request.session_key.agent_id())
+                .count();
+
+            if agent_runs >= self.config.max_concurrent_runs {
+                return Err(ExecutionError::TooManyRuns(format!(
+                    "Agent {} has {} active runs (max: {})",
+                    request.session_key.agent_id(),
+                    agent_runs,
+                    self.config.max_concurrent_runs
+                )));
+            }
+        }
+
+        // Check agent state
+        if !agent.is_idle().await {
+            return Err(ExecutionError::AgentBusy(agent.id().to_string()));
+        }
+
+        // Create cancellation channel
+        let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
+
+        // Register the run
+        {
+            let mut runs = self.active_runs.write().await;
+            runs.insert(
+                run_id.clone(),
+                ActiveRun {
+                    request: request.clone(),
+                    state: RunState::Running,
+                    started_at: chrono::Utc::now(),
+                    steps_completed: 0,
+                    current_tool: None,
+                    cancel_tx: Some(cancel_tx),
+                    seq_counter: AtomicU64::new(0),
+                    chunk_counter: AtomicU32::new(0),
+                },
+            );
+        }
+
+        // Emit run accepted event
+        let _ = emitter
+            .emit(StreamEvent::RunAccepted {
+                run_id: run_id.clone(),
+                session_key: request.session_key.to_key_string(),
+                accepted_at: chrono::Utc::now().to_rfc3339(),
+            })
+            .await;
+
+        // Set agent state to running
+        agent
+            .set_state(AgentState::Running {
+                run_id: run_id.clone(),
+            })
+            .await;
+
+        // Store user message in session
+        agent
+            .add_message(&request.session_key, MessageRole::User, &request.input)
+            .await;
+
+        // Execute the run
+        let active_runs = self.active_runs.clone();
+        let timeout_secs = request
+            .timeout_secs
+            .unwrap_or(self.config.default_timeout_secs);
+
+        let result = tokio::select! {
+            result = self.run_agent_loop(
+                &run_id,
+                &request,
+                agent.clone(),
+                emitter.clone(),
+            ) => result,
+
+            _ = cancel_rx.recv() => {
+                info!("Run {} cancelled", run_id);
+                Err(ExecutionError::Cancelled)
+            }
+
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(timeout_secs)) => {
+                warn!("Run {} timed out after {}s", run_id, timeout_secs);
+                Err(ExecutionError::Timeout)
+            }
+        };
+
+        // Update run state based on result
+        let final_state = match &result {
+            Ok(_) => RunState::Completed,
+            Err(ExecutionError::Cancelled) => RunState::Cancelled,
+            Err(e) => RunState::Failed {
+                error: e.to_string(),
+            },
+        };
+
+        // Get run info for summary
+        let (started_at, steps_completed, final_seq) = {
+            let mut runs = active_runs.write().await;
+            if let Some(run) = runs.get_mut(&run_id) {
+                run.state = final_state.clone();
+                run.cancel_tx = None;
+                (run.started_at, run.steps_completed, run.next_seq())
+            } else {
+                (chrono::Utc::now(), 0, 0)
+            }
+        };
+
+        // Reset agent state
+        agent.set_state(AgentState::Idle).await;
+
+        // Emit completion event
+        let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds() as u64;
+
+        let final_result = match &result {
+            Ok(response) => {
+                // Store assistant response
+                agent
+                    .add_message(&request.session_key, MessageRole::Assistant, response)
+                    .await;
+
+                let _ = emitter
+                    .emit(StreamEvent::RunComplete {
+                        run_id: run_id.clone(),
+                        seq: final_seq,
+                        summary: RunSummary {
+                            total_tokens: 0,
+                            tool_calls: 0,
+                            loops: steps_completed,
+                            final_response: Some(response.clone()),
+                        },
+                        total_duration_ms: duration_ms,
+                    })
+                    .await;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = emitter
+                    .emit(StreamEvent::RunError {
+                        run_id: run_id.clone(),
+                        seq: final_seq,
+                        error: e.to_string(),
+                        error_code: Some(match e {
+                            ExecutionError::Timeout => "TIMEOUT".to_string(),
+                            ExecutionError::Cancelled => "CANCELLED".to_string(),
+                            _ => "INTERNAL_ERROR".to_string(),
+                        }),
+                    })
+                    .await;
+                Err(ExecutionError::Failed(e.to_string()))
+            }
+        };
+
+        // Remove from active runs after a delay (for status queries)
+        let runs_clone = active_runs.clone();
+        let run_id_clone = run_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+            runs_clone.write().await.remove(&run_id_clone);
+        });
+
+        final_result
+    }
+
+    /// Get the status of a run
+    pub async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
+        let runs = self.active_runs.read().await;
+        runs.get(run_id).map(|run| RunStatus {
+            run_id: run_id.to_string(),
+            state: run.state.clone(),
+            started_at: Some(run.started_at),
+            completed_at: match run.state {
+                RunState::Completed | RunState::Cancelled | RunState::Failed { .. } => {
+                    Some(chrono::Utc::now())
+                }
+                _ => None,
+            },
+            steps_completed: run.steps_completed,
+            current_tool: run.current_tool.clone(),
+        })
+    }
+
+    /// Cancel a run
+    pub async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        let runs = self.active_runs.read().await;
+
+        if let Some(run) = runs.get(run_id) {
+            if let Some(ref cancel_tx) = run.cancel_tx {
+                let _ = cancel_tx.send(()).await;
+                info!("Sent cancellation signal for run {}", run_id);
+                return Ok(());
+            } else {
+                return Err(ExecutionError::RunNotActive(run_id.to_string()));
+            }
+        }
+
+        Err(ExecutionError::RunNotFound(run_id.to_string()))
+    }
+
+    /// List active runs
+    pub async fn list_active_runs(&self) -> Vec<RunStatus> {
+        let runs = self.active_runs.read().await;
+        runs.iter()
+            .map(|(id, run)| RunStatus {
+                run_id: id.clone(),
+                state: run.state.clone(),
+                started_at: Some(run.started_at),
+                completed_at: None,
+                steps_completed: run.steps_completed,
+                current_tool: run.current_tool.clone(),
+            })
+            .collect()
+    }
+
+    /// Internal: Run the agent loop with full integration
+    ///
+    /// This method bridges to the actual AgentLoop infrastructure using:
+    /// - Thinker for LLM decision making
+    /// - SingleStepExecutor for tool execution
+    /// - EventEmittingCallback for streaming events
+    ///
+    /// # Arguments
+    ///
+    /// * `run_id` - Unique identifier for this run
+    /// * `request` - The run request
+    /// * `agent` - Agent instance
+    /// * `emitter` - Event emitter for streaming
+    async fn run_agent_loop<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        request: &RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<E>,
+    ) -> Result<String, ExecutionError> {
+        debug!(
+            run_id = run_id,
+            "Starting agent loop"
+        );
+
+        // Get session history for context
+        let history = agent.get_history(&request.session_key, Some(20)).await;
+        debug!(
+            "Loaded {} messages from session history",
+            history.len()
+        );
+
+        // Create abort signal channel
+        let (_abort_tx, abort_rx) = watch::channel(false);
+
+        // Create callback adapter that emits StreamEvents
+        let callback = Arc::new(EventEmittingCallback::new(
+            emitter.clone(),
+            run_id.to_string(),
+        ));
+
+        // Create Thinker with provider
+        let provider = self.provider_registry.default_provider();
+        let thinker_registry = Arc::new(SingleProviderRegistry::new(provider));
+
+        // Inject skill instructions from SkillSystem v2 snapshot into prompt
+        let skill_instructions = match get_extension_manager().ok().and_then(|m| m.skill_system()) {
+            Some(sys) => {
+                let snapshot = sys.current_snapshot().await;
+                if snapshot.prompt_xml.is_empty() { None } else { Some(snapshot.prompt_xml) }
+            }
+            None => None,
+        };
+        // Load runtime capabilities from the ledger for prompt injection
+        let runtime_capabilities = {
+            use crate::runtimes::ledger::CapabilityLedger;
+            use crate::runtimes::format_entries_for_prompt;
+
+            crate::utils::paths::get_runtimes_dir().ok().and_then(|dir| {
+                let ledger = CapabilityLedger::load_or_create(dir.join("ledger.json"));
+                let ready = ledger.list_ready();
+                if ready.is_empty() { None } else { Some(format_entries_for_prompt(&ready)) }
+            })
+        };
+
+        let thinker_config = ThinkerConfig {
+            prompt: PromptConfig { skill_instructions, runtime_capabilities, ..PromptConfig::default() },
+            ..ThinkerConfig::default()
+        };
+        let thinker = Arc::new(Thinker::new(thinker_registry, thinker_config));
+
+        // Create Executor with routing support
+        let local_executor = Arc::new(SingleStepExecutor::new(self.tool_registry.clone()));
+
+        // Create compressor (no-op for Gateway mode)
+        let compressor = Arc::new(NoOpCompressor);
+
+        // Create AgentLoop with config
+        let max_loops = agent.config().max_loops as usize;
+        let loop_config = LoopConfig::default().with_max_steps(max_loops);
+
+        // Build request context (empty for Gateway mode, context is from session history)
+        let context = RequestContext::empty();
+
+        // Format history as initial summary
+        let history_summary = self.format_history(&history);
+
+        // Filter tools based on agent whitelist/blacklist
+        let allowed_tools: Vec<UnifiedTool> = self
+            .tools
+            .iter()
+            .filter(|t| agent.is_tool_allowed(&t.name))
+            .cloned()
+            .collect();
+
+        // Run the loop (history_summary as Option<String>)
+        let initial_history = if history_summary.is_empty() {
+            None
+        } else {
+            Some(history_summary)
+        };
+
+        // Construct IdentityContext from session metadata
+        let session_key_str = request.session_key.to_key_string();
+        let identity = self
+            .session_manager
+            .get_identity_context(&session_key_str, "gateway")
+            .await
+            .unwrap_or_else(|_| {
+                IdentityContext::owner(session_key_str.clone(), "gateway".to_string())
+            });
+
+        // Run with local executor
+        let agent_loop = AgentLoop::new(thinker, local_executor, compressor, loop_config);
+        let mut run_context = RunContext::new(
+            request.input.clone(),
+            context,
+            allowed_tools,
+            identity.clone(),
+        )
+        .with_abort_signal(abort_rx);
+        if let Some(history) = initial_history {
+            run_context = run_context.with_initial_history(history);
+        }
+        let result = agent_loop
+            .run(run_context, callback.as_ref())
+            .await;
+
+        // Update step count from result
+        let steps = match &result {
+            LoopResult::Completed { steps, .. } => *steps,
+            LoopResult::Failed { steps, .. } => *steps,
+            LoopResult::GuardTriggered(_) => 0,
+            LoopResult::UserAborted => 0,
+        };
+
+        {
+            let mut runs = self.active_runs.write().await;
+            if let Some(run) = runs.get_mut(run_id) {
+                run.steps_completed = steps as u32;
+            }
+        }
+
+        // Convert LoopResult to response
+        match result {
+            LoopResult::Completed { summary, .. } => {
+                info!(run_id = %run_id, "Agent loop completed successfully");
+                Ok(summary)
+            }
+            LoopResult::Failed { reason, .. } => {
+                error!(run_id = %run_id, reason = %reason, "Agent loop failed");
+                Err(ExecutionError::Failed(reason))
+            }
+            LoopResult::GuardTriggered(violation) => {
+                warn!(run_id = %run_id, violation = ?violation, "Guard triggered");
+                Err(ExecutionError::Failed(violation.description()))
+            }
+            LoopResult::UserAborted => {
+                info!(run_id = %run_id, "Agent loop aborted by user");
+                Err(ExecutionError::Cancelled)
+            }
+        }
+    }
+}
+
+// ============================================================================
+// ExecutionAdapter trait implementation
+// ============================================================================
+
+/// Implement ExecutionAdapter for the full ExecutionEngine with AgentLoop integration.
+///
+/// This allows InboundMessageRouter to use ExecutionEngine via a trait object,
+/// enabling routing without being generic over provider and tool registry types.
+#[async_trait]
+impl<P, R> ExecutionAdapter for ExecutionEngine<P, R>
+where
+    P: ThinkerProviderRegistry + Send + Sync + 'static,
+    R: ToolRegistry + Send + Sync + 'static,
+{
+    async fn execute(
+        &self,
+        request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), ExecutionError> {
+        // Wrap the dyn trait object in DynEventEmitter to make it Sized,
+        // then delegate to the existing generic execute method
+        let wrapper = Arc::new(DynEventEmitter::new(emitter));
+        ExecutionEngine::execute(self, request, agent, wrapper).await
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        ExecutionEngine::cancel(self, run_id).await
+    }
+
+    async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
+        ExecutionEngine::get_status(self, run_id).await
+    }
+}

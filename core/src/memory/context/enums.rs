@@ -1,0 +1,499 @@
+//! Enum definitions for memory fact classification and metadata.
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+// ============================================================================
+// FactType
+// ============================================================================
+
+/// Type classification for memory facts
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum FactType {
+    /// User preferences (likes, habits, style choices)
+    Preference,
+    /// User plans, goals, or intentions
+    Plan,
+    /// Learning or skill-related information
+    Learning,
+    /// Project or work-related information
+    Project,
+    /// Personal information (non-sensitive)
+    Personal,
+    /// Tool/capability procedural knowledge (for tool-as-resource)
+    Tool,
+    /// Other facts that don't fit above categories
+    #[default]
+    Other,
+    // Multi-Agent 2.0 fact types
+    /// Sub-agent run record (task execution metadata)
+    SubagentRun,
+    /// Sub-agent session state
+    SubagentSession,
+    /// Sub-agent checkpoint for resumption
+    SubagentCheckpoint,
+    /// Sub-agent conversation transcript
+    SubagentTranscript,
+}
+
+impl FactType {
+    /// Convert to string representation
+    pub fn as_str(&self) -> &str {
+        match self {
+            FactType::Preference => "preference",
+            FactType::Plan => "plan",
+            FactType::Learning => "learning",
+            FactType::Project => "project",
+            FactType::Personal => "personal",
+            FactType::Tool => "tool",
+            FactType::Other => "other",
+            FactType::SubagentRun => "subagent_run",
+            FactType::SubagentSession => "subagent_session",
+            FactType::SubagentCheckpoint => "subagent_checkpoint",
+            FactType::SubagentTranscript => "subagent_transcript",
+        }
+    }
+
+    /// Parse from string with fallback to Other
+    pub fn from_str_or_other(s: &str) -> Self {
+        s.parse().unwrap_or(FactType::Other)
+    }
+
+    /// Get default aleph:// path for this fact type
+    pub fn default_path(&self) -> &str {
+        match self {
+            FactType::Preference => "aleph://user/preferences/",
+            FactType::Personal => "aleph://user/personal/",
+            FactType::Plan => "aleph://user/plans/",
+            FactType::Learning => "aleph://knowledge/learning/",
+            FactType::Project => "aleph://knowledge/projects/",
+            FactType::Tool => "aleph://agent/tools/",
+            FactType::Other => "aleph://knowledge/",
+            FactType::SubagentRun
+            | FactType::SubagentSession
+            | FactType::SubagentCheckpoint
+            | FactType::SubagentTranscript => "aleph://agent/experiences/",
+        }
+    }
+
+    /// Map fact type to standardized memory category.
+    pub fn default_category(&self) -> MemoryCategory {
+        match self {
+            FactType::Preference => MemoryCategory::Preferences,
+            FactType::Plan | FactType::Personal => MemoryCategory::Profile,
+            FactType::Learning | FactType::Project | FactType::Other => MemoryCategory::Entities,
+            FactType::Tool => MemoryCategory::Patterns,
+            FactType::SubagentRun | FactType::SubagentSession | FactType::SubagentCheckpoint => {
+                MemoryCategory::Cases
+            }
+            FactType::SubagentTranscript => MemoryCategory::Events,
+        }
+    }
+}
+
+impl std::str::FromStr for FactType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "preference" => Ok(FactType::Preference),
+            "plan" => Ok(FactType::Plan),
+            "learning" => Ok(FactType::Learning),
+            "project" => Ok(FactType::Project),
+            "personal" => Ok(FactType::Personal),
+            "tool" => Ok(FactType::Tool),
+            "subagent_run" => Ok(FactType::SubagentRun),
+            "subagent_session" => Ok(FactType::SubagentSession),
+            "subagent_checkpoint" => Ok(FactType::SubagentCheckpoint),
+            "subagent_transcript" => Ok(FactType::SubagentTranscript),
+            "other" => Ok(FactType::Other),
+            _ => Err(format!("Unknown fact type: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for FactType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// ============================================================================
+// FactSource
+// ============================================================================
+
+/// Origin/type of a Fact
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FactSource {
+    /// LLM-extracted from conversation (existing behavior)
+    #[default]
+    Extracted,
+    /// L1 Overview generated by CompressionDaemon
+    Summary,
+    /// User-uploaded long document (Markdown-first)
+    Document,
+    /// User-created manually
+    Manual,
+}
+
+impl FactSource {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Extracted => "extracted",
+            Self::Summary => "summary",
+            Self::Document => "document",
+            Self::Manual => "manual",
+        }
+    }
+
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "extracted" => Self::Extracted,
+            "summary" => Self::Summary,
+            "document" => Self::Document,
+            "manual" => Self::Manual,
+            _ => Self::Extracted,
+        }
+    }
+}
+
+impl std::str::FromStr for FactSource {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "extracted" => Ok(Self::Extracted),
+            "summary" => Ok(Self::Summary),
+            "document" => Ok(Self::Document),
+            "manual" => Ok(Self::Manual),
+            _ => Err(format!("Unknown fact source: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for FactSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// ============================================================================
+// MemoryLayer
+// ============================================================================
+
+/// Tiered loading level for memory retrieval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryLayer {
+    /// Abstract summary for fast scanning.
+    L0Abstract,
+    /// Structured overview for navigation.
+    L1Overview,
+    /// Full-detail content.
+    #[default]
+    L2Detail,
+}
+
+impl MemoryLayer {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::L0Abstract => "l0_abstract",
+            Self::L1Overview => "l1_overview",
+            Self::L2Detail => "l2_detail",
+        }
+    }
+
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Self::L2Detail)
+    }
+}
+
+impl std::str::FromStr for MemoryLayer {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "l0_abstract" => Ok(Self::L0Abstract),
+            "l1_overview" => Ok(Self::L1Overview),
+            "l2_detail" => Ok(Self::L2Detail),
+            _ => Err(format!("Unknown memory layer: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// ============================================================================
+// MemoryCategory
+// ============================================================================
+
+/// Standardized memory categories inspired by OpenViking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryCategory {
+    Profile,
+    Preferences,
+    #[default]
+    Entities,
+    Events,
+    Cases,
+    Patterns,
+}
+
+impl MemoryCategory {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Profile => "profile",
+            Self::Preferences => "preferences",
+            Self::Entities => "entities",
+            Self::Events => "events",
+            Self::Cases => "cases",
+            Self::Patterns => "patterns",
+        }
+    }
+
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Self::Entities)
+    }
+}
+
+impl std::str::FromStr for MemoryCategory {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "profile" => Ok(Self::Profile),
+            "preferences" => Ok(Self::Preferences),
+            "entities" => Ok(Self::Entities),
+            "events" => Ok(Self::Events),
+            "cases" => Ok(Self::Cases),
+            "patterns" => Ok(Self::Patterns),
+            _ => Err(format!("Unknown memory category: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// ============================================================================
+// MemoryTier
+// ============================================================================
+
+/// Memory tier for cognitive architecture.
+///
+/// Controls how a fact is treated during retrieval and decay:
+/// - **Core**: always loaded, never decayed (identity-level knowledge)
+/// - **ShortTerm**: active working memory, subject to rapid decay
+/// - **LongTerm**: consolidated knowledge, slow decay curve
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryTier {
+    /// Identity-level facts: always loaded, never decayed.
+    Core,
+    /// Active working memory, subject to rapid decay.
+    #[default]
+    ShortTerm,
+    /// Consolidated knowledge, slow decay curve.
+    LongTerm,
+}
+
+impl MemoryTier {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Core => "core",
+            Self::ShortTerm => "short_term",
+            Self::LongTerm => "long_term",
+        }
+    }
+
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Self::ShortTerm)
+    }
+}
+
+impl std::str::FromStr for MemoryTier {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "core" => Ok(Self::Core),
+            "short_term" => Ok(Self::ShortTerm),
+            "long_term" => Ok(Self::LongTerm),
+            _ => Err(format!("Unknown memory tier: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// ============================================================================
+// MemoryScope
+// ============================================================================
+
+/// Visibility scope for a memory fact.
+///
+/// Controls which retrieval contexts can see a given fact:
+/// - **Global**: visible everywhere
+/// - **Workspace**: visible only within a specific workspace
+/// - **Persona**: visible only to a specific persona
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryScope {
+    /// Visible everywhere.
+    #[default]
+    Global,
+    /// Visible only within a specific workspace.
+    Workspace,
+    /// Visible only to a specific persona.
+    Persona,
+}
+
+impl MemoryScope {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Global => "global",
+            Self::Workspace => "workspace",
+            Self::Persona => "persona",
+        }
+    }
+
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Self::Global)
+    }
+}
+
+impl std::str::FromStr for MemoryScope {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "global" => Ok(Self::Global),
+            "workspace" => Ok(Self::Workspace),
+            "persona" => Ok(Self::Persona),
+            _ => Err(format!("Unknown memory scope: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// ============================================================================
+// FactSpecificity
+// ============================================================================
+
+/// Fact specificity level (prevents too vague or too detailed facts)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FactSpecificity {
+    /// Principle level: "User prefers functional programming"
+    Principle,
+    /// Pattern level: "User uses Result instead of panic for error handling"
+    #[default]
+    Pattern,
+    /// Instance level: "User used anyhow in 2025-01-15 project"
+    Instance,
+}
+
+impl FactSpecificity {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Principle => "principle",
+            Self::Pattern => "pattern",
+            Self::Instance => "instance",
+        }
+    }
+
+    /// Parse from string with fallback to Pattern
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Self::Pattern)
+    }
+}
+
+impl std::str::FromStr for FactSpecificity {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "principle" => Ok(Self::Principle),
+            "pattern" => Ok(Self::Pattern),
+            "instance" => Ok(Self::Instance),
+            _ => Err(format!("Unknown fact specificity: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for FactSpecificity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// ============================================================================
+// TemporalScope
+// ============================================================================
+
+/// Temporal scope of a fact
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TemporalScope {
+    /// Long-term valid: "User's native language is Chinese"
+    Permanent,
+    /// Context-related: "User is working on Aleph project"
+    #[default]
+    Contextual,
+    /// Short-term valid: "User wants to focus on docs today"
+    Ephemeral,
+}
+
+impl TemporalScope {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Permanent => "permanent",
+            Self::Contextual => "contextual",
+            Self::Ephemeral => "ephemeral",
+        }
+    }
+
+    /// Parse from string with fallback to Contextual
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or(Self::Contextual)
+    }
+}
+
+impl std::str::FromStr for TemporalScope {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "permanent" => Ok(Self::Permanent),
+            "contextual" => Ok(Self::Contextual),
+            "ephemeral" => Ok(Self::Ephemeral),
+            _ => Err(format!("Unknown temporal scope: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for TemporalScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
