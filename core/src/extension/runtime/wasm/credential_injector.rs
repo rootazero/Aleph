@@ -7,7 +7,7 @@
 
 use url::Url;
 
-use super::capabilities::{CredentialBinding, CredentialInject};
+use super::capabilities::{host_matches_pattern, CredentialBinding, CredentialInject};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -36,30 +36,6 @@ impl std::fmt::Display for CredentialError {
 }
 
 impl std::error::Error for CredentialError {}
-
-// ---------------------------------------------------------------------------
-// Host pattern matching
-// ---------------------------------------------------------------------------
-
-/// Check whether `host` matches `pattern`.
-///
-/// Supports leading wildcard notation (`*.domain.com`):
-/// - `*.domain.com` matches `api.domain.com` (one subdomain level)
-/// - `*.domain.com` does NOT match `domain.com` (bare domain)
-/// - `*.domain.com` does NOT match `a.b.domain.com` (nested subdomains)
-///
-/// Without a wildcard prefix, an exact (case-insensitive) match is required.
-fn host_matches_pattern(host: &str, pattern: &str) -> bool {
-    if let Some(suffix) = pattern.strip_prefix("*.") {
-        if let Some(prefix) = host.strip_suffix(suffix) {
-            prefix.ends_with('.') && !prefix[..prefix.len() - 1].contains('.')
-        } else {
-            false
-        }
-    } else {
-        pattern.eq_ignore_ascii_case(host)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Public API

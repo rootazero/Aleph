@@ -21,6 +21,9 @@ pub enum CapabilityError {
     ResourceExhausted(String),
     LeakDetected(String),
     PathTraversal(String),
+    SecretNotFound(String),
+    ApprovalDenied(String),
+    ApprovalTimeout,
     InternalError(String),
 }
 
@@ -33,6 +36,9 @@ impl std::fmt::Display for CapabilityError {
             Self::ResourceExhausted(msg) => write!(f, "Resource exhausted: {}", msg),
             Self::LeakDetected(msg) => write!(f, "Leak detected: {}", msg),
             Self::PathTraversal(msg) => write!(f, "Path traversal: {}", msg),
+            Self::SecretNotFound(msg) => write!(f, "Secret not found: {}", msg),
+            Self::ApprovalDenied(msg) => write!(f, "Approval denied: {}", msg),
+            Self::ApprovalTimeout => write!(f, "Approval timed out"),
             Self::InternalError(msg) => write!(f, "Internal error: {}", msg),
         }
     }
@@ -149,6 +155,7 @@ impl WasmCapabilityKernel {
     }
 
     fn validate_path(&self, path: &str) -> Result<(), CapabilityError> {
+        // Check raw path first
         if path.contains("..") {
             return Err(CapabilityError::PathTraversal("'..' not allowed".to_string()));
         }
@@ -158,6 +165,20 @@ impl WasmCapabilityKernel {
         if path.contains('\0') {
             return Err(CapabilityError::PathTraversal("null bytes not allowed".to_string()));
         }
+
+        // Also check percent-decoded form to prevent encoded traversal (%2e%2e)
+        let decoded = percent_encoding::percent_decode_str(path).decode_utf8_lossy();
+        if decoded.contains("..") {
+            return Err(CapabilityError::PathTraversal(
+                "encoded '..' not allowed".to_string(),
+            ));
+        }
+        if decoded.starts_with('/') {
+            return Err(CapabilityError::PathTraversal(
+                "encoded absolute path not allowed".to_string(),
+            ));
+        }
+
         Ok(())
     }
 }
@@ -227,6 +248,16 @@ mod tests {
         assert!(kernel.check_workspace_read("docs/../secrets/key.pem").is_err());
         assert!(kernel.check_workspace_read("/etc/passwd").is_err());
         assert!(kernel.check_workspace_read("docs/\0hidden").is_err());
+    }
+
+    #[test]
+    fn test_workspace_rejects_percent_encoded_traversal() {
+        let kernel = kernel_with_workspace();
+        // %2e = '.', so %2e%2e = '..'
+        assert!(kernel.check_workspace_read("docs/%2e%2e/secrets/key.pem").is_err());
+        assert!(kernel.check_workspace_read("docs/%2E%2E/secrets/key.pem").is_err());
+        // Encoded absolute path: %2f = '/'
+        assert!(kernel.check_workspace_read("%2fetc/passwd").is_err());
     }
 
     #[test]

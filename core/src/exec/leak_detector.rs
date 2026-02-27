@@ -10,7 +10,7 @@ use aho_corasick::AhoCorasick;
 use regex::Regex;
 
 /// Action to take when a leak is detected.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LeakAction {
     /// Block the content entirely — must not be transmitted.
     Block,
@@ -178,7 +178,7 @@ impl LeakDetector {
                 };
                 findings.push(ScanFinding {
                     pattern_name: pattern.name,
-                    action: pattern.action.clone(),
+                    action: pattern.action,
                     matched_text: truncated,
                 });
             }

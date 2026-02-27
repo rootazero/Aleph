@@ -71,6 +71,27 @@ fn default_path_prefix() -> String {
     "/".to_string()
 }
 
+/// Check whether `host` matches `pattern` with wildcard support.
+///
+/// Supports leading wildcard notation (`*.domain.com`):
+/// - `*.domain.com` matches `api.domain.com` (one subdomain level)
+/// - `*.domain.com` does NOT match `domain.com` (bare domain)
+/// - `*.domain.com` does NOT match `a.b.domain.com` (nested subdomains)
+///
+/// Without a wildcard prefix, an exact (case-insensitive) match is required.
+pub fn host_matches_pattern(host: &str, pattern: &str) -> bool {
+    if pattern.starts_with("*.") {
+        let suffix = &pattern[1..]; // ".domain.com"
+        if !host.ends_with(suffix) {
+            return false;
+        }
+        let prefix = &host[..host.len() - suffix.len()];
+        !prefix.is_empty() && !prefix.contains('.')
+    } else {
+        pattern.eq_ignore_ascii_case(host)
+    }
+}
+
 impl EndpointPattern {
     /// Check whether a request (method, host, path) matches this pattern.
     pub fn matches(&self, method: &str, host: &str, path: &str) -> bool {
@@ -87,22 +108,7 @@ impl EndpointPattern {
         }
 
         // Host check
-        if self.host.starts_with("*.") {
-            // Wildcard: *.domain.com
-            // The suffix we need is ".domain.com"
-            let suffix = &self.host[1..]; // ".domain.com"
-            // host must end with the suffix AND the part before the suffix
-            // must not contain a dot (i.e., exactly one subdomain level).
-            if !host.ends_with(suffix) {
-                return false;
-            }
-            let prefix = &host[..host.len() - suffix.len()];
-            // prefix must be non-empty and must not contain '.'
-            !prefix.is_empty() && !prefix.contains('.')
-        } else {
-            // Exact host match
-            host.eq_ignore_ascii_case(&self.host)
-        }
+        host_matches_pattern(host, &self.host)
     }
 }
 
