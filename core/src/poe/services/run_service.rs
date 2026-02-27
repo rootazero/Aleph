@@ -16,6 +16,8 @@ use crate::gateway::protocol::JsonRpcRequest;
 use crate::poe::{
     CompositeValidator, PoeConfig, PoeManager, PoeOutcome, PoeTask, Worker,
 };
+use crate::poe::crystallization::ExperienceRecorder;
+use crate::poe::event_bus::PoeEventBus;
 use crate::poe::handler_types::{
     PoeAcceptedEvent, PoeCompletedEvent, PoeErrorEvent, PoeStepEvent, PoeValidationEvent,
     PoeCancelResult, PoeConfigParams, PoeRunParams, PoeRunResult,
@@ -44,6 +46,10 @@ pub struct PoeRunManager<W: Worker + 'static> {
     validator_factory: ValidatorFactory,
     /// Default POE configuration
     default_config: PoeConfig,
+    /// Optional POE event bus for domain events
+    poe_event_bus: Option<Arc<PoeEventBus>>,
+    /// Optional experience recorder for crystallization
+    recorder: Option<Arc<dyn ExperienceRecorder>>,
 }
 
 impl<W: Worker + 'static> PoeRunManager<W> {
@@ -71,7 +77,21 @@ impl<W: Worker + 'static> PoeRunManager<W> {
             worker_factory,
             validator_factory,
             default_config,
+            poe_event_bus: None,
+            recorder: None,
         }
+    }
+
+    /// Set the POE event bus for domain event emission.
+    pub fn with_poe_event_bus(mut self, bus: Arc<PoeEventBus>) -> Self {
+        self.poe_event_bus = Some(bus);
+        self
+    }
+
+    /// Set the experience recorder for crystallization.
+    pub fn with_recorder(mut self, recorder: Arc<dyn ExperienceRecorder>) -> Self {
+        self.recorder = Some(recorder);
+        self
     }
 
     /// Start a new POE run
@@ -145,6 +165,8 @@ impl<W: Worker + 'static> PoeRunManager<W> {
         let abort_signals = self.abort_signals.clone();
         let task_id_clone = task_id.clone();
         let stream = params.stream;
+        let poe_event_bus = self.poe_event_bus.clone();
+        let recorder = self.recorder.clone();
 
         tokio::spawn(async move {
             let result = execute_poe_task(PoeExecutionContext {
@@ -157,6 +179,8 @@ impl<W: Worker + 'static> PoeRunManager<W> {
                 active_tasks: active_tasks.clone(),
                 abort_rx,
                 stream,
+                poe_event_bus,
+                recorder,
             })
             .await;
 
@@ -302,6 +326,8 @@ struct PoeExecutionContext<W: Worker + 'static> {
     active_tasks: Arc<RwLock<HashMap<String, PoeTaskState>>>,
     abort_rx: tokio::sync::watch::Receiver<bool>,
     stream: bool,
+    poe_event_bus: Option<Arc<PoeEventBus>>,
+    recorder: Option<Arc<dyn ExperienceRecorder>>,
 }
 
 /// Execute a POE task with event emission
@@ -318,6 +344,8 @@ async fn execute_poe_task<W: Worker + 'static>(
         active_tasks,
         mut abort_rx,
         stream,
+        poe_event_bus,
+        recorder,
     } = ctx;
 
     let start_time = Instant::now();
@@ -378,9 +406,16 @@ async fn execute_poe_task<W: Worker + 'static>(
         })
     };
 
-    // Create manager with validation callback and execute
-    let manager = PoeManager::new(worker, validator, config)
+    // Create manager with validation callback and optional event bus/recorder
+    let mut manager = PoeManager::new(worker, validator, config)
         .with_validation_callback(validation_callback);
+
+    if let Some(bus) = poe_event_bus {
+        manager = manager.with_event_bus(bus);
+    }
+    if let Some(rec) = recorder {
+        manager = manager.with_recorder(rec);
+    }
 
     // Execute with abort check
     let outcome = tokio::select! {
