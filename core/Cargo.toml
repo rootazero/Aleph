@@ -33,8 +33,10 @@ signal = ["gateway"]
 mattermost = ["gateway"]
 # IRC channel support (RFC 2812 raw TCP)
 irc = ["gateway"]
+# Generic Webhook channel support (bidirectional HTTP + HMAC)
+webhook = ["gateway"]
 # All messaging channels
-all-channels = ["telegram", "discord", "whatsapp", "slack", "email", "matrix", "signal", "mattermost", "irc"]
+all-channels = ["telegram", "discord", "whatsapp", "slack", "email", "matrix", "signal", "mattermost", "irc", "webhook"]
 # Cron job scheduling
 cron = ["dep:cron", "dep:chrono-tz", "dep:sysinfo", "gateway"]
 # CLI interactive prompts (inquire for rich user questions)

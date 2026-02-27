@@ -16,6 +16,7 @@
 //! - **Signal**: Signal via signal-cli REST API integration (requires `signal` feature)
 //! - **Mattermost**: Mattermost WebSocket + REST API v4 integration (requires `mattermost` feature)
 //! - **IRC**: IRC raw TCP integration via RFC 2812 (requires `irc` feature)
+//! - **Webhook**: Generic bidirectional HTTP webhook (requires `webhook` feature)
 
 pub mod cli;
 
@@ -49,6 +50,9 @@ pub mod mattermost;
 #[cfg(feature = "irc")]
 pub mod irc;
 
+#[cfg(feature = "webhook")]
+pub mod webhook;
+
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
 #[cfg(target_os = "macos")]
@@ -80,3 +84,6 @@ pub use mattermost::{MattermostChannel, MattermostChannelFactory, MattermostConf
 
 #[cfg(feature = "irc")]
 pub use irc::{IrcChannel, IrcChannelFactory, IrcConfig};
+
+#[cfg(feature = "webhook")]
+pub use webhook::{WebhookChannel, WebhookChannelFactory, WebhookChannelConfig};
