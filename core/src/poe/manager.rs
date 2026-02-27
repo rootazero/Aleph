@@ -29,7 +29,7 @@ use crate::poe::event_bus::PoeEventBus;
 use crate::poe::events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind};
 use crate::poe::types::{PoeOutcome, PoeTask, Verdict, WorkerOutput, WorkerState};
 use crate::poe::validation::CompositeValidator;
-use crate::poe::worker::Worker;
+use crate::poe::worker::{StateSnapshot, Worker};
 
 // ============================================================================
 // Validation Callback
@@ -172,6 +172,8 @@ pub struct PoeManager<W: Worker> {
     event_bus: Option<Arc<PoeEventBus>>,
     /// Monotonic sequence counter for event ordering
     event_seq: AtomicU32,
+    /// Optional workspace path for snapshot capture/restore
+    workspace: Option<std::path::PathBuf>,
 }
 
 impl<W: Worker> PoeManager<W> {
@@ -192,7 +194,18 @@ impl<W: Worker> PoeManager<W> {
             meta_cognition: None,
             event_bus: None,
             event_seq: AtomicU32::new(0),
+            workspace: None,
         }
+    }
+
+    /// Set the workspace path for snapshot capture/restore.
+    ///
+    /// When configured, the manager captures a git-based snapshot before
+    /// the first operation attempt and restores it before each retry,
+    /// ensuring a clean workspace for each attempt.
+    pub fn with_workspace(mut self, workspace: std::path::PathBuf) -> Self {
+        self.workspace = Some(workspace);
+        self
     }
 
     /// Set the experience recorder for crystallizing POE executions.
@@ -281,6 +294,31 @@ impl<W: Worker> PoeManager<W> {
             hard_constraints_count: task.manifest.hard_constraints.len(),
             soft_metrics_count: task.manifest.soft_metrics.len(),
         });
+
+        // Capture initial workspace snapshot for rollback
+        let snapshot = if let Some(ref workspace) = self.workspace {
+            match StateSnapshot::capture(workspace).await {
+                Ok(snap) => {
+                    if snap.stash_hash.is_some() {
+                        tracing::debug!(
+                            task_id = %task.manifest.task_id,
+                            "Captured workspace snapshot for rollback"
+                        );
+                    }
+                    Some(snap)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        task_id = %task.manifest.task_id,
+                        error = %e,
+                        "Failed to capture workspace snapshot, continuing without rollback"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // Track the last failure for retry feedback
         let mut previous_failure: Option<String> = None;
@@ -383,6 +421,22 @@ impl<W: Worker> PoeManager<W> {
                     best_distance: budget.best_score().unwrap_or(1.0),
                 });
                 return Ok(outcome);
+            }
+
+            // Restore workspace to clean state before retry
+            if let Some(ref snap) = snapshot {
+                if let Err(e) = snap.restore().await {
+                    tracing::warn!(
+                        task_id = %task.manifest.task_id,
+                        error = %e,
+                        "Failed to restore workspace snapshot, retrying on dirty state"
+                    );
+                } else {
+                    tracing::debug!(
+                        task_id = %task.manifest.task_id,
+                        "Workspace restored to clean state for retry"
+                    );
+                }
             }
 
             // Prepare for retry
@@ -762,6 +816,25 @@ mod tests {
 
         // Worker should have been called multiple times
         assert!(manager.worker().execution_count() > 1);
+    }
+
+    #[tokio::test]
+    async fn test_manager_with_workspace_compiles() {
+        // Verify the workspace builder method is available and composable
+        let worker = MockWorker::new();
+        let provider = Arc::new(MockProvider::new(""));
+        let validator = CompositeValidator::new(provider);
+        let config = PoeConfig::default();
+
+        let manager = PoeManager::new(worker, validator, config)
+            .with_workspace(PathBuf::from("/tmp/test"));
+
+        // Verify workspace is set
+        assert!(manager.workspace.is_some());
+        assert_eq!(
+            manager.workspace.as_ref().unwrap(),
+            &PathBuf::from("/tmp/test")
+        );
     }
 
     #[tokio::test]
