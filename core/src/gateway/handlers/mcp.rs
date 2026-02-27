@@ -9,7 +9,7 @@
 use serde::Deserialize;
 use serde_json::json;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, RESOURCE_NOT_FOUND};
 use crate::mcp::manager::{McpManagerConfig, McpManagerHandle};
 
 // ============================================================================
@@ -47,32 +47,6 @@ fn default_max_lines() -> u32 {
 }
 
 // ============================================================================
-// Helper: Parse params
-// ============================================================================
-
-// JsonRpcResponse is 152+ bytes but boxing it would complicate all handler call sites
-#[allow(clippy::result_large_err)]
-fn parse_params<T: serde::de::DeserializeOwned>(
-    request: &JsonRpcRequest,
-    required_field: &str,
-) -> Result<T, JsonRpcResponse> {
-    match &request.params {
-        Some(p) => serde_json::from_value(p.clone()).map_err(|e| {
-            JsonRpcResponse::error(
-                request.id.clone(),
-                INVALID_PARAMS,
-                format!("Invalid params: {}", e),
-            )
-        }),
-        None => Err(JsonRpcResponse::error(
-            request.id.clone(),
-            INVALID_PARAMS,
-            format!("Missing params: {} required", required_field),
-        )),
-    }
-}
-
-// ============================================================================
 // List
 // ============================================================================
 
@@ -90,7 +64,7 @@ pub async fn handle_list(request: JsonRpcRequest, handle: McpManagerHandle) -> J
 
 /// Add a new MCP server
 pub async fn handle_add(request: JsonRpcRequest, handle: McpManagerHandle) -> JsonRpcResponse {
-    let params: AddParams = match parse_params(&request, "config") {
+    let params: AddParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -114,7 +88,7 @@ pub async fn handle_add(request: JsonRpcRequest, handle: McpManagerHandle) -> Js
 ///
 /// This uses upsert semantics - removes the old server (if exists) and adds the new one.
 pub async fn handle_update(request: JsonRpcRequest, handle: McpManagerHandle) -> JsonRpcResponse {
-    let params: UpdateParams = match parse_params(&request, "config") {
+    let params: UpdateParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -140,7 +114,7 @@ pub async fn handle_update(request: JsonRpcRequest, handle: McpManagerHandle) ->
 
 /// Delete an MCP server
 pub async fn handle_delete(request: JsonRpcRequest, handle: McpManagerHandle) -> JsonRpcResponse {
-    let params: IdParams = match parse_params(&request, "id") {
+    let params: IdParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -160,7 +134,7 @@ pub async fn handle_delete(request: JsonRpcRequest, handle: McpManagerHandle) ->
 
 /// Get MCP server detailed status
 pub async fn handle_status(request: JsonRpcRequest, handle: McpManagerHandle) -> JsonRpcResponse {
-    let params: IdParams = match parse_params(&request, "id") {
+    let params: IdParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -184,7 +158,7 @@ pub async fn handle_status(request: JsonRpcRequest, handle: McpManagerHandle) ->
 ///
 /// Note: Logging is not yet implemented in the actor. Returns empty logs for now.
 pub async fn handle_logs(request: JsonRpcRequest, _handle: McpManagerHandle) -> JsonRpcResponse {
-    let _params: LogsParams = match parse_params(&request, "id") {
+    let _params: LogsParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -199,7 +173,7 @@ pub async fn handle_logs(request: JsonRpcRequest, _handle: McpManagerHandle) -> 
 
 /// Start a stopped MCP server
 pub async fn handle_start(request: JsonRpcRequest, handle: McpManagerHandle) -> JsonRpcResponse {
-    let params: IdParams = match parse_params(&request, "id") {
+    let params: IdParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -219,7 +193,7 @@ pub async fn handle_start(request: JsonRpcRequest, handle: McpManagerHandle) -> 
 
 /// Stop a running MCP server
 pub async fn handle_stop(request: JsonRpcRequest, handle: McpManagerHandle) -> JsonRpcResponse {
-    let params: IdParams = match parse_params(&request, "id") {
+    let params: IdParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -239,7 +213,7 @@ pub async fn handle_stop(request: JsonRpcRequest, handle: McpManagerHandle) -> J
 
 /// Restart an MCP server
 pub async fn handle_restart(request: JsonRpcRequest, handle: McpManagerHandle) -> JsonRpcResponse {
-    let params: IdParams = match parse_params(&request, "id") {
+    let params: IdParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -448,7 +422,7 @@ pub async fn handle_list_pending_approvals(request: JsonRpcRequest) -> JsonRpcRe
 ///
 /// Submit user's response to an approval request.
 pub async fn handle_respond_approval(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: RespondApprovalParams = match parse_params(&request, "request_id, approved") {
+    let params: RespondApprovalParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -474,7 +448,7 @@ pub async fn handle_respond_approval(request: JsonRpcRequest) -> JsonRpcResponse
 ///
 /// Cancel a pending approval request.
 pub async fn handle_cancel_approval(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: CancelApprovalParams = match parse_params(&request, "request_id") {
+    let params: CancelApprovalParams = match super::parse_params(&request) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
