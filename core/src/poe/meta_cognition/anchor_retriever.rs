@@ -123,8 +123,8 @@ impl AnchorRetriever {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::memory::cortex::meta_cognition::reactive::LLMConfig;
     use crate::memory::cortex::meta_cognition::schema::initialize_schema;
+    use crate::poe::meta_cognition::reactive::LLMConfig;
     use crate::poe::meta_cognition::types::{AnchorScope, AnchorSource};
     use rusqlite::Connection;
 
