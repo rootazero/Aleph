@@ -17,6 +17,7 @@
 //! - **Mattermost**: Mattermost WebSocket + REST API v4 integration (requires `mattermost` feature)
 //! - **IRC**: IRC raw TCP integration via RFC 2812 (requires `irc` feature)
 //! - **Webhook**: Generic bidirectional HTTP webhook (requires `webhook` feature)
+//! - **XMPP**: XMPP raw TCP integration via RFC 6120/6121 + XEP-0045 MUC (requires `xmpp` feature)
 
 pub mod cli;
 
@@ -53,6 +54,9 @@ pub mod irc;
 #[cfg(feature = "webhook")]
 pub mod webhook;
 
+#[cfg(feature = "xmpp")]
+pub mod xmpp;
+
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
 #[cfg(target_os = "macos")]
@@ -87,3 +91,6 @@ pub use irc::{IrcChannel, IrcChannelFactory, IrcConfig};
 
 #[cfg(feature = "webhook")]
 pub use webhook::{WebhookChannel, WebhookChannelFactory, WebhookChannelConfig};
+
+#[cfg(feature = "xmpp")]
+pub use xmpp::{XmppChannel, XmppChannelFactory, XmppConfig};
