@@ -330,6 +330,24 @@ impl StateDatabase {
             );
 
             -- ================================================================
+            -- POE Contracts: Pending contract persistence
+            -- ================================================================
+
+            CREATE TABLE IF NOT EXISTS poe_contracts (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                instruction TEXT NOT NULL,
+                manifest_json TEXT NOT NULL,
+                context_json TEXT,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'signed', 'rejected', 'expired')),
+                created_at INTEGER NOT NULL,
+                signed_at INTEGER,
+                expires_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_pc_status ON poe_contracts(status);
+            CREATE INDEX IF NOT EXISTS idx_pc_task_id ON poe_contracts(task_id);
+
+            -- ================================================================
             -- sqlite-vec Virtual Tables: created dynamically via vec_schema_sql()
             -- ================================================================
 
