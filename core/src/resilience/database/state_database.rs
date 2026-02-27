@@ -294,6 +294,30 @@ impl StateDatabase {
                 ON memory_events(correlation_id);
 
             -- ================================================================
+            -- POE Event Sourcing (append-only event log)
+            -- ================================================================
+
+            CREATE TABLE IF NOT EXISTS poe_events (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id        TEXT NOT NULL,
+                seq            INTEGER NOT NULL,
+                event_type     TEXT NOT NULL,
+                event_json     TEXT NOT NULL,
+                tier           TEXT NOT NULL CHECK(tier IN ('skeleton', 'pulse')),
+                timestamp      INTEGER NOT NULL,
+                correlation_id TEXT,
+
+                UNIQUE(task_id, seq)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_pe_task_id
+                ON poe_events(task_id);
+            CREATE INDEX IF NOT EXISTS idx_pe_event_type
+                ON poe_events(event_type);
+            CREATE INDEX IF NOT EXISTS idx_pe_timestamp
+                ON poe_events(timestamp);
+
+            -- ================================================================
             -- sqlite-vec Virtual Tables: created dynamically via vec_schema_sql()
             -- ================================================================
 
