@@ -14,6 +14,8 @@ use super::aleph_plugin_toml::{
     CapabilitiesSection, ChannelSection, CommandSection, HookSection, HttpRouteSection,
     PromptSection, ProviderSection, ServiceSection, ToolSection,
 };
+use crate::extension::runtime::wasm::WasmCapabilities;
+use crate::extension::runtime::wasm::WasmResourceLimits;
 
 // =============================================================================
 // Config UI Hints
@@ -256,6 +258,14 @@ pub struct PluginManifest {
     #[serde(skip)]
     pub capabilities_v2: Option<CapabilitiesSection>,
 
+    /// WASM sandbox capability declarations (parsed from [plugin.capabilities])
+    #[serde(skip)]
+    pub wasm_capabilities: Option<WasmCapabilities>,
+
+    /// WASM resource limits (parsed from [plugin.limits] or defaults)
+    #[serde(skip)]
+    pub wasm_resource_limits: Option<WasmResourceLimits>,
+
     // ═══════════════════════════════════════════
     // P2 Extension fields
     // ═══════════════════════════════════════════
@@ -300,6 +310,8 @@ impl PluginManifest {
             services_v2: None,
             prompt_v2: None,
             capabilities_v2: None,
+            wasm_capabilities: None,
+            wasm_resource_limits: None,
             // P2 fields
             channels_v2: None,
             providers_v2: None,
