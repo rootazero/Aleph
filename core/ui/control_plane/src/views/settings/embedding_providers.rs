@@ -61,7 +61,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
     view! {
         <div class="flex h-full">
             // Left panel - Provider list
-            <div class="flex flex-col w-2/3 border-r border-border">
+            <div class="flex flex-col w-5/12 border-r border-border">
                 // Header
                 <div class="px-6 py-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">
@@ -141,7 +141,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                                 }.into_any()
                                             } else {
                                                 view! {
-                                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                    <div class="grid grid-cols-1 gap-2">
                                                         {provider_list.into_iter().map(|p| {
                                                             let pid = p.id.clone();
                                                             let is_selected = selected_provider_id.get() == Some(pid.clone());
@@ -182,7 +182,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
             </div>
 
             // Right panel - Detail / Add form
-            <div class="flex-1 bg-surface overflow-auto">
+            <div class="w-7/12 bg-surface overflow-auto">
                 {move || {
                     if show_add_form.get() {
                         view! {
@@ -739,7 +739,7 @@ fn AddProviderPanel(
                 <label class="block text-sm font-medium text-text-secondary mb-2">
                     "Start from preset"
                 </label>
-                <div class="grid grid-cols-2 gap-2">
+                <div class="grid grid-cols-1 gap-2">
                     {move || {
                         let preset_list = presets.get();
                         preset_list.into_iter().map(|p| {

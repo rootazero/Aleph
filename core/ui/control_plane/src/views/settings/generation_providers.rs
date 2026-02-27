@@ -56,7 +56,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
     view! {
         <div class="flex h-full">
             // Left panel - Provider list + Generation settings
-            <div class="flex flex-col w-2/3 border-r border-border">
+            <div class="flex flex-col w-5/12 border-r border-border">
                 // Header
                 <div class="px-6 py-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">
@@ -107,7 +107,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                         } else {
                             let presets = current_presets();
                             view! {
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-6">
+                                <div class="grid grid-cols-1 gap-3 p-6">
                                     {presets.into_iter().map(|preset| {
                                         let preset_id = preset.id.clone();
                                         let configured = is_configured(&preset_id);
@@ -142,7 +142,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
             </div>
 
             // Right panel - Provider details
-            <div class="flex-1 bg-surface">
+            <div class="w-7/12 bg-surface overflow-auto">
                 <ProviderDetailPanel
                     selected_id=selected_provider_id
                     providers=providers
