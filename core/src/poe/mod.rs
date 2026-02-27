@@ -231,4 +231,6 @@ pub use event_bus::PoeEventBus;
 pub use events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind, EventTier};
 
 // Projectors
+pub use projectors::memory::{MemoryFactWriter, MemoryProjector, NoOpMemoryFactWriter};
+pub use projectors::runner::{ProjectorHandler, ProjectorRunner};
 pub use projectors::trust::TrustProjector;
