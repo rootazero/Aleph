@@ -28,6 +28,8 @@ pub mod link;
 pub mod transport;
 
 #[cfg(feature = "gateway")]
+pub mod formatter;
+#[cfg(feature = "gateway")]
 pub mod protocol;
 #[cfg(feature = "gateway")]
 pub mod server;
@@ -97,6 +99,8 @@ pub mod execution_adapter;
 pub mod a2a_policy;
 #[cfg(feature = "gateway")]
 pub mod context;
+#[cfg(feature = "gateway")]
+pub mod webhook_receiver;
 #[cfg(feature = "gateway")]
 pub mod webhooks;
 #[cfg(feature = "gateway")]
@@ -178,6 +182,8 @@ pub use execution_adapter::ExecutionAdapter;
 pub use a2a_policy::AgentToAgentPolicy;
 #[cfg(feature = "gateway")]
 pub use context::GatewayContext;
+#[cfg(feature = "gateway")]
+pub use webhook_receiver::{WebhookHandler, WebhookReceiver};
 #[cfg(feature = "gateway")]
 pub use webhooks::{
     WebhooksConfig, WebhookEndpointConfig, SignatureFormat,
