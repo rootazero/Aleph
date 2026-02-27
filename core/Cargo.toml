@@ -55,6 +55,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 sqlite-vec = "0.1.6"
 uuid = { version = "1.7", features = ["v4", "serde"] }
 regex = "1.10"
+aho-corasick = "1.1"
+percent-encoding = "2.3"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = { version = "0.10", optional = true }
 rand = "0.8"
