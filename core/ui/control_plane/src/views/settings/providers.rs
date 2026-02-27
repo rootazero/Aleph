@@ -588,12 +588,12 @@ fn ProviderDetailPanel(
     };
 
     view! {
-        <div class="p-6">
+        <div class="flex flex-col h-full">
             {move || {
                 let sel = selected.get();
                 if sel.is_none() {
                     return view! {
-                        <div class="flex flex-col items-center justify-center h-64 text-text-tertiary">
+                        <div class="flex flex-col items-center justify-center flex-1 text-text-tertiary">
                             <svg class="w-12 h-12 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
                                     d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -622,255 +622,261 @@ fn ProviderDetailPanel(
                     .and_then(find_preset);
 
                 view! {
-                    <div class="space-y-5">
-                        // Header with icon
-                        <div class="flex items-center gap-3">
-                            {if let Some(preset) = preset_info {
-                                let ch = preset.name.chars().next().unwrap_or('?').to_uppercase().to_string();
-                                view! {
-                                    <div
-                                        class="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold"
-                                        style=format!("background-color: {}", preset.icon_color)
-                                    >
-                                        {ch}
-                                    </div>
-                                }.into_any()
-                            } else {
-                                view! {
-                                    <div class="w-10 h-10 rounded-xl bg-surface-sunken flex items-center justify-center text-text-tertiary font-bold">
-                                        "?"
-                                    </div>
-                                }.into_any()
-                            }}
-                            <div>
-                                <h2 class="text-lg font-semibold text-text-primary capitalize">{title}</h2>
+                    <div class="flex flex-col h-full">
+                        // Header
+                        <div class="px-6 py-4 border-b border-border">
+                            <div class="flex items-center gap-3">
                                 {if let Some(preset) = preset_info {
-                                    view! { <p class="text-xs text-text-tertiary">{preset.description}</p> }.into_any()
-                                } else {
-                                    view! { <p class="text-xs text-text-tertiary">"Custom provider configuration"</p> }.into_any()
-                                }}
-                            </div>
-                        </div>
-
-                        // Error
-                        {move || error.get().filter(|e| !e.contains("Failed to load")).map(|e| view! {
-                            <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">{e}</div>
-                        })}
-
-                        // Form
-                        <div class="space-y-4">
-                            // Name (editable only for new custom)
-                            {move || if sel == "__new__" {
-                                view! {
-                                    <div>
-                                        <label class="block text-xs font-medium text-text-secondary mb-1">"Name"</label>
-                                        <input
-                                            type="text"
-                                            prop:value=move || form_name.get()
-                                            on:input=move |ev| form_name.set(event_target_value(&ev))
-                                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                            placeholder="my-provider"
-                                        />
-                                    </div>
-                                }.into_any()
-                            } else {
-                                view! { <div></div> }.into_any()
-                            }}
-
-                            // Protocol
-                            <div>
-                                <label class="block text-xs font-medium text-text-secondary mb-1">"Protocol"</label>
-                                <select
-                                    prop:value=move || form_protocol.get()
-                                    on:change=move |ev| form_protocol.set(event_target_value(&ev))
-                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                >
-                                    <option value="openai">"OpenAI Compatible"</option>
-                                    <option value="anthropic">"Anthropic"</option>
-                                    <option value="gemini">"Google Gemini"</option>
-                                    <option value="ollama">"Ollama"</option>
-                                </select>
-                            </div>
-
-                            // Model
-                            <div>
-                                <label class="block text-xs font-medium text-text-secondary mb-1">"Model"</label>
-                                <input
-                                    type="text"
-                                    prop:value=move || form_model.get()
-                                    on:input=move |ev| form_model.set(event_target_value(&ev))
-                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                    placeholder="model-name"
-                                />
-                            </div>
-
-                            // API Key
-                            <div>
-                                <label class="block text-xs font-medium text-text-secondary mb-1">"API Key"</label>
-                                <input
-                                    type="password"
-                                    prop:value=move || form_api_key.get()
-                                    on:input=move |ev| form_api_key.set(event_target_value(&ev))
-                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                    placeholder=move || {
-                                        preset_info.map(|p| p.api_key_placeholder).unwrap_or("sk-...")
-                                    }
-                                />
-                                {move || if preset_info.map(|p| !p.needs_api_key).unwrap_or(false) {
+                                    let ch = preset.name.chars().next().unwrap_or('?').to_uppercase().to_string();
                                     view! {
-                                        <p class="mt-1 text-xs text-text-tertiary">"Not required for local providers"</p>
-                                    }.into_any()
-                                } else if !is_new() {
-                                    view! {
-                                        <p class="mt-1 text-xs text-text-tertiary">"Leave empty to keep existing key"</p>
+                                        <div
+                                            class="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold"
+                                            style=format!("background-color: {}", preset.icon_color)
+                                        >
+                                            {ch}
+                                        </div>
                                     }.into_any()
                                 } else {
-                                    view! { <span></span> }.into_any()
+                                    view! {
+                                        <div class="w-10 h-10 rounded-xl bg-surface-sunken flex items-center justify-center text-text-tertiary font-bold">
+                                            "?"
+                                        </div>
+                                    }.into_any()
                                 }}
-                            </div>
-
-                            // Base URL
-                            <div>
-                                <label class="block text-xs font-medium text-text-secondary mb-1">"Base URL"</label>
-                                <input
-                                    type="text"
-                                    prop:value=move || form_base_url.get()
-                                    on:input=move |ev| form_base_url.set(event_target_value(&ev))
-                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                    placeholder="https://api.example.com/v1"
-                                />
-                            </div>
-
-                            // Enabled
-                            <label class="flex items-center gap-2 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    prop:checked=move || form_enabled.get()
-                                    on:change=move |ev| form_enabled.set(event_target_checked(&ev))
-                                    class="w-4 h-4 rounded"
-                                />
-                                <span class="text-sm text-text-secondary">"Enabled"</span>
-                            </label>
-
-                            // Advanced
-                            <details class="group">
-                                <summary class="cursor-pointer text-xs font-medium text-text-tertiary hover:text-text-secondary">
-                                    "Advanced Settings"
-                                </summary>
-                                <div class="mt-3 space-y-3 pl-3 border-l-2 border-border">
-                                    <div>
-                                        <label class="block text-xs font-medium text-text-secondary mb-1">"Timeout (s)"</label>
-                                        <input
-                                            type="number"
-                                            prop:value=move || form_timeout.get()
-                                            on:input=move |ev| { if let Ok(v) = event_target_value(&ev).parse() { form_timeout.set(v); } }
-                                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label class="block text-xs font-medium text-text-secondary mb-1">"Max Tokens"</label>
-                                        <input
-                                            type="number"
-                                            prop:value=move || form_max_tokens.get()
-                                            on:input=move |ev| form_max_tokens.set(event_target_value(&ev))
-                                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                            placeholder="Optional"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label class="block text-xs font-medium text-text-secondary mb-1">"Temperature"</label>
-                                        <input
-                                            type="number"
-                                            step="0.1"
-                                            prop:value=move || form_temperature.get()
-                                            on:input=move |ev| form_temperature.set(event_target_value(&ev))
-                                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                            placeholder="0.0 - 2.0"
-                                        />
-                                    </div>
+                                <div class="flex-1">
+                                    <h2 class="text-lg font-semibold text-text-primary capitalize">{title}</h2>
+                                    {if let Some(preset) = preset_info {
+                                        view! { <p class="text-xs text-text-tertiary">{preset.description}</p> }.into_any()
+                                    } else {
+                                        view! { <p class="text-xs text-text-tertiary">"Custom provider configuration"</p> }.into_any()
+                                    }}
                                 </div>
-                            </details>
+                            </div>
                         </div>
 
-                        // Actions
-                        <div class="space-y-2 pt-2">
-                            <div class="flex gap-2">
-                                <button
-                                    on:click=on_save
-                                    prop:disabled=move || saving.get()
-                                    class="flex-1 px-4 py-2 bg-primary hover:bg-primary-hover disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
-                                >
-                                    {move || if saving.get() { "Saving..." } else { "Save" }}
-                                </button>
-                                <button
-                                    on:click=on_test
-                                    prop:disabled=move || testing.get() || saving.get()
-                                    class="flex-1 px-4 py-2 bg-surface-raised border border-border hover:border-primary/40 text-text-secondary text-sm rounded-lg transition-colors disabled:opacity-50"
-                                >
-                                    {move || if testing.get() { "Testing..." } else { "Test" }}
-                                </button>
-                            </div>
+                        // Scrollable content
+                        <div class="flex-1 overflow-y-auto p-6 space-y-6">
+                            // Error
+                            {move || error.get().filter(|e| !e.contains("Failed to load")).map(|e| view! {
+                                <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">{e}</div>
+                            })}
 
-                            {move || {
-                                let s = selected.get();
-                                let is_existing = s.as_ref().map(|s| !s.starts_with("__")).unwrap_or(false);
-                                if is_existing {
+                            // Configuration form card
+                            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
+                                <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Configuration"</h3>
+
+                                // Name (editable only for new custom)
+                                {move || if sel == "__new__" {
                                     view! {
-                                        <div class="flex gap-2">
-                                            <button
-                                                on:click=on_set_default
-                                                prop:disabled=move || saving.get()
-                                                class="flex-1 px-4 py-2 bg-success-subtle border border-success/20 text-success text-sm rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
-                                            >
-                                                "Set Default"
-                                            </button>
-                                            <button
-                                                on:click=on_delete
-                                                prop:disabled=move || saving.get()
-                                                class="px-4 py-2 bg-danger-subtle border border-danger/20 text-danger text-sm rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
-                                            >
-                                                "Delete"
-                                            </button>
+                                        <div>
+                                            <label class="block text-sm text-text-secondary mb-1">"Name"</label>
+                                            <input
+                                                type="text"
+                                                prop:value=move || form_name.get()
+                                                on:input=move |ev| form_name.set(event_target_value(&ev))
+                                                class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                                placeholder="my-provider"
+                                            />
                                         </div>
                                     }.into_any()
                                 } else {
                                     view! { <div></div> }.into_any()
-                                }
-                            }}
-                        </div>
+                                }}
 
-                        // Test result
-                        {move || test_result.get().map(|result| {
-                            if result.success {
-                                view! {
-                                    <div class="p-3 bg-success-subtle border border-success/20 rounded-lg">
-                                        <div class="flex items-center gap-2 text-success text-sm">
-                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                                            </svg>
-                                            <span class="font-medium">"Connection successful"</span>
-                                        </div>
-                                        {result.latency_ms.map(|ms| view! {
-                                            <p class="mt-1 text-xs text-success">{format!("Latency: {}ms", ms)}</p>
-                                        })}
+                                // Protocol
+                                <div>
+                                    <label class="block text-sm text-text-secondary mb-1">"Protocol"</label>
+                                    <select
+                                        prop:value=move || form_protocol.get()
+                                        on:change=move |ev| form_protocol.set(event_target_value(&ev))
+                                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                    >
+                                        <option value="openai">"OpenAI Compatible"</option>
+                                        <option value="anthropic">"Anthropic"</option>
+                                        <option value="gemini">"Google Gemini"</option>
+                                        <option value="ollama">"Ollama"</option>
+                                    </select>
+                                </div>
+
+                                // Model
+                                <div>
+                                    <label class="block text-sm text-text-secondary mb-1">"Model"</label>
+                                    <input
+                                        type="text"
+                                        prop:value=move || form_model.get()
+                                        on:input=move |ev| form_model.set(event_target_value(&ev))
+                                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                        placeholder="model-name"
+                                    />
+                                </div>
+
+                                // API Key
+                                <div>
+                                    <label class="block text-sm text-text-secondary mb-1">"API Key"</label>
+                                    <input
+                                        type="password"
+                                        prop:value=move || form_api_key.get()
+                                        on:input=move |ev| form_api_key.set(event_target_value(&ev))
+                                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                        placeholder=move || {
+                                            preset_info.map(|p| p.api_key_placeholder).unwrap_or("sk-...")
+                                        }
+                                    />
+                                    {move || if preset_info.map(|p| !p.needs_api_key).unwrap_or(false) {
+                                        view! {
+                                            <p class="mt-1 text-xs text-text-tertiary">"Not required for local providers"</p>
+                                        }.into_any()
+                                    } else if !is_new() {
+                                        view! {
+                                            <p class="mt-1 text-xs text-text-tertiary">"Leave empty to keep existing key"</p>
+                                        }.into_any()
+                                    } else {
+                                        view! { <span></span> }.into_any()
+                                    }}
+                                </div>
+
+                                // Base URL
+                                <div>
+                                    <label class="block text-sm text-text-secondary mb-1">"Base URL"</label>
+                                    <input
+                                        type="text"
+                                        prop:value=move || form_base_url.get()
+                                        on:input=move |ev| form_base_url.set(event_target_value(&ev))
+                                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                        placeholder="https://api.example.com/v1"
+                                    />
+                                </div>
+
+                                // Enabled
+                                <label class="flex items-center gap-3 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        prop:checked=move || form_enabled.get()
+                                        on:change=move |ev| form_enabled.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <div>
+                                        <span class="text-sm text-text-primary">"Enabled"</span>
+                                        <p class="text-xs text-text-tertiary">"Include this provider in the available providers list"</p>
                                     </div>
-                                }.into_any()
-                            } else {
-                                view! {
-                                    <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg">
-                                        <div class="flex items-center gap-2 text-danger text-sm">
-                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                                            </svg>
-                                            <span class="font-medium">"Connection failed"</span>
+                                </label>
+                            </div>
+
+                            // Advanced Settings card
+                            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
+                                <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Advanced Settings"</h3>
+                                <div>
+                                    <label class="block text-sm text-text-secondary mb-1">"Timeout (s)"</label>
+                                    <input
+                                        type="number"
+                                        prop:value=move || form_timeout.get()
+                                        on:input=move |ev| { if let Ok(v) = event_target_value(&ev).parse() { form_timeout.set(v); } }
+                                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-text-secondary mb-1">"Max Tokens"</label>
+                                    <input
+                                        type="number"
+                                        prop:value=move || form_max_tokens.get()
+                                        on:input=move |ev| form_max_tokens.set(event_target_value(&ev))
+                                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                        placeholder="Optional"
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-text-secondary mb-1">"Temperature"</label>
+                                    <input
+                                        type="number"
+                                        step="0.1"
+                                        prop:value=move || form_temperature.get()
+                                        on:input=move |ev| form_temperature.set(event_target_value(&ev))
+                                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                        placeholder="0.0 - 2.0"
+                                    />
+                                </div>
+                            </div>
+
+                            // Actions
+                            <div class="space-y-2">
+                                <div class="flex gap-2">
+                                    <button
+                                        on:click=on_save
+                                        prop:disabled=move || saving.get()
+                                        class="flex-1 px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+                                    >
+                                        {move || if saving.get() { "Saving..." } else { "Save" }}
+                                    </button>
+                                    <button
+                                        on:click=on_test
+                                        prop:disabled=move || testing.get() || saving.get()
+                                        class="flex-1 px-4 py-2.5 bg-surface-raised border border-border hover:border-primary/40 text-text-secondary text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                                    >
+                                        {move || if testing.get() { "Testing..." } else { "Test" }}
+                                    </button>
+                                </div>
+
+                                {move || {
+                                    let s = selected.get();
+                                    let is_existing = s.as_ref().map(|s| !s.starts_with("__")).unwrap_or(false);
+                                    if is_existing {
+                                        view! {
+                                            <div class="flex gap-2">
+                                                <button
+                                                    on:click=on_set_default
+                                                    prop:disabled=move || saving.get()
+                                                    class="flex-1 px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
+                                                >
+                                                    "Set Default"
+                                                </button>
+                                                <button
+                                                    on:click=on_delete
+                                                    prop:disabled=move || saving.get()
+                                                    class="px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
+                                                >
+                                                    "Delete"
+                                                </button>
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        view! { <div></div> }.into_any()
+                                    }
+                                }}
+                            </div>
+
+                            // Test result
+                            {move || test_result.get().map(|result| {
+                                if result.success {
+                                    view! {
+                                        <div class="p-3 bg-success-subtle border border-success/20 rounded-lg">
+                                            <div class="flex items-center gap-2 text-success text-sm">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                                </svg>
+                                                <span class="font-medium">"Connection successful"</span>
+                                            </div>
+                                            {result.latency_ms.map(|ms| view! {
+                                                <p class="mt-1 text-xs text-success">{format!("Latency: {}ms", ms)}</p>
+                                            })}
                                         </div>
-                                        {result.error.clone().map(|e| view! {
-                                            <p class="mt-1 text-xs text-danger">{e}</p>
-                                        })}
-                                    </div>
-                                }.into_any()
-                            }
-                        })}
+                                    }.into_any()
+                                } else {
+                                    view! {
+                                        <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg">
+                                            <div class="flex items-center gap-2 text-danger text-sm">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                                </svg>
+                                                <span class="font-medium">"Connection failed"</span>
+                                            </div>
+                                            {result.error.clone().map(|e| view! {
+                                                <p class="mt-1 text-xs text-danger">{e}</p>
+                                            })}
+                                        </div>
+                                    }.into_any()
+                                }
+                            })}
+                        </div>
                     </div>
                 }.into_any()
             }}
