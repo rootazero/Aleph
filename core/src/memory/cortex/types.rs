@@ -93,7 +93,7 @@ pub struct Experience {
     /// Pattern hash (for deduplication and clustering)
     pub pattern_hash: String,
 
-    /// Intent embedding vector (384-dim)
+    /// Intent embedding vector
     pub intent_vector: Option<Vec<f32>>,
 
     /// Original user intent

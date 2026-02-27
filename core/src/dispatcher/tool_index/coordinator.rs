@@ -28,7 +28,7 @@ pub struct ToolMeta {
     pub category: Option<String>,
     /// Curated semantic metadata (highest quality source)
     pub structured_meta: Option<String>,
-    /// Pre-computed embedding vector (384-dim)
+    /// Pre-computed embedding vector
     pub embedding: Option<Vec<f32>>,
 }
 

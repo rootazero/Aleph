@@ -578,8 +578,8 @@ mod tests {
             "test.app".to_string(),
             "test.txt".to_string(),
         );
-        // Create dummy embedding (384-dim for multilingual-e5-small)
-        let embedding = vec![0.0f32; 384];
+        // Create dummy embedding (1024-dim)
+        let embedding = vec![0.0f32; 1024];
         let memory = crate::memory::context::MemoryEntry::with_embedding(
             "mem-1".to_string(),
             context,

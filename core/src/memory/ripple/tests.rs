@@ -13,11 +13,11 @@ use super::*;
 
 /// Helper to create a test fact with embedding
 fn create_test_fact(id: &str, content: &str, embedding: Vec<f32>) -> MemoryFact {
-    // Ensure embedding is 384 dimensions (pad or truncate)
-    let mut emb_384 = vec![0.0; 384];
+    // Ensure embedding is 1024 dimensions (pad or truncate)
+    let mut emb_1024 = vec![0.0; 1024];
     for (i, &val) in embedding.iter().enumerate() {
-        if i < 384 {
-            emb_384[i] = val;
+        if i < 1024 {
+            emb_1024[i] = val;
         }
     }
 
@@ -25,7 +25,7 @@ fn create_test_fact(id: &str, content: &str, embedding: Vec<f32>) -> MemoryFact 
         id: id.to_string(),
         content: content.to_string(),
         fact_type: FactType::Preference,
-        embedding: Some(emb_384),
+        embedding: Some(emb_1024),
         source_memory_ids: vec![],
         created_at: 0,
         updated_at: 0,

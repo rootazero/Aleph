@@ -61,35 +61,34 @@ impl EmbeddingManager {
         })
     }
 
-    /// Switch the active provider. Returns true if vector store should be cleared.
-    pub async fn switch_provider(&self, new_id: &str) -> Result<bool, AlephError> {
-        // Extract config and old_id, then drop the settings lock before creating the provider.
+    /// Switch the active provider.
+    ///
+    /// Multi-dimension vector columns (vec_768, vec_1024, vec_1536) allow
+    /// different providers to coexist — no need to clear the vector store.
+    pub async fn switch_provider(&self, new_id: &str) -> Result<(), AlephError> {
+        // Extract config, then drop the settings lock before creating the provider.
         // This avoids holding two write locks simultaneously.
-        let (config, old_id) = {
+        let config = {
             let settings = self.settings.read().await;
-            let old_id = settings.active_provider_id.clone();
-            let config = settings
+            settings
                 .providers
                 .iter()
                 .find(|p| p.id == new_id)
                 .ok_or_else(|| AlephError::config(format!("Provider not found: {}", new_id)))?
-                .clone();
-            (config, old_id)
+                .clone()
         }; // settings lock released
 
         // Create provider before mutating settings — if this fails, nothing changes.
         let provider = create_provider(&config)?;
 
         // Now update both settings and active provider
+        let old_id = self.settings.read().await.active_provider_id.clone();
         self.settings.write().await.active_provider_id = new_id.to_string();
         *self.active_provider.write().await = Some(provider);
 
-        let should_clear = old_id != new_id;
-        if should_clear {
-            info!(old = %old_id, new = %new_id, "Embedding provider switched — vector store should be cleared");
-        }
+        info!(old = %old_id, new = %new_id, "Embedding provider switched");
 
-        Ok(should_clear)
+        Ok(())
     }
 
     /// Test a specific provider's connectivity

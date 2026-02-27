@@ -305,10 +305,10 @@ pub async fn handle_remove(
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }
 
-/// Set a provider as active; return `{ "should_clear": true/false }`.
+/// Set a provider as active.
 ///
-/// `should_clear` is true when the active provider changes (dimensions may differ),
-/// signaling that the vector store should be rebuilt.
+/// Multi-dimension vector columns allow different providers to coexist,
+/// so switching providers does not require clearing the vector store.
 pub async fn handle_set_active(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
@@ -335,8 +335,6 @@ pub async fn handle_set_active(
         }
     };
 
-    let should_clear;
-
     {
         let mut cfg = config.write().await;
 
@@ -349,8 +347,6 @@ pub async fn handle_set_active(
             );
         }
 
-        let old_id = cfg.memory.embedding.active_provider_id.clone();
-        should_clear = old_id != params.id;
         cfg.memory.embedding.active_provider_id = params.id.clone();
 
         // Save to file
@@ -368,13 +364,9 @@ pub async fn handle_set_active(
         "topic": "config.embedding.providers.changed",
         "action": "set_active",
         "provider_id": params.id,
-        "should_clear": should_clear,
     }));
 
-    JsonRpcResponse::success(
-        request.id,
-        serde_json::json!({ "should_clear": should_clear }),
-    )
+    JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }
 
 /// Test an embedding provider's connectivity.

@@ -14,11 +14,11 @@ use super::resolver::ResolutionStrategy;
 
 /// Helper to create a test fact
 fn create_test_fact(id: &str, content: &str, confidence: f32) -> MemoryFact {
-    // Create 384-dim embedding based on content hash
-    let mut embedding = vec![0.0; 384];
-    let hash = content.len() % 384;
+    // Create 1024-dim embedding based on content hash
+    let mut embedding = vec![0.0; 1024];
+    let hash = content.len() % 1024;
     embedding[hash] = 1.0;
-    if hash + 1 < 384 {
+    if hash + 1 < 1024 {
         embedding[hash + 1] = 0.5;
     }
 

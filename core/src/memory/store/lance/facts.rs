@@ -660,7 +660,7 @@ mod tests {
         fact.content_hash = "hash123".to_string();
         fact.embedding_model = "test-model".to_string();
         if with_embedding {
-            fact.embedding = Some(vec![0.1_f32; 384]);
+            fact.embedding = Some(vec![0.1_f32; 1024]);
         }
         fact
     }
@@ -849,10 +849,10 @@ mod tests {
 
         // Insert facts WITH embeddings
         let fact1 = make_test_fact("Rust programming", FactType::Learning, true);
-        // fact1 has embedding = [0.1; 384]
+        // fact1 has embedding = [0.1; 1024]
 
         let mut fact2 = make_test_fact("Python scripting", FactType::Learning, true);
-        fact2.embedding = Some(vec![0.9_f32; 384]);
+        fact2.embedding = Some(vec![0.9_f32; 1024]);
 
         backend
             .batch_insert_facts(&[fact1.clone(), fact2.clone()])
@@ -860,14 +860,14 @@ mod tests {
             .unwrap();
 
         // Search with a vector close to fact1's embedding
-        let query_vec = vec![0.1_f32; 384];
+        let query_vec = vec![0.1_f32; 1024];
         let results = backend
-            .vector_search(&query_vec, 384, &SearchFilter::new(), 10)
+            .vector_search(&query_vec, 1024, &SearchFilter::new(), 10)
             .await
             .unwrap();
 
         assert!(!results.is_empty());
-        // The result closest to [0.1; 384] should be fact1
+        // The result closest to [0.1; 1024] should be fact1
         assert_eq!(results[0].fact.content, "Rust programming");
         assert!(results[0].score > 0.0);
     }
@@ -878,16 +878,16 @@ mod tests {
 
         let fact1 = make_test_fact("Similar fact", FactType::Learning, true);
         let mut fact2 = make_test_fact("Different fact", FactType::Learning, true);
-        fact2.embedding = Some(vec![0.9_f32; 384]);
+        fact2.embedding = Some(vec![0.9_f32; 1024]);
 
         backend
             .batch_insert_facts(&[fact1.clone(), fact2.clone()])
             .await
             .unwrap();
 
-        let query_vec = vec![0.1_f32; 384];
+        let query_vec = vec![0.1_f32; 1024];
         let results = backend
-            .find_similar_facts(&query_vec, 384, &SearchFilter::new(), 0.5, 10)
+            .find_similar_facts(&query_vec, 1024, &SearchFilter::new(), 0.5, 10)
             .await
             .unwrap();
 
@@ -1026,11 +1026,11 @@ mod tests {
             .unwrap();
 
         // Search with filter for Learning only
-        let query_vec = vec![0.1_f32; 384];
+        let query_vec = vec![0.1_f32; 1024];
         let results = backend
             .vector_search(
                 &query_vec,
-                384,
+                1024,
                 &SearchFilter::new().with_fact_type(FactType::Learning),
                 10,
             )

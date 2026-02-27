@@ -143,7 +143,7 @@ impl SessionStore for LanceMemoryBackend {
             .query()
             .nearest_to(embedding)
             .map_err(lance_err)?
-            .column("vec_384")
+            .column("vec_768")
             .limit(limit);
 
         if let Some(f) = filter.to_lance_filter() {
@@ -399,7 +399,7 @@ mod tests {
             ),
             user_input.to_string(),
             "ai response".to_string(),
-            vec![0.1_f32; 384],
+            vec![0.1_f32; 768],
         )
     }
 
@@ -409,13 +409,13 @@ mod tests {
 
         let mem1 = make_test_memory("mem-1", "What is Rust?", 1700000000);
         let mut mem2 = make_test_memory("mem-2", "Tell me about Python", 1700001000);
-        mem2.embedding = Some(vec![0.9_f32; 384]);
+        mem2.embedding = Some(vec![0.9_f32; 768]);
 
         backend.insert_memory(&mem1).await.unwrap();
         backend.insert_memory(&mem2).await.unwrap();
 
         // Search with vector close to mem1
-        let query_vec = vec![0.1_f32; 384];
+        let query_vec = vec![0.1_f32; 768];
         let results = backend
             .search_memories(&query_vec, &MemoryFilter::new(), 10)
             .await

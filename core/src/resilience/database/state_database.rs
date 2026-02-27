@@ -8,8 +8,8 @@ use sqlite_vec::sqlite3_vec_init;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// Default embedding dimension (multilingual-e5-small)
-pub const DEFAULT_EMBEDDING_DIM: u32 = 384;
+/// Default embedding dimension for vector search
+pub const DEFAULT_EMBEDDING_DIM: u32 = 1024;
 
 /// State database for resilience state management (agent events, tasks, traces, sessions)
 pub struct StateDatabase {
@@ -474,7 +474,7 @@ impl StateDatabase {
     /// Initialize vector database with schema
     ///
     /// Includes migration logic for embedding dimension changes.
-    /// When embedding dimension changes (e.g., 512 -> 384), old data is cleared.
+    /// When embedding dimension changes (e.g., 384 -> 1024), old data is cleared.
     pub fn new(db_path: PathBuf) -> Result<Self, AlephError> {
         // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
@@ -497,7 +497,6 @@ impl StateDatabase {
                 .map_err(|e| AlephError::config(format!("Failed to drop old table: {}", e)))?;
 
             tracing::info!(
-                old_dim = 384,
                 new_dim = DEFAULT_EMBEDDING_DIM,
                 "Cleared memories table for embedding dimension migration"
             );
@@ -968,7 +967,7 @@ mod tests {
     fn test_new_with_dim_default() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("test.db");
-        let db = StateDatabase::new_with_dim(db_path, 384).unwrap();
+        let db = StateDatabase::new_with_dim(db_path, 1024).unwrap();
 
         let conn = db.conn.lock().unwrap();
         let dim: String = conn
@@ -978,7 +977,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(dim, "384");
+        assert_eq!(dim, "1024");
     }
 
 }

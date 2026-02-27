@@ -24,13 +24,13 @@ mod tests {
         (Arc::new(backend), temp_dir)
     }
 
-    /// Generate a simple test embedding (384 dimensions)
+    /// Generate a simple test embedding (1024 dimensions)
     ///
     /// Uses sin function with seed to create somewhat unique embeddings
     /// that have reasonable similarity properties for testing.
     fn test_embedding(seed: f32) -> Vec<f32> {
-        (0..384)
-            .map(|i| ((i as f32 + seed) / 384.0).sin())
+        (0..1024)
+            .map(|i| ((i as f32 + seed) / 1024.0).sin())
             .collect()
     }
 

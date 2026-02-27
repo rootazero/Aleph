@@ -35,12 +35,12 @@ mod tests {
             .unwrap();
 
         // Insert fact into workspace "ws-a"
-        let emb_a = vec![0.9f32; 384];
+        let emb_a = vec![0.9f32; 1024];
         let fact_a = make_fact("Bitcoin price is $100k", "ws-a", emb_a.clone());
         backend.insert_fact(&fact_a).await.unwrap();
 
         // Insert fact into workspace "ws-b"
-        let emb_b = vec![0.1f32; 384];
+        let emb_b = vec![0.1f32; 1024];
         let fact_b = make_fact("Chapter 3 outline complete", "ws-b", emb_b.clone());
         backend.insert_fact(&fact_b).await.unwrap();
 
@@ -48,7 +48,7 @@ mod tests {
         let filter_a = SearchFilter::new()
             .with_workspace(WorkspaceFilter::Single("ws-a".into()));
         let results_a = backend
-            .vector_search(&emb_a, 384, &filter_a, 10)
+            .vector_search(&emb_a, 1024, &filter_a, 10)
             .await
             .unwrap();
         assert_eq!(results_a.len(), 1, "workspace ws-a should have exactly 1 fact");
@@ -59,7 +59,7 @@ mod tests {
         let filter_b = SearchFilter::new()
             .with_workspace(WorkspaceFilter::Single("ws-b".into()));
         let results_b = backend
-            .vector_search(&emb_b, 384, &filter_b, 10)
+            .vector_search(&emb_b, 1024, &filter_b, 10)
             .await
             .unwrap();
         assert_eq!(results_b.len(), 1, "workspace ws-b should have exactly 1 fact");
@@ -70,7 +70,7 @@ mod tests {
         let filter_all = SearchFilter::new()
             .with_workspace(WorkspaceFilter::All);
         let results_all = backend
-            .vector_search(&emb_a, 384, &filter_all, 10)
+            .vector_search(&emb_a, 1024, &filter_all, 10)
             .await
             .unwrap();
         assert_eq!(results_all.len(), 2, "All workspaces should return both facts");
@@ -153,7 +153,7 @@ mod tests {
             .unwrap();
 
         // Insert a fact with the default workspace (simulating legacy behavior)
-        let emb = vec![0.5f32; 384];
+        let emb = vec![0.5f32; 1024];
         let fact = make_fact("User prefers dark mode", DEFAULT_WORKSPACE, emb.clone());
         backend.insert_fact(&fact).await.unwrap();
 
@@ -161,7 +161,7 @@ mod tests {
         let filter_default = SearchFilter::new()
             .with_workspace(WorkspaceFilter::Single(DEFAULT_WORKSPACE.to_string()));
         let results = backend
-            .vector_search(&emb, 384, &filter_default, 10)
+            .vector_search(&emb, 1024, &filter_default, 10)
             .await
             .unwrap();
         assert_eq!(results.len(), 1, "should find the fact in the default workspace");
@@ -171,7 +171,7 @@ mod tests {
         let filter_none = SearchFilter::new()
             .with_workspace(WorkspaceFilter::Single("nonexistent".to_string()));
         let results_empty = backend
-            .vector_search(&emb, 384, &filter_none, 10)
+            .vector_search(&emb, 1024, &filter_none, 10)
             .await
             .unwrap();
         assert!(

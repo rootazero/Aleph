@@ -71,8 +71,8 @@ pub fn facts_schema() -> Arc<Schema> {
         Field::new("strength", DataType::Float32, false),
         Field::new("access_count", DataType::Int32, false),
         Field::new("last_accessed_at", DataType::Int64, true),
-        // Vector columns
-        vector_field("vec_384", 384),
+        // Vector columns (multi-dimension coexistence)
+        vector_field("vec_768", 768),
         vector_field("vec_1024", 1024),
         vector_field("vec_1536", 1536),
     ]))
@@ -124,7 +124,7 @@ pub fn memories_schema() -> Arc<Schema> {
         Field::new("session_key", DataType::Utf8, false),
         Field::new("namespace", DataType::Utf8, false),
         Field::new("workspace", DataType::Utf8, false),
-        vector_field("vec_384", 384),
+        vector_field("vec_768", 768),
     ]))
 }
 
@@ -152,7 +152,7 @@ mod tests {
     #[test]
     fn facts_schema_has_vector_columns() {
         let schema = facts_schema();
-        for name in &["vec_384", "vec_1024", "vec_1536"] {
+        for name in &["vec_768", "vec_1024", "vec_1536"] {
             let field = schema.field_with_name(name).unwrap_or_else(|_| {
                 panic!("facts schema must contain column '{}'", name);
             });
@@ -170,7 +170,7 @@ mod tests {
     fn facts_schema_vector_dimensions() {
         let schema = facts_schema();
         let expected: &[(&str, i32)] = &[
-            ("vec_384", 384),
+            ("vec_768", 768),
             ("vec_1024", 1024),
             ("vec_1536", 1536),
         ];
@@ -214,12 +214,12 @@ mod tests {
     }
 
     #[test]
-    fn memories_schema_has_vec_384() {
+    fn memories_schema_has_vec_768() {
         let schema = memories_schema();
-        let field = schema.field_with_name("vec_384").expect("vec_384 column must exist");
+        let field = schema.field_with_name("vec_768").expect("vec_768 column must exist");
         assert!(
-            matches!(field.data_type(), DataType::FixedSizeList(_, 384)),
-            "vec_384 should be FixedSizeList(Float32, 384), got {:?}",
+            matches!(field.data_type(), DataType::FixedSizeList(_, 768)),
+            "vec_768 should be FixedSizeList(Float32, 768), got {:?}",
             field.data_type(),
         );
         assert!(field.is_nullable());
@@ -253,7 +253,7 @@ mod tests {
         let optional = [
             "tags", "source_memory_ids", "invalidation_reason",
             "decay_invalidated_at", "persona_id", "last_accessed_at",
-            "vec_384", "vec_1024", "vec_1536",
+            "vec_768", "vec_1024", "vec_1536",
         ];
         for name in &optional {
             let field = schema.field_with_name(name).unwrap_or_else(|_| {
