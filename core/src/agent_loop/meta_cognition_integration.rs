@@ -298,7 +298,7 @@ impl MetaCognitionIntegration {
     ///
     /// ```no_run
     /// # use alephcore::agent_loop::meta_cognition_integration::MetaCognitionIntegration;
-    /// # use alephcore::memory::cortex::meta_cognition::BehavioralAnchor;
+    /// # use alephcore::poe::meta_cognition::BehavioralAnchor;
     /// # fn example(integration: &MetaCognitionIntegration, anchors: Vec<BehavioralAnchor>) {
     /// let base_prompt = "You are a helpful AI assistant.";
     /// let augmented = integration.inject_into_prompt(base_prompt, &anchors);
