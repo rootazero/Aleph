@@ -5,13 +5,14 @@
 //! with Aleph through this channel.
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 fn default_path() -> String {
     "/webhook/generic".to_string()
 }
 
 /// Generic webhook channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WebhookChannelConfig {
     /// HMAC-SHA256 secret for signature verification (inbound + outbound)
     pub secret: String,
@@ -26,6 +27,17 @@ pub struct WebhookChannelConfig {
     /// List of allowed sender_ids (empty = all allowed)
     #[serde(default)]
     pub allowed_senders: Vec<String>,
+}
+
+impl fmt::Debug for WebhookChannelConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WebhookChannelConfig")
+            .field("secret", &"[REDACTED]")
+            .field("callback_url", &self.callback_url)
+            .field("path", &self.path)
+            .field("allowed_senders", &self.allowed_senders)
+            .finish()
+    }
 }
 
 impl Default for WebhookChannelConfig {
