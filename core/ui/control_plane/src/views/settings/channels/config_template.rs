@@ -116,25 +116,24 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
 
         spawn_local(async move {
             // Build a flat patch map: "channels.{id}.{key}" -> value
-            let mut had_error = false;
+            let mut patch = serde_json::Map::new();
             for (key, value) in values.iter() {
                 let full_key = format!("{}.{}", section, key);
-                if let Err(e) = state
-                    .rpc_call(
-                        "config.set",
-                        json!({ "key": full_key, "value": value }),
-                    )
-                    .await
-                {
-                    error.set(Some(format!("Failed to save {}: {}", key, e)));
-                    had_error = true;
-                    break;
+                patch.insert(full_key, value.clone());
+            }
+
+            match state
+                .rpc_call("config.patch", Value::Object(patch))
+                .await
+            {
+                Ok(_) => {
+                    success.set(Some("Configuration saved successfully.".to_string()));
+                }
+                Err(e) => {
+                    error.set(Some(format!("Failed to save configuration: {}", e)));
                 }
             }
             saving.set(false);
-            if !had_error {
-                success.set(Some("Configuration saved successfully.".to_string()));
-            }
         });
     };
 
