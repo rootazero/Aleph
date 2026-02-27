@@ -17,6 +17,8 @@ use crate::poe::{
     PendingResult, PrepareResult, RejectResult, SignRequest, SignResult, Worker,
 };
 use crate::poe::handler_types::PoeRunParams;
+use crate::poe::trust::{AutoApprovalDecision, TrustContext, TrustEvaluator};
+use crate::resilience::database::StateDatabase;
 use super::run_service::PoeRunManager;
 
 /// Parameters for poe.prepare request
@@ -75,6 +77,10 @@ pub struct PoeContractService<W: Worker + 'static> {
     run_manager: Arc<PoeRunManager<W>>,
     /// Event bus for publishing events
     event_bus: Arc<GatewayEventBus>,
+    /// Trust evaluator for progressive auto-approval (optional)
+    trust_evaluator: Option<Arc<dyn TrustEvaluator>>,
+    /// State database for historical trust data (optional)
+    state_db: Option<Arc<StateDatabase>>,
 }
 
 impl<W: Worker + 'static> PoeContractService<W> {
@@ -89,7 +95,21 @@ impl<W: Worker + 'static> PoeContractService<W> {
             contract_store: Arc::new(PendingContractStore::new()),
             run_manager,
             event_bus,
+            trust_evaluator: None,
+            state_db: None,
         }
+    }
+
+    /// Set the trust evaluator for progressive auto-approval.
+    pub fn with_trust_evaluator(mut self, evaluator: Arc<dyn TrustEvaluator>) -> Self {
+        self.trust_evaluator = Some(evaluator);
+        self
+    }
+
+    /// Set the state database for historical trust data enrichment.
+    pub fn with_state_db(mut self, db: Arc<StateDatabase>) -> Self {
+        self.state_db = Some(db);
+        self
     }
 
     /// Get access to the contract store.
@@ -125,6 +145,50 @@ impl<W: Worker + 'static> PoeContractService<W> {
             &uuid::Uuid::new_v4().to_string()[..8]
         );
 
+        // 3.5: Evaluate trust for potential auto-approval
+        let auto_approved = if let Some(ref evaluator) = self.trust_evaluator {
+            let pattern_id = manifest.task_id.clone();
+            let mut context = TrustContext::new()
+                .with_pattern_id(&pattern_id)
+                .with_file_count(manifest.hard_constraints.len());
+
+            // Enrich with historical data if StateDB is available
+            if let Some(ref db) = self.state_db {
+                if let Ok(Some(score_row)) = db.get_trust_score(&pattern_id).await {
+                    context = context.with_history(
+                        score_row.trust_score,
+                        score_row.total_executions,
+                    );
+                    if score_row.trust_score >= 0.9 && score_row.total_executions >= 5 {
+                        context = context.with_crystallized_skill();
+                    }
+                }
+            }
+
+            let decision = evaluator.evaluate(&manifest, &context);
+            match decision {
+                AutoApprovalDecision::AutoApprove { ref reason, confidence } => {
+                    info!(
+                        contract_id = %contract_id,
+                        reason = %reason,
+                        confidence = %confidence,
+                        "Contract auto-approved by trust evaluator"
+                    );
+                    true
+                }
+                AutoApprovalDecision::RequireSignature { ref reason } => {
+                    info!(
+                        contract_id = %contract_id,
+                        reason = %reason,
+                        "Trust evaluator requires signature"
+                    );
+                    false
+                }
+            }
+        } else {
+            false
+        };
+
         // 4. Create pending contract
         let mut contract = PendingContract::new(
             contract_id.clone(),
@@ -136,10 +200,15 @@ impl<W: Worker + 'static> PoeContractService<W> {
             contract = contract.with_context(ctx.into());
         }
 
-        // 5. Store in pending contracts
+        // 5. Store in pending contracts (even if auto-approved, for audit trail)
         self.contract_store.insert(contract).await;
 
-        info!(contract_id = %contract_id, "Contract prepared, awaiting signature");
+        info!(
+            contract_id = %contract_id,
+            auto_approved = %auto_approved,
+            "Contract prepared{}",
+            if auto_approved { ", auto-approved" } else { ", awaiting signature" }
+        );
 
         // 6. Emit event
         self.emit_event(
@@ -149,6 +218,7 @@ impl<W: Worker + 'static> PoeContractService<W> {
                 "objective": manifest.objective,
                 "constraint_count": manifest.hard_constraints.len(),
                 "metric_count": manifest.soft_metrics.len(),
+                "auto_approved": auto_approved,
             }),
         );
 
@@ -157,6 +227,7 @@ impl<W: Worker + 'static> PoeContractService<W> {
             manifest,
             created_at: Utc::now().to_rfc3339(),
             instruction: params.instruction,
+            auto_approved,
         })
     }
 
