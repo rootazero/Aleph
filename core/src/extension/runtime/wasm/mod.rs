@@ -5,12 +5,14 @@
 
 mod allowlist;
 mod capabilities;
+mod capability_kernel;
 mod credential_injector;
 mod limits;
 mod permissions;
 
 pub use allowlist::{AllowlistError, AllowlistValidator};
 pub use capabilities::WasmCapabilities;
+pub use capability_kernel::{CapabilityError, WasmCapabilityKernel};
 pub use credential_injector::{inject_credential, CredentialError};
 pub use limits::WasmResourceLimits;
 pub use permissions::PermissionChecker;
