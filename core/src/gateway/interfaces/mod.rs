@@ -18,6 +18,7 @@
 //! - **IRC**: IRC raw TCP integration via RFC 2812 (requires `irc` feature)
 //! - **Webhook**: Generic bidirectional HTTP webhook (requires `webhook` feature)
 //! - **XMPP**: XMPP raw TCP integration via RFC 6120/6121 + XEP-0045 MUC (requires `xmpp` feature)
+//! - **Nostr**: Nostr NIP-01 relay WebSocket + NIP-04 DM integration (requires `nostr` feature)
 
 pub mod cli;
 
@@ -57,6 +58,9 @@ pub mod webhook;
 #[cfg(feature = "xmpp")]
 pub mod xmpp;
 
+#[cfg(feature = "nostr")]
+pub mod nostr;
+
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
 #[cfg(target_os = "macos")]
@@ -94,3 +98,6 @@ pub use webhook::{WebhookChannel, WebhookChannelFactory, WebhookChannelConfig};
 
 #[cfg(feature = "xmpp")]
 pub use xmpp::{XmppChannel, XmppChannelFactory, XmppConfig};
+
+#[cfg(feature = "nostr")]
+pub use nostr::{NostrChannel, NostrChannelFactory, NostrConfig};
