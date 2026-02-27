@@ -12,6 +12,7 @@
 //! - **Discord**: Discord Bot API integration (requires `discord` feature)
 //! - **Slack**: Slack Socket Mode + REST API integration (requires `slack` feature)
 //! - **Email**: IMAP + SMTP email integration (requires `email` feature)
+//! - **Matrix**: Matrix Client-Server API v3 integration (requires `matrix` feature)
 
 pub mod cli;
 
@@ -33,6 +34,9 @@ pub mod slack;
 #[cfg(feature = "email")]
 pub mod email;
 
+#[cfg(feature = "matrix")]
+pub mod matrix;
+
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
 #[cfg(target_os = "macos")]
@@ -52,3 +56,6 @@ pub use slack::{SlackChannel, SlackChannelFactory, SlackConfig};
 
 #[cfg(feature = "email")]
 pub use email::{EmailChannel, EmailChannelFactory, EmailConfig};
+
+#[cfg(feature = "matrix")]
+pub use matrix::{MatrixChannel, MatrixChannelFactory, MatrixConfig};
