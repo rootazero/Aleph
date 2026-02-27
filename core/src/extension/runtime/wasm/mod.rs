@@ -13,8 +13,8 @@ mod permissions;
 
 pub use allowlist::{AllowlistError, AllowlistValidator};
 pub use capabilities::{
-    CredentialBinding, CredentialInject, EndpointPattern, HttpCapability, RateLimit,
-    SecretsCapability, ToolInvokeCapability, WasmCapabilities, WorkspaceCapability,
+    host_matches_pattern, CredentialBinding, CredentialInject, EndpointPattern, HttpCapability,
+    RateLimit, SecretsCapability, ToolInvokeCapability, WasmCapabilities, WorkspaceCapability,
 };
 pub use capability_kernel::{CapabilityError, WasmCapabilityKernel};
 pub use credential_injector::{inject_credential, CredentialError};
