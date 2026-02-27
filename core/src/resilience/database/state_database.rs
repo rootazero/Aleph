@@ -318,6 +318,18 @@ impl StateDatabase {
                 ON poe_events(timestamp);
 
             -- ================================================================
+            -- POE Trust Scores: Pattern-level success metrics
+            -- ================================================================
+
+            CREATE TABLE IF NOT EXISTS poe_trust_scores (
+                pattern_id TEXT PRIMARY KEY,
+                total_executions INTEGER NOT NULL DEFAULT 0,
+                successful_executions INTEGER NOT NULL DEFAULT 0,
+                trust_score REAL NOT NULL DEFAULT 0.0,
+                last_updated INTEGER NOT NULL
+            );
+
+            -- ================================================================
             -- sqlite-vec Virtual Tables: created dynamically via vec_schema_sql()
             -- ================================================================
 

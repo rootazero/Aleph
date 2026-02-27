@@ -7,3 +7,4 @@
 //! - MemoryProjector → Memory facts (Task 12)
 
 pub mod crystallization;
+pub mod trust;
