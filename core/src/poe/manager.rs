@@ -99,6 +99,25 @@ impl PoeConfig {
 }
 
 // ============================================================================
+// MetaCognitionCallback
+// ============================================================================
+
+/// Callback trait for meta-cognition integration with PoeManager.
+///
+/// This trait is `Send + Sync` safe, allowing it to be used in async contexts.
+/// Implementations should handle the threading internally (e.g., via channels
+/// or `spawn_blocking`) if they need to access non-Send types like SQLite.
+pub trait MetaCognitionCallback: Send + Sync {
+    /// Called when a validation fails, to trigger reactive reflection.
+    fn on_validation_failure(
+        &self,
+        task_id: &str,
+        objective: &str,
+        failure_reason: &str,
+    );
+}
+
+// ============================================================================
 // PoeManager
 // ============================================================================
 
@@ -144,6 +163,8 @@ pub struct PoeManager<W: Worker> {
     validation_callback: Option<ValidationCallback>,
     /// Optional recorder for crystallizing experiences
     recorder: Option<Arc<dyn ExperienceRecorder>>,
+    /// Optional meta-cognition callback for failure learning
+    meta_cognition: Option<Arc<dyn MetaCognitionCallback>>,
 }
 
 impl<W: Worker> PoeManager<W> {
@@ -161,6 +182,7 @@ impl<W: Worker> PoeManager<W> {
             config,
             validation_callback: None,
             recorder: None,
+            meta_cognition: None,
         }
     }
 
@@ -191,6 +213,15 @@ impl<W: Worker> PoeManager<W> {
     /// * `callback` - Function to call after each validation
     pub fn with_validation_callback(mut self, callback: ValidationCallback) -> Self {
         self.validation_callback = Some(callback);
+        self
+    }
+
+    /// Set the meta-cognition callback for failure learning.
+    ///
+    /// The callback is invoked after each failed validation to trigger
+    /// reactive reflection and anchor generation.
+    pub fn with_meta_cognition(mut self, callback: Arc<dyn MetaCognitionCallback>) -> Self {
+        self.meta_cognition = Some(callback);
         self
     }
 
@@ -264,6 +295,15 @@ impl<W: Worker> PoeManager<W> {
                 let outcome = PoeOutcome::Success(verdict);
                 self.record_experience(&task, &outcome, &output, start_time);
                 return Ok(outcome);
+            }
+
+            // Trigger meta-cognition on validation failure
+            if let Some(ref mc) = self.meta_cognition {
+                mc.on_validation_failure(
+                    &task.manifest.task_id,
+                    &task.manifest.objective,
+                    &verdict.reason,
+                );
             }
 
             // Check for stuck (no progress over window)
