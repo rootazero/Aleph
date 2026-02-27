@@ -108,6 +108,7 @@ pub mod contract;
 pub mod contract_store;
 pub mod crystallization;
 pub mod handler_types;
+pub mod interceptor;
 pub mod manager;
 pub mod manifest;
 pub mod services;
@@ -117,6 +118,9 @@ pub mod validation;
 pub mod worker;
 
 // Re-exports for convenient access
+// Interceptor directives
+pub use interceptor::StepDirective;
+
 // Budget management
 pub use budget::{BudgetStatus, PoeBudget};
 
