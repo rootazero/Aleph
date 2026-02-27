@@ -18,12 +18,15 @@
 //!    f. Otherwise -> retry with failure feedback
 //! 3. If loop exits -> return BudgetExhausted
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::error::Result;
 use crate::poe::budget::PoeBudget;
 use crate::poe::crystallization::ExperienceRecorder;
+use crate::poe::event_bus::PoeEventBus;
+use crate::poe::events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind};
 use crate::poe::types::{PoeOutcome, PoeTask, Verdict, WorkerOutput, WorkerState};
 use crate::poe::validation::CompositeValidator;
 use crate::poe::worker::Worker;
@@ -165,6 +168,10 @@ pub struct PoeManager<W: Worker> {
     recorder: Option<Arc<dyn ExperienceRecorder>>,
     /// Optional meta-cognition callback for failure learning
     meta_cognition: Option<Arc<dyn MetaCognitionCallback>>,
+    /// Optional event bus for emitting domain events
+    event_bus: Option<Arc<PoeEventBus>>,
+    /// Monotonic sequence counter for event ordering
+    event_seq: AtomicU32,
 }
 
 impl<W: Worker> PoeManager<W> {
@@ -183,6 +190,8 @@ impl<W: Worker> PoeManager<W> {
             validation_callback: None,
             recorder: None,
             meta_cognition: None,
+            event_bus: None,
+            event_seq: AtomicU32::new(0),
         }
     }
 
@@ -225,6 +234,16 @@ impl<W: Worker> PoeManager<W> {
         self
     }
 
+    /// Set the event bus for emitting domain events during execution.
+    ///
+    /// When configured, the manager emits `PoeEvent` variants at key lifecycle
+    /// points: manifest creation, operation attempts, validation results, and
+    /// final outcome.
+    pub fn with_event_bus(mut self, bus: Arc<PoeEventBus>) -> Self {
+        self.event_bus = Some(bus);
+        self
+    }
+
     /// Get a reference to the worker.
     ///
     /// This is primarily useful for testing to verify worker execution counts.
@@ -255,6 +274,14 @@ impl<W: Worker> PoeManager<W> {
         // Create budget from task manifest and config
         let mut budget = PoeBudget::new(task.manifest.max_attempts, self.config.max_tokens);
 
+        // Emit: manifest created
+        self.emit_event(&task.manifest.task_id, PoeEvent::ManifestCreated {
+            task_id: task.manifest.task_id.clone(),
+            objective: task.manifest.objective.clone(),
+            hard_constraints_count: task.manifest.hard_constraints.len(),
+            soft_metrics_count: task.manifest.soft_metrics.len(),
+        });
+
         // Track the last failure for retry feedback
         let mut previous_failure: Option<String> = None;
         let mut last_verdict: Option<Verdict> = None;
@@ -274,6 +301,13 @@ impl<W: Worker> PoeManager<W> {
                 .execute(&instruction, previous_failure.as_deref())
                 .await?;
 
+            // Emit: operation attempted
+            self.emit_event(&task.manifest.task_id, PoeEvent::OperationAttempted {
+                task_id: task.manifest.task_id.clone(),
+                attempt: budget.current_attempt + 1,
+                tokens_used: output.tokens_consumed,
+            });
+
             // Evaluation: Validate output against manifest
             let verdict = self.validator.validate(&task.manifest, &output).await?;
 
@@ -290,10 +324,28 @@ impl<W: Worker> PoeManager<W> {
                 });
             }
 
+            // Emit: validation completed
+            self.emit_event(&task.manifest.task_id, PoeEvent::ValidationCompleted {
+                task_id: task.manifest.task_id.clone(),
+                attempt: budget.current_attempt,
+                passed: verdict.passed,
+                distance_score: verdict.distance_score,
+                hard_passed: verdict.hard_results.iter().filter(|r| r.passed).count(),
+                hard_total: verdict.hard_results.len(),
+            });
+
             // Check for success
             if verdict.passed {
                 let outcome = PoeOutcome::Success(verdict);
                 self.record_experience(&task, &outcome, &output, start_time);
+                self.emit_event(&task.manifest.task_id, PoeEvent::OutcomeRecorded {
+                    task_id: task.manifest.task_id.clone(),
+                    outcome: PoeOutcomeKind::Success,
+                    attempts: budget.current_attempt,
+                    total_tokens: budget.tokens_used,
+                    duration_ms: start_time.elapsed().as_millis() as u64,
+                    best_distance: budget.best_score().unwrap_or(0.0),
+                });
                 return Ok(outcome);
             }
 
@@ -322,6 +374,14 @@ impl<W: Worker> PoeManager<W> {
                     suggestion,
                 };
                 self.record_experience(&task, &outcome, &output, start_time);
+                self.emit_event(&task.manifest.task_id, PoeEvent::OutcomeRecorded {
+                    task_id: task.manifest.task_id.clone(),
+                    outcome: PoeOutcomeKind::StrategySwitch,
+                    attempts: budget.current_attempt,
+                    total_tokens: budget.tokens_used,
+                    duration_ms: start_time.elapsed().as_millis() as u64,
+                    best_distance: budget.best_score().unwrap_or(1.0),
+                });
                 return Ok(outcome);
             }
 
@@ -346,6 +406,16 @@ impl<W: Worker> PoeManager<W> {
             self.record_experience(&task, &outcome, output, start_time);
         }
 
+        // Emit: budget exhausted outcome
+        self.emit_event(&task.manifest.task_id, PoeEvent::OutcomeRecorded {
+            task_id: task.manifest.task_id.clone(),
+            outcome: PoeOutcomeKind::BudgetExhausted,
+            attempts: budget.current_attempt,
+            total_tokens: budget.tokens_used,
+            duration_ms: start_time.elapsed().as_millis() as u64,
+            best_distance: budget.best_score().unwrap_or(1.0),
+        });
+
         Ok(outcome)
     }
 
@@ -363,6 +433,14 @@ impl<W: Worker> PoeManager<W> {
     ) {
         if let Some(ref recorder) = self.recorder {
             recorder.record_with_timing(task, outcome, output, start_time);
+        }
+    }
+
+    /// Emit a domain event to the event bus (if configured).
+    fn emit_event(&self, task_id: &str, event: PoeEvent) {
+        if let Some(ref bus) = self.event_bus {
+            let seq = self.event_seq.fetch_add(1, Ordering::Relaxed);
+            bus.emit(PoeEventEnvelope::new(task_id.into(), seq, event, None));
         }
     }
 
@@ -684,5 +762,44 @@ mod tests {
 
         // Worker should have been called multiple times
         assert!(manager.worker().execution_count() > 1);
+    }
+
+    #[tokio::test]
+    async fn test_poe_manager_emits_events() {
+        use crate::poe::event_bus::PoeEventBus;
+        use crate::poe::events::PoeEvent;
+
+        let bus = Arc::new(PoeEventBus::default());
+        let mut rx = bus.subscribe();
+
+        let worker = MockWorker::new();
+        let provider = Arc::new(MockProvider::new(""));
+        let validator = CompositeValidator::new(provider);
+        let config = PoeConfig::default();
+
+        let manager = PoeManager::new(worker, validator, config)
+            .with_event_bus(bus.clone());
+
+        let task = create_simple_task();
+        let outcome = manager.execute(task).await.unwrap();
+        assert!(matches!(outcome, PoeOutcome::Success(_)));
+
+        // Collect emitted events (non-blocking)
+        let mut events = Vec::new();
+        while let Ok(envelope) = rx.try_recv() {
+            events.push(envelope);
+        }
+
+        // Should have: ManifestCreated, OperationAttempted, ValidationCompleted, OutcomeRecorded
+        assert!(events.len() >= 4, "Expected at least 4 events, got {}", events.len());
+        assert!(matches!(events[0].event, PoeEvent::ManifestCreated { .. }));
+        assert!(matches!(events[1].event, PoeEvent::OperationAttempted { .. }));
+        assert!(matches!(events[2].event, PoeEvent::ValidationCompleted { .. }));
+        assert!(matches!(events[3].event, PoeEvent::OutcomeRecorded { .. }));
+
+        // Verify sequence numbers are monotonic
+        for (i, e) in events.iter().enumerate() {
+            assert_eq!(e.seq as usize, i, "Event seq should be {}, got {}", i, e.seq);
+        }
     }
 }
