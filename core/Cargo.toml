@@ -29,8 +29,10 @@ email = ["gateway", "dep:lettre", "dep:mail-parser", "dep:async-imap", "dep:asyn
 matrix = ["gateway"]
 # Signal channel support (signal-cli REST API)
 signal = ["gateway"]
+# Mattermost channel support (WebSocket + REST API v4)
+mattermost = ["gateway"]
 # All messaging channels
-all-channels = ["telegram", "discord", "whatsapp", "slack", "email", "matrix", "signal"]
+all-channels = ["telegram", "discord", "whatsapp", "slack", "email", "matrix", "signal", "mattermost"]
 # Cron job scheduling
 cron = ["dep:cron", "dep:chrono-tz", "dep:sysinfo", "gateway"]
 # CLI interactive prompts (inquire for rich user questions)
