@@ -10,6 +10,7 @@
 //! - **iMessage**: macOS iMessage integration (requires Full Disk Access)
 //! - **Telegram**: Telegram Bot API integration (requires `telegram` feature)
 //! - **Discord**: Discord Bot API integration (requires `discord` feature)
+//! - **Slack**: Slack Socket Mode + REST API integration (requires `slack` feature)
 
 pub mod cli;
 
@@ -25,6 +26,9 @@ pub mod discord;
 #[cfg(feature = "whatsapp")]
 pub mod whatsapp;
 
+#[cfg(feature = "slack")]
+pub mod slack;
+
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
 #[cfg(target_os = "macos")]
@@ -38,3 +42,6 @@ pub use discord::{DiscordChannel, DiscordChannelFactory, DiscordConfig};
 
 #[cfg(feature = "whatsapp")]
 pub use whatsapp::{WhatsAppChannel, WhatsAppChannelFactory, WhatsAppConfig};
+
+#[cfg(feature = "slack")]
+pub use slack::{SlackChannel, SlackChannelFactory, SlackConfig};

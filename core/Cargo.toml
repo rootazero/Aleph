@@ -21,8 +21,10 @@ telegram = ["dep:teloxide", "gateway"]
 discord = ["dep:serenity", "gateway"]
 # WhatsApp channel support
 whatsapp = ["gateway"]
+# Slack channel support (Socket Mode + REST API)
+slack = ["gateway"]
 # All messaging channels
-all-channels = ["telegram", "discord", "whatsapp"]
+all-channels = ["telegram", "discord", "whatsapp", "slack"]
 # Cron job scheduling
 cron = ["dep:cron", "dep:chrono-tz", "dep:sysinfo", "gateway"]
 # CLI interactive prompts (inquire for rich user questions)
