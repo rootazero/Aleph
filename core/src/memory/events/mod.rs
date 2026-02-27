@@ -8,7 +8,7 @@
 //! Events follow the Skeleton/Pulse classification from the resilience layer:
 //! - **Skeleton** — structural mutations that must be persisted immediately
 //!   (FactCreated, FactContentUpdated, FactMetadataUpdated, TierTransitioned,
-//!    FactInvalidated, FactRestored, FactDeleted, FactConsolidated, FactMigrated)
+//!   FactInvalidated, FactRestored, FactDeleted, FactConsolidated, FactMigrated)
 //! - **Pulse** — high-frequency observations that may be buffered before persist
 //!   (FactAccessed, StrengthDecayed)
 //!

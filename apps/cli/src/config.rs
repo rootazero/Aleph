@@ -126,25 +126,4 @@ impl CliConfig {
         self.save(path)
     }
 
-    /// Load and return auth token
-    pub async fn load_token(&self) -> Option<String> {
-        self.auth_token.clone()
-    }
-
-    /// Save auth token
-    pub async fn save_token(&mut self, token: &str) {
-        self.auth_token = Some(token.to_string());
-        let _ = self.save(None);
-    }
-
-    /// Clear auth token
-    pub async fn clear_token(&mut self) {
-        self.auth_token = None;
-        let _ = self.save(None);
-    }
-
-    /// Get or create device ID
-    pub fn get_or_create_device_id(&self) -> String {
-        self.device_id.clone()
-    }
 }

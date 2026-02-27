@@ -9,25 +9,20 @@ use std::path::Path;
 use crate::thinker::soul::Verbosity;
 
 /// Proactivity level for AI interactions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProactivityLevel {
     /// Only respond when called
     Reactive,
     /// Occasionally offer suggestions
+    #[default]
     Balanced,
     /// Actively provide help
     Proactive,
 }
 
-impl Default for ProactivityLevel {
-    fn default() -> Self {
-        Self::Balanced
-    }
-}
-
 /// Interaction preferences for AI behavior
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InteractionPrefs {
     /// Response verbosity preference
     #[serde(default)]
@@ -37,17 +32,8 @@ pub struct InteractionPrefs {
     pub proactivity: ProactivityLevel,
 }
 
-impl Default for InteractionPrefs {
-    fn default() -> Self {
-        Self {
-            verbosity: Verbosity::default(),
-            proactivity: ProactivityLevel::default(),
-        }
-    }
-}
-
 /// Structured user profile loaded from markdown with YAML frontmatter
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UserProfile {
     /// User's full name
     pub name: String,
@@ -71,20 +57,6 @@ pub struct UserProfile {
     pub addendum: Option<String>,
 }
 
-impl Default for UserProfile {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            preferred_name: None,
-            timezone: None,
-            language: None,
-            context_notes: Vec::new(),
-            interaction_preferences: InteractionPrefs::default(),
-            addendum: None,
-        }
-    }
-}
-
 impl UserProfile {
     /// Load user profile from a markdown file with YAML frontmatter.
     ///
@@ -101,8 +73,7 @@ impl UserProfile {
         }
 
         // Try to extract YAML frontmatter
-        if trimmed.starts_with("---") {
-            let after_first = &trimmed[3..];
+        if let Some(after_first) = trimmed.strip_prefix("---") {
             if let Some(end_pos) = after_first.find("\n---") {
                 let frontmatter = &after_first[..end_pos];
                 return serde_yaml::from_str(frontmatter.trim()).ok();

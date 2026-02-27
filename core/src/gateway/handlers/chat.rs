@@ -15,6 +15,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::parse_params;
 use super::super::router::SessionKey;
 use super::super::session_manager::SessionManager;
 use super::agent::{AgentRunManager, AgentRunParams};
@@ -118,24 +119,9 @@ pub async fn handle_send(
     run_manager: Arc<AgentRunManager>,
 ) -> JsonRpcResponse {
     // Parse params
-    let params: SendParams = match &request.params {
-        Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map.clone())) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        _ => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing or invalid params object",
-            );
-        }
+    let params: SendParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Validate message
@@ -175,24 +161,9 @@ pub async fn handle_abort(
     run_manager: Arc<AgentRunManager>,
 ) -> JsonRpcResponse {
     // Parse params
-    let params: AbortParams = match &request.params {
-        Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map.clone())) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        _ => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing or invalid params object",
-            );
-        }
+    let params: AbortParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Cancel the run
@@ -217,24 +188,9 @@ pub async fn handle_history(
     session_manager: Arc<SessionManager>,
 ) -> JsonRpcResponse {
     // Parse params
-    let params: HistoryParams = match &request.params {
-        Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map.clone())) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        _ => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing or invalid params object",
-            );
-        }
+    let params: HistoryParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Parse session key
@@ -294,24 +250,9 @@ pub async fn handle_clear(
     session_manager: Arc<SessionManager>,
 ) -> JsonRpcResponse {
     // Parse params
-    let params: ClearParams = match &request.params {
-        Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map.clone())) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        _ => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing or invalid params object",
-            );
-        }
+    let params: ClearParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Parse session key

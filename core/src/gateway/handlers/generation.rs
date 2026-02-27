@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
+use super::parse_params;
 
 /// Generation provider info
 #[derive(Debug, Clone, Serialize)]
@@ -51,24 +52,9 @@ pub struct GetProviderParams {
 
 /// Get a generation provider config
 pub async fn handle_get_provider(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: GetProviderParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: name required".to_string(),
-            );
-        }
+    let params: GetProviderParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Get from config
@@ -106,24 +92,9 @@ pub struct GenerationProviderConfigJson {
 
 /// Update a generation provider
 pub async fn handle_update_provider(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: UpdateProviderParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: name, config required".to_string(),
-            );
-        }
+    let params: UpdateProviderParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Update config
@@ -144,24 +115,9 @@ pub struct TestProviderParams {
 
 /// Test a generation provider
 pub async fn handle_test_provider(request: JsonRpcRequest) -> JsonRpcResponse {
-    let _params: TestProviderParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: name, config required".to_string(),
-            );
-        }
+    let _params: TestProviderParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Actually test the provider

@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::RwLock;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, RESOURCE_NOT_FOUND, TIMEOUT};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, RESOURCE_NOT_FOUND, TIMEOUT};
+use super::parse_params;
 use super::super::run_event_bus::{ActiveRunHandle, RunEndResult, wait_for_run_end, WaitError};
 
 // ============================================================================
@@ -85,24 +86,9 @@ pub async fn handle_run_wait(
     active_runs: Arc<RwLock<HashMap<String, ActiveRunHandle>>>,
 ) -> JsonRpcResponse {
     // Parse parameters
-    let params: RunWaitRequest = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: run_id required".to_string(),
-            );
-        }
+    let params: RunWaitRequest = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Cap timeout at maximum
@@ -205,24 +191,9 @@ pub async fn handle_run_queue_message(
     active_runs: Arc<RwLock<HashMap<String, ActiveRunHandle>>>,
 ) -> JsonRpcResponse {
     // Parse parameters
-    let params: RunQueueMessageRequest = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: run_id, message required".to_string(),
-            );
-        }
+    let params: RunQueueMessageRequest = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Get input sender from active runs
@@ -279,6 +250,7 @@ pub async fn handle_run_queue_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::protocol::INVALID_PARAMS;
     use crate::gateway::router::SessionKey;
     use serde_json::json;
 

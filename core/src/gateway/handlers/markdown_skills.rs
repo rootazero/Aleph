@@ -14,7 +14,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
+use super::parse_params;
 use crate::tools::markdown_skill::{load_skills_from_dir, MarkdownCliTool};
 use crate::tools::AlephToolServer;
 
@@ -71,24 +72,9 @@ pub struct LoadParams {
 
 /// Load Markdown skills from a directory
 pub async fn handle_load(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: LoadParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: path required".to_string(),
-            );
-        }
+    let params: LoadParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     let path = PathBuf::from(&params.path);
@@ -150,24 +136,9 @@ pub struct ReloadParams {
 
 /// Reload a specific Markdown skill
 pub async fn handle_reload(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: ReloadParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: name required".to_string(),
-            );
-        }
+    let params: ReloadParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Get skill path
@@ -262,24 +233,9 @@ pub struct UnloadParams {
 
 /// Unload a Markdown skill
 pub async fn handle_unload(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: UnloadParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: name required".to_string(),
-            );
-        }
+    let params: UnloadParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Remove from server

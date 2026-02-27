@@ -6,8 +6,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::super::protocol::{
-    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
+    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, RESOURCE_NOT_FOUND,
 };
+use super::parse_params;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::workspace::Workspace;
 use crate::memory::workspace_store;
@@ -39,24 +40,9 @@ pub struct CreateParams {
 /// {"jsonrpc":"2.0","method":"workspace.create","params":{"id":"crypto","name":"Crypto Trading"},"id":1}
 /// ```
 pub async fn handle_create(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
-    let params: CreateParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: id and name required".to_string(),
-            );
-        }
+    let params: CreateParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     let mut ws = Workspace::new(params.id, params.name);
@@ -126,24 +112,9 @@ pub struct GetParams {
 /// {"jsonrpc":"2.0","method":"workspace.get","params":{"id":"crypto"},"id":1}
 /// ```
 pub async fn handle_get(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
-    let params: GetParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: id required".to_string(),
-            );
-        }
+    let params: GetParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     match workspace_store::get_workspace(&db, &params.id).await {
@@ -189,24 +160,9 @@ pub struct UpdateParams {
 /// {"jsonrpc":"2.0","method":"workspace.update","params":{"id":"crypto","name":"Crypto Research"},"id":1}
 /// ```
 pub async fn handle_update(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
-    let params: UpdateParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: id required".to_string(),
-            );
-        }
+    let params: UpdateParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Get existing workspace
@@ -277,24 +233,9 @@ pub async fn handle_update(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
 /// {"jsonrpc":"2.0","method":"workspace.archive","params":{"id":"crypto"},"id":1}
 /// ```
 pub async fn handle_archive(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
-    let params: GetParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: id required".to_string(),
-            );
-        }
+    let params: GetParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     match workspace_store::archive_workspace(&db, &params.id).await {

@@ -5,8 +5,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::parse_params;
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::memory::store::{MemoryBackend, SessionStore};
 
 /// Memory entry for JSON serialization
@@ -78,6 +78,17 @@ fn default_limit() -> u32 {
     20
 }
 
+impl Default for SearchParams {
+    fn default() -> Self {
+        Self {
+            query: None,
+            app_bundle_id: None,
+            window_title: None,
+            limit: default_limit(),
+        }
+    }
+}
+
 /// Search memories
 ///
 /// # Example Request
@@ -89,20 +100,11 @@ pub async fn handle_search(
     request: JsonRpcRequest,
     db: MemoryBackend,
 ) -> JsonRpcResponse {
-    let params: SearchParams = match request.params {
-        Some(ref p) => serde_json::from_value(p.clone()).unwrap_or(SearchParams {
-            query: None,
-            app_bundle_id: None,
-            window_title: None,
-            limit: default_limit(),
-        }),
-        None => SearchParams {
-            query: None,
-            app_bundle_id: None,
-            window_title: None,
-            limit: default_limit(),
-        },
-    };
+    let params: SearchParams = request
+        .params
+        .as_ref()
+        .and_then(|p| serde_json::from_value(p.clone()).ok())
+        .unwrap_or_default();
 
     let filter = crate::memory::store::types::MemoryFilter {
         app_bundle_id: params.app_bundle_id.clone(),
@@ -155,24 +157,9 @@ pub async fn handle_delete(
     request: JsonRpcRequest,
     db: MemoryBackend,
 ) -> JsonRpcResponse {
-    let params: DeleteParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: id required".to_string(),
-            );
-        }
+    let params: DeleteParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     match db.delete_memory(&params.id).await {
@@ -190,7 +177,7 @@ pub async fn handle_delete(
 // ============================================================================
 
 /// Parameters for memory.clear
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct ClearParams {
     /// Filter by app bundle ID (optional)
     #[serde(default)]
@@ -205,16 +192,11 @@ pub async fn handle_clear(
     request: JsonRpcRequest,
     db: MemoryBackend,
 ) -> JsonRpcResponse {
-    let params: ClearParams = match request.params {
-        Some(ref p) => serde_json::from_value(p.clone()).unwrap_or(ClearParams {
-            app_bundle_id: None,
-            window_title: None,
-        }),
-        None => ClearParams {
-            app_bundle_id: None,
-            window_title: None,
-        },
-    };
+    let params: ClearParams = request
+        .params
+        .as_ref()
+        .and_then(|p| serde_json::from_value(p.clone()).ok())
+        .unwrap_or_default();
 
     match db
         .clear_memories(params.app_bundle_id.as_deref(), params.window_title.as_deref())

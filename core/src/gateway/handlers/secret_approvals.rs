@@ -13,7 +13,8 @@ use serde_json::json;
 use tokio::sync::{Mutex, Notify};
 use tracing::info;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
+use super::parse_params;
 
 /// Approval decision
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -154,24 +155,9 @@ pub async fn handle_request(
         30000
     }
 
-    let params: Params = match &request.params {
-        Some(p) => match serde_json::from_value(p.clone()) {
-            Ok(parsed) => parsed,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id.clone(),
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                )
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id.clone(),
-                INVALID_PARAMS,
-                "Missing params",
-            )
-        }
+    let params: Params = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     match manager
@@ -205,24 +191,9 @@ pub async fn handle_resolve(
         decision: ApprovalDecision,
     }
 
-    let params: Params = match &request.params {
-        Some(p) => match serde_json::from_value(p.clone()) {
-            Ok(parsed) => parsed,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id.clone(),
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                )
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id.clone(),
-                INVALID_PARAMS,
-                "Missing params",
-            )
-        }
+    let params: Params = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     match manager.resolve_approval(&params.id, params.decision).await {

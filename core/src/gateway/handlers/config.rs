@@ -13,6 +13,7 @@ use crate::config::{build_ui_hints, generate_config_schema_json, Config, ConfigU
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::hot_reload::ConfigWatcher;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::handlers::parse_params;
 
 /// Handle config.reload RPC request
 ///
@@ -415,24 +416,9 @@ pub async fn handle_patch_config(
     debug!("Handling config.patch");
 
     // Parse patch from params
-    let patch: HashMap<String, Value> = match req.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(patch) => patch,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    req.id,
-                    INVALID_PARAMS,
-                    format!("Invalid patch format: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                req.id,
-                INVALID_PARAMS,
-                "Missing patch parameters".to_string(),
-            );
-        }
+    let patch: HashMap<String, Value> = match parse_params(&req) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Validate non-empty

@@ -3,7 +3,7 @@
 //! Handles subscribing and unsubscribing from event topics.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -11,6 +11,7 @@ use tracing::{debug, info};
 
 use crate::gateway::event_bus::TopicFilter;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
+use crate::gateway::handlers::parse_params;
 
 /// Tracks subscriptions per connection
 pub struct SubscriptionManager {
@@ -125,20 +126,9 @@ pub async fn handle_subscribe(
     conn_id: &str,
     manager: Arc<SubscriptionManager>,
 ) -> JsonRpcResponse {
-    let params: SubscribeParams = match &request.params {
-        Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map.clone())) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        _ => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params");
-        }
+    let params: SubscribeParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     if params.topics.is_empty() {
@@ -172,20 +162,9 @@ pub async fn handle_unsubscribe(
     conn_id: &str,
     manager: Arc<SubscriptionManager>,
 ) -> JsonRpcResponse {
-    let params: UnsubscribeParams = match &request.params {
-        Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map.clone())) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        _ => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params");
-        }
+    let params: UnsubscribeParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     let removed = manager.remove_patterns(conn_id, &params.topics).await;

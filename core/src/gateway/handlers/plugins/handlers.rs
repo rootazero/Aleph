@@ -8,6 +8,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::handlers::parse_params;
 use crate::extension::{ComponentLoader, ExtensionManager, SyncExtensionManager};
 
 use super::types::*;
@@ -98,24 +99,9 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Install a plugin from Git repository
 pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: InstallParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: url required".to_string(),
-            );
-        }
+    let params: InstallParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Clone repository and install
@@ -172,24 +158,9 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Install plugins from a zip file
 pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: InstallFromZipParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: data required".to_string(),
-            );
-        }
+    let params: InstallFromZipParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Decode base64
@@ -264,24 +235,9 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
 
 /// Uninstall a plugin
 pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: UninstallParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: name required".to_string(),
-            );
-        }
+    let params: UninstallParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     let plugins_dir = crate::extension::default_plugins_dir();
@@ -311,24 +267,9 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Enable a plugin
 pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: ToggleParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: name required".to_string(),
-            );
-        }
+    let params: ToggleParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Implement plugin enable/disable in registry
@@ -338,24 +279,9 @@ pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Disable a plugin
 pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: ToggleParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: name required".to_string(),
-            );
-        }
+    let params: ToggleParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Implement plugin enable/disable in registry
@@ -384,24 +310,9 @@ pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
 /// - `INTERNAL_ERROR`: Extension manager not initialized or tool call failed
 /// - `INVALID_PARAMS`: Missing or invalid parameters
 pub async fn handle_call_tool(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: CallToolParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: pluginId, handler required".to_string(),
-            );
-        }
+    let params: CallToolParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Get the extension manager from global state
@@ -447,24 +358,9 @@ pub async fn handle_call_tool(request: JsonRpcRequest) -> JsonRpcResponse {
 /// - `INVALID_PARAMS`: Missing or invalid parameters
 /// - `-32001`: Command not found in plugin
 pub async fn handle_execute_command(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: ExecuteCommandParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: pluginId, commandName required".to_string(),
-            );
-        }
+    let params: ExecuteCommandParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Get the extension manager from global state
@@ -545,24 +441,9 @@ pub async fn handle_execute_command(request: JsonRpcRequest) -> JsonRpcResponse 
 /// - `INTERNAL_ERROR`: Extension manager not initialized or loading failed
 /// - `INVALID_PARAMS`: Missing path or invalid manifest
 pub async fn handle_load(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: LoadPluginParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: path required".to_string(),
-            );
-        }
+    let params: LoadPluginParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Get the extension manager from global state
@@ -623,24 +504,9 @@ pub async fn handle_load(request: JsonRpcRequest) -> JsonRpcResponse {
 /// - `INTERNAL_ERROR`: Extension manager not initialized or plugin not found
 /// - `INVALID_PARAMS`: Missing pluginId
 pub async fn handle_unload(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: UnloadPluginParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: pluginId required".to_string(),
-            );
-        }
+    let params: UnloadPluginParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Get the extension manager from global state
@@ -801,7 +667,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .message
-            .contains("path required"));
+            .contains("Missing params"));
     }
 
     #[tokio::test]
@@ -855,7 +721,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .message
-            .contains("pluginId required"));
+            .contains("Missing params"));
     }
 
     #[tokio::test]
@@ -934,7 +800,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .message
-            .contains("pluginId, commandName required"));
+            .contains("Missing params"));
     }
 
     #[tokio::test]

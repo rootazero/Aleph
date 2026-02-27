@@ -1,7 +1,8 @@
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use futures::channel::oneshot;
 use crate::connection::connector::{AlephConnector, ConnectionError};
 use thiserror::Error;
@@ -20,28 +21,33 @@ pub enum RpcError {
     ChannelClosed,
 }
 
+/// Pending RPC response senders, keyed by request ID.
+type PendingMap = HashMap<String, oneshot::Sender<Result<Value, RpcError>>>;
+
 pub struct RpcClient {
-    connector: Arc<Mutex<Box<dyn AlephConnector>>>,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, RpcError>>>>>,
-    next_id: Arc<Mutex<u64>>,
+    connector: Rc<RefCell<Box<dyn AlephConnector>>>,
+    pending: Rc<RefCell<PendingMap>>,
+    next_id: RefCell<u64>,
 }
 
 impl RpcClient {
     pub fn new(connector: Box<dyn AlephConnector>) -> Self {
         Self {
-            connector: Arc::new(Mutex::new(connector)),
-            pending: Arc::new(Mutex::new(HashMap::new())),
-            next_id: Arc::new(Mutex::new(1)),
+            connector: Rc::new(RefCell::new(connector)),
+            pending: Rc::new(RefCell::new(HashMap::new())),
+            next_id: RefCell::new(1),
         }
     }
 
+    // WASM is single-threaded; holding RefCell borrow across await is safe.
+    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn call<P, R>(&self, method: &str, params: P) -> Result<R, RpcError>
     where
         P: Serialize,
         R: DeserializeOwned,
     {
         let id = {
-            let mut id_gen = self.next_id.lock().unwrap();
+            let mut id_gen = self.next_id.borrow_mut();
             let id = *id_gen;
             *id_gen += 1;
             id.to_string()
@@ -55,21 +61,18 @@ impl RpcClient {
         });
 
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().unwrap().insert(id, tx);
+        self.pending.borrow_mut().insert(id, tx);
 
-        {
-            let mut conn = self.connector.lock().unwrap();
-            conn.send(request).await?;
-        }
+        self.connector.borrow_mut().send(request).await?;
 
         let res = rx.await.map_err(|_| RpcError::ChannelClosed)??;
-        
+
         Ok(serde_json::from_value(res)?)
     }
 
     pub fn handle_response(&self, response: Value) {
         if let Some(id) = response.get("id").and_then(|id| id.as_str()) {
-            if let Some(tx) = self.pending.lock().unwrap().remove(id) {
+            if let Some(tx) = self.pending.borrow_mut().remove(id) {
                 if let Some(error) = response.get("error") {
                     let msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
                     let _ = tx.send(Err(RpcError::ServerError(msg.to_string())));

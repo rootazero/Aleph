@@ -9,21 +9,16 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Frequency at which a heartbeat task should run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HeartbeatFrequency {
     /// Run every heartbeat interval.
+    #[default]
     Every,
     /// Run every N heartbeat intervals.
     EveryN(u32),
     /// Run once per day.
     Daily,
-}
-
-impl Default for HeartbeatFrequency {
-    fn default() -> Self {
-        Self::Every
-    }
 }
 
 /// A specific task to perform during heartbeat.

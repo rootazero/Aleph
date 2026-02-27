@@ -129,24 +129,11 @@ fn strip_injection_markers(value: &str) -> String {
 
     let mut result = value.to_string();
 
-    // Case-insensitive removal
-    for marker in CI_MARKERS {
-        let lower = result.to_lowercase();
-        let marker_lower = *marker; // already lowercase
-        while let Some(pos) = lower.find(marker_lower) {
-            // Remove the original-case substring at this position
-            result = format!("{}{}", &result[..pos], &result[pos + marker.len()..]);
-            // Recompute lowercase for next iteration (positions shifted)
-            break; // we'll catch subsequent matches on next loop iteration
-        }
-    }
-
-    // Re-run to catch all occurrences (simpler: just loop until stable)
+    // Case-insensitive removal — loop until no more markers are found.
     let mut prev = String::new();
     while prev != result {
         prev = result.clone();
         for marker in CI_MARKERS {
-            // Build a case-insensitive search
             let lower = result.to_lowercase();
             if let Some(pos) = lower.find(*marker) {
                 result = format!("{}{}", &result[..pos], &result[pos + marker.len()..]);

@@ -202,7 +202,7 @@ impl DesktopBridgeManager {
     pub fn is_connected(&self) -> bool {
         self.transport
             .as_ref()
-            .map_or(false, |t| t.is_connected())
+            .is_some_and(|t| t.is_connected())
     }
 
     /// Check whether the bridge reported a specific capability during

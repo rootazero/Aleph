@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
+use super::parse_params;
 use crate::config::Config;
 
 // ============================================================================
@@ -41,24 +42,9 @@ pub async fn handle_behavior_get(request: JsonRpcRequest, _config: Arc<Config>) 
 
 /// Update behavior config
 pub async fn handle_behavior_update(request: JsonRpcRequest) -> JsonRpcResponse {
-    let _params: BehaviorConfigJson = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            );
-        }
+    let _params: BehaviorConfigJson = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Update config file and reload
@@ -97,24 +83,9 @@ pub async fn handle_search_get(request: JsonRpcRequest, _config: Arc<Config>) ->
 
 /// Update search config
 pub async fn handle_search_update(request: JsonRpcRequest) -> JsonRpcResponse {
-    let _params: SearchConfigJson = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            );
-        }
+    let _params: SearchConfigJson = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Update config file and reload
@@ -124,24 +95,9 @@ pub async fn handle_search_update(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Test search provider
 pub async fn handle_search_test(request: JsonRpcRequest) -> JsonRpcResponse {
-    let _params: SearchConfigJson = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            );
-        }
+    let _params: SearchConfigJson = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Actually test the search provider
@@ -186,24 +142,9 @@ pub async fn handle_policies_get(request: JsonRpcRequest, _config: Arc<Config>) 
 
 /// Update policies config
 pub async fn handle_policies_update(request: JsonRpcRequest) -> JsonRpcResponse {
-    let _params: PoliciesConfigJson = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            );
-        }
+    let _params: PoliciesConfigJson = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Update config file and reload
@@ -240,24 +181,9 @@ pub async fn handle_shortcuts_get(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Update shortcuts config
 pub async fn handle_shortcuts_update(request: JsonRpcRequest) -> JsonRpcResponse {
-    let _params: ShortcutsConfigJson = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            );
-        }
+    let _params: ShortcutsConfigJson = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Update config file and reload
@@ -294,24 +220,9 @@ pub async fn handle_triggers_get(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Update triggers config
 pub async fn handle_triggers_update(request: JsonRpcRequest) -> JsonRpcResponse {
-    let _params: TriggersConfigJson = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            );
-        }
+    let _params: TriggersConfigJson = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Update config file and reload
@@ -362,24 +273,9 @@ pub async fn handle_security_get_code_exec(request: JsonRpcRequest) -> JsonRpcRe
 
 /// Update code execution config
 pub async fn handle_security_update_code_exec(request: JsonRpcRequest) -> JsonRpcResponse {
-    let _params: CodeExecConfigJson = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            );
-        }
+    let _params: CodeExecConfigJson = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Update config
@@ -404,24 +300,9 @@ pub async fn handle_security_get_file_ops(request: JsonRpcRequest) -> JsonRpcRes
 
 /// Update file operations config
 pub async fn handle_security_update_file_ops(request: JsonRpcRequest) -> JsonRpcResponse {
-    let _params: FileOpsConfigJson = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            );
-        }
+    let _params: FileOpsConfigJson = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Update config
@@ -446,24 +327,9 @@ pub struct ModelProfileJson {
 
 /// Update model profile
 pub async fn handle_model_profiles_update(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: ModelProfileJson = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: profile required".to_string(),
-            );
-        }
+    let params: ModelProfileJson = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Update config

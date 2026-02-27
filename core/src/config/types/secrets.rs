@@ -60,19 +60,14 @@ pub struct SecretProviderConfig {
 ///
 /// Determines how aggressively the secret is protected at runtime
 /// (e.g., cache duration, redaction depth, audit verbosity).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Sensitivity {
     /// Normal handling — cached per TTL, standard redaction
+    #[default]
     Standard,
     /// Elevated protection — shorter effective cache, deeper redaction, audit trail
     High,
-}
-
-impl Default for Sensitivity {
-    fn default() -> Self {
-        Sensitivity::Standard
-    }
 }
 
 // =============================================================================

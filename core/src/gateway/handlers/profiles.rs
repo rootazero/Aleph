@@ -8,6 +8,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, RESOURCE_NOT_FOUND};
+use super::parse_params;
 use crate::providers::profile_manager::{AuthProfileManager, ProfileInfo};
 
 // ============================================================================
@@ -158,24 +159,9 @@ pub async fn handle_status(
     profile_manager: Arc<AuthProfileManager>,
 ) -> JsonRpcResponse {
     // Parse params
-    let params: ProfilesStatusRequest = match &request.params {
-        Some(p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: profile_id required".to_string(),
-            );
-        }
+    let params: ProfilesStatusRequest = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Find the profile
