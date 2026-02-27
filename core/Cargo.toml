@@ -31,8 +31,10 @@ matrix = ["gateway"]
 signal = ["gateway"]
 # Mattermost channel support (WebSocket + REST API v4)
 mattermost = ["gateway"]
+# IRC channel support (RFC 2812 raw TCP)
+irc = ["gateway"]
 # All messaging channels
-all-channels = ["telegram", "discord", "whatsapp", "slack", "email", "matrix", "signal", "mattermost"]
+all-channels = ["telegram", "discord", "whatsapp", "slack", "email", "matrix", "signal", "mattermost", "irc"]
 # Cron job scheduling
 cron = ["dep:cron", "dep:chrono-tz", "dep:sysinfo", "gateway"]
 # CLI interactive prompts (inquire for rich user questions)
