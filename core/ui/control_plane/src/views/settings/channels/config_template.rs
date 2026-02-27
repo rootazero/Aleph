@@ -48,16 +48,30 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
     let config_section: &'static str = definition.config_section;
 
     // ---- Effect: load config on mount ----
+    // config_section is e.g. "channels.telegram"; extract the top-level
+    // section ("channels") and the channel sub-key ("telegram").
+    let (top_section, channel_sub_key): (&'static str, &'static str) = config_section
+        .split_once('.')
+        .unwrap_or((config_section, ""));
+
     Effect::new(move || {
         if state.is_connected.get() {
-            let key = config_section.to_string();
+            let section = top_section.to_string();
+            let sub_key = channel_sub_key.to_string();
             spawn_local(async move {
                 match state
-                    .rpc_call("config.get", json!({ "key": key }))
+                    .rpc_call("config.get", json!({ "section": section }))
                     .await
                 {
                     Ok(val) => {
-                        if let Some(obj) = val.as_object() {
+                        // The response is the full section object (e.g. all channels).
+                        // Extract the channel-specific sub-object if a sub-key exists.
+                        let channel_val = if sub_key.is_empty() {
+                            Some(&val)
+                        } else {
+                            val.get(&sub_key)
+                        };
+                        if let Some(obj) = channel_val.and_then(|v| v.as_object()) {
                             field_values.set(obj.clone());
                         }
                         loading.set(false);
@@ -82,7 +96,7 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
             let id = channel_id.to_string();
             spawn_local(async move {
                 match state
-                    .rpc_call("channel.status", json!({ "channel": id }))
+                    .rpc_call("channels.status", json!({ "channel_id": id }))
                     .await
                 {
                     Ok(val) => {
@@ -150,7 +164,7 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
         let id = channel_id.to_string();
         spawn_local(async move {
             match state
-                .rpc_call("channel.start", json!({ "channel": id }))
+                .rpc_call("channel.start", json!({ "channel_id": id }))
                 .await
             {
                 Ok(_) => {
@@ -177,7 +191,7 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
         let id = channel_id.to_string();
         spawn_local(async move {
             match state
-                .rpc_call("channel.stop", json!({ "channel": id }))
+                .rpc_call("channel.stop", json!({ "channel_id": id }))
                 .await
             {
                 Ok(_) => {
@@ -520,7 +534,16 @@ fn render_field(
                     .unwrap_or_default()
             };
             let on_tags_change = move |tags: Vec<String>| {
-                let arr: Vec<Value> = tags.into_iter().map(Value::String).collect();
+                let arr: Vec<Value> = tags
+                    .iter()
+                    .map(|t| {
+                        if let Ok(n) = t.parse::<i64>() {
+                            Value::Number(n.into())
+                        } else {
+                            Value::String(t.clone())
+                        }
+                    })
+                    .collect();
                 set_value(Value::Array(arr));
             };
             view! {
