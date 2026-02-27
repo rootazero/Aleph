@@ -27,8 +27,10 @@ slack = ["gateway"]
 email = ["gateway", "dep:lettre", "dep:mail-parser", "dep:async-imap", "dep:async-native-tls"]
 # Matrix channel support (Client-Server API v3)
 matrix = ["gateway"]
+# Signal channel support (signal-cli REST API)
+signal = ["gateway"]
 # All messaging channels
-all-channels = ["telegram", "discord", "whatsapp", "slack", "email", "matrix"]
+all-channels = ["telegram", "discord", "whatsapp", "slack", "email", "matrix", "signal"]
 # Cron job scheduling
 cron = ["dep:cron", "dep:chrono-tz", "dep:sysinfo", "gateway"]
 # CLI interactive prompts (inquire for rich user questions)
