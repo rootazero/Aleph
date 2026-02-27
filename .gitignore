@@ -67,6 +67,9 @@ core/test.txt
 newinstall*.txt
 _bmad/bmm/testarch/knowledge/log.md
 
+# Build pipeline artifacts
+apps/macos-native/Aleph/Resources/aleph-server
+
 # Misc
 agentstructure/
 icons/
