@@ -11,6 +11,7 @@ use super::decision::{Action, ActionResult};
 use super::guards::GuardViolation;
 use super::question::QuestionKind;
 use super::state::{LoopState, Thinking};
+use crate::poe::StepDirective;
 
 /// Callback interface for Agent Loop events
 ///
@@ -40,6 +41,17 @@ pub trait LoopCallback: Send + Sync {
 
     /// Called when action execution completes
     async fn on_action_done(&self, action: &Action, result: &ActionResult);
+
+    /// Called after each step completes (action + result available).
+    /// Returns a StepDirective telling AgentLoop what to do next.
+    /// Default: Continue (backward compatible — no intervention).
+    async fn on_step_evaluate(
+        &self,
+        _step: &super::state::LoopStep,
+        _state: &super::state::LoopState,
+    ) -> StepDirective {
+        StepDirective::Continue
+    }
 
     /// Called when high-risk operation needs confirmation
     /// Returns true if confirmed, false if cancelled
@@ -178,6 +190,13 @@ impl<T: LoopCallback + ?Sized> LoopCallback for &T {
     }
     async fn on_action_done(&self, action: &Action, result: &ActionResult) {
         (*self).on_action_done(action, result).await
+    }
+    async fn on_step_evaluate(
+        &self,
+        step: &super::state::LoopStep,
+        state: &super::state::LoopState,
+    ) -> StepDirective {
+        (*self).on_step_evaluate(step, state).await
     }
     async fn on_confirmation_required(&self, tool_name: &str, arguments: &Value) -> bool {
         (*self).on_confirmation_required(tool_name, arguments).await
@@ -472,6 +491,7 @@ pub enum LoopEvent {
     ThinkingDone { decision_type: String },
     ActionStart { action_type: String },
     ActionDone { action_type: String, success: bool },
+    StepEvaluate { step: usize },
     ConfirmationRequired { tool_name: String },
     UserInputRequired { question: String },
     UserMultigroupRequired { question: String, group_count: usize },
@@ -531,6 +551,15 @@ impl LoopCallback for CollectingCallback {
             action_type: action.action_type(),
             success: result.is_success(),
         });
+    }
+
+    async fn on_step_evaluate(
+        &self,
+        step: &super::state::LoopStep,
+        _state: &super::state::LoopState,
+    ) -> StepDirective {
+        self.push(LoopEvent::StepEvaluate { step: step.step_id });
+        StepDirective::Continue
     }
 
     async fn on_confirmation_required(&self, tool_name: &str, _arguments: &Value) -> bool {
@@ -663,6 +692,38 @@ mod tests {
         assert!(matches!(events[0], LoopEvent::LoopStart { .. }));
         assert!(matches!(events[1], LoopEvent::StepStart { step: 0 }));
         assert!(matches!(events[2], LoopEvent::Complete { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_on_step_evaluate_default_returns_continue() {
+        use super::super::decision::{Action, ActionResult, Decision};
+        use super::super::state::{LoopStep, Thinking};
+
+        let callback = NoOpLoopCallback;
+        let state = LoopState::new(
+            "test-session".to_string(),
+            "test request".to_string(),
+            super::super::state::RequestContext::empty(),
+        );
+        let step = LoopStep {
+            step_id: 0,
+            observation_summary: String::new(),
+            thinking: Thinking {
+                reasoning: None,
+                decision: Decision::Complete {
+                    summary: "done".to_string(),
+                },
+                structured: None,
+            },
+            action: Action::Completion {
+                summary: "done".to_string(),
+            },
+            result: ActionResult::Completed,
+            tokens_used: 0,
+            duration_ms: 0,
+        };
+        let directive = callback.on_step_evaluate(&step, &state).await;
+        assert!(matches!(directive, StepDirective::Continue));
     }
 
     #[tokio::test]
