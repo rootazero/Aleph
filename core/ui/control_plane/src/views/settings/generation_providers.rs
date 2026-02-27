@@ -56,13 +56,13 @@ pub fn GenerationProvidersView() -> impl IntoView {
     view! {
         <div class="flex h-full">
             // Left panel - Provider list + Generation settings
-            <div class="flex flex-col w-5/12 min-w-0 border-r border-border">
+            <div class="flex flex-col w-5/12 min-w-[400px] border-r border-border">
                 // Header
                 <div class="px-6 py-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">
                         "Generation Providers"
                     </h1>
-                    <p class="mt-1 text-sm text-text-tertiary">
+                    <p class="mt-1 text-sm text-text-secondary">
                         "Configure media generation providers and settings"
                     </p>
                 </div>
@@ -89,7 +89,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                 </div>
 
                 // Content
-                <div class="flex-1 overflow-y-auto">
+                <div class="flex-1 overflow-auto">
                     // Provider cards (loading/error/list)
                     {move || {
                         if is_loading.get() {
@@ -107,7 +107,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                         } else {
                             let presets = current_presets();
                             view! {
-                                <div class="grid grid-cols-1 gap-3 p-6">
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-6">
                                     {presets.into_iter().map(|preset| {
                                         let preset_id = preset.id.clone();
                                         let configured = is_configured(&preset_id);
@@ -142,7 +142,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
             </div>
 
             // Right panel - Provider details
-            <div class="w-7/12 min-w-0 overflow-y-auto">
+            <div class="w-7/12 min-w-[320px] bg-surface">
                 <ProviderDetailPanel
                     selected_id=selected_provider_id
                     providers=providers
@@ -272,7 +272,7 @@ fn ProviderDetailPanel(
     let state = expect_context::<DashboardState>();
 
     view! {
-        <div class="h-full overflow-auto">
+        <div class="h-full">
             {move || {
                 if let Some(provider_id) = selected_id.get() {
                     let provider = providers.get().into_iter()
@@ -303,7 +303,7 @@ fn ProviderDetailPanel(
 #[component]
 fn EmptyState() -> impl IntoView {
     view! {
-        <div class="flex items-center justify-center h-full">
+        <div class="flex flex-1 items-center justify-center h-full">
             <div class="text-center text-text-secondary">
                 <p class="text-lg">"Select a provider to view details"</p>
             </div>
@@ -417,21 +417,39 @@ fn ProviderDetailView(
     });
 
     view! {
-        <div class="p-6 space-y-6">
-            // Header
-            <div class="flex items-center justify-between">
-                <h2 class="text-xl font-semibold text-text-primary">
-                    {provider.name.clone()}
-                </h2>
+        <div class="flex flex-col h-full">
+            // Fixed header
+            <div class="px-6 py-4 border-b border-border">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 class="text-lg font-semibold text-text-primary">
+                            {provider.name.clone()}
+                        </h2>
+                        <p class="text-sm text-text-tertiary mt-0.5">
+                            {provider.config.provider_type.clone()}
+                        </p>
+                    </div>
+                    <span class=move || {
+                        if provider.config.enabled {
+                            "px-2.5 py-1 rounded-full text-xs font-medium bg-success-subtle text-success"
+                        } else {
+                            "px-2.5 py-1 rounded-full text-xs font-medium bg-surface-sunken text-text-tertiary"
+                        }
+                    }>
+                        {if provider.config.enabled { "Enabled" } else { "Disabled" }}
+                    </span>
+                </div>
             </div>
 
-            // Provider details
-            <div class="space-y-4">
-                <DetailField label="Provider Type" value=provider.config.provider_type.clone() />
+            // Scrollable content
+            <div class="flex-1 overflow-y-auto p-6 space-y-6">
+
+            // Configuration card
+            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
                 <DetailField label="Model" value=provider.config.model.clone().unwrap_or_else(|| "N/A".to_string()) />
                 <DetailField label="Base URL" value=provider.config.base_url.clone().unwrap_or_else(|| "N/A".to_string()) />
                 <DetailField label="API Key" value=if provider.config.api_key.is_some() { "••••••••".to_string() } else { "Not set".to_string() } />
-                <DetailField label="Enabled" value=if provider.config.enabled { "Yes" } else { "No" }.to_string() />
                 <DetailField label="Timeout" value=format!("{} seconds", provider.config.timeout_seconds) />
                 <DetailField label="Capabilities" value=capabilities_str.clone() />
             </div>
@@ -440,9 +458,9 @@ fn ProviderDetailView(
             {move || {
                 if has_defaults {
                     view! {
-                        <div class="p-3 bg-primary-subtle border border-primary/20 rounded">
+                        <div class="p-3 bg-primary-subtle border border-primary/20 rounded-lg">
                             <p class="text-sm text-primary">
-                                "This is the default provider for: "
+                                "Default provider for: "
                                 {default_for_str.clone()}
                             </p>
                         </div>
@@ -457,7 +475,7 @@ fn ProviderDetailView(
                 if let Some((success, message)) = test_result.get() {
                     if success {
                         view! {
-                            <div class="p-3 bg-success-subtle border border-success/20 rounded">
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded-lg">
                                 <p class="text-sm text-success">
                                     {message}
                                 </p>
@@ -465,7 +483,7 @@ fn ProviderDetailView(
                         }.into_any()
                     } else {
                         view! {
-                            <div class="p-3 bg-danger-subtle border border-danger/20 rounded">
+                            <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg">
                                 <p class="text-sm text-danger">
                                     {message}
                                 </p>
@@ -479,60 +497,61 @@ fn ProviderDetailView(
 
             // Action error
             {move || action_error.get().map(|e| view! {
-                <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
+                <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">
                     {e}
                 </div>
             })}
 
             // Actions
-            <div class="space-y-3 pt-4 border-t border-border">
-                // Test connection
+            <div class="flex flex-row gap-3 pt-2">
                 <button
                     on:click=handle_test
                     disabled=move || testing.get()
-                    class="w-full px-4 py-2 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors"
+                    class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
                     {move || if testing.get() { "Testing..." } else { "Test Connection" }}
                 </button>
-
-                // Set as default buttons
-                <div class="space-y-2">
-                    <p class="text-sm font-medium text-text-secondary">"Set as default for:"</p>
-                    {capabilities.iter().map(|cap| {
-                        let gen_type = *cap;
-                        let is_default = is_default_for.contains(&gen_type);
-                        let set_default = handle_set_default.clone();
-
-                        view! {
-                            <button
-                                on:click=move |_| set_default(gen_type)
-                                disabled=move || setting_default.get() || is_default
-                                class=move || {
-                                    let base = "w-full px-4 py-2 rounded-lg transition-colors";
-                                    if is_default {
-                                        format!("{} bg-primary-subtle text-primary cursor-not-allowed", base)
-                                    } else {
-                                        format!("{} bg-surface-raised text-text-secondary hover:bg-surface-sunken disabled:opacity-50", base)
-                                    }
-                                }
-                            >
-                                {gen_type.icon()} " " {gen_type.display_name()}
-                                {if is_default { " (Current)" } else { "" }}
-                            </button>
-                        }
-                    }).collect_view()}
-                </div>
-
-                // Delete button
-                <button
-                    on:click=handle_delete
-                    disabled=move || deleting.get()
-                    class="w-full px-4 py-2 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors"
-                >
-                    {move || if deleting.get() { "Deleting..." } else { "Delete Provider" }}
-                </button>
             </div>
-        </div>
+
+            // Set as default buttons
+            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"SET AS DEFAULT FOR"</h3>
+                {capabilities.iter().map(|cap| {
+                    let gen_type = *cap;
+                    let is_default = is_default_for.contains(&gen_type);
+                    let set_default = handle_set_default.clone();
+
+                    view! {
+                        <button
+                            on:click=move |_| set_default(gen_type)
+                            disabled=move || setting_default.get() || is_default
+                            class=move || {
+                                let base = "w-full px-4 py-2.5 rounded-lg transition-colors font-medium";
+                                if is_default {
+                                    format!("{} bg-primary-subtle text-primary cursor-not-allowed", base)
+                                } else {
+                                    format!("{} bg-surface-sunken text-text-secondary hover:bg-surface-raised disabled:opacity-50", base)
+                                }
+                            }
+                        >
+                            {gen_type.icon()} " " {gen_type.display_name()}
+                            {if is_default { " (Current)" } else { "" }}
+                        </button>
+                    }
+                }).collect_view()}
+            </div>
+
+            // Delete button
+            <button
+                on:click=handle_delete
+                disabled=move || deleting.get()
+                class="w-full px-4 py-2.5 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors font-medium"
+            >
+                {move || if deleting.get() { "Deleting..." } else { "Delete Provider" }}
+            </button>
+
+            </div> // scrollable content
+        </div> // flex wrapper
     }
 }
 
