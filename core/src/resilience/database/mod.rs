@@ -10,6 +10,7 @@
 
 mod events;
 mod memory_events;
+mod poe_events;
 pub mod migration;
 mod sessions;
 mod state_database;
