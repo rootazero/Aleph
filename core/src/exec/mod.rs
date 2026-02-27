@@ -17,6 +17,7 @@ pub mod decision;
 pub mod forwarder;
 pub mod ipc;
 pub mod kernel;
+pub mod leak_detector;
 pub mod manager;
 pub mod masker;
 pub mod parser;
