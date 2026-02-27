@@ -111,6 +111,7 @@ pub mod handler_types;
 pub mod interceptor;
 pub mod manager;
 pub mod manifest;
+pub mod meta_cognition;
 pub mod prompt_context;
 pub mod prompt_layer;
 pub mod services;
