@@ -119,7 +119,7 @@ pub mod worker;
 
 // Re-exports for convenient access
 // Interceptor directives
-pub use interceptor::StepDirective;
+pub use interceptor::{PoeLoopCallback, StepDirective, StepEvaluator};
 
 // Budget management
 pub use budget::{BudgetStatus, PoeBudget};
