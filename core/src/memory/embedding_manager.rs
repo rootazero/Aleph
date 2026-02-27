@@ -93,14 +93,16 @@ impl EmbeddingManager {
 
     /// Test a specific provider's connectivity
     pub async fn test_provider(&self, provider_id: &str) -> Result<(), AlephError> {
-        let settings = self.settings.read().await;
-        let config = settings
-            .providers
-            .iter()
-            .find(|p| p.id == provider_id)
-            .ok_or_else(|| AlephError::config(format!("Provider not found: {}", provider_id)))?;
-
-        let provider = RemoteEmbeddingProvider::from_config(config)?;
+        let config = {
+            let settings = self.settings.read().await;
+            settings
+                .providers
+                .iter()
+                .find(|p| p.id == provider_id)
+                .ok_or_else(|| AlephError::config(format!("Provider not found: {}", provider_id)))?
+                .clone()
+        }; // settings lock released here
+        let provider = RemoteEmbeddingProvider::from_config(&config)?;
         provider.test_connection().await
     }
 
