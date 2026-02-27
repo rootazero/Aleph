@@ -56,13 +56,13 @@ pub fn GenerationProvidersView() -> impl IntoView {
     view! {
         <div class="flex h-full">
             // Left panel - Provider list + Generation settings
-            <div class="flex flex-col w-5/12 border-r border-border">
+            <div class="flex flex-col w-5/12 min-w-0 border-r border-border">
                 // Header
                 <div class="px-6 py-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">
                         "Generation Providers"
                     </h1>
-                    <p class="mt-1 text-sm text-text-secondary">
+                    <p class="mt-1 text-sm text-text-tertiary">
                         "Configure media generation providers and settings"
                     </p>
                 </div>
@@ -89,7 +89,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                 </div>
 
                 // Content
-                <div class="flex-1 overflow-auto">
+                <div class="flex-1 overflow-y-auto">
                     // Provider cards (loading/error/list)
                     {move || {
                         if is_loading.get() {
@@ -142,7 +142,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
             </div>
 
             // Right panel - Provider details
-            <div class="w-7/12 bg-surface overflow-auto">
+            <div class="w-7/12 min-w-0 overflow-y-auto">
                 <ProviderDetailPanel
                     selected_id=selected_provider_id
                     providers=providers

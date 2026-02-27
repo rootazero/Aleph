@@ -149,15 +149,17 @@ pub fn ProvidersView() -> impl IntoView {
     view! {
         <div class="flex h-full">
             // Left panel: Presets + Configured providers
-            <div class="w-5/12 border-r border-border overflow-y-auto">
-                <div class="p-6 space-y-6">
-                    <div>
-                        <h1 class="text-2xl font-bold text-text-primary">"AI Providers"</h1>
-                        <p class="mt-1 text-sm text-text-tertiary">
-                            "Configure AI model providers. Select a preset or add a custom provider."
-                        </p>
-                    </div>
+            <div class="flex flex-col w-5/12 min-w-0 border-r border-border">
+                // Header
+                <div class="px-6 py-4 border-b border-border">
+                    <h1 class="text-2xl font-semibold text-text-primary">"AI Providers"</h1>
+                    <p class="mt-1 text-sm text-text-tertiary">
+                        "Configure AI model providers. Select a preset or add a custom provider."
+                    </p>
+                </div>
 
+                // Scrollable content
+                <div class="flex-1 overflow-y-auto p-6 space-y-6">
                     {move || error.get().filter(|e| e.contains("Failed to load")).map(|_| view! {
                         <div class="p-3 bg-info-subtle border border-info/20 rounded-lg text-info text-sm flex items-center gap-2">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -178,7 +180,7 @@ pub fn ProvidersView() -> impl IntoView {
             </div>
 
             // Right panel: Detail/Editor
-            <div class="w-7/12 overflow-y-auto">
+            <div class="w-7/12 min-w-0 overflow-y-auto">
                 <ProviderDetailPanel
                     providers=providers
                     selected=selected

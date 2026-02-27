@@ -61,19 +61,19 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
     view! {
         <div class="flex h-full">
             // Left panel - Provider list
-            <div class="flex flex-col w-5/12 border-r border-border">
+            <div class="flex flex-col w-5/12 min-w-0 border-r border-border">
                 // Header
                 <div class="px-6 py-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">
                         "Embedding Providers"
                     </h1>
-                    <p class="mt-1 text-sm text-text-secondary">
+                    <p class="mt-1 text-sm text-text-tertiary">
                         "Configure vector embedding providers for memory and knowledge base"
                     </p>
                 </div>
 
                 // Content
-                <div class="flex-1 overflow-auto">
+                <div class="flex-1 overflow-y-auto">
                     {move || {
                         if is_loading.get() {
                             view! {
@@ -182,7 +182,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
             </div>
 
             // Right panel - Detail / Add form
-            <div class="w-7/12 bg-surface overflow-auto">
+            <div class="w-7/12 min-w-0 overflow-y-auto">
                 {move || {
                     if show_add_form.get() {
                         view! {
