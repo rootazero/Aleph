@@ -1,102 +1,135 @@
 //! WASM plugin permission checking
+//!
+//! Thin facade over WasmCapabilities for quick capability presence checks.
+//! Actual enforcement is in WasmCapabilityKernel.
 
-use std::collections::HashSet;
-use crate::extension::manifest::PluginPermission;
+use super::capabilities::WasmCapabilities;
 
-/// Permission checker for WASM plugins
+/// Checks whether WASM capabilities are declared.
+///
+/// This is a lightweight query layer. Actual enforcement
+/// (prefix checks, path traversal, leak detection, etc.)
+/// is handled by [`WasmCapabilityKernel`].
 #[derive(Debug, Clone, Default)]
 pub struct PermissionChecker {
-    allowed: HashSet<PluginPermission>,
+    capabilities: Option<WasmCapabilities>,
 }
 
 impl PermissionChecker {
-    /// Create a new permission checker with the given permissions
-    pub fn new(permissions: Vec<PluginPermission>) -> Self {
-        Self {
-            allowed: permissions.into_iter().collect(),
-        }
+    pub fn new(capabilities: Option<WasmCapabilities>) -> Self {
+        Self { capabilities }
     }
 
-    /// Check if network access is allowed
-    pub fn can_network(&self) -> bool {
-        self.allowed.contains(&PluginPermission::Network)
+    /// Whether HTTP capability is declared
+    pub fn has_http(&self) -> bool {
+        self.capabilities
+            .as_ref()
+            .map(|c| c.http.is_some())
+            .unwrap_or(false)
     }
 
-    /// Check if filesystem read is allowed
-    pub fn can_read_filesystem(&self) -> bool {
-        self.allowed.contains(&PluginPermission::FilesystemRead)
-            || self.allowed.contains(&PluginPermission::Filesystem)
+    /// Whether workspace capability is declared
+    pub fn has_workspace(&self) -> bool {
+        self.capabilities
+            .as_ref()
+            .map(|c| c.workspace.is_some())
+            .unwrap_or(false)
     }
 
-    /// Check if filesystem write is allowed
-    pub fn can_write_filesystem(&self) -> bool {
-        self.allowed.contains(&PluginPermission::FilesystemWrite)
-            || self.allowed.contains(&PluginPermission::Filesystem)
+    /// Whether tool_invoke capability is declared
+    pub fn has_tool_invoke(&self) -> bool {
+        self.capabilities
+            .as_ref()
+            .map(|c| c.tool_invoke.is_some())
+            .unwrap_or(false)
     }
 
-    /// Check if environment access is allowed
-    pub fn can_access_env(&self) -> bool {
-        self.allowed.contains(&PluginPermission::Env)
+    /// Whether secrets capability is declared
+    pub fn has_secrets(&self) -> bool {
+        self.capabilities
+            .as_ref()
+            .map(|c| c.secrets.is_some())
+            .unwrap_or(false)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extension::runtime::wasm::capabilities::*;
+    use std::collections::HashMap;
 
     #[test]
-    fn test_no_permissions() {
-        let checker = PermissionChecker::new(vec![]);
-        assert!(!checker.can_network());
-        assert!(!checker.can_read_filesystem());
-        assert!(!checker.can_write_filesystem());
+    fn test_no_capabilities() {
+        let checker = PermissionChecker::new(None);
+        assert!(!checker.has_http());
+        assert!(!checker.has_workspace());
+        assert!(!checker.has_tool_invoke());
+        assert!(!checker.has_secrets());
     }
 
     #[test]
-    fn test_network_permission() {
-        let checker = PermissionChecker::new(vec![PluginPermission::Network]);
-        assert!(checker.can_network());
-        assert!(!checker.can_read_filesystem());
+    fn test_default_capabilities_empty() {
+        let checker = PermissionChecker::new(Some(WasmCapabilities::default()));
+        assert!(!checker.has_http());
+        assert!(!checker.has_workspace());
+        assert!(!checker.has_tool_invoke());
+        assert!(!checker.has_secrets());
     }
 
     #[test]
-    fn test_filesystem_permission() {
-        let checker = PermissionChecker::new(vec![PluginPermission::Filesystem]);
-        assert!(checker.can_read_filesystem());
-        assert!(checker.can_write_filesystem());
+    fn test_with_http_capability() {
+        let caps = WasmCapabilities {
+            http: Some(HttpCapability {
+                allowlist: vec![],
+                credentials: vec![],
+                rate_limit: None,
+                timeout_secs: 30,
+                max_request_bytes: 1_048_576,
+                max_response_bytes: 10_485_760,
+            }),
+            ..Default::default()
+        };
+        let checker = PermissionChecker::new(Some(caps));
+        assert!(checker.has_http());
+        assert!(!checker.has_workspace());
     }
 
     #[test]
-    fn test_filesystem_read_only() {
-        let checker = PermissionChecker::new(vec![PluginPermission::FilesystemRead]);
-        assert!(checker.can_read_filesystem());
-        assert!(!checker.can_write_filesystem());
+    fn test_with_workspace_capability() {
+        let caps = WasmCapabilities {
+            workspace: Some(WorkspaceCapability {
+                allowed_prefixes: vec!["docs/".to_string()],
+            }),
+            ..Default::default()
+        };
+        let checker = PermissionChecker::new(Some(caps));
+        assert!(checker.has_workspace());
+        assert!(!checker.has_http());
     }
 
     #[test]
-    fn test_filesystem_write_only() {
-        let checker = PermissionChecker::new(vec![PluginPermission::FilesystemWrite]);
-        assert!(!checker.can_read_filesystem());
-        assert!(checker.can_write_filesystem());
+    fn test_with_tool_invoke_capability() {
+        let caps = WasmCapabilities {
+            tool_invoke: Some(ToolInvokeCapability {
+                aliases: HashMap::new(),
+                max_per_execution: 10,
+            }),
+            ..Default::default()
+        };
+        let checker = PermissionChecker::new(Some(caps));
+        assert!(checker.has_tool_invoke());
     }
 
     #[test]
-    fn test_env_permission() {
-        let checker = PermissionChecker::new(vec![PluginPermission::Env]);
-        assert!(checker.can_access_env());
-        assert!(!checker.can_network());
-    }
-
-    #[test]
-    fn test_multiple_permissions() {
-        let checker = PermissionChecker::new(vec![
-            PluginPermission::Network,
-            PluginPermission::FilesystemRead,
-            PluginPermission::Env,
-        ]);
-        assert!(checker.can_network());
-        assert!(checker.can_read_filesystem());
-        assert!(!checker.can_write_filesystem());
-        assert!(checker.can_access_env());
+    fn test_with_secrets_capability() {
+        let caps = WasmCapabilities {
+            secrets: Some(SecretsCapability {
+                allowed_patterns: vec!["slack_*".to_string()],
+            }),
+            ..Default::default()
+        };
+        let checker = PermissionChecker::new(Some(caps));
+        assert!(checker.has_secrets());
     }
 }
