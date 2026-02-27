@@ -14,7 +14,9 @@
 
 ```
 Stage 1: WASM (Panel UI)
-   trunk build --release  →  dist/
+   npm run build:css (Tailwind CSS v4)
+   cargo build -p aleph-control-plane --target wasm32-unknown-unknown --release
+   wasm-bindgen --target web  →  dist/
    ↓
 Stage 2: Server Binary
    cargo build --bin aleph-server --features control-plane --release
@@ -34,7 +36,7 @@ Stage 3: macOS Native App
 ```
 just build
   ├── just server
-  │     └── just wasm  (trunk build --release)
+  │     └── just wasm  (npm build:css + cargo wasm32 + wasm-bindgen)
   │           → cargo build --bin aleph-server --features control-plane --release
   └── just macos
         └── _ensure-server (triggers just server if binary missing)
@@ -92,8 +94,9 @@ Single file: `justfile` at project root. No additional scripts needed.
 
 ### WASM Build
 
-- Uses `trunk build --release` (existing Trunk.toml config)
-- Output: `core/ui/control_plane/dist/`
+- Manual pipeline: Tailwind CSS → cargo wasm32 → wasm-bindgen → index.html
+- Trunk not used (fails in workspace setups: "cargo artifacts not found")
+- Output: `core/ui/control_plane/dist/` (tailwind.css, aleph_dashboard.js, .wasm, index.html)
 - build.rs caching: skips rebuild if dist/ exists
 
 ### Server Build
