@@ -7,7 +7,7 @@
 use super::types::{AnchorScope, AnchorSource, BehavioralAnchor};
 use super::AnchorStore;
 use crate::error::AlephError;
-use crate::memory::cortex::types::Experience;
+use crate::poe::crystallization::experience::Experience;
 use crate::memory::store::MemoryBackend;
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
@@ -451,8 +451,8 @@ Generate an optimization suggestion to improve task execution efficiency.
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::memory::cortex::meta_cognition::schema::initialize_schema;
-    use crate::memory::cortex::types::ExperienceBuilder;
+    use crate::memory::cortex::meta_cognition::schema::initialize_schema; // Schema stays in cortex (DB concern)
+    use crate::poe::crystallization::experience::ExperienceBuilder;
     use crate::memory::store::LanceMemoryBackend;
     use crate::providers::MockProvider;
     use rusqlite::Connection;
