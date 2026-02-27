@@ -119,6 +119,7 @@ pub mod trust;
 pub mod types;
 pub mod validation;
 pub mod worker;
+pub mod event_bus;
 pub mod events;
 
 // Re-exports for convenient access
@@ -220,4 +221,5 @@ pub use handler_types::{
 pub use services::{PoeRunManager, PoeContractService, PrepareParams, PrepareContext, RejectParams};
 
 // Domain events
+pub use event_bus::PoeEventBus;
 pub use events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind, EventTier};
