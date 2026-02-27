@@ -83,8 +83,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         haloWindow.configure(serverPort: serverPort)
         settingsWindow.configure(serverPort: serverPort)
 
-        // Register all desktop handlers and start bridge server
+        // Register all desktop handlers and PIM handlers, then start bridge server
         bridge.registerDesktopHandlers()
+        bridge.registerPIMHandlers()
         do {
             try bridge.start()
             logger.info("BridgeServer started successfully")

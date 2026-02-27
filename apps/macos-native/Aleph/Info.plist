@@ -28,5 +28,13 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Aleph. All rights reserved.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Aleph needs calendar access to help you manage events and schedules.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Aleph needs reminders access to help you manage tasks and to-dos.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Aleph needs contacts access to help you find and manage people.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Aleph needs automation access to interact with Notes and other apps.</string>
 </dict>
 </plist>

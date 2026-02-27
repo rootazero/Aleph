@@ -214,6 +214,99 @@ fn request_to_jsonrpc(request: &DesktopRequest) -> (&'static str, serde_json::Va
         DesktopRequest::CanvasUpdate { patch } => {
             ("desktop.canvas_update", json!({ "patch": patch }))
         }
+
+        // ========= PIM (Personal Information Management) =========
+
+        // Calendar
+        DesktopRequest::PimCalendarList { from, to, calendar_id } => {
+            ("pim.calendar.list", json!({ "from": from, "to": to, "calendar_id": calendar_id }))
+        }
+        DesktopRequest::PimCalendarGet { id } => {
+            ("pim.calendar.get", json!({ "id": id }))
+        }
+        DesktopRequest::PimCalendarCreate { title, start, end, calendar_id, location, notes, all_day } => {
+            ("pim.calendar.create", json!({
+                "title": title, "start": start, "end": end,
+                "calendar_id": calendar_id, "location": location,
+                "notes": notes, "all_day": all_day,
+            }))
+        }
+        DesktopRequest::PimCalendarUpdate { id, title, start, end, location, notes, all_day, calendar_id } => {
+            ("pim.calendar.update", json!({
+                "id": id, "title": title, "start": start,
+                "end": end, "location": location, "notes": notes,
+                "all_day": all_day, "calendar_id": calendar_id,
+            }))
+        }
+        DesktopRequest::PimCalendarDelete { id } => {
+            ("pim.calendar.delete", json!({ "id": id }))
+        }
+        DesktopRequest::PimCalendarCalendars => ("pim.calendar.calendars", json!({})),
+
+        // Reminders
+        DesktopRequest::PimRemindersList { list_id, include_completed } => {
+            ("pim.reminders.list", json!({ "list_id": list_id, "include_completed": include_completed }))
+        }
+        DesktopRequest::PimRemindersGet { id } => {
+            ("pim.reminders.get", json!({ "id": id }))
+        }
+        DesktopRequest::PimRemindersCreate { title, list_id, due_date, priority, notes } => {
+            ("pim.reminders.create", json!({
+                "title": title, "list_id": list_id,
+                "due_date": due_date, "priority": priority, "notes": notes,
+            }))
+        }
+        DesktopRequest::PimRemindersComplete { id, completed } => {
+            ("pim.reminders.complete", json!({ "id": id, "completed": completed }))
+        }
+        DesktopRequest::PimRemindersDelete { id } => {
+            ("pim.reminders.delete", json!({ "id": id }))
+        }
+        DesktopRequest::PimRemindersLists => ("pim.reminders.lists", json!({})),
+
+        // Notes
+        DesktopRequest::PimNotesList { folder } => {
+            ("pim.notes.list", json!({ "folder": folder }))
+        }
+        DesktopRequest::PimNotesGet { id } => {
+            ("pim.notes.get", json!({ "id": id }))
+        }
+        DesktopRequest::PimNotesCreate { title, body, folder } => {
+            ("pim.notes.create", json!({ "title": title, "body": body, "folder": folder }))
+        }
+        DesktopRequest::PimNotesUpdate { id, title, body } => {
+            ("pim.notes.update", json!({ "id": id, "title": title, "body": body }))
+        }
+        DesktopRequest::PimNotesDelete { id } => {
+            ("pim.notes.delete", json!({ "id": id }))
+        }
+        DesktopRequest::PimNotesFolders => ("pim.notes.folders", json!({})),
+
+        // Contacts
+        DesktopRequest::PimContactsSearch { query } => {
+            ("pim.contacts.search", json!({ "query": query }))
+        }
+        DesktopRequest::PimContactsGet { id } => {
+            ("pim.contacts.get", json!({ "id": id }))
+        }
+        DesktopRequest::PimContactsCreate { given_name, family_name, organization, notes, phone_numbers, emails } => {
+            ("pim.contacts.create", json!({
+                "given_name": given_name, "family_name": family_name,
+                "organization": organization, "notes": notes,
+                "phone_numbers": phone_numbers, "emails": emails,
+            }))
+        }
+        DesktopRequest::PimContactsUpdate { id, given_name, family_name, organization, notes, phone_numbers, emails } => {
+            ("pim.contacts.update", json!({
+                "id": id, "given_name": given_name, "family_name": family_name,
+                "organization": organization, "notes": notes,
+                "phone_numbers": phone_numbers, "emails": emails,
+            }))
+        }
+        DesktopRequest::PimContactsDelete { id } => {
+            ("pim.contacts.delete", json!({ "id": id }))
+        }
+        DesktopRequest::PimContactsGroups => ("pim.contacts.groups", json!({})),
     }
 }
 
