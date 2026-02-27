@@ -361,4 +361,28 @@ mod tests {
         assert_eq!(recent[0].step_id, 7);
         assert_eq!(recent[2].step_id, 9);
     }
+
+    #[test]
+    fn test_poe_hint_set_and_take() {
+        let mut state = LoopState::new(
+            "test".to_string(),
+            "request".to_string(),
+            RequestContext::empty(),
+        );
+
+        // Initially None
+        assert!(state.poe_hint.is_none());
+
+        // Set hint
+        state.set_poe_hint("try decomposition".to_string());
+        assert_eq!(state.poe_hint.as_deref(), Some("try decomposition"));
+
+        // Take consumes the hint
+        let taken = state.take_poe_hint();
+        assert_eq!(taken.as_deref(), Some("try decomposition"));
+        assert!(state.poe_hint.is_none());
+
+        // Second take returns None
+        assert!(state.take_poe_hint().is_none());
+    }
 }

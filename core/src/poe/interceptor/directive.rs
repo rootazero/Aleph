@@ -8,7 +8,7 @@ pub enum StepDirective {
     Continue,
     /// Continue but inject a hint into the next Think step.
     ContinueWithHint { hint: String },
-    /// Suggest strategy switch — warning, not forced termination.
+    /// Suggest strategy switch — terminates loop via GuardTriggered(PoeStrategySwitch).
     SuggestStrategySwitch { reason: String, suggestion: String },
     /// Force loop termination.
     Abort { reason: String },
