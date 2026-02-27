@@ -180,7 +180,11 @@ fn markdown_to_telegram_html(text: &str) -> String {
 /// Convert inline Markdown (bold, italic, code, links) to Telegram HTML.
 /// Does NOT handle fenced code blocks -- the caller strips those first.
 fn inline_md_to_telegram_html(text: &str) -> String {
-    let mut s = text.to_string();
+    // Escape HTML special characters FIRST, before any Markdown-to-HTML tag
+    // replacements. Markdown markers (**  *  `  []()) don't contain < > &, so
+    // escaping first is safe and prevents user text like "1 < 2" from breaking
+    // Telegram's HTML parser.
+    let mut s = escape_html(text);
 
     // Bold: **text** -> <b>text</b>
     s = replace_paired_marker(&s, "**", "<b>", "</b>");
@@ -345,8 +349,14 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
         // Try to find the best split point within max_len.
         let candidate = &remaining[..max_len];
 
-        // Check if we're inside a code block.
-        let split_pos = find_split_point(candidate, remaining);
+        let mut split_pos = find_split_point(candidate);
+
+        // Character-level fallback: if find_split_point returned 0 (no viable
+        // boundary found), force a hard split at max_len to guarantee forward
+        // progress and the max_len contract.
+        if split_pos == 0 {
+            split_pos = max_len;
+        }
 
         let (chunk, rest) = remaining.split_at(split_pos);
         let chunk = chunk.trim_end();
@@ -366,11 +376,11 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
     chunks
 }
 
-/// Find the best byte offset to split `candidate` (a prefix of `full_text`).
+/// Find the best byte offset to split `candidate`.
 ///
 /// Prefers paragraph boundaries, then line boundaries. Avoids splitting inside
 /// fenced code blocks.
-fn find_split_point(candidate: &str, _full_text: &str) -> usize {
+fn find_split_point(candidate: &str) -> usize {
     // Count fence openings/closings in the candidate to detect if we're mid-block.
     let fence_count = candidate.matches("```").count();
     let in_code_block = fence_count % 2 != 0;
@@ -524,6 +534,14 @@ fn strip_single_asterisk(text: &str) -> String {
 }
 
 /// Replace `[text](url)` links with a custom format.
+///
+/// # Known limitations
+///
+/// - **False positives with bracket-paren adjacency**: patterns like `array[0](foo)`
+///   will be misinterpreted as a Markdown link with link text `0` and URL `foo`.
+/// - **URLs containing parentheses**: URLs with literal `)` (e.g., Wikipedia links
+///   like `https://en.wikipedia.org/wiki/Rust_(programming_language)`) will be
+///   truncated at the first `)` because the parser uses a simple greedy `find(')')`.
 fn replace_links(text: &str, fmt_fn: impl Fn(&str, &str) -> String) -> String {
     let mut result = text.to_string();
 
@@ -823,6 +841,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_html_escape_inline_text() {
+        // Plain text containing HTML special characters must be escaped so that
+        // Telegram's HTML parser does not choke on them.
+        assert_eq!(
+            MessageFormatter::format("1 < 2 & 3 > 0", MarkupFormat::TelegramHtml),
+            "1 &lt; 2 &amp; 3 &gt; 0"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Slack mrkdwn
     // -----------------------------------------------------------------------
@@ -984,6 +1012,28 @@ mod tests {
         for chunk in &chunks {
             assert!(chunk.len() <= 20);
         }
+    }
+
+    #[test]
+    fn test_split_long_line_hard_split() {
+        // A single very long line with no newlines or other split opportunities
+        // must still produce chunks that are all <= max_len.
+        let long_line = "x".repeat(150);
+        let max_len = 40;
+        let chunks = MessageFormatter::split(&long_line, max_len);
+        assert!(chunks.len() >= 4, "expected at least 4 chunks, got {}", chunks.len());
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert!(
+                chunk.len() <= max_len,
+                "chunk {} has length {} which exceeds max_len {}",
+                i,
+                chunk.len(),
+                max_len
+            );
+        }
+        // Verify all content is preserved.
+        let reassembled: String = chunks.concat();
+        assert_eq!(reassembled, long_line);
     }
 
     // -----------------------------------------------------------------------
