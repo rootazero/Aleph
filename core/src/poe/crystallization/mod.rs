@@ -19,11 +19,28 @@
 //! 3. Generates pattern IDs from task objectives for grouping similar tasks
 //! 4. Calculates satisfaction scores from validation verdicts
 //!
+//! ## Migrated from Cortex
+//!
+//! The following submodules were migrated from `crate::memory::cortex`:
+//! - `experience` — Core types (Experience, DistillationTask, etc.)
+//! - `distillation` — Distillation service for processing experiences
+//! - `pattern_extractor` — LLM-based pattern extraction
+//! - `clustering` — Experience clustering and deduplication
+//! - `dreaming` — Background batch processing
+//!
 //! ## Thread Safety
 //!
 //! The `ExperienceRecorder` trait provides a `Send + Sync` interface for recording
 //! experiences, allowing integration with async code like tokio::spawn. The concrete
 //! `ExperienceCrystallizer` implementation handles the actual database operations.
+
+// Submodules migrated from Cortex
+pub mod clustering;
+pub mod distillation;
+pub mod dreaming;
+pub mod experience;
+pub mod experience_store;
+pub mod pattern_extractor;
 
 use std::sync::Arc;
 use std::time::Instant;

@@ -48,6 +48,11 @@ pub enum GuardViolation {
         /// Preview of the arguments (truncated for display)
         arguments_preview: String,
     },
+    /// POE suggests switching strategy due to lack of progress
+    PoeStrategySwitch {
+        reason: String,
+        suggestion: String,
+    },
 }
 
 impl GuardViolation {
@@ -102,6 +107,9 @@ impl GuardViolation {
                     tool_name, repeat_count, arguments_preview
                 )
             }
+            GuardViolation::PoeStrategySwitch { reason, suggestion } => {
+                format!("POE strategy switch: {} — suggestion: {}", reason, suggestion)
+            }
         }
     }
 
@@ -125,6 +133,9 @@ impl GuardViolation {
             }
             GuardViolation::DoomLoop { .. } => {
                 "The agent is making the exact same tool call repeatedly without progress. This usually indicates a logic error or misunderstanding. Please clarify your request or try a different approach.".to_string()
+            }
+            GuardViolation::PoeStrategySwitch { suggestion, .. } => {
+                suggestion.clone()
             }
         }
     }
@@ -761,6 +772,10 @@ mod tests {
             GuardViolation::StuckLoop { action: "search".to_string(), repeat_count: 3 },
             GuardViolation::RepeatedFailures { pattern: "search".to_string(), failure_count: 3, total_attempts: 5 },
             GuardViolation::DoomLoop { tool_name: "web_search".to_string(), repeat_count: 3, arguments_preview: r#"{"query": "test"}"#.to_string() },
+            GuardViolation::PoeStrategySwitch {
+                reason: "no progress".to_string(),
+                suggestion: "try a different approach".to_string(),
+            },
         ];
 
         for violation in violations {

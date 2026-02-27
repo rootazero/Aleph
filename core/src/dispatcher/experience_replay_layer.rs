@@ -4,8 +4,10 @@
 //! "muscle memory" execution by replaying verified patterns.
 
 use crate::error::{AlephError, Result};
-use crate::memory::cortex::{Experience, ParameterMapping, ReplayMatch};
-use crate::memory::store::MemoryBackend;
+use crate::poe::crystallization::experience::{
+    Experience, ExperienceBuilder, EvolutionStatus, ParameterMapping, ReplayMatch,
+};
+use crate::poe::crystallization::experience_store::{ExperienceStore, PoeExperience};
 use crate::memory::EmbeddingProvider;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -33,7 +35,7 @@ impl Default for ExperienceReplayConfig {
 
 /// L1.5 Experience Replay Layer
 pub struct ExperienceReplayLayer {
-    _db: MemoryBackend,
+    experience_store: Arc<dyn ExperienceStore>,
     embedder: Arc<dyn EmbeddingProvider>,
     config: ExperienceReplayConfig,
 }
@@ -41,12 +43,12 @@ pub struct ExperienceReplayLayer {
 impl ExperienceReplayLayer {
     /// Create a new Experience Replay Layer
     pub fn new(
-        db: MemoryBackend,
+        experience_store: Arc<dyn ExperienceStore>,
         embedder: Arc<dyn EmbeddingProvider>,
         config: ExperienceReplayConfig,
     ) -> Self {
         Self {
-            _db: db,
+            experience_store,
             embedder,
             config,
         }
@@ -62,16 +64,31 @@ impl ExperienceReplayLayer {
         info!("L1.5: Attempting to match intent: {}", intent);
 
         // Step 1: Generate intent embedding
-        let _intent_vector = self.embedder.embed(intent).await.map_err(|e| {
+        let intent_vector = self.embedder.embed(intent).await.map_err(|e| {
             AlephError::Other {
                 message: format!("Failed to embed intent: {}", e),
                 suggestion: None,
             }
         })?;
 
-        // TODO: Implement experience vector search via new store API
-        // Old code: db.vector_search_experiences(vector, max_candidates, threshold, statuses)
-        let candidates: Vec<(Experience, f64)> = Vec::new();
+        // Step 2: Search for similar experiences via ExperienceStore
+        let search_results = self
+            .experience_store
+            .vector_search(
+                &intent_vector,
+                self.config.max_candidates,
+                self.config.similarity_threshold,
+            )
+            .await
+            .map_err(|e| AlephError::Other {
+                message: format!("Experience search failed: {}", e),
+                suggestion: None,
+            })?;
+
+        let candidates: Vec<(Experience, f64)> = search_results
+            .into_iter()
+            .map(|(poe_exp, sim)| (poe_experience_to_experience(poe_exp, sim), sim))
+            .collect();
 
         if candidates.is_empty() {
             debug!("L1.5: No matching experiences found");
@@ -231,6 +248,38 @@ impl ExperienceReplayLayer {
     }
 }
 
+/// Convert a PoeExperience from the store into the Experience type used by the replay pipeline.
+fn poe_experience_to_experience(exp: PoeExperience, similarity: f64) -> Experience {
+    ExperienceBuilder::new(exp.id, exp.objective, exp.tool_sequence_json)
+        .pattern_hash(exp.pattern_id)
+        .success_score(similarity)
+        .latency_ms(exp.duration_ms as i64)
+        .build()
+        // Apply fields not covered by builder
+        .with_parameter_mapping(exp.parameter_mapping)
+        .with_evolution_status_if_high_satisfaction(exp.satisfaction)
+}
+
+/// Extension methods for Experience construction from PoeExperience.
+trait ExperienceExt {
+    fn with_parameter_mapping(self, mapping: Option<String>) -> Self;
+    fn with_evolution_status_if_high_satisfaction(self, satisfaction: f32) -> Self;
+}
+
+impl ExperienceExt for Experience {
+    fn with_parameter_mapping(mut self, mapping: Option<String>) -> Self {
+        self.parameter_mapping = mapping;
+        self
+    }
+
+    fn with_evolution_status_if_high_satisfaction(mut self, satisfaction: f32) -> Self {
+        if satisfaction >= 0.8 {
+            self.evolution_status = EvolutionStatus::Verified;
+        }
+        self
+    }
+}
+
 /// Experience with similarity score
 struct ExperienceWithScore {
     id: String,
@@ -242,23 +291,20 @@ struct ExperienceWithScore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+    use crate::poe::crystallization::experience_store::InMemoryExperienceStore;
 
-    async fn create_test_db() -> (MemoryBackend, TempDir) {
-        let temp_dir = TempDir::new().unwrap();
-        let backend = crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap();
-        (Arc::new(backend), temp_dir)
+    fn create_test_store() -> Arc<dyn ExperienceStore> {
+        Arc::new(InMemoryExperienceStore::new())
     }
 
     #[tokio::test]
     async fn test_extract_with_regex() {
-        let (db, temp) = create_test_db().await;
-        let cache_dir = temp.path().join("embedder_cache");
+        let store = create_test_store();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
             crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(1024, "mock-model"),
         );
         let config = ExperienceReplayConfig::default();
-        let layer = ExperienceReplayLayer::new(db, embedder, config);
+        let layer = ExperienceReplayLayer::new(store, embedder, config);
 
         let text = "Search for TODO in file main.rs";
         let pattern = r"file\s+(\S+)";
@@ -269,13 +315,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_extract_after_keyword() {
-        let (db, temp) = create_test_db().await;
-        let cache_dir = temp.path().join("embedder_cache");
+        let store = create_test_store();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
             crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(1024, "mock-model"),
         );
         let config = ExperienceReplayConfig::default();
-        let layer = ExperienceReplayLayer::new(db, embedder, config);
+        let layer = ExperienceReplayLayer::new(store, embedder, config);
 
         let text = "Search for TODO comments";
         let keyword = "for";

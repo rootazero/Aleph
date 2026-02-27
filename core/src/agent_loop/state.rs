@@ -32,6 +32,8 @@ pub struct LoopState {
     pub history_summary: String,
     /// Step index up to which history has been compressed
     pub compressed_until_step: usize,
+    /// POE hint for next Think step (consumed once, then cleared)
+    pub poe_hint: Option<String>,
 }
 
 impl LoopState {
@@ -47,6 +49,7 @@ impl LoopState {
             started_at: Instant::now(),
             history_summary: String::new(),
             compressed_until_step: 0,
+            poe_hint: None,
         }
     }
 
@@ -81,6 +84,16 @@ impl LoopState {
         } else {
             &self.steps[self.steps.len() - window_size..]
         }
+    }
+
+    /// Set a POE hint for the next Think step.
+    pub fn set_poe_hint(&mut self, hint: String) {
+        self.poe_hint = Some(hint);
+    }
+
+    /// Take the POE hint (consuming it).
+    pub fn take_poe_hint(&mut self) -> Option<String> {
+        self.poe_hint.take()
     }
 
     /// Get elapsed time since session start
@@ -347,5 +360,29 @@ mod tests {
         assert_eq!(recent.len(), 3);
         assert_eq!(recent[0].step_id, 7);
         assert_eq!(recent[2].step_id, 9);
+    }
+
+    #[test]
+    fn test_poe_hint_set_and_take() {
+        let mut state = LoopState::new(
+            "test".to_string(),
+            "request".to_string(),
+            RequestContext::empty(),
+        );
+
+        // Initially None
+        assert!(state.poe_hint.is_none());
+
+        // Set hint
+        state.set_poe_hint("try decomposition".to_string());
+        assert_eq!(state.poe_hint.as_deref(), Some("try decomposition"));
+
+        // Take consumes the hint
+        let taken = state.take_poe_hint();
+        assert_eq!(taken.as_deref(), Some("try decomposition"));
+        assert!(state.poe_hint.is_none());
+
+        // Second take returns None
+        assert!(state.take_poe_hint().is_none());
     }
 }

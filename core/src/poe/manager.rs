@@ -18,15 +18,18 @@
 //!    f. Otherwise -> retry with failure feedback
 //! 3. If loop exits -> return BudgetExhausted
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::error::Result;
 use crate::poe::budget::PoeBudget;
 use crate::poe::crystallization::ExperienceRecorder;
+use crate::poe::event_bus::PoeEventBus;
+use crate::poe::events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind};
 use crate::poe::types::{PoeOutcome, PoeTask, Verdict, WorkerOutput, WorkerState};
 use crate::poe::validation::CompositeValidator;
-use crate::poe::worker::Worker;
+use crate::poe::worker::{StateSnapshot, Worker};
 
 // ============================================================================
 // Validation Callback
@@ -99,6 +102,25 @@ impl PoeConfig {
 }
 
 // ============================================================================
+// MetaCognitionCallback
+// ============================================================================
+
+/// Callback trait for meta-cognition integration with PoeManager.
+///
+/// This trait is `Send + Sync` safe, allowing it to be used in async contexts.
+/// Implementations should handle the threading internally (e.g., via channels
+/// or `spawn_blocking`) if they need to access non-Send types like SQLite.
+pub trait MetaCognitionCallback: Send + Sync {
+    /// Called when a validation fails, to trigger reactive reflection.
+    fn on_validation_failure(
+        &self,
+        task_id: &str,
+        objective: &str,
+        failure_reason: &str,
+    );
+}
+
+// ============================================================================
 // PoeManager
 // ============================================================================
 
@@ -144,6 +166,14 @@ pub struct PoeManager<W: Worker> {
     validation_callback: Option<ValidationCallback>,
     /// Optional recorder for crystallizing experiences
     recorder: Option<Arc<dyn ExperienceRecorder>>,
+    /// Optional meta-cognition callback for failure learning
+    meta_cognition: Option<Arc<dyn MetaCognitionCallback>>,
+    /// Optional event bus for emitting domain events
+    event_bus: Option<Arc<PoeEventBus>>,
+    /// Monotonic sequence counter for event ordering
+    event_seq: AtomicU32,
+    /// Optional workspace path for snapshot capture/restore
+    workspace: Option<std::path::PathBuf>,
 }
 
 impl<W: Worker> PoeManager<W> {
@@ -161,7 +191,21 @@ impl<W: Worker> PoeManager<W> {
             config,
             validation_callback: None,
             recorder: None,
+            meta_cognition: None,
+            event_bus: None,
+            event_seq: AtomicU32::new(0),
+            workspace: None,
         }
+    }
+
+    /// Set the workspace path for snapshot capture/restore.
+    ///
+    /// When configured, the manager captures a git-based snapshot before
+    /// the first operation attempt and restores it before each retry,
+    /// ensuring a clean workspace for each attempt.
+    pub fn with_workspace(mut self, workspace: std::path::PathBuf) -> Self {
+        self.workspace = Some(workspace);
+        self
     }
 
     /// Set the experience recorder for crystallizing POE executions.
@@ -191,6 +235,25 @@ impl<W: Worker> PoeManager<W> {
     /// * `callback` - Function to call after each validation
     pub fn with_validation_callback(mut self, callback: ValidationCallback) -> Self {
         self.validation_callback = Some(callback);
+        self
+    }
+
+    /// Set the meta-cognition callback for failure learning.
+    ///
+    /// The callback is invoked after each failed validation to trigger
+    /// reactive reflection and anchor generation.
+    pub fn with_meta_cognition(mut self, callback: Arc<dyn MetaCognitionCallback>) -> Self {
+        self.meta_cognition = Some(callback);
+        self
+    }
+
+    /// Set the event bus for emitting domain events during execution.
+    ///
+    /// When configured, the manager emits `PoeEvent` variants at key lifecycle
+    /// points: manifest creation, operation attempts, validation results, and
+    /// final outcome.
+    pub fn with_event_bus(mut self, bus: Arc<PoeEventBus>) -> Self {
+        self.event_bus = Some(bus);
         self
     }
 
@@ -224,6 +287,39 @@ impl<W: Worker> PoeManager<W> {
         // Create budget from task manifest and config
         let mut budget = PoeBudget::new(task.manifest.max_attempts, self.config.max_tokens);
 
+        // Emit: manifest created
+        self.emit_event(&task.manifest.task_id, PoeEvent::ManifestCreated {
+            task_id: task.manifest.task_id.clone(),
+            objective: task.manifest.objective.clone(),
+            hard_constraints_count: task.manifest.hard_constraints.len(),
+            soft_metrics_count: task.manifest.soft_metrics.len(),
+        });
+
+        // Capture initial workspace snapshot for rollback
+        let snapshot = if let Some(ref workspace) = self.workspace {
+            match StateSnapshot::capture(workspace).await {
+                Ok(snap) => {
+                    if snap.stash_hash.is_some() {
+                        tracing::debug!(
+                            task_id = %task.manifest.task_id,
+                            "Captured workspace snapshot for rollback"
+                        );
+                    }
+                    Some(snap)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        task_id = %task.manifest.task_id,
+                        error = %e,
+                        "Failed to capture workspace snapshot, continuing without rollback"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Track the last failure for retry feedback
         let mut previous_failure: Option<String> = None;
         let mut last_verdict: Option<Verdict> = None;
@@ -243,6 +339,13 @@ impl<W: Worker> PoeManager<W> {
                 .execute(&instruction, previous_failure.as_deref())
                 .await?;
 
+            // Emit: operation attempted
+            self.emit_event(&task.manifest.task_id, PoeEvent::OperationAttempted {
+                task_id: task.manifest.task_id.clone(),
+                attempt: budget.current_attempt + 1,
+                tokens_used: output.tokens_consumed,
+            });
+
             // Evaluation: Validate output against manifest
             let verdict = self.validator.validate(&task.manifest, &output).await?;
 
@@ -259,11 +362,38 @@ impl<W: Worker> PoeManager<W> {
                 });
             }
 
+            // Emit: validation completed
+            self.emit_event(&task.manifest.task_id, PoeEvent::ValidationCompleted {
+                task_id: task.manifest.task_id.clone(),
+                attempt: budget.current_attempt,
+                passed: verdict.passed,
+                distance_score: verdict.distance_score,
+                hard_passed: verdict.hard_results.iter().filter(|r| r.passed).count(),
+                hard_total: verdict.hard_results.len(),
+            });
+
             // Check for success
             if verdict.passed {
                 let outcome = PoeOutcome::Success(verdict);
                 self.record_experience(&task, &outcome, &output, start_time);
+                self.emit_event(&task.manifest.task_id, PoeEvent::OutcomeRecorded {
+                    task_id: task.manifest.task_id.clone(),
+                    outcome: PoeOutcomeKind::Success,
+                    attempts: budget.current_attempt,
+                    total_tokens: budget.tokens_used,
+                    duration_ms: start_time.elapsed().as_millis() as u64,
+                    best_distance: budget.best_score().unwrap_or(0.0),
+                });
                 return Ok(outcome);
+            }
+
+            // Trigger meta-cognition on validation failure
+            if let Some(ref mc) = self.meta_cognition {
+                mc.on_validation_failure(
+                    &task.manifest.task_id,
+                    &task.manifest.objective,
+                    &verdict.reason,
+                );
             }
 
             // Check for stuck (no progress over window)
@@ -282,7 +412,31 @@ impl<W: Worker> PoeManager<W> {
                     suggestion,
                 };
                 self.record_experience(&task, &outcome, &output, start_time);
+                self.emit_event(&task.manifest.task_id, PoeEvent::OutcomeRecorded {
+                    task_id: task.manifest.task_id.clone(),
+                    outcome: PoeOutcomeKind::StrategySwitch,
+                    attempts: budget.current_attempt,
+                    total_tokens: budget.tokens_used,
+                    duration_ms: start_time.elapsed().as_millis() as u64,
+                    best_distance: budget.best_score().unwrap_or(1.0),
+                });
                 return Ok(outcome);
+            }
+
+            // Restore workspace to clean state before retry
+            if let Some(ref snap) = snapshot {
+                if let Err(e) = snap.restore().await {
+                    tracing::warn!(
+                        task_id = %task.manifest.task_id,
+                        error = %e,
+                        "Failed to restore workspace snapshot, retrying on dirty state"
+                    );
+                } else {
+                    tracing::debug!(
+                        task_id = %task.manifest.task_id,
+                        "Workspace restored to clean state for retry"
+                    );
+                }
             }
 
             // Prepare for retry
@@ -306,6 +460,16 @@ impl<W: Worker> PoeManager<W> {
             self.record_experience(&task, &outcome, output, start_time);
         }
 
+        // Emit: budget exhausted outcome
+        self.emit_event(&task.manifest.task_id, PoeEvent::OutcomeRecorded {
+            task_id: task.manifest.task_id.clone(),
+            outcome: PoeOutcomeKind::BudgetExhausted,
+            attempts: budget.current_attempt,
+            total_tokens: budget.tokens_used,
+            duration_ms: start_time.elapsed().as_millis() as u64,
+            best_distance: budget.best_score().unwrap_or(1.0),
+        });
+
         Ok(outcome)
     }
 
@@ -323,6 +487,14 @@ impl<W: Worker> PoeManager<W> {
     ) {
         if let Some(ref recorder) = self.recorder {
             recorder.record_with_timing(task, outcome, output, start_time);
+        }
+    }
+
+    /// Emit a domain event to the event bus (if configured).
+    fn emit_event(&self, task_id: &str, event: PoeEvent) {
+        if let Some(ref bus) = self.event_bus {
+            let seq = self.event_seq.fetch_add(1, Ordering::Relaxed);
+            bus.emit(PoeEventEnvelope::new(task_id.into(), seq, event, None));
         }
     }
 
@@ -644,5 +816,63 @@ mod tests {
 
         // Worker should have been called multiple times
         assert!(manager.worker().execution_count() > 1);
+    }
+
+    #[tokio::test]
+    async fn test_manager_with_workspace_compiles() {
+        // Verify the workspace builder method is available and composable
+        let worker = MockWorker::new();
+        let provider = Arc::new(MockProvider::new(""));
+        let validator = CompositeValidator::new(provider);
+        let config = PoeConfig::default();
+
+        let manager = PoeManager::new(worker, validator, config)
+            .with_workspace(PathBuf::from("/tmp/test"));
+
+        // Verify workspace is set
+        assert!(manager.workspace.is_some());
+        assert_eq!(
+            manager.workspace.as_ref().unwrap(),
+            &PathBuf::from("/tmp/test")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_poe_manager_emits_events() {
+        use crate::poe::event_bus::PoeEventBus;
+        use crate::poe::events::PoeEvent;
+
+        let bus = Arc::new(PoeEventBus::default());
+        let mut rx = bus.subscribe();
+
+        let worker = MockWorker::new();
+        let provider = Arc::new(MockProvider::new(""));
+        let validator = CompositeValidator::new(provider);
+        let config = PoeConfig::default();
+
+        let manager = PoeManager::new(worker, validator, config)
+            .with_event_bus(bus.clone());
+
+        let task = create_simple_task();
+        let outcome = manager.execute(task).await.unwrap();
+        assert!(matches!(outcome, PoeOutcome::Success(_)));
+
+        // Collect emitted events (non-blocking)
+        let mut events = Vec::new();
+        while let Ok(envelope) = rx.try_recv() {
+            events.push(envelope);
+        }
+
+        // Should have: ManifestCreated, OperationAttempted, ValidationCompleted, OutcomeRecorded
+        assert!(events.len() >= 4, "Expected at least 4 events, got {}", events.len());
+        assert!(matches!(events[0].event, PoeEvent::ManifestCreated { .. }));
+        assert!(matches!(events[1].event, PoeEvent::OperationAttempted { .. }));
+        assert!(matches!(events[2].event, PoeEvent::ValidationCompleted { .. }));
+        assert!(matches!(events[3].event, PoeEvent::OutcomeRecorded { .. }));
+
+        // Verify sequence numbers are monotonic
+        for (i, e) in events.iter().enumerate() {
+            assert_eq!(e.seq as usize, i, "Event seq should be {}, got {}", i, e.seq);
+        }
     }
 }

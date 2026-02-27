@@ -294,6 +294,60 @@ impl StateDatabase {
                 ON memory_events(correlation_id);
 
             -- ================================================================
+            -- POE Event Sourcing (append-only event log)
+            -- ================================================================
+
+            CREATE TABLE IF NOT EXISTS poe_events (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id        TEXT NOT NULL,
+                seq            INTEGER NOT NULL,
+                event_type     TEXT NOT NULL,
+                event_json     TEXT NOT NULL,
+                tier           TEXT NOT NULL CHECK(tier IN ('skeleton', 'pulse')),
+                timestamp      INTEGER NOT NULL,
+                correlation_id TEXT,
+
+                UNIQUE(task_id, seq)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_pe_task_id
+                ON poe_events(task_id);
+            CREATE INDEX IF NOT EXISTS idx_pe_event_type
+                ON poe_events(event_type);
+            CREATE INDEX IF NOT EXISTS idx_pe_timestamp
+                ON poe_events(timestamp);
+
+            -- ================================================================
+            -- POE Trust Scores: Pattern-level success metrics
+            -- ================================================================
+
+            CREATE TABLE IF NOT EXISTS poe_trust_scores (
+                pattern_id TEXT PRIMARY KEY,
+                total_executions INTEGER NOT NULL DEFAULT 0,
+                successful_executions INTEGER NOT NULL DEFAULT 0,
+                trust_score REAL NOT NULL DEFAULT 0.0,
+                last_updated INTEGER NOT NULL
+            );
+
+            -- ================================================================
+            -- POE Contracts: Pending contract persistence
+            -- ================================================================
+
+            CREATE TABLE IF NOT EXISTS poe_contracts (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                instruction TEXT NOT NULL,
+                manifest_json TEXT NOT NULL,
+                context_json TEXT,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'signed', 'rejected', 'expired')),
+                created_at INTEGER NOT NULL,
+                signed_at INTEGER,
+                expires_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_pc_status ON poe_contracts(status);
+            CREATE INDEX IF NOT EXISTS idx_pc_task_id ON poe_contracts(task_id);
+
+            -- ================================================================
             -- sqlite-vec Virtual Tables: created dynamically via vec_schema_sql()
             -- ================================================================
 

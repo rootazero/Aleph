@@ -1,5 +1,13 @@
-//! Cortex evolution system
+//! Cortex evolution system (DEPRECATED)
 //!
+//! **This module is deprecated.** Its capabilities have been absorbed by the POE module:
+//! - Meta-cognition (anchors, critic, reflector) → `crate::poe::meta_cognition`
+//! - Crystallization (distillation, clustering, dreaming) → `crate::poe::crystallization`
+//!
+//! This module is retained for backward compatibility during the transition period.
+//! New code should use `crate::poe::meta_cognition` and `crate::poe::crystallization` instead.
+//!
+//! Original description:
 //! Implements the experience replay buffer and skill distillation pipeline
 //! for evolving from "stateless executor" to "self-evolving agent".
 
