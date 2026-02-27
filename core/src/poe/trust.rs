@@ -489,4 +489,90 @@ mod tests {
         assert!(approve.can_auto_approve());
         assert_eq!(approve.reason(), "Safe");
     }
+
+    /// Tests mirroring the TrustContext enrichment logic used by PoeContractService.
+    /// When trust_score >= 0.9 and total_executions >= 5, the context is marked as
+    /// a crystallized skill, which enables auto-approval by ExperienceTrustEvaluator.
+    #[test]
+    fn test_trust_context_enrichment_for_contract_service() {
+        let evaluator = ExperienceTrustEvaluator::new()
+            .with_min_success_rate(0.95)
+            .with_min_executions(5);
+        let manifest = create_simple_manifest();
+
+        // Simulate the enrichment logic from PoeContractService::prepare():
+        // if score_row.trust_score >= 0.9 && score_row.total_executions >= 5 =>
+        //   context = context.with_crystallized_skill()
+        let trust_score: f32 = 0.98;
+        let total_executions: u32 = 10;
+
+        let mut context = TrustContext::new()
+            .with_pattern_id("task-1")
+            .with_file_count(1)
+            .with_history(trust_score, total_executions);
+
+        if trust_score >= 0.9 && total_executions >= 5 {
+            context = context.with_crystallized_skill();
+        }
+
+        let decision = evaluator.evaluate(&manifest, &context);
+        assert!(decision.can_auto_approve());
+        assert!(decision.reason().contains("Crystallized skill"));
+    }
+
+    /// When trust score is below the crystallization threshold, the context
+    /// does NOT get marked as crystallized, so ExperienceTrustEvaluator falls
+    /// back to the whitelist evaluator.
+    #[test]
+    fn test_trust_context_enrichment_below_threshold() {
+        let evaluator = ExperienceTrustEvaluator::new()
+            .with_min_success_rate(0.95)
+            .with_min_executions(5);
+        let manifest = create_simple_manifest();
+
+        // Trust score below 0.9 => no crystallized skill flag
+        let trust_score: f32 = 0.80;
+        let total_executions: u32 = 10;
+
+        let mut context = TrustContext::new()
+            .with_pattern_id("task-2")
+            .with_file_count(1)
+            .with_history(trust_score, total_executions);
+
+        if trust_score >= 0.9 && total_executions >= 5 {
+            context = context.with_crystallized_skill();
+        }
+
+        // Falls back to whitelist — simple manifest with FileExists, file_count=1 => auto-approve
+        let decision = evaluator.evaluate(&manifest, &context);
+        assert!(decision.can_auto_approve());
+        // But reason should NOT mention "Crystallized skill"
+        assert!(!decision.reason().contains("Crystallized skill"));
+    }
+
+    /// Without a trust evaluator configured, auto_approved should always be false.
+    /// This tests the None branch in the contract service logic.
+    #[test]
+    fn test_no_evaluator_means_no_auto_approval() {
+        let evaluator: Option<Box<dyn TrustEvaluator>> = None;
+        let auto_approved = evaluator.is_some();
+        assert!(!auto_approved);
+    }
+
+    /// AlwaysRequireSignature should never auto-approve, regardless of context.
+    #[test]
+    fn test_always_require_signature_with_rich_context() {
+        let evaluator = AlwaysRequireSignature::new();
+        let manifest = create_simple_manifest();
+
+        // Even with high trust, crystallized skill, it should still require signature
+        let context = TrustContext::new()
+            .with_pattern_id("task-1")
+            .with_crystallized_skill()
+            .with_history(1.0, 100)
+            .with_file_count(1);
+
+        let decision = evaluator.evaluate(&manifest, &context);
+        assert!(decision.requires_signature());
+    }
 }

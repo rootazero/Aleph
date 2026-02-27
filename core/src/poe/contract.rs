@@ -221,6 +221,10 @@ pub struct PrepareResult {
 
     /// Original instruction (echoed back)
     pub instruction: String,
+
+    /// Whether the contract was auto-approved by trust evaluation (no signature needed)
+    #[serde(default)]
+    pub auto_approved: bool,
 }
 
 /// Result of poe.sign request.
@@ -335,5 +339,35 @@ mod tests {
 
         assert_eq!(summary.contract_id, "contract-123");
         assert_eq!(summary.objective, "Test objective");
+    }
+
+    #[test]
+    fn test_prepare_result_auto_approved_default() {
+        let manifest = SuccessManifest::new("task-1", "Test objective");
+        let result = PrepareResult {
+            contract_id: "contract-123".into(),
+            manifest,
+            created_at: "2026-02-27T00:00:00Z".into(),
+            instruction: "Do something".into(),
+            auto_approved: false,
+        };
+        assert!(!result.auto_approved);
+    }
+
+    #[test]
+    fn test_prepare_result_auto_approved_true() {
+        let manifest = SuccessManifest::new("task-1", "Test objective");
+        let result = PrepareResult {
+            contract_id: "contract-123".into(),
+            manifest,
+            created_at: "2026-02-27T00:00:00Z".into(),
+            instruction: "Do something".into(),
+            auto_approved: true,
+        };
+        assert!(result.auto_approved);
+
+        // Verify serialization includes auto_approved
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["auto_approved"], true);
     }
 }

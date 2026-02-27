@@ -49,6 +49,9 @@ pub struct StateSnapshot {
     /// List of files and their content hashes at snapshot time.
     /// The hash is SHA-256 of file contents.
     pub file_hashes: Vec<(PathBuf, String)>,
+
+    /// Git stash object hash for capture/restore (None if workspace has no git)
+    pub stash_hash: Option<String>,
 }
 
 impl StateSnapshot {
@@ -58,6 +61,7 @@ impl StateSnapshot {
             timestamp: Utc::now(),
             workspace,
             file_hashes: Vec::new(),
+            stash_hash: None,
         }
     }
 
@@ -67,6 +71,7 @@ impl StateSnapshot {
             timestamp: Utc::now(),
             workspace,
             file_hashes,
+            stash_hash: None,
         }
     }
 
@@ -86,6 +91,89 @@ impl StateSnapshot {
     /// Get the number of tracked files.
     pub fn file_count(&self) -> usize {
         self.file_hashes.len()
+    }
+
+    /// Check if the given path is inside a git working tree.
+    pub async fn has_git(workspace: &std::path::Path) -> bool {
+        tokio::process::Command::new("git")
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .current_dir(workspace)
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Capture current workspace state using git stash.
+    ///
+    /// Creates a git stash entry (without actually stashing -- uses `stash create`
+    /// which creates the stash object without modifying the working tree).
+    ///
+    /// Returns a snapshot with the stash hash set. If the workspace is not a git
+    /// repo or has no changes, the stash_hash will be None.
+    pub async fn capture(workspace: &std::path::Path) -> crate::error::Result<Self> {
+        let mut snapshot = Self::new(workspace.to_path_buf());
+
+        if !Self::has_git(workspace).await {
+            return Ok(snapshot);
+        }
+
+        let output = tokio::process::Command::new("git")
+            .args(["stash", "create", "--include-untracked"])
+            .current_dir(workspace)
+            .output()
+            .await
+            .map_err(|e| crate::error::AlephError::other(format!("Failed to create git stash: {}", e)))?;
+
+        let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !hash.is_empty() {
+            snapshot.stash_hash = Some(hash);
+        }
+
+        Ok(snapshot)
+    }
+
+    /// Restore workspace to the captured state.
+    ///
+    /// Uses `git checkout -- .` to discard working tree changes, then
+    /// `git stash apply` to restore the captured state.
+    ///
+    /// No-op if no stash hash was captured.
+    pub async fn restore(&self) -> crate::error::Result<()> {
+        let Some(ref hash) = self.stash_hash else {
+            return Ok(());
+        };
+
+        // First, clean working tree
+        let output = tokio::process::Command::new("git")
+            .args(["checkout", "--", "."])
+            .current_dir(&self.workspace)
+            .output()
+            .await
+            .map_err(|e| crate::error::AlephError::other(format!("Failed to checkout: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!("git checkout failed: {}", stderr);
+        }
+
+        // Apply stash
+        let output = tokio::process::Command::new("git")
+            .args(["stash", "apply", hash])
+            .current_dir(&self.workspace)
+            .output()
+            .await
+            .map_err(|e| crate::error::AlephError::other(format!("Failed to apply stash: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(crate::error::AlephError::other(format!(
+                "Failed to apply stash {}: {}",
+                hash, stderr
+            )));
+        }
+
+        Ok(())
     }
 }
 

@@ -5,7 +5,7 @@
 //! observe-think-act-feedback cycle.
 
 use crate::error::AlephError;
-use crate::memory::cortex::meta_cognition::{
+use crate::poe::meta_cognition::{
     AnchorRetriever, AnchorStore, BehavioralAnchor, FailureSignal, FailureSnapshot,
     ReactiveReflector, TagExtractor,
 };
@@ -80,7 +80,7 @@ impl MetaCognitionIntegration {
         anchor_store: Arc<RwLock<AnchorStore>>,
         config: MetaCognitionConfig,
     ) -> Result<Self, AlephError> {
-        use crate::memory::cortex::meta_cognition::reactive::LLMConfig;
+        use crate::poe::meta_cognition::LLMConfig;
         use crate::providers::create_mock_provider;
 
         let llm_config = LLMConfig::default();
@@ -298,7 +298,7 @@ impl MetaCognitionIntegration {
     ///
     /// ```no_run
     /// # use alephcore::agent_loop::meta_cognition_integration::MetaCognitionIntegration;
-    /// # use alephcore::memory::cortex::meta_cognition::BehavioralAnchor;
+    /// # use alephcore::poe::meta_cognition::BehavioralAnchor;
     /// # fn example(integration: &MetaCognitionIntegration, anchors: Vec<BehavioralAnchor>) {
     /// let base_prompt = "You are a helpful AI assistant.";
     /// let augmented = integration.inject_into_prompt(base_prompt, &anchors);
@@ -310,14 +310,33 @@ impl MetaCognitionIntegration {
             return base_prompt.to_string();
         }
 
-        use crate::memory::cortex::meta_cognition::InjectionFormatter;
-
-        let anchor_section = InjectionFormatter::format_anchors(anchors);
+        // Inline formatting (InjectionFormatter deprecated, replaced by PoePromptLayer)
+        let anchor_section = Self::format_anchors(anchors);
 
         format!(
             "{}\n\n# Behavioral Anchors (Learned Rules)\n\n{}\n",
             base_prompt, anchor_section
         )
+    }
+
+    /// Format behavioral anchors for prompt injection (inlined from deprecated InjectionFormatter)
+    fn format_anchors(anchors: &[BehavioralAnchor]) -> String {
+        if anchors.is_empty() {
+            return String::new();
+        }
+
+        let mut output = String::from("## Behavioral Guidelines\n\n");
+        output.push_str("The following learned behaviors should guide your decision-making:\n\n");
+
+        for (idx, anchor) in anchors.iter().enumerate() {
+            output.push_str(&format!("{}. **{}**\n", idx + 1, anchor.rule_text));
+            output.push_str(&format!("   - Priority: {}\n", anchor.priority));
+            output.push_str(&format!("   - Confidence: {:.2}\n", anchor.confidence));
+            output.push_str(&format!("   - Tags: {}\n", anchor.trigger_tags.join(", ")));
+            output.push('\n');
+        }
+
+        output
     }
 
     /// Update anchor confidence based on task outcome
@@ -376,7 +395,7 @@ impl MetaCognitionIntegration {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::memory::cortex::meta_cognition::types::{AnchorScope, AnchorSource};
+    use crate::poe::meta_cognition::{AnchorScope, AnchorSource};
     use crate::memory::store::LanceMemoryBackend;
     use rusqlite::Connection;
     use tempfile::TempDir;

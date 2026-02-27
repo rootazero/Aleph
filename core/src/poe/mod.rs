@@ -108,15 +108,25 @@ pub mod contract;
 pub mod contract_store;
 pub mod crystallization;
 pub mod handler_types;
+pub mod interceptor;
 pub mod manager;
 pub mod manifest;
+pub mod meta_cognition;
+pub mod prompt_context;
+pub mod projectors;
+pub mod prompt_layer;
 pub mod services;
 pub mod trust;
 pub mod types;
 pub mod validation;
 pub mod worker;
+pub mod event_bus;
+pub mod events;
 
 // Re-exports for convenient access
+// Interceptor directives
+pub use interceptor::{PoeLoopCallback, StepDirective, StepEvaluator};
+
 // Budget management
 pub use budget::{BudgetStatus, PoeBudget};
 
@@ -124,7 +134,7 @@ pub use budget::{BudgetStatus, PoeBudget};
 pub use manifest::ManifestBuilder;
 
 // Manager and configuration
-pub use manager::{PoeConfig, PoeManager, ValidationCallback, ValidationEvent};
+pub use manager::{MetaCognitionCallback, PoeConfig, PoeManager, ValidationCallback, ValidationEvent};
 
 // Core types
 pub use types::{
@@ -157,12 +167,41 @@ pub use crystallization::{
     ExperienceRecorder, NoOpRecorder,
 };
 
+// Crystallization submodules (migrated from Cortex)
+pub use crystallization::experience::{
+    DistillationMode, DistillationTask, EnvironmentContext, EvolutionStatus,
+    Experience as CortexExperience, ExperienceBuilder, ParameterConfig, ParameterMapping,
+};
+pub use crystallization::distillation::{
+    DistillationConfig, DistillationPriority, DistillationService,
+};
+pub use crystallization::pattern_extractor::{
+    ExtractedPattern, PatternExtractor, PatternExtractorConfig,
+};
+pub use crystallization::clustering::{
+    Cluster, ClusteringConfig, ClusteringService,
+};
+pub use crystallization::dreaming::{
+    CortexDreamingConfig, CortexDreamingService, DreamingMetrics,
+};
+
+// Experience store
+pub use crystallization::experience_store::{
+    ExperienceStore, InMemoryExperienceStore, PoeExperience,
+};
+
 // Contract signing workflow
 pub use contract::{
     ContractContext, ContractSummary, PendingContract, PendingResult,
     PrepareResult, RejectRequest, RejectResult, SignRequest, SignResult,
 };
 pub use contract_store::PendingContractStore;
+
+// Prompt context
+pub use prompt_context::PoePromptContext;
+
+// Prompt layer (for PromptPipeline injection)
+pub use prompt_layer::PoePromptLayer;
 
 // Trust evaluation (progressive auto-approval)
 pub use trust::{
@@ -186,3 +225,12 @@ pub use handler_types::{
 
 // Service layer
 pub use services::{PoeRunManager, PoeContractService, PrepareParams, PrepareContext, RejectParams};
+
+// Domain events
+pub use event_bus::PoeEventBus;
+pub use events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind, EventTier};
+
+// Projectors
+pub use projectors::memory::{MemoryFactWriter, MemoryProjector, NoOpMemoryFactWriter};
+pub use projectors::runner::{ProjectorHandler, ProjectorRunner};
+pub use projectors::trust::TrustProjector;

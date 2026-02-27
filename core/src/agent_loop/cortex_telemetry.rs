@@ -4,7 +4,7 @@
 //! for experience replay and skill distillation.
 
 use crate::error::AlephError;
-use crate::memory::cortex::EnvironmentContext;
+use crate::poe::EnvironmentContext;
 use crate::memory::store::MemoryBackend;
 use std::sync::Arc;
 use std::time::Instant;
