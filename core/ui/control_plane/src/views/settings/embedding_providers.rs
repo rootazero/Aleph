@@ -723,22 +723,26 @@ fn AddProviderPanel(
     };
 
     view! {
-        <div class="p-6 space-y-6">
-            <div class="flex items-center justify-between">
-                <h2 class="text-xl font-semibold text-text-primary">"Add Embedding Provider"</h2>
-                <button
-                    on:click=move |_| on_cancel()
-                    class="text-text-tertiary hover:text-text-primary transition-colors"
-                >
-                    "Cancel"
-                </button>
+        <div class="flex flex-col h-full">
+            // Fixed header
+            <div class="px-6 py-4 border-b border-border">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-xl font-semibold text-text-primary">"Add Embedding Provider"</h2>
+                    <button
+                        on:click=move |_| on_cancel()
+                        class="text-text-tertiary hover:text-text-primary transition-colors"
+                    >
+                        "Cancel"
+                    </button>
+                </div>
             </div>
 
+            // Scrollable content
+            <div class="flex-1 overflow-y-auto p-6 space-y-6">
+
             // Preset selector
-            <div>
-                <label class="block text-sm font-medium text-text-secondary mb-2">
-                    "Start from preset"
-                </label>
+            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"PRESET"</h3>
                 <div class="grid grid-cols-2 gap-2">
                     {move || {
                         let preset_list = presets.get();
@@ -776,7 +780,8 @@ fn AddProviderPanel(
             </div>
 
             // Form fields
-            <div class="space-y-4">
+            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
                 // ID
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">"Provider ID"</label>
@@ -882,11 +887,11 @@ fn AddProviderPanel(
             })}
 
             // Actions
-            <div class="space-y-3 pt-4 border-t border-border">
+            <div class="flex flex-row gap-3 pt-2">
                 <button
                     on:click=handle_test
                     disabled=move || testing.get()
-                    class="w-full px-4 py-2 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors"
+                    class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
                     {move || if testing.get() { "Testing..." } else { "Test Connection" }}
                 </button>
@@ -894,11 +899,13 @@ fn AddProviderPanel(
                 <button
                     on:click=handle_add
                     disabled=move || adding.get()
-                    class="w-full px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors"
+                    class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
                     {move || if adding.get() { "Adding..." } else { "Add Provider" }}
                 </button>
             </div>
-        </div>
+
+            </div> // scrollable content
+        </div> // flex wrapper
     }
 }
