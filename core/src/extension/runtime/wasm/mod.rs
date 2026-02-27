@@ -3,8 +3,12 @@
 //! Provides sandboxed execution of WASM plugins with permission-based
 //! access to host functions.
 
+mod capabilities;
+mod limits;
 mod permissions;
 
+pub use capabilities::WasmCapabilities;
+pub use limits::WasmResourceLimits;
 pub use permissions::PermissionChecker;
 
 #[cfg(feature = "plugin-wasm")]
