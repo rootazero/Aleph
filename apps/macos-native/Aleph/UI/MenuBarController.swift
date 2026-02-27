@@ -25,7 +25,11 @@ final class MenuBarController: NSObject, ObservableObject {
     func setup() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "brain.head.profile", accessibilityDescription: "Aleph")
+            let image = NSImage(systemSymbolName: "brain.head.profile", accessibilityDescription: "Aleph")
+                ?? NSImage(systemSymbolName: "brain", accessibilityDescription: "Aleph")
+                ?? NSImage(systemSymbolName: "gear", accessibilityDescription: "Aleph")
+            image?.isTemplate = true
+            button.image = image
             button.toolTip = "Aleph - AI Assistant"
         }
         statusItem?.menu = buildMenu()

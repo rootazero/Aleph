@@ -24,6 +24,21 @@ targets:
       - path: Aleph
         excludes:
           - "*.entitlements"
+          - "Resources/aleph-server"
+    postCompileScripts:
+      - name: Copy Server Binary
+        script: |
+          if [ -f "${PROJECT_DIR}/Aleph/Resources/aleph-server" ]; then
+            mkdir -p "${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources"
+            cp "${PROJECT_DIR}/Aleph/Resources/aleph-server" "${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/aleph-server"
+            chmod +x "${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/aleph-server"
+          else
+            echo "warning: aleph-server not found in Resources — run 'just server' first"
+          fi
+        inputFiles:
+          - $(PROJECT_DIR)/Aleph/Resources/aleph-server
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(PRODUCT_NAME).app/Contents/Resources/aleph-server
     settings:
       base:
         INFOPLIST_FILE: Aleph/Info.plist
