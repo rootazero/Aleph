@@ -1,6 +1,6 @@
 // core/ui/control_plane/src/components/sidebar/sidebar.rs
 //
-// Unified flat sidebar: Dashboard (expandable) + Settings groups.
+// Unified flat sidebar: all groups rendered as flat sections (no collapsing).
 //
 // Alert Flow:
 // 1. Gateway emits alert events (e.g., "alerts.system.health")
@@ -43,17 +43,6 @@ impl ThemeMode {
 
 #[component]
 pub fn Sidebar() -> impl IntoView {
-    let location = use_location();
-    let dashboard_expanded = RwSignal::new(true);
-
-    // Auto-expand Dashboard when navigating to dashboard sub-routes
-    Effect::new(move || {
-        let path = location.pathname.get();
-        if path == "/" || path == "/trace" || path == "/status" || path == "/memory" {
-            dashboard_expanded.set(true);
-        }
-    });
-
     view! {
         <aside class="w-64 border-r border-border bg-sidebar flex flex-col transition-all duration-300">
             // Logo
@@ -61,8 +50,8 @@ pub fn Sidebar() -> impl IntoView {
 
             // Scrollable navigation area
             <nav class="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-                // Dashboard section (expandable)
-                <DashboardSection expanded=dashboard_expanded />
+                // Dashboard section (flat, same style as other groups)
+                <DashboardSection />
 
                 // Settings groups
                 {SETTINGS_GROUPS.iter().map(|group| {
@@ -80,95 +69,38 @@ pub fn Sidebar() -> impl IntoView {
     }
 }
 
-/// Dashboard section with expandable sub-items
+/// Dashboard section — flat layout, same style as settings groups
 #[component]
-fn DashboardSection(expanded: RwSignal<bool>) -> impl IntoView {
-    let location = use_location();
-    let dashboard_expanded = expanded;
-
-    let is_dashboard_active = move || {
-        let path = location.pathname.get();
-        path == "/" || path == "/trace" || path == "/status" || path == "/memory"
-    };
-
-    let toggle = move |_| {
-        dashboard_expanded.update(|v| *v = !*v);
-    };
-
+fn DashboardSection() -> impl IntoView {
     view! {
         <div class="space-y-0.5">
-            // Dashboard header row (clickable to expand/collapse)
-            <button
-                on:click=toggle
-                class=move || {
-                    let base = "flex items-center gap-3 px-3 py-2 rounded-lg w-full text-left transition-all duration-200";
-                    if is_dashboard_active() {
-                        format!("{} text-sidebar-accent bg-sidebar-active font-medium", base)
-                    } else {
-                        format!("{} text-text-secondary hover:text-text-primary hover:bg-sidebar-active/50", base)
-                    }
-                }
-            >
-                // Expand/collapse chevron
-                <svg
-                    width="16"
-                    height="16"
-                    attr:class=move || {
-                        let base = "w-4 h-4 transition-transform duration-200 flex-shrink-0";
-                        if dashboard_expanded.get() {
-                            format!("{} rotate-90", base)
-                        } else {
-                            base.to_string()
-                        }
-                    }
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                >
-                    <polyline points="9 18 15 12 9 6" />
-                </svg>
-
-                // Home icon
-                <svg width="20" height="20" attr:class="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                    <polyline points="9 22 9 12 15 12 15 22" />
-                </svg>
-
-                <span class="text-sm font-medium">"Dashboard"</span>
-            </button>
-
-            // Sub-items (visible when expanded)
-            <Show when=move || dashboard_expanded.get()>
-                <div class="ml-6 space-y-0.5">
-                    <SidebarItem href="/" label="Overview">
-                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                        <polyline points="9 22 9 12 15 12 15 22" />
-                    </SidebarItem>
-                    <SidebarItem href="/trace" label="Agent Trace" alert_key="agent.trace">
-                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-                    </SidebarItem>
-                    <SidebarItem href="/status" label="System Health" alert_key="system.health">
-                        <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
-                        <rect x="9" y="9" width="6" height="6" />
-                        <line x1="9" y1="1" x2="9" y2="4" />
-                        <line x1="15" y1="1" x2="15" y2="4" />
-                        <line x1="9" y1="20" x2="9" y2="23" />
-                        <line x1="15" y1="20" x2="15" y2="23" />
-                        <line x1="20" y1="9" x2="23" y2="9" />
-                        <line x1="20" y1="15" x2="23" y2="15" />
-                        <line x1="1" y1="9" x2="4" y2="9" />
-                        <line x1="1" y1="15" x2="4" y2="15" />
-                    </SidebarItem>
-                    <SidebarItem href="/memory" label="Memory Vault" alert_key="memory.status">
-                        <ellipse cx="12" cy="5" rx="9" ry="3" />
-                        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
-                        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-                    </SidebarItem>
-                </div>
-            </Show>
+            <h3 class="px-3 py-1 text-xs font-medium text-text-tertiary uppercase tracking-wider">
+                "Dashboard"
+            </h3>
+            <SidebarItem href="/" label="Overview">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                <polyline points="9 22 9 12 15 12 15 22" />
+            </SidebarItem>
+            <SidebarItem href="/trace" label="Agent Trace" alert_key="agent.trace">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+            </SidebarItem>
+            <SidebarItem href="/status" label="System Health" alert_key="system.health">
+                <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
+                <rect x="9" y="9" width="6" height="6" />
+                <line x1="9" y1="1" x2="9" y2="4" />
+                <line x1="15" y1="1" x2="15" y2="4" />
+                <line x1="9" y1="20" x2="9" y2="23" />
+                <line x1="15" y1="20" x2="15" y2="23" />
+                <line x1="20" y1="9" x2="23" y2="9" />
+                <line x1="20" y1="15" x2="23" y2="15" />
+                <line x1="1" y1="9" x2="4" y2="9" />
+                <line x1="1" y1="15" x2="4" y2="15" />
+            </SidebarItem>
+            <SidebarItem href="/memory" label="Memory Vault" alert_key="memory.status">
+                <ellipse cx="12" cy="5" rx="9" ry="3" />
+                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+            </SidebarItem>
         </div>
     }
 }
