@@ -25,6 +25,11 @@ pub enum LoopResult {
     GuardTriggered(GuardViolation),
     /// User aborted the loop
     UserAborted,
+    /// POE interceptor aborted the loop
+    PoeAborted {
+        /// Reason for POE-initiated abort
+        reason: String,
+    },
 }
 
 impl LoopResult {
@@ -40,6 +45,7 @@ impl LoopResult {
             LoopResult::Failed { steps, .. } => *steps,
             LoopResult::GuardTriggered(_) => 0,
             LoopResult::UserAborted => 0,
+            LoopResult::PoeAborted { .. } => 0,
         }
     }
 }
