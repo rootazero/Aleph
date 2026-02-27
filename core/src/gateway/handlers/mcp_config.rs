@@ -24,6 +24,10 @@ use crate::config::{Config, McpServerConfig};
 pub struct McpServerInfo {
     pub name: String,
     pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, String>,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requires_runtime: Option<String>,
@@ -67,6 +71,8 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -
             .map(|(name, cfg)| McpServerInfo {
                 name: name.clone(),
                 command: cfg.command.clone(),
+                args: cfg.args.clone(),
+                env: cfg.env.clone(),
                 enabled: cfg.enabled,
                 requires_runtime: cfg.requires_runtime.clone(),
                 cwd: cfg.cwd.clone(),
@@ -81,6 +87,8 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -
             .map(|cfg| McpServerInfo {
                 name: cfg.name.clone(),
                 command: cfg.command.clone(),
+                args: cfg.args.clone(),
+                env: cfg.env.clone(),
                 enabled: true, // Legacy servers don't have enabled field
                 requires_runtime: cfg.requires_runtime.clone(),
                 cwd: cfg.cwd.clone(),
@@ -116,6 +124,8 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
             let info = McpServerInfo {
                 name: params.name.clone(),
                 command: cfg.command.clone(),
+                args: cfg.args.clone(),
+                env: cfg.env.clone(),
                 enabled: cfg.enabled,
                 requires_runtime: cfg.requires_runtime.clone(),
                 cwd: cfg.cwd.clone(),
@@ -134,6 +144,8 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
         let info = McpServerInfo {
             name: cfg.name.clone(),
             command: cfg.command.clone(),
+            args: cfg.args.clone(),
+            env: cfg.env.clone(),
             enabled: true,
             requires_runtime: cfg.requires_runtime.clone(),
             cwd: cfg.cwd.clone(),
