@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
+use super::parse_params;
 use crate::logging::{get_log_directory, get_log_level, set_log_level, LogLevel};
 
 /// Get current log level
@@ -51,24 +52,9 @@ struct SetLevelParams {
 /// {"jsonrpc":"2.0","result":{"ok":true,"level":"debug"},"id":1}
 /// ```
 pub async fn handle_set_level(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: SetLevelParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: level required".to_string(),
-            );
-        }
+    let params: SetLevelParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     let level = match LogLevel::parse(&params.level) {

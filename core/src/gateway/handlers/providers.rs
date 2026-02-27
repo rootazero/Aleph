@@ -9,6 +9,7 @@ use tokio::sync::RwLock;
 use tracing::{error, info};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::parse_params;
 use super::super::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::config::{Config, ProviderConfig};
 use crate::secrets::types::EntryMetadata;
@@ -71,24 +72,9 @@ pub struct GetParams {
 
 /// Get a single provider
 pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
-    let params: GetParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: name required".to_string(),
-            );
-        }
+    let params: GetParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     let config = config.read().await;
@@ -285,24 +271,9 @@ pub async fn handle_update(
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
-    let params: UpdateParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: name, config required".to_string(),
-            );
-        }
+    let params: UpdateParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Update config
@@ -381,24 +352,9 @@ pub async fn handle_create(
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
-    let params: CreateParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: name, config required".to_string(),
-            );
-        }
+    let params: CreateParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Create provider
@@ -476,24 +432,9 @@ pub async fn handle_delete(
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
-    let params: DeleteParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: name required".to_string(),
-            );
-        }
+    let params: DeleteParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Delete provider
@@ -564,24 +505,9 @@ pub struct TestParams {
 
 /// Test a provider connection
 pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: TestParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: config required".to_string(),
-            );
-        }
+    let params: TestParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     let config = params.config;
@@ -681,24 +607,9 @@ pub async fn handle_set_default(
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
-    let params: SetDefaultParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: name required".to_string(),
-            );
-        }
+    let params: SetDefaultParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Set default provider

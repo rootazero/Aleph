@@ -20,12 +20,6 @@ pub enum CliError {
     #[error("RPC error ({code}): {message}")]
     Rpc { code: i32, message: String },
 
-    #[error("Authentication required")]
-    AuthRequired,
-
-    #[error("Authentication failed: {0}")]
-    AuthFailed(String),
-
     #[error("Timeout waiting for response")]
     Timeout,
 

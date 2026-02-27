@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::parse_params;
 use super::plugins::get_extension_manager;
 #[cfg(test)]
 use super::plugins::is_extension_manager_initialized;
@@ -80,24 +81,9 @@ pub struct StartParams {
 /// - `INTERNAL_ERROR`: Extension manager not initialized or service failed to start
 /// - `INVALID_PARAMS`: Missing or invalid parameters
 pub async fn handle_start(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: StartParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: pluginId, serviceId required".to_string(),
-            );
-        }
+    let params: StartParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Get the extension manager from global state
@@ -150,24 +136,9 @@ pub struct StopParams {
 /// - `INTERNAL_ERROR`: Extension manager not initialized or service failed to stop
 /// - `INVALID_PARAMS`: Missing or invalid parameters
 pub async fn handle_stop(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: StopParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: pluginId, serviceId required".to_string(),
-            );
-        }
+    let params: StopParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Get the extension manager from global state
@@ -318,24 +289,9 @@ pub struct StatusParams {
 /// - `INTERNAL_ERROR`: Extension manager not initialized
 /// - `INVALID_PARAMS`: Missing or invalid parameters
 pub async fn handle_status(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: StatusParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: pluginId, serviceId required".to_string(),
-            );
-        }
+    let params: StatusParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Get the extension manager from global state
@@ -468,7 +424,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .message
-            .contains("pluginId, serviceId required"));
+            .contains("Missing params"));
     }
 
     #[tokio::test]
@@ -496,7 +452,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .message
-            .contains("pluginId, serviceId required"));
+            .contains("Missing params"));
     }
 
     #[tokio::test]
@@ -524,7 +480,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .message
-            .contains("pluginId, serviceId required"));
+            .contains("Missing params"));
     }
 
     #[tokio::test]

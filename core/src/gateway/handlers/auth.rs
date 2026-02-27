@@ -9,6 +9,7 @@ use tracing::{debug, info, warn};
 
 use crate::gateway::device_store::{ApprovedDevice, DeviceStore};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_FAILED, INVALID_PARAMS};
+use crate::gateway::handlers::parse_params;
 use crate::gateway::security::{DeviceRole, DeviceType, PairingManager, PairingRequest, TokenManager};
 use crate::gateway::security::store::DeviceUpsertData;
 use crate::gateway::security::SecurityStore;
@@ -419,20 +420,9 @@ pub async fn handle_pairing_approve(
         code: String,
     }
 
-    let params: ApproveParams = match &request.params {
-        Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map.clone())) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        _ => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params");
-        }
+    let params: ApproveParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Confirm pairing (removes from pending and returns the request)
@@ -539,20 +529,9 @@ pub async fn handle_pairing_reject(
         code: String,
     }
 
-    let params: RejectParams = match &request.params {
-        Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map.clone())) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        _ => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params");
-        }
+    let params: RejectParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     match ctx.pairing_manager.cancel_pairing(&params.code) {
@@ -672,20 +651,9 @@ pub async fn handle_devices_revoke(
         device_id: String,
     }
 
-    let params: RevokeParams = match &request.params {
-        Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map.clone())) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        _ => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params");
-        }
+    let params: RevokeParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Revoke device from store

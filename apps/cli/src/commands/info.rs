@@ -1,18 +1,7 @@
 //! Server info command
 
-use serde::Deserialize;
-
 use crate::client::AlephClient;
 use crate::error::CliResult;
-
-#[derive(Deserialize)]
-struct InfoResponse {
-    version: String,
-    #[serde(default)]
-    features: Vec<String>,
-    #[serde(default)]
-    providers: Vec<String>,
-}
 
 /// Run info command
 pub async fn run(server_url: &str) -> CliResult<()> {

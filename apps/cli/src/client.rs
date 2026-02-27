@@ -39,8 +39,8 @@ pub struct AlephClient {
     pending: Arc<RwLock<HashMap<String, PendingRequest>>>,
     /// Request ID counter
     id_counter: Arc<std::sync::atomic::AtomicU64>,
-    /// Stream event channel
-    event_tx: mpsc::Sender<StreamEvent>,
+    /// Stream event channel (kept alive as ownership anchor for the Receiver)
+    _event_tx: mpsc::Sender<StreamEvent>,
     /// Whether client is connected
     connected: Arc<std::sync::atomic::AtomicBool>,
     /// Authentication token
@@ -67,7 +67,7 @@ impl AlephClient {
             write: write.clone(),
             pending: pending.clone(),
             id_counter: Arc::new(std::sync::atomic::AtomicU64::new(1)),
-            event_tx: event_tx.clone(),
+            _event_tx: event_tx.clone(),
             connected: connected.clone(),
             auth_token: Arc::new(RwLock::new(None)),
         };
@@ -214,7 +214,7 @@ impl AlephClient {
 
         debug!("Sending response to Server: {}", json);
         let mut write_guard = write.lock().await;
-        if let Err(e) = write_guard.send(Message::Text(json.into())).await {
+        if let Err(e) = write_guard.send(Message::Text(json)).await {
             error!("Failed to send response: {}", e);
         }
     }
@@ -271,7 +271,7 @@ impl AlephClient {
 
         {
             let mut write = self.write.lock().await;
-            write.send(Message::Text(json.into())).await?;
+            write.send(Message::Text(json)).await?;
         }
 
         // Wait for response with timeout
@@ -298,32 +298,6 @@ impl AlephClient {
                 message: error.message,
             }),
         }
-    }
-
-    /// Send a notification (no response expected)
-    pub async fn notify<P: Serialize>(&self, method: &str, params: Option<P>) -> CliResult<()> {
-        if !self.connected.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(CliError::Disconnected);
-        }
-
-        let params_value = params
-            .map(|p| serde_json::to_value(p))
-            .transpose()?;
-
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            method: method.to_string(),
-            params: params_value,
-            id: None,
-        };
-
-        let json = serde_json::to_string(&request)?;
-        debug!("Sending notification: {}", json);
-
-        let mut write = self.write.lock().await;
-        write.send(Message::Text(json.into())).await?;
-
-        Ok(())
     }
 
     /// Connect and authenticate with the server
@@ -353,16 +327,6 @@ impl AlephClient {
         *self.auth_token.write().await = Some(result.token.clone());
 
         Ok(result.token)
-    }
-
-    /// Check if client is connected
-    pub fn is_connected(&self) -> bool {
-        self.connected.load(std::sync::atomic::Ordering::SeqCst)
-    }
-
-    /// Get current auth token
-    pub async fn auth_token(&self) -> Option<String> {
-        self.auth_token.read().await.clone()
     }
 
     /// Close the connection

@@ -11,8 +11,8 @@ struct Session {
     key: String,
     #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    #[serde(default, rename = "created_at")]
+    _created_at: Option<String>,
     #[serde(default)]
     message_count: Option<u32>,
 }

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::parse_params;
 use crate::skills::{self, SkillInfo};
 
 /// Skill info for JSON serialization
@@ -66,24 +67,9 @@ pub struct InstallParams {
 
 /// Install a skill from URL (GitHub)
 pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: InstallParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: url required".to_string(),
-            );
-        }
+    let params: InstallParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     match skills::install_skill_from_url(params.url) {
@@ -112,24 +98,9 @@ pub struct InstallFromZipParams {
 
 /// Install skills from a zip file
 pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: InstallFromZipParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: data required".to_string(),
-            );
-        }
+    let params: InstallFromZipParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Decode base64
@@ -181,24 +152,9 @@ pub struct DeleteParams {
 
 /// Delete a skill
 pub async fn handle_delete(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: DeleteParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: id required".to_string(),
-            );
-        }
+    let params: DeleteParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     match skills::delete_skill(params.id) {

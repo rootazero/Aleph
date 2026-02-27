@@ -3,7 +3,7 @@
 //! RPC handlers for agent operations: run, wait, cancel, status.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -15,6 +15,7 @@ use super::super::event_emitter::{
     EventEmitter, GatewayEventEmitter, RunSummary, StreamEvent,
 };
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::parse_params;
 use super::super::router::{AgentRouter, SessionKey};
 
 /// Parameters for agent.run request
@@ -253,24 +254,9 @@ pub async fn handle_run(
     run_manager: Arc<AgentRunManager>,
 ) -> JsonRpcResponse {
     // Parse params
-    let params: AgentRunParams = match request.params {
-        Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map)) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        _ => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing or invalid params object",
-            );
-        }
+    let params: AgentRunParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Validate input
@@ -286,41 +272,40 @@ pub async fn handle_run(
 }
 
 /// Handle agent.status RPC request
+/// Parameters for agent.status / agent.cancel
+#[derive(Debug, Deserialize)]
+struct RunIdParams {
+    run_id: String,
+}
+
 pub async fn handle_status(
     request: JsonRpcRequest,
     run_manager: Arc<AgentRunManager>,
 ) -> JsonRpcResponse {
-    // Parse run_id from params
-    let run_id = match &request.params {
-        Some(Value::Object(map)) => map
-            .get("run_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        _ => None,
+    let params: RunIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
-    match run_id {
-        Some(id) => match run_manager.get_run_status(&id).await {
-            Some(state) => {
-                let status_str = match &state.status {
-                    RunStatus::Running => "running",
-                    RunStatus::Completed => "completed",
-                    RunStatus::Failed(_) => "failed",
-                    RunStatus::Cancelled => "cancelled",
-                };
-                JsonRpcResponse::success(
-                    request.id,
-                    json!({
-                        "run_id": state.run_id,
-                        "session_key": state.session_key.to_key_string(),
-                        "status": status_str,
-                        "elapsed_ms": state.started_at.elapsed().as_millis() as u64,
-                    }),
-                )
-            }
-            None => JsonRpcResponse::error(request.id, INVALID_PARAMS, "Run not found"),
-        },
-        None => JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing run_id parameter"),
+    match run_manager.get_run_status(&params.run_id).await {
+        Some(state) => {
+            let status_str = match &state.status {
+                RunStatus::Running => "running",
+                RunStatus::Completed => "completed",
+                RunStatus::Failed(_) => "failed",
+                RunStatus::Cancelled => "cancelled",
+            };
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "run_id": state.run_id,
+                    "session_key": state.session_key.to_key_string(),
+                    "status": status_str,
+                    "elapsed_ms": state.started_at.elapsed().as_millis() as u64,
+                }),
+            )
+        }
+        None => JsonRpcResponse::error(request.id, INVALID_PARAMS, "Run not found"),
     }
 }
 
@@ -329,27 +314,19 @@ pub async fn handle_cancel(
     request: JsonRpcRequest,
     run_manager: Arc<AgentRunManager>,
 ) -> JsonRpcResponse {
-    let run_id = match &request.params {
-        Some(Value::Object(map)) => map
-            .get("run_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        _ => None,
+    let params: RunIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
-    match run_id {
-        Some(id) => {
-            let cancelled = run_manager.cancel_run(&id).await;
-            JsonRpcResponse::success(
-                request.id,
-                json!({
-                    "run_id": id,
-                    "cancelled": cancelled,
-                }),
-            )
-        }
-        None => JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing run_id parameter"),
-    }
+    let cancelled = run_manager.cancel_run(&params.run_id).await;
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "run_id": params.run_id,
+            "cancelled": cancelled,
+        }),
+    )
 }
 
 /// Handle agents.list RPC request
@@ -384,24 +361,9 @@ pub struct ConfirmPlanParams {
 ///
 /// Confirms or rejects a task plan that requires user approval.
 pub async fn handle_confirm_plan(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: ConfirmPlanParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: plan_id, confirmed required".to_string(),
-            );
-        }
+    let params: ConfirmPlanParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Forward to active agent instance
@@ -427,24 +389,9 @@ pub struct RespondToInputParams {
 ///
 /// Responds to a user input request from the agent.
 pub async fn handle_respond_to_input(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: RespondToInputParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: request_id, response required".to_string(),
-            );
-        }
+    let params: RespondToInputParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // TODO: Forward to active agent instance
@@ -470,24 +417,9 @@ pub struct GenerateTitleParams {
 ///
 /// Generates a title for a conversation based on the first exchange.
 pub async fn handle_generate_title(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: GenerateTitleParams = match request.params {
-        Some(ref p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: user_input, ai_response required".to_string(),
-            );
-        }
+    let params: GenerateTitleParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Generate a simple title from user input

@@ -10,6 +10,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
+use super::parse_params;
 use crate::config::Config;
 
 // ============================================================================
@@ -253,24 +254,9 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<Config>) -> JsonRp
 /// }
 /// ```
 pub async fn handle_get(request: JsonRpcRequest, config: Arc<Config>) -> JsonRpcResponse {
-    let params: GetParams = match &request.params {
-        Some(p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: provider required".to_string(),
-            );
-        }
+    let params: GetParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     match config.providers.get(&params.provider) {
@@ -313,24 +299,9 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<Config>) -> JsonRpc
 /// }
 /// ```
 pub async fn handle_capabilities(request: JsonRpcRequest, config: Arc<Config>) -> JsonRpcResponse {
-    let params: GetParams = match &request.params {
-        Some(p) => match serde_json::from_value(p.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params: provider required".to_string(),
-            );
-        }
+    let params: GetParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     match config.providers.get(&params.provider) {

@@ -1,14 +1,14 @@
 use super::connector::{AlephConnector, ConnectionError};
 use async_trait::async_trait;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use serde_json::Value;
 use std::pin::Pin;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{ErrorEvent, MessageEvent, WebSocket};
-use std::sync::{Arc, Mutex};
 use futures::channel::mpsc;
 
+#[derive(Default)]
 pub struct WasmConnector {
     ws: Option<WebSocket>,
     receiver: Option<mpsc::UnboundedReceiver<Result<Value, ConnectionError>>>,
@@ -17,11 +17,7 @@ pub struct WasmConnector {
 
 impl WasmConnector {
     pub fn new() -> Self {
-        Self {
-            ws: None,
-            receiver: None,
-            is_connected: false,
-        }
+        Self::default()
     }
 }
 
@@ -45,7 +41,6 @@ impl AlephConnector for WasmConnector {
         onmessage_callback.forget();
 
         // OnError
-        let (tx_err, _) = mpsc::unbounded::<Result<Value, ConnectionError>>(); // Simplified
         let onerror_callback = Closure::wrap(Box::new(move |e: ErrorEvent| {
             web_sys::console::error_1(&e);
         }) as Box<dyn FnMut(ErrorEvent)>);
