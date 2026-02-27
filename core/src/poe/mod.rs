@@ -185,6 +185,11 @@ pub use crystallization::dreaming::{
     CortexDreamingConfig, CortexDreamingService, DreamingMetrics,
 };
 
+// Experience store
+pub use crystallization::experience_store::{
+    ExperienceStore, InMemoryExperienceStore, PoeExperience,
+};
+
 // Contract signing workflow
 pub use contract::{
     ContractContext, ContractSummary, PendingContract, PendingResult,
