@@ -100,8 +100,33 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, METHOD_NOT_FOUND};
+use super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND};
 use crate::config::Config;
+
+/// Parse and deserialize JSON-RPC request params into a typed struct.
+///
+/// Returns `Err(JsonRpcResponse)` with `INVALID_PARAMS` on missing or
+/// malformed params — callers can early-return this directly.
+// JsonRpcResponse is 152+ bytes but boxing it would complicate all handler call sites
+#[allow(clippy::result_large_err)]
+pub(crate) fn parse_params<T: serde::de::DeserializeOwned>(
+    request: &JsonRpcRequest,
+) -> Result<T, JsonRpcResponse> {
+    match &request.params {
+        Some(p) => serde_json::from_value(p.clone()).map_err(|e| {
+            JsonRpcResponse::error(
+                request.id.clone(),
+                INVALID_PARAMS,
+                format!("Invalid params: {}", e),
+            )
+        }),
+        None => Err(JsonRpcResponse::error(
+            request.id.clone(),
+            INVALID_PARAMS,
+            "Missing params",
+        )),
+    }
+}
 
 /// Type alias for async handler functions
 pub type HandlerFn = Arc<
