@@ -104,7 +104,7 @@ Single file: `justfile` at project root. No additional scripts needed.
 
 ### macOS Build
 
-- Copies server binary to `apps/macos-native/Resources/`
+- Copies server binary to `apps/macos-native/Aleph/Resources/`
 - Runs `xcodegen generate` (if available) then `xcodebuild`
 - Output: `Aleph.app` in derived data
 
