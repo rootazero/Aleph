@@ -56,7 +56,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
     view! {
         <div class="flex h-full">
             // Left panel - Provider list + Generation settings
-            <div class="flex flex-col w-2/3 border-r border-border">
+            <div class="flex flex-col w-5/12 min-w-[400px] border-r border-border">
                 // Header
                 <div class="px-6 py-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">
@@ -142,7 +142,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
             </div>
 
             // Right panel - Provider details
-            <div class="flex-1 bg-surface">
+            <div class="w-7/12 min-w-[320px] bg-surface">
                 <ProviderDetailPanel
                     selected_id=selected_provider_id
                     providers=providers
@@ -272,7 +272,7 @@ fn ProviderDetailPanel(
     let state = expect_context::<DashboardState>();
 
     view! {
-        <div class="h-full overflow-auto">
+        <div class="h-full">
             {move || {
                 if let Some(provider_id) = selected_id.get() {
                     let provider = providers.get().into_iter()

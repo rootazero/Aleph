@@ -61,7 +61,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
     view! {
         <div class="flex h-full">
             // Left panel - Provider list
-            <div class="flex flex-col w-2/3 border-r border-border">
+            <div class="flex flex-col w-5/12 min-w-[400px] border-r border-border">
                 // Header
                 <div class="px-6 py-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">
@@ -182,7 +182,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
             </div>
 
             // Right panel - Detail / Add form
-            <div class="flex-1 bg-surface overflow-auto">
+            <div class="w-7/12 min-w-[320px] bg-surface">
                 {move || {
                     if show_add_form.get() {
                         view! {
@@ -438,32 +438,41 @@ fn ProviderDetailPanel(
     };
 
     view! {
-        <div class="p-6 space-y-6">
-            // Header
-            <div class="flex items-center justify-between">
-                <div>
-                    <h2 class="text-xl font-semibold text-text-primary">
-                        {provider_name.clone()}
-                    </h2>
-                    <span class="text-sm text-text-tertiary">{format!("ID: {}", provider_id.clone())}</span>
+        <div class="flex flex-col h-full">
+            // Fixed header
+            <div class="px-6 py-4 border-b border-border">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 class="text-lg font-semibold text-text-primary">
+                            {provider_name.clone()}
+                        </h2>
+                        <p class="text-sm text-text-tertiary mt-0.5">
+                            {format!("ID: {}", provider_id.clone())}
+                        </p>
+                    </div>
+                    {if is_active {
+                        view! {
+                            <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-success-subtle text-success">
+                                "Active"
+                            </span>
+                        }.into_view()
+                    } else {
+                        view! {
+                            <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-surface-sunken text-text-tertiary">
+                                "Inactive"
+                            </span>
+                        }.into_view()
+                    }}
                 </div>
-                {if is_active {
-                    view! {
-                        <span class="px-3 py-1 bg-primary-subtle text-primary text-sm font-medium rounded">
-                            "Active Provider"
-                        </span>
-                    }.into_view()
-                } else {
-                    view! {
-                        <span class="px-3 py-1 bg-surface-raised text-text-tertiary text-sm rounded">
-                            "Inactive"
-                        </span>
-                    }.into_view()
-                }}
             </div>
 
-            // Editable fields
-            <div class="space-y-4">
+            // Scrollable content
+            <div class="flex-1 overflow-y-auto p-6 space-y-6">
+
+            // Configuration card
+            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
+
                 // API Base URL
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
@@ -532,13 +541,13 @@ fn ProviderDetailPanel(
                 if let Some((success, message)) = test_result.get() {
                     if success {
                         view! {
-                            <div class="p-3 bg-success-subtle border border-success/20 rounded">
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded-lg">
                                 <p class="text-sm text-success">{message}</p>
                             </div>
                         }.into_any()
                     } else {
                         view! {
-                            <div class="p-3 bg-danger-subtle border border-danger/20 rounded">
+                            <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg">
                                 <p class="text-sm text-danger">{message}</p>
                             </div>
                         }.into_any()
@@ -550,68 +559,68 @@ fn ProviderDetailPanel(
 
             // Save success
             {move || save_success.get().then(|| view! {
-                <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">"Saved"</div>
+                <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm">"Saved"</div>
             })}
 
             // Action error
             {move || action_error.get().map(|e| view! {
-                <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">{e}</div>
+                <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">{e}</div>
             })}
 
             // Actions
-            <div class="space-y-3 pt-4 border-t border-border">
-                // Test connection
+            <div class="flex flex-row gap-3 pt-2">
                 <button
                     on:click=handle_test
                     disabled=move || testing.get()
-                    class="w-full px-4 py-2 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors"
+                    class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
                     {move || if testing.get() { "Testing..." } else { "Test Connection" }}
                 </button>
 
-                // Save changes
                 <button
                     on:click=handle_save
                     disabled=move || saving.get()
-                    class="w-full px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors"
+                    class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
                     {move || if saving.get() { "Saving..." } else { "Save Changes" }}
                 </button>
-
-                // Set as active (only for non-active providers)
-                {if !is_active {
-                    Some(view! {
-                        <button
-                            on:click=handle_activate
-                            disabled=move || activating.get()
-                            class="w-full px-4 py-2 bg-surface-raised text-text-secondary rounded-lg hover:bg-surface-sunken disabled:opacity-50 transition-colors"
-                        >
-                            {move || if activating.get() { "Activating..." } else { "Set as Active" }}
-                        </button>
-                    })
-                } else {
-                    None
-                }}
-
-                // Delete button (disabled for active provider)
-                <button
-                    on:click=handle_delete
-                    disabled=move || deleting.get() || is_active
-                    class="w-full px-4 py-2 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors"
-                    title=move || if is_active { "Cannot delete the active provider" } else { "" }
-                >
-                    {move || {
-                        if deleting.get() {
-                            "Deleting..."
-                        } else if is_active {
-                            "Delete (switch active first)"
-                        } else {
-                            "Delete Provider"
-                        }
-                    }}
-                </button>
             </div>
-        </div>
+
+            // Set as active (only for non-active providers)
+            {if !is_active {
+                Some(view! {
+                    <button
+                        on:click=handle_activate
+                        disabled=move || activating.get()
+                        class="w-full px-4 py-2.5 bg-surface-raised text-text-secondary rounded-lg hover:bg-surface-sunken disabled:opacity-50 transition-colors font-medium"
+                    >
+                        {move || if activating.get() { "Activating..." } else { "Set as Active" }}
+                    </button>
+                })
+            } else {
+                None
+            }}
+
+            // Delete button (disabled for active provider)
+            <button
+                on:click=handle_delete
+                disabled=move || deleting.get() || is_active
+                class="w-full px-4 py-2.5 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors font-medium"
+                title=move || if is_active { "Cannot delete the active provider" } else { "" }
+            >
+                {move || {
+                    if deleting.get() {
+                        "Deleting..."
+                    } else if is_active {
+                        "Delete (switch active first)"
+                    } else {
+                        "Delete Provider"
+                    }
+                }}
+            </button>
+
+            </div> // scrollable content
+        </div> // flex wrapper
     }
 }
 

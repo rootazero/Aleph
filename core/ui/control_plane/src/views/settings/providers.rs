@@ -96,7 +96,7 @@ fn ProviderList(
     };
 
     view! {
-        <div class="w-80 border-r border-border bg-surface-raised flex flex-col">
+        <div class="flex flex-col w-5/12 min-w-[400px] border-r border-border">
             // Header
             <div class="p-4 border-b border-border">
                 <div class="flex items-center justify-between mb-4">
@@ -116,7 +116,7 @@ fn ProviderList(
             </div>
 
             // Provider list
-            <div class="flex-1 overflow-y-auto p-4 space-y-2">
+            <div class="flex-1 overflow-y-auto p-6">
                 {move || {
                     if loading.get() {
                         view! {
@@ -132,7 +132,7 @@ fn ProviderList(
                         }.into_any()
                     } else {
                         view! {
-                            <div class="space-y-2">
+                            <div class="grid grid-cols-1 gap-3">
                                 {move || providers.get().into_iter().map(|provider| {
                                     let name = provider.name.clone();
                                     let name_for_selected = name.clone();
@@ -170,49 +170,68 @@ fn ProviderCard(
     on_click: impl Fn(leptos::ev::MouseEvent) + 'static,
 ) -> impl IntoView {
     let name = provider.name.clone();
+    let protocol = provider.provider_type.clone().unwrap_or_default();
     let model = provider.model.clone();
     let enabled = provider.enabled;
     let is_default = provider.is_default;
 
     view! {
-        <button
+        <div
             on:click=on_click
             class=move || {
-                let base = "w-full text-left p-3 rounded-lg border transition-all";
+                let base = "border rounded-lg p-4 hover:border-primary cursor-pointer transition-colors";
                 if is_selected.get() {
-                    format!("{} bg-primary-subtle border-primary", base)
+                    format!("{} ring-2 ring-primary/30 border-primary bg-primary-subtle", base)
                 } else {
-                    format!("{} bg-surface-sunken border-border hover:bg-surface-sunken hover:border-border-strong", base)
+                    format!("{} border-border", base)
                 }
             }
         >
-            <div class="flex items-start justify-between mb-1">
+            <div class="flex items-start justify-between mb-3">
                 <div class="flex items-center gap-2">
-                    <span class="font-medium text-text-primary text-sm">
-                        {name}
-                    </span>
-                    {move || if is_default {
+                    <span class="text-2xl">{
+                        match protocol.as_str() {
+                            "anthropic" => "\u{1F4AC}",
+                            "openai" => "\u{1F916}",
+                            "gemini" => "\u{2728}",
+                            "ollama" => "\u{1F999}",
+                            _ => "\u{26A1}",
+                        }
+                    }</span>
+                    <div>
+                        <h3 class="font-semibold text-text-primary">
+                            {name}
+                        </h3>
+                        <span class="text-xs text-text-tertiary">{protocol.clone()}</span>
+                    </div>
+                </div>
+                {move || {
+                    if is_default {
                         view! {
-                            <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded">
+                            <span class="px-2 py-1 text-xs font-medium bg-primary-subtle text-primary rounded">
                                 "Default"
                             </span>
                         }.into_any()
+                    } else if enabled {
+                        view! {
+                            <span class="px-2 py-1 text-xs font-medium bg-success-subtle text-success rounded">
+                                "Enabled"
+                            </span>
+                        }.into_any()
                     } else {
-                        view! { <span></span> }.into_any()
-                    }}
-                </div>
-                <div class=move || {
-                    if enabled {
-                        "w-2 h-2 rounded-full bg-success"
-                    } else {
-                        "w-2 h-2 rounded-full bg-surface-sunken"
+                        view! {
+                            <span class="px-2 py-1 text-xs font-medium bg-surface-raised text-text-tertiary rounded">
+                                "Disabled"
+                            </span>
+                        }.into_any()
                     }
-                }></div>
+                }}
             </div>
-            <div class="text-xs text-text-secondary truncate">
-                {model}
+
+            <div class="flex items-center gap-2 text-xs text-text-tertiary">
+                <span class="font-mono">{model}</span>
             </div>
-        </button>
+        </div>
     }
 }
 
@@ -449,7 +468,7 @@ fn ProviderEditor(
     };
 
     view! {
-        <div class="flex-1 overflow-y-auto">
+        <div class="w-7/12 min-w-[320px] overflow-y-auto">
             {move || {
                 if !is_editing() {
                     view! {
