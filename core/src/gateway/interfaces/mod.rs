@@ -14,6 +14,7 @@
 //! - **Email**: IMAP + SMTP email integration (requires `email` feature)
 //! - **Matrix**: Matrix Client-Server API v3 integration (requires `matrix` feature)
 //! - **Signal**: Signal via signal-cli REST API integration (requires `signal` feature)
+//! - **Mattermost**: Mattermost WebSocket + REST API v4 integration (requires `mattermost` feature)
 
 pub mod cli;
 
@@ -41,6 +42,9 @@ pub mod matrix;
 #[cfg(feature = "signal")]
 pub mod signal;
 
+#[cfg(feature = "mattermost")]
+pub mod mattermost;
+
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
 #[cfg(target_os = "macos")]
@@ -66,3 +70,6 @@ pub use matrix::{MatrixChannel, MatrixChannelFactory, MatrixConfig};
 
 #[cfg(feature = "signal")]
 pub use signal::{SignalChannel, SignalChannelFactory, SignalConfig};
+
+#[cfg(feature = "mattermost")]
+pub use mattermost::{MattermostChannel, MattermostChannelFactory, MattermostConfig};
