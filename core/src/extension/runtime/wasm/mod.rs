@@ -7,6 +7,7 @@ mod allowlist;
 mod capabilities;
 mod capability_kernel;
 mod credential_injector;
+mod host_functions;
 mod limits;
 mod permissions;
 
@@ -30,7 +31,10 @@ use crate::extension::error::ExtensionError;
 use crate::extension::manifest::PluginManifest;
 
 #[cfg(feature = "plugin-wasm")]
-use extism::{Manifest as ExtismManifest, Plugin, Wasm};
+use std::sync::Arc;
+
+#[cfg(feature = "plugin-wasm")]
+use extism::{Manifest as ExtismManifest, PluginBuilder, UserData, Wasm, PTR};
 
 /// Input for WASM tool calls
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,12 +62,11 @@ pub struct WasmRuntime {
 
 #[cfg(feature = "plugin-wasm")]
 struct LoadedWasmPlugin {
-    plugin: Plugin,
-    // Stored for future use: permission checks and manifest introspection
+    plugin: extism::Plugin,
     #[allow(dead_code)]
     manifest: PluginManifest,
     #[allow(dead_code)]
-    permissions: PermissionChecker,
+    kernel: Arc<WasmCapabilityKernel>,
 }
 
 impl WasmRuntime {
@@ -86,15 +89,62 @@ impl WasmRuntime {
 
         info!("Loading WASM plugin: {} from {:?}", manifest.id, wasm_path);
 
+        // Parse capabilities from manifest (default = zero permissions)
+        let capabilities = manifest.wasm_capabilities.clone().unwrap_or_default();
+        let limits = manifest.wasm_resource_limits.clone().unwrap_or_default();
+
+        // Create per-plugin capability kernel
+        let kernel = Arc::new(WasmCapabilityKernel::new(
+            manifest.id.clone(),
+            capabilities,
+            limits,
+        ));
+
+        // Create host state for Extism UserData
+        let host_state = UserData::new(host_functions::HostState {
+            kernel: kernel.clone(),
+            workspace_root: manifest.root_dir.clone(),
+        });
+
         let extism_manifest = ExtismManifest::new([Wasm::file(&wasm_path)]);
 
-        let plugin = Plugin::new(&extism_manifest, [], true)
+        let plugin = PluginBuilder::new(extism_manifest)
+            .with_wasi(true)
+            .with_function(
+                "log",
+                [PTR, PTR],
+                [],
+                host_state.clone(),
+                host_functions::host_log,
+            )
+            .with_function(
+                "now_millis",
+                [],
+                [PTR],
+                host_state.clone(),
+                host_functions::host_now_millis,
+            )
+            .with_function(
+                "workspace_read",
+                [PTR],
+                [PTR],
+                host_state.clone(),
+                host_functions::host_workspace_read,
+            )
+            .with_function(
+                "secret_exists",
+                [PTR],
+                [PTR],
+                host_state,
+                host_functions::host_secret_exists,
+            )
+            .build()
             .map_err(|e| ExtensionError::Runtime(format!("Failed to load WASM: {}", e)))?;
 
         let loaded = LoadedWasmPlugin {
             plugin,
             manifest: manifest.clone(),
-            permissions: PermissionChecker::new(manifest.permissions.clone()),
+            kernel,
         };
 
         self.plugins.insert(manifest.id.clone(), loaded);
