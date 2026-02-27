@@ -132,6 +132,58 @@ pub enum DesktopRequest {
 
     // Internal
     Ping,
+
+    // ========= PIM (Personal Information Management) =========
+
+    // Calendar
+    PimCalendarList { from: String, to: String, calendar_id: Option<String> },
+    PimCalendarGet { id: String },
+    PimCalendarCreate {
+        title: String, start: String, end: String,
+        calendar_id: Option<String>, location: Option<String>,
+        notes: Option<String>, all_day: Option<bool>,
+    },
+    PimCalendarUpdate {
+        id: String, title: Option<String>, start: Option<String>,
+        end: Option<String>, location: Option<String>, notes: Option<String>,
+    },
+    PimCalendarDelete { id: String },
+    PimCalendarCalendars,
+
+    // Reminders
+    PimRemindersList { list_id: Option<String>, include_completed: Option<bool> },
+    PimRemindersGet { id: String },
+    PimRemindersCreate {
+        title: String, list_id: Option<String>,
+        due_date: Option<String>, priority: Option<i32>, notes: Option<String>,
+    },
+    PimRemindersComplete { id: String, completed: bool },
+    PimRemindersDelete { id: String },
+    PimRemindersLists,
+
+    // Notes
+    PimNotesList { folder: Option<String> },
+    PimNotesGet { id: String },
+    PimNotesCreate { title: String, body: Option<String>, folder: Option<String> },
+    PimNotesUpdate { id: String, title: Option<String>, body: Option<String> },
+    PimNotesDelete { id: String },
+    PimNotesFolders,
+
+    // Contacts
+    PimContactsSearch { query: String },
+    PimContactsGet { id: String },
+    PimContactsCreate {
+        given_name: String, family_name: Option<String>,
+        organization: Option<String>, notes: Option<String>,
+        phone_numbers: Option<Vec<String>>, emails: Option<Vec<String>>,
+    },
+    PimContactsUpdate {
+        id: String, given_name: Option<String>, family_name: Option<String>,
+        organization: Option<String>, notes: Option<String>,
+        phone_numbers: Option<Vec<String>>, emails: Option<Vec<String>>,
+    },
+    PimContactsDelete { id: String },
+    PimContactsGroups,
 }
 
 /// Desktop Bridge response (parsed manually in client, not via serde).
