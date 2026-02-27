@@ -131,7 +131,7 @@ pub use budget::{BudgetStatus, PoeBudget};
 pub use manifest::ManifestBuilder;
 
 // Manager and configuration
-pub use manager::{PoeConfig, PoeManager, ValidationCallback, ValidationEvent};
+pub use manager::{MetaCognitionCallback, PoeConfig, PoeManager, ValidationCallback, ValidationEvent};
 
 // Core types
 pub use types::{
