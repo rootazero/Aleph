@@ -11,7 +11,7 @@ use crate::agents::sub_agents::SubAgentDispatcher;
 use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
 use crate::error::{AlephError, Result};
 use crate::generation::GenerationProviderRegistry;
-use crate::builtin_tools::{BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, SearchTool, WebFetchTool, YouTubeTool};
+use crate::builtin_tools::{BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, PimTool, SearchTool, WebFetchTool, YouTubeTool};
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::builtin_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillListTool};
 #[cfg(feature = "gateway")]
@@ -53,6 +53,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) list_skills_tool: SkillListTool,
     /// Desktop bridge tool instance
     pub(crate) desktop_tool: DesktopTool,
+    /// PIM (Personal Information Management) tool instance
+    pub(crate) pim_tool: PimTool,
     /// Generation provider registry for video/audio generation
     pub(crate) generation_registry: Option<Arc<std::sync::RwLock<GenerationProviderRegistry>>>,
     /// Dispatcher tool registry for meta tools (smart tool discovery)
@@ -96,6 +98,9 @@ impl BuiltinToolRegistry {
 
         // Desktop bridge tool (macOS App required at runtime; gracefully unavailable otherwise)
         let desktop_tool = DesktopTool::new();
+
+        // PIM tool (Calendar, Reminders, Notes, Contacts via Desktop Bridge)
+        let pim_tool = PimTool::new();
 
         // Create image generation tool if generation registry is provided
         let image_generate_tool = config.generation_registry.as_ref().map(|registry| {
@@ -203,6 +208,16 @@ impl BuiltinToolRegistry {
                 "builtin:desktop",
                 "desktop",
                 DesktopTool::DESCRIPTION,
+                ToolSource::Builtin,
+            ),
+        );
+
+        tools.insert(
+            "pim".to_string(),
+            UnifiedTool::new(
+                "builtin:pim",
+                "pim",
+                PimTool::DESCRIPTION,
                 ToolSource::Builtin,
             ),
         );
@@ -341,6 +356,7 @@ impl BuiltinToolRegistry {
             read_skill_tool,
             list_skills_tool,
             desktop_tool,
+            pim_tool,
             generation_registry,
             dispatcher_registry,
             sub_agent_dispatcher,
@@ -432,6 +448,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             "read_skill" => Box::pin(async move { self.read_skill_tool.call_json(arguments).await }),
             "list_skills" => Box::pin(async move { self.list_skills_tool.call_json(arguments).await }),
             "desktop" => Box::pin(async move { self.desktop_tool.call_json(arguments).await }),
+            "pim" => Box::pin(async move { self.pim_tool.call_json(arguments).await }),
 
             // Sessions tools for cross-session communication (requires gateway feature)
             #[cfg(feature = "gateway")]
