@@ -22,6 +22,18 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Serialize a provider config to JSON and inject `is_active` based on the active provider id.
+fn inject_is_active(provider: &EmbeddingProviderConfig, active_id: &str) -> serde_json::Value {
+    let mut val = serde_json::to_value(provider).unwrap_or_default();
+    if let Some(obj) = val.as_object_mut() {
+        obj.insert(
+            "is_active".into(),
+            serde_json::json!(provider.id == active_id),
+        );
+    }
+    val
+}
+
 // =============================================================================
 // RPC Handlers
 // =============================================================================
@@ -37,16 +49,7 @@ pub async fn handle_list(
     let providers: Vec<serde_json::Value> = settings
         .providers
         .iter()
-        .map(|p| {
-            let mut val = serde_json::to_value(p).unwrap_or_default();
-            if let Some(obj) = val.as_object_mut() {
-                obj.insert(
-                    "is_active".to_string(),
-                    serde_json::json!(p.id == settings.active_provider_id),
-                );
-            }
-            val
-        })
+        .map(|p| inject_is_active(p, &settings.active_provider_id))
         .collect();
 
     JsonRpcResponse::success(request.id, serde_json::json!(providers))
@@ -72,14 +75,7 @@ pub async fn handle_get(
 
     match settings.providers.iter().find(|p| p.id == params.id) {
         Some(provider) => {
-            let mut val = serde_json::to_value(provider).unwrap_or_default();
-            if let Some(obj) = val.as_object_mut() {
-                obj.insert(
-                    "is_active".to_string(),
-                    serde_json::json!(provider.id == settings.active_provider_id),
-                );
-            }
-            JsonRpcResponse::success(request.id, val)
+            JsonRpcResponse::success(request.id, inject_is_active(provider, &settings.active_provider_id))
         }
         None => JsonRpcResponse::error(
             request.id,
