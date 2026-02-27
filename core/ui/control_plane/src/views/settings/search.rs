@@ -402,12 +402,12 @@ fn ProviderDetailPanel(
     };
 
     view! {
-        <div class="p-6">
+        <div class="flex flex-col h-full">
             {move || {
                 let sel = selected.get();
                 if sel.is_none() {
                     return view! {
-                        <div class="flex flex-col items-center justify-center h-64 text-text-tertiary">
+                        <div class="flex flex-col items-center justify-center flex-1 text-text-tertiary">
                             <svg class="w-12 h-12 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
                                     d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -422,174 +422,192 @@ fn ProviderDetailPanel(
                 let is_active = config.get().default_provider == sel_name;
 
                 view! {
-                    <div class="space-y-5">
-                        // Header with icon
-                        <div class="flex items-center gap-3">
+                    <div class="flex flex-col h-full">
+                        // Header
+                        <div class="px-6 py-4 border-b border-border">
+                            <div class="flex items-center gap-3">
+                                {if let Some(p) = preset {
+                                    let ch = p.display_name.chars().next().unwrap_or('?').to_uppercase().to_string();
+                                    view! {
+                                        <div
+                                            class="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold"
+                                            style=format!("background-color: {}", p.icon_color)
+                                        >
+                                            {ch}
+                                        </div>
+                                    }.into_any()
+                                } else {
+                                    view! {
+                                        <div class="w-10 h-10 rounded-xl bg-surface-sunken flex items-center justify-center text-text-tertiary font-bold">
+                                            "?"
+                                        </div>
+                                    }.into_any()
+                                }}
+                                <div class="flex-1">
+                                    <div class="flex items-center gap-2">
+                                        <h2 class="text-lg font-semibold text-text-primary">
+                                            {preset.map(|p| p.display_name).unwrap_or(&sel_name)}
+                                        </h2>
+                                        {if is_active {
+                                            view! {
+                                                <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded">
+                                                    "Active"
+                                                </span>
+                                            }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }}
+                                    </div>
+                                    <p class="text-xs text-text-tertiary">
+                                        {preset.map(|p| p.description).unwrap_or("Search provider")}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        // Content
+                        <div class="flex-1 overflow-y-auto p-6 space-y-6">
+                            // Provider info
                             {if let Some(p) = preset {
-                                let ch = p.display_name.chars().next().unwrap_or('?').to_uppercase().to_string();
                                 view! {
-                                    <div
-                                        class="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold"
-                                        style=format!("background-color: {}", p.icon_color)
-                                    >
-                                        {ch}
+                                    <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
+                                        <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Provider Details"</h3>
+                                        <div class="space-y-2">
+                                            <div class="flex items-center justify-between">
+                                                <span class="text-sm text-text-secondary">"Base URL"</span>
+                                                <span class="text-sm text-text-primary font-mono">{p.base_url}</span>
+                                            </div>
+                                            <div class="flex items-center justify-between">
+                                                <span class="text-sm text-text-secondary">"API Key Required"</span>
+                                                <span class="text-sm text-text-primary">{if p.needs_api_key { "Yes" } else { "No" }}</span>
+                                            </div>
+                                            {if p.is_self_hosted {
+                                                view! {
+                                                    <div class="flex items-center justify-between">
+                                                        <span class="text-sm text-text-secondary">"Type"</span>
+                                                        <span class="px-2 py-0.5 bg-info-subtle text-info text-xs font-medium rounded">"Self-hosted"</span>
+                                                    </div>
+                                                }.into_any()
+                                            } else {
+                                                view! { <span></span> }.into_any()
+                                            }}
+                                        </div>
                                     </div>
                                 }.into_any()
                             } else {
-                                view! {
-                                    <div class="w-10 h-10 rounded-xl bg-surface-sunken flex items-center justify-center text-text-tertiary font-bold">
-                                        "?"
-                                    </div>
-                                }.into_any()
+                                view! { <div></div> }.into_any()
                             }}
-                            <div>
-                                <div class="flex items-center gap-2">
-                                    <h2 class="text-lg font-semibold text-text-primary">
-                                        {preset.map(|p| p.display_name).unwrap_or(&sel_name)}
-                                    </h2>
-                                    {if is_active {
-                                        view! {
-                                            <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded">
-                                                "Active"
-                                            </span>
-                                        }.into_any()
-                                    } else {
-                                        view! { <span></span> }.into_any()
-                                    }}
-                                </div>
-                                <p class="text-xs text-text-tertiary">
-                                    {preset.map(|p| p.description).unwrap_or("Search provider")}
-                                </p>
-                            </div>
-                        </div>
 
-                        // Provider info
-                        {if let Some(p) = preset {
-                            view! {
-                                <div class="p-3 bg-surface-sunken rounded-lg space-y-2">
-                                    <div class="flex items-center justify-between text-xs">
-                                        <span class="text-text-tertiary">"Base URL"</span>
-                                        <span class="text-text-secondary font-mono">{p.base_url}</span>
+                            // Error
+                            {move || error.get().filter(|e| !e.contains("Failed to load")).map(|e| view! {
+                                <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">{e}</div>
+                            })}
+
+                            // Search Settings
+                            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-5">
+                                <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Search Settings"</h3>
+
+                                // Enabled
+                                <label class="flex items-center gap-3 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        prop:checked=move || form_enabled.get()
+                                        on:change=move |ev| form_enabled.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <div>
+                                        <span class="text-sm text-text-primary">"Enable Search"</span>
+                                        <p class="text-xs text-text-tertiary">"Allow AI to search the web for information"</p>
                                     </div>
-                                    <div class="flex items-center justify-between text-xs">
-                                        <span class="text-text-tertiary">"API Key Required"</span>
-                                        <span class="text-text-secondary">{if p.needs_api_key { "Yes" } else { "No" }}</span>
-                                    </div>
-                                    {if p.is_self_hosted {
-                                        view! {
-                                            <div class="flex items-center justify-between text-xs">
-                                                <span class="text-text-tertiary">"Type"</span>
-                                                <span class="px-1.5 py-0.5 bg-info-subtle text-info text-xs rounded">"Self-hosted"</span>
-                                            </div>
-                                        }.into_any()
-                                    } else {
-                                        view! { <span></span> }.into_any()
-                                    }}
-                                </div>
-                            }.into_any()
-                        } else {
-                            view! { <div></div> }.into_any()
-                        }}
+                                </label>
 
-                        // Error
-                        {move || error.get().filter(|e| !e.contains("Failed to load")).map(|e| view! {
-                            <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">{e}</div>
-                        })}
-
-                        // Form
-                        <div class="space-y-4">
-                            // Enabled
-                            <label class="flex items-center gap-2 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    prop:checked=move || form_enabled.get()
-                                    on:change=move |ev| form_enabled.set(event_target_checked(&ev))
-                                    class="w-4 h-4 rounded"
-                                />
+                                // Max Results
                                 <div>
-                                    <span class="text-sm text-text-primary">"Enable Search"</span>
-                                    <p class="text-xs text-text-tertiary">"Allow AI to search the web"</p>
-                                </div>
-                            </label>
-
-                            // Max Results
-                            <div>
-                                <div class="flex items-center justify-between mb-1">
-                                    <label class="text-xs font-medium text-text-secondary">"Max Results"</label>
-                                    <span class="text-xs text-text-tertiary font-mono">{move || form_max_results.get()}</span>
-                                </div>
-                                <input
-                                    type="range"
-                                    min="1"
-                                    max="20"
-                                    step="1"
-                                    prop:value=move || form_max_results.get()
-                                    on:input=move |ev| {
-                                        if let Ok(val) = event_target_value(&ev).parse::<u64>() {
-                                            form_max_results.set(val);
+                                    <div class="flex items-center justify-between mb-2">
+                                        <label class="text-sm text-text-secondary">"Max Results"</label>
+                                        <span class="text-sm text-text-primary font-mono">{move || form_max_results.get()}</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="1"
+                                        max="20"
+                                        step="1"
+                                        prop:value=move || form_max_results.get()
+                                        on:input=move |ev| {
+                                            if let Ok(val) = event_target_value(&ev).parse::<u64>() {
+                                                form_max_results.set(val);
+                                            }
                                         }
-                                    }
-                                    class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
-                                />
-                            </div>
-
-                            // Timeout
-                            <div>
-                                <div class="flex items-center justify-between mb-1">
-                                    <label class="text-xs font-medium text-text-secondary">"Timeout"</label>
-                                    <span class="text-xs text-text-tertiary font-mono">{move || form_timeout.get()} "s"</span>
+                                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
+                                    />
+                                    <div class="flex justify-between text-xs text-text-tertiary mt-1">
+                                        <span>"1"</span>
+                                        <span>"20"</span>
+                                    </div>
                                 </div>
-                                <input
-                                    type="range"
-                                    min="5"
-                                    max="60"
-                                    step="5"
-                                    prop:value=move || form_timeout.get()
-                                    on:input=move |ev| {
-                                        if let Ok(val) = event_target_value(&ev).parse::<u64>() {
-                                            form_timeout.set(val);
+
+                                // Timeout
+                                <div>
+                                    <div class="flex items-center justify-between mb-2">
+                                        <label class="text-sm text-text-secondary">"Timeout"</label>
+                                        <span class="text-sm text-text-primary font-mono">{move || form_timeout.get()} "s"</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="5"
+                                        max="60"
+                                        step="5"
+                                        prop:value=move || form_timeout.get()
+                                        on:input=move |ev| {
+                                            if let Ok(val) = event_target_value(&ev).parse::<u64>() {
+                                                form_timeout.set(val);
+                                            }
                                         }
+                                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
+                                    />
+                                    <div class="flex justify-between text-xs text-text-tertiary mt-1">
+                                        <span>"5s"</span>
+                                        <span>"60s"</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            // Save success
+                            {move || save_success.get().then(|| view! {
+                                <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm flex items-center gap-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                    </svg>
+                                    "Saved successfully"
+                                </div>
+                            })}
+
+                            // Actions
+                            <div class="space-y-2">
+                                <button
+                                    on:click=on_save
+                                    prop:disabled=move || saving.get()
+                                    class="w-full px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+                                >
+                                    {move || if saving.get() { "Saving..." } else { "Save Settings" }}
+                                </button>
+
+                                {move || {
+                                    if !is_active {
+                                        view! {
+                                            <button
+                                                on:click=on_set_active
+                                                prop:disabled=move || saving.get()
+                                                class="w-full px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
+                                            >
+                                                "Set as Active Provider"
+                                            </button>
+                                        }.into_any()
+                                    } else {
+                                        view! { <div></div> }.into_any()
                                     }
-                                    class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
-                                />
+                                }}
                             </div>
-                        </div>
-
-                        // Save success
-                        {move || save_success.get().then(|| view! {
-                            <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm flex items-center gap-2">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                                </svg>
-                                "Saved successfully"
-                            </div>
-                        })}
-
-                        // Actions
-                        <div class="space-y-2 pt-2">
-                            <button
-                                on:click=on_save
-                                prop:disabled=move || saving.get()
-                                class="w-full px-4 py-2 bg-primary hover:bg-primary-hover disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
-                            >
-                                {move || if saving.get() { "Saving..." } else { "Save Settings" }}
-                            </button>
-
-                            {move || {
-                                if !is_active {
-                                    view! {
-                                        <button
-                                            on:click=on_set_active
-                                            prop:disabled=move || saving.get()
-                                            class="w-full px-4 py-2 bg-success-subtle border border-success/20 text-success text-sm rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
-                                        >
-                                            "Set as Active Provider"
-                                        </button>
-                                    }.into_any()
-                                } else {
-                                    view! { <div></div> }.into_any()
-                                }
-                            }}
                         </div>
                     </div>
                 }.into_any()
