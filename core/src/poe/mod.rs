@@ -229,3 +229,6 @@ pub use services::{PoeRunManager, PoeContractService, PrepareParams, PrepareCont
 // Domain events
 pub use event_bus::PoeEventBus;
 pub use events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind, EventTier};
+
+// Projectors
+pub use projectors::trust::TrustProjector;
