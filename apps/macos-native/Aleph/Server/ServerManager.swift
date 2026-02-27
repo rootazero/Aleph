@@ -52,7 +52,7 @@ final class ServerManager: ObservableObject {
 
         let proc = Process()
         proc.executableURL = binaryPath
-        proc.arguments = ["--bridge-mode", "--socket", socketPath.path]
+        proc.arguments = []
 
         let stdout = Pipe()
         let stderr = Pipe()
@@ -78,7 +78,7 @@ final class ServerManager: ObservableObject {
             throw Error.startFailed(error.localizedDescription)
         }
 
-        try await waitForSocket(timeout: 10.0)
+        try await waitForHTTP(port: 18790, timeout: 15.0)
         state = .running
     }
 
@@ -147,5 +147,30 @@ final class ServerManager: ObservableObject {
             try await Task.sleep(nanoseconds: 200_000_000)
         }
         throw Error.socketTimeout
+    }
+
+    private func waitForHTTP(port: Int, timeout: TimeInterval) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if checkHTTPPort(port: port) { return }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+        throw Error.socketTimeout
+    }
+
+    private func checkHTTPPort(port: Int) -> Bool {
+        guard let url = URL(string: "http://127.0.0.1:\(port)/") else { return false }
+        let sem = DispatchSemaphore(value: 0)
+        var ok = false
+        let task = URLSession.shared.dataTask(with: url) { _, response, _ in
+            if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                ok = true
+            }
+            sem.signal()
+        }
+        task.resume()
+        _ = sem.wait(timeout: .now() + 2)
+        task.cancel()
+        return ok
     }
 }
