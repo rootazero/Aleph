@@ -137,6 +137,9 @@ where
             LoopResult::UserAborted => {
                 WorkerOutput::failed("Execution aborted by user")
             }
+            LoopResult::PoeAborted { reason } => {
+                WorkerOutput::failed(format!("POE aborted: {}", reason))
+            }
         };
 
         output.artifacts = artifacts;

@@ -444,6 +444,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             LoopResult::Failed { steps, .. } => *steps,
             LoopResult::GuardTriggered(_) => 0,
             LoopResult::UserAborted => 0,
+            LoopResult::PoeAborted { .. } => 0,
         };
 
         {
@@ -470,6 +471,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             LoopResult::UserAborted => {
                 info!(run_id = %run_id, "Agent loop aborted by user");
                 Err(ExecutionError::Cancelled)
+            }
+            LoopResult::PoeAborted { reason } => {
+                warn!(run_id = %run_id, reason = %reason, "Agent loop aborted by POE");
+                Err(ExecutionError::Failed(format!("POE aborted: {}", reason)))
             }
         }
     }
