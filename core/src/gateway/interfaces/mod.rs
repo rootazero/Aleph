@@ -15,6 +15,7 @@
 //! - **Matrix**: Matrix Client-Server API v3 integration (requires `matrix` feature)
 //! - **Signal**: Signal via signal-cli REST API integration (requires `signal` feature)
 //! - **Mattermost**: Mattermost WebSocket + REST API v4 integration (requires `mattermost` feature)
+//! - **IRC**: IRC raw TCP integration via RFC 2812 (requires `irc` feature)
 
 pub mod cli;
 
@@ -45,6 +46,9 @@ pub mod signal;
 #[cfg(feature = "mattermost")]
 pub mod mattermost;
 
+#[cfg(feature = "irc")]
+pub mod irc;
+
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
 #[cfg(target_os = "macos")]
@@ -73,3 +77,6 @@ pub use signal::{SignalChannel, SignalChannelFactory, SignalConfig};
 
 #[cfg(feature = "mattermost")]
 pub use mattermost::{MattermostChannel, MattermostChannelFactory, MattermostConfig};
+
+#[cfg(feature = "irc")]
+pub use irc::{IrcChannel, IrcChannelFactory, IrcConfig};
