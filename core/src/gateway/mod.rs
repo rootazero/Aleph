@@ -28,6 +28,8 @@ pub mod link;
 pub mod transport;
 
 #[cfg(feature = "gateway")]
+pub mod formatter;
+#[cfg(feature = "gateway")]
 pub mod protocol;
 #[cfg(feature = "gateway")]
 pub mod server;
