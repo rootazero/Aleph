@@ -231,10 +231,11 @@ fn request_to_jsonrpc(request: &DesktopRequest) -> (&'static str, serde_json::Va
                 "notes": notes, "all_day": all_day,
             }))
         }
-        DesktopRequest::PimCalendarUpdate { id, title, start, end, location, notes } => {
+        DesktopRequest::PimCalendarUpdate { id, title, start, end, location, notes, all_day, calendar_id } => {
             ("pim.calendar.update", json!({
                 "id": id, "title": title, "start": start,
                 "end": end, "location": location, "notes": notes,
+                "all_day": all_day, "calendar_id": calendar_id,
             }))
         }
         DesktopRequest::PimCalendarDelete { id } => {
