@@ -11,6 +11,7 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
+use crate::dispatcher::experience_replay_layer::ExperienceReplayLayer;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::protocol::JsonRpcRequest;
 use crate::poe::{
@@ -50,6 +51,8 @@ pub struct PoeRunManager<W: Worker + 'static> {
     poe_event_bus: Option<Arc<PoeEventBus>>,
     /// Optional experience recorder for crystallization
     recorder: Option<Arc<dyn ExperienceRecorder>>,
+    /// Optional experience replay layer for hint injection
+    experience_replay: Option<Arc<ExperienceReplayLayer>>,
 }
 
 impl<W: Worker + 'static> PoeRunManager<W> {
@@ -79,6 +82,7 @@ impl<W: Worker + 'static> PoeRunManager<W> {
             default_config,
             poe_event_bus: None,
             recorder: None,
+            experience_replay: None,
         }
     }
 
@@ -91,6 +95,12 @@ impl<W: Worker + 'static> PoeRunManager<W> {
     /// Set the experience recorder for crystallization.
     pub fn with_recorder(mut self, recorder: Arc<dyn ExperienceRecorder>) -> Self {
         self.recorder = Some(recorder);
+        self
+    }
+
+    /// Set the experience replay layer for hint injection.
+    pub fn with_experience_replay(mut self, replay: Arc<ExperienceReplayLayer>) -> Self {
+        self.experience_replay = Some(replay);
         self
     }
 
@@ -167,6 +177,7 @@ impl<W: Worker + 'static> PoeRunManager<W> {
         let stream = params.stream;
         let poe_event_bus = self.poe_event_bus.clone();
         let recorder = self.recorder.clone();
+        let experience_replay = self.experience_replay.clone();
 
         tokio::spawn(async move {
             let result = execute_poe_task(PoeExecutionContext {
@@ -181,6 +192,7 @@ impl<W: Worker + 'static> PoeRunManager<W> {
                 stream,
                 poe_event_bus,
                 recorder,
+                experience_replay,
             })
             .await;
 
@@ -328,6 +340,7 @@ struct PoeExecutionContext<W: Worker + 'static> {
     stream: bool,
     poe_event_bus: Option<Arc<PoeEventBus>>,
     recorder: Option<Arc<dyn ExperienceRecorder>>,
+    experience_replay: Option<Arc<ExperienceReplayLayer>>,
 }
 
 /// Execute a POE task with event emission
@@ -336,7 +349,7 @@ async fn execute_poe_task<W: Worker + 'static>(
 ) -> Result<PoeOutcome, String> {
     let PoeExecutionContext {
         task_id,
-        task,
+        mut task,
         worker,
         validator,
         config,
@@ -346,9 +359,34 @@ async fn execute_poe_task<W: Worker + 'static>(
         stream,
         poe_event_bus,
         recorder,
+        experience_replay,
     } = ctx;
 
     let start_time = Instant::now();
+
+    // Query experience replay for hint injection
+    if let Some(ref replay) = experience_replay {
+        match replay.try_match(&task.manifest.objective).await {
+            Ok(Some(match_result)) => {
+                info!(
+                    task_id = %task_id,
+                    confidence = match_result.confidence,
+                    "Experience replay match found"
+                );
+                task.instruction = format_experience_hint(
+                    match_result.confidence,
+                    &match_result.tool_sequence,
+                    &task.instruction,
+                );
+            }
+            Ok(None) => {
+                debug!(task_id = %task_id, "No experience replay match found");
+            }
+            Err(e) => {
+                warn!(task_id = %task_id, error = %e, "Experience replay query failed, proceeding without hint");
+            }
+        }
+    }
 
     // Helper to emit events
     let emit = |topic: &str, data: serde_json::Value| {
@@ -489,4 +527,54 @@ async fn execute_poe_task<W: Worker + 'static>(
     );
 
     Ok(outcome)
+}
+
+/// Format an experience replay hint to prepend to an instruction.
+///
+/// Extracted as a standalone function for testability.
+fn format_experience_hint(confidence: f64, tool_sequence: &str, instruction: &str) -> String {
+    format!(
+        "[Experience hint: Similar task matched with {:.0}% confidence. Previous solution: {}]\n\n{}",
+        confidence * 100.0,
+        tool_sequence,
+        instruction,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_experience_hint_prepends_to_instruction() {
+        let instruction = "Deploy the service to production";
+        let tool_sequence = "build -> test -> deploy";
+        let confidence = 0.92;
+
+        let result = format_experience_hint(confidence, tool_sequence, instruction);
+
+        assert!(result.starts_with("[Experience hint:"));
+        assert!(result.contains("92%"));
+        assert!(result.contains("build -> test -> deploy"));
+        assert!(result.ends_with(instruction));
+    }
+
+    #[test]
+    fn test_format_experience_hint_confidence_rounding() {
+        let result = format_experience_hint(0.856, "step1", "do X");
+        assert!(result.contains("86%"));
+
+        let result = format_experience_hint(1.0, "step1", "do X");
+        assert!(result.contains("100%"));
+
+        let result = format_experience_hint(0.0, "step1", "do X");
+        assert!(result.contains("0%"));
+    }
+
+    #[test]
+    fn test_format_experience_hint_preserves_original_instruction() {
+        let instruction = "A multi-line\ninstruction with\nspecial chars: !@#$%";
+        let result = format_experience_hint(0.9, "seq", instruction);
+        assert!(result.contains(instruction));
+    }
 }
