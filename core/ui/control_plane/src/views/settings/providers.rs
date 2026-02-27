@@ -149,7 +149,7 @@ pub fn ProvidersView() -> impl IntoView {
     view! {
         <div class="flex h-full">
             // Left panel: Presets + Configured providers
-            <div class="w-2/3 border-r border-border overflow-y-auto">
+            <div class="w-5/12 border-r border-border overflow-y-auto">
                 <div class="p-6 space-y-6">
                     <div>
                         <h1 class="text-2xl font-bold text-text-primary">"AI Providers"</h1>
@@ -178,7 +178,7 @@ pub fn ProvidersView() -> impl IntoView {
             </div>
 
             // Right panel: Detail/Editor
-            <div class="w-1/3 overflow-y-auto">
+            <div class="w-7/12 overflow-y-auto">
                 <ProviderDetailPanel
                     providers=providers
                     selected=selected
@@ -203,7 +203,7 @@ fn PresetGrid(
             <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
                 "Quick Setup"
             </h2>
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-1 gap-2">
                 {PRESETS.iter().map(|preset| {
                     let name = preset.name;
                     let description = preset.description;
