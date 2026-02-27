@@ -146,6 +146,7 @@ pub enum DesktopRequest {
     PimCalendarUpdate {
         id: String, title: Option<String>, start: Option<String>,
         end: Option<String>, location: Option<String>, notes: Option<String>,
+        all_day: Option<bool>, calendar_id: Option<String>,
     },
     PimCalendarDelete { id: String },
     PimCalendarCalendars,

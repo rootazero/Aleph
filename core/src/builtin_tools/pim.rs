@@ -394,6 +394,8 @@ pub fn build_pim_request(args: &PimArgs) -> std::result::Result<DesktopRequest, 
                 end: args.end.clone(),
                 location: args.location.clone(),
                 notes: args.notes.clone(),
+                all_day: args.all_day,
+                calendar_id: args.calendar_id.clone(),
             }
         }
         "calendar_delete" => {
