@@ -280,6 +280,8 @@ pub fn parse_aleph_plugin_content(content: &str, path: &Path) -> ExtensionResult
         services_v2: None,
         prompt_v2: None,
         capabilities_v2: None,
+        wasm_capabilities: None,
+        wasm_resource_limits: None,
         // P2 fields not available in JSON format
         channels_v2: None,
         providers_v2: None,
