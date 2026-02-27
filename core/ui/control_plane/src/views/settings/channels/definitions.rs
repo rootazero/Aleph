@@ -1007,3 +1007,21 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         docs_url: "https://github.com/nostr-protocol/nips",
     },
 ];
+
+// ---------------------------------------------------------------------------
+// Named references into ALL_CHANNELS (index-based)
+// ---------------------------------------------------------------------------
+
+pub static TELEGRAM: &ChannelDefinition = &ALL_CHANNELS[0];
+pub static DISCORD: &ChannelDefinition = &ALL_CHANNELS[1];
+pub static WHATSAPP: &ChannelDefinition = &ALL_CHANNELS[2];
+pub static IMESSAGE: &ChannelDefinition = &ALL_CHANNELS[3];
+pub static SLACK: &ChannelDefinition = &ALL_CHANNELS[4];
+pub static EMAIL: &ChannelDefinition = &ALL_CHANNELS[5];
+pub static MATRIX: &ChannelDefinition = &ALL_CHANNELS[6];
+pub static SIGNAL: &ChannelDefinition = &ALL_CHANNELS[7];
+pub static MATTERMOST: &ChannelDefinition = &ALL_CHANNELS[8];
+pub static IRC: &ChannelDefinition = &ALL_CHANNELS[9];
+pub static WEBHOOK: &ChannelDefinition = &ALL_CHANNELS[10];
+pub static XMPP: &ChannelDefinition = &ALL_CHANNELS[11];
+pub static NOSTR: &ChannelDefinition = &ALL_CHANNELS[12];

@@ -34,6 +34,8 @@ pub use channels::TelegramChannelView;
 pub use channels::DiscordChannelView;
 pub use channels::WhatsAppChannelView;
 pub use channels::IMessageChannelView;
+pub use channels::ChannelsOverview;
+pub use channels::ChannelConfigTemplate;
 
 // Settings default view (sidebar is provided by SettingsLayout)
 use leptos::prelude::*;

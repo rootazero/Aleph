@@ -7,6 +7,8 @@ use crate::views::system_status::SystemStatus;
 use crate::views::agent_trace::AgentTrace;
 use crate::views::memory::Memory;
 use crate::views::settings::*;
+use crate::views::settings::channels::config_template::ChannelConfigTemplate;
+use crate::views::settings::channels::definitions;
 use crate::views::halo::HaloView;
 use crate::components::Sidebar;
 use crate::context::{DashboardContext, DashboardState};
@@ -84,13 +86,90 @@ fn AppContent() -> impl IntoView {
                         <Route path=path!("/settings/memory") view=MemoryView />
                         <Route path=path!("/settings/security") view=SecurityView />
                         <Route path=path!("/settings/policies") view=PoliciesView />
-                        <Route path=path!("/settings/channels/telegram") view=TelegramChannelView />
+                        // Channels overview
+                        <Route path=path!("/settings/channels") view=ChannelsOverview />
+                        // Discord keeps its complex view
                         <Route path=path!("/settings/channels/discord") view=DiscordChannelView />
-                        <Route path=path!("/settings/channels/whatsapp") view=WhatsAppChannelView />
-                        <Route path=path!("/settings/channels/imessage") view=IMessageChannelView />
+                        // Template-driven channel config pages
+                        <Route path=path!("/settings/channels/telegram") view=TelegramConfigPage />
+                        <Route path=path!("/settings/channels/whatsapp") view=WhatsAppConfigPage />
+                        <Route path=path!("/settings/channels/imessage") view=IMessageConfigPage />
+                        <Route path=path!("/settings/channels/slack") view=SlackConfigPage />
+                        <Route path=path!("/settings/channels/email") view=EmailConfigPage />
+                        <Route path=path!("/settings/channels/matrix") view=MatrixConfigPage />
+                        <Route path=path!("/settings/channels/signal") view=SignalConfigPage />
+                        <Route path=path!("/settings/channels/mattermost") view=MattermostConfigPage />
+                        <Route path=path!("/settings/channels/irc") view=IrcConfigPage />
+                        <Route path=path!("/settings/channels/webhook") view=WebhookConfigPage />
+                        <Route path=path!("/settings/channels/xmpp") view=XmppConfigPage />
+                        <Route path=path!("/settings/channels/nostr") view=NostrConfigPage />
                     </Routes>
                 </main>
             </Router>
         </div>
     }
+}
+
+// ---------------------------------------------------------------------------
+// Thin wrapper components: one per template-driven channel
+// ---------------------------------------------------------------------------
+
+#[component]
+fn TelegramConfigPage() -> impl IntoView {
+    view! { <ChannelConfigTemplate definition=definitions::TELEGRAM /> }
+}
+
+#[component]
+fn WhatsAppConfigPage() -> impl IntoView {
+    view! { <ChannelConfigTemplate definition=definitions::WHATSAPP /> }
+}
+
+#[component]
+fn IMessageConfigPage() -> impl IntoView {
+    view! { <ChannelConfigTemplate definition=definitions::IMESSAGE /> }
+}
+
+#[component]
+fn SlackConfigPage() -> impl IntoView {
+    view! { <ChannelConfigTemplate definition=definitions::SLACK /> }
+}
+
+#[component]
+fn EmailConfigPage() -> impl IntoView {
+    view! { <ChannelConfigTemplate definition=definitions::EMAIL /> }
+}
+
+#[component]
+fn MatrixConfigPage() -> impl IntoView {
+    view! { <ChannelConfigTemplate definition=definitions::MATRIX /> }
+}
+
+#[component]
+fn SignalConfigPage() -> impl IntoView {
+    view! { <ChannelConfigTemplate definition=definitions::SIGNAL /> }
+}
+
+#[component]
+fn MattermostConfigPage() -> impl IntoView {
+    view! { <ChannelConfigTemplate definition=definitions::MATTERMOST /> }
+}
+
+#[component]
+fn IrcConfigPage() -> impl IntoView {
+    view! { <ChannelConfigTemplate definition=definitions::IRC /> }
+}
+
+#[component]
+fn WebhookConfigPage() -> impl IntoView {
+    view! { <ChannelConfigTemplate definition=definitions::WEBHOOK /> }
+}
+
+#[component]
+fn XmppConfigPage() -> impl IntoView {
+    view! { <ChannelConfigTemplate definition=definitions::XMPP /> }
+}
+
+#[component]
+fn NostrConfigPage() -> impl IntoView {
+    view! { <ChannelConfigTemplate definition=definitions::NOSTR /> }
 }
