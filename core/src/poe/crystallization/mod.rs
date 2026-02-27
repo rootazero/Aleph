@@ -39,6 +39,7 @@ pub mod clustering;
 pub mod distillation;
 pub mod dreaming;
 pub mod experience;
+pub mod experience_store;
 pub mod pattern_extractor;
 
 use std::sync::Arc;
