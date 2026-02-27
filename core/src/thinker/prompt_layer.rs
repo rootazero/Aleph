@@ -2,6 +2,7 @@
 
 use crate::agent_loop::ToolInfo;
 use crate::dispatcher::tool_index::HydrationResult;
+use crate::poe::PoePromptContext;
 use super::context::ResolvedContext;
 use super::prompt_builder::PromptConfig;
 use super::soul::SoulManifest;
@@ -34,27 +35,45 @@ pub struct LayerInput<'a> {
     pub hydration: Option<&'a HydrationResult>,
     pub soul: Option<&'a SoulManifest>,
     pub context: Option<&'a ResolvedContext>,
+    /// POE context (success criteria, behavioral anchors, hints)
+    pub poe: Option<&'a PoePromptContext>,
 }
 
 impl<'a> LayerInput<'a> {
     /// Input for the `Basic` path — config + tool list.
     pub fn basic(config: &'a PromptConfig, tools: &'a [ToolInfo]) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: None, context: None }
+        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, poe: None }
     }
 
     /// Input for the `Hydration` path — config + hydration result.
     pub fn hydration(config: &'a PromptConfig, hydration: &'a HydrationResult) -> Self {
-        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None }
+        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, poe: None }
     }
 
     /// Input for the `Soul` path — config + tools + soul manifest.
     pub fn soul(config: &'a PromptConfig, tools: &'a [ToolInfo], soul: &'a SoulManifest) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None }
+        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, poe: None }
     }
 
     /// Input for the `Context` path — config + resolved context.
     pub fn context(config: &'a PromptConfig, ctx: &'a ResolvedContext) -> Self {
-        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx) }
+        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), poe: None }
+    }
+
+    /// Attach POE context to this input.
+    pub fn with_poe(mut self, poe: &'a PoePromptContext) -> Self {
+        self.poe = Some(poe);
+        self
+    }
+
+    /// Get POE manifest if present.
+    pub fn poe_manifest(&self) -> Option<&crate::poe::types::SuccessManifest> {
+        self.poe.and_then(|p| p.manifest.as_ref())
+    }
+
+    /// Get POE hint if present.
+    pub fn poe_hint(&self) -> Option<&str> {
+        self.poe.and_then(|p| p.current_hint.as_deref())
     }
 }
 
