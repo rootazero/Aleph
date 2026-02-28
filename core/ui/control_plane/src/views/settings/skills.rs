@@ -1,5 +1,11 @@
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+
+use crate::context::DashboardState;
+
+const OFFICIAL_SKILLS_URL: &str = "https://github.com/rootazero/AlephSkills";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillInfo {
@@ -9,17 +15,64 @@ pub struct SkillInfo {
     pub source: Option<String>,
 }
 
+/// Load skills list from Gateway
+fn load_skills(state: DashboardState, skills: RwSignal<Vec<SkillInfo>>, loading: RwSignal<bool>, error: RwSignal<Option<String>>) {
+    loading.set(true);
+    error.set(None);
+    spawn_local(async move {
+        match state.rpc_call("skills.list", json!({})).await {
+            Ok(result) => {
+                if let Some(list) = result.get("skills") {
+                    if let Ok(parsed) = serde_json::from_value::<Vec<SkillInfo>>(list.clone()) {
+                        skills.set(parsed);
+                    }
+                }
+                loading.set(false);
+            }
+            Err(e) => {
+                error.set(Some(format!("Failed to load skills: {}", e)));
+                loading.set(false);
+            }
+        }
+    });
+}
+
 #[component]
 pub fn SkillsView() -> impl IntoView {
+    let state = expect_context::<DashboardState>();
     let skills = RwSignal::new(Vec::<SkillInfo>::new());
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
     let show_install_dialog = RwSignal::new(false);
+    let installing_official = RwSignal::new(false);
 
-    // TODO: Load skills from Gateway
+    // Load skills on mount
     Effect::new(move || {
-        loading.set(false);
+        if state.is_connected.get() {
+            load_skills(state, skills, loading, error);
+        } else {
+            loading.set(false);
+        }
     });
+
+    // Install official skills handler
+    let install_official = move |_| {
+        installing_official.set(true);
+        error.set(None);
+        spawn_local(async move {
+            match state.rpc_call("skills.install", json!({ "url": OFFICIAL_SKILLS_URL })).await {
+                Ok(_) => {
+                    installing_official.set(false);
+                    // Reload skills list
+                    load_skills(state, skills, loading, error);
+                }
+                Err(e) => {
+                    error.set(Some(format!("Failed to install official skills: {}", e)));
+                    installing_official.set(false);
+                }
+            }
+        });
+    };
 
     view! {
         <div class="flex-1 p-6 overflow-y-auto bg-surface">
@@ -38,12 +91,17 @@ pub fn SkillsView() -> impl IntoView {
                         <button
                             class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm"
                             on:click=move |_| {
-                                loading.set(true);
-                                // TODO: Reload skills
-                                loading.set(false);
+                                load_skills(state, skills, loading, error);
                             }
                         >
                             "Refresh"
+                        </button>
+                        <button
+                            class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm disabled:opacity-50"
+                            disabled=move || installing_official.get()
+                            on:click=install_official
+                        >
+                            {move || if installing_official.get() { "Installing..." } else { "Install Official Skills" }}
                         </button>
                         <button
                             class="px-3 py-1.5 bg-primary text-white rounded hover:bg-primary-hover text-sm"
@@ -92,7 +150,12 @@ pub fn SkillsView() -> impl IntoView {
                                         key=|skill| skill.id.clone()
                                         children=move |skill| {
                                             view! {
-                                                <SkillCard skill=skill />
+                                                <SkillCard
+                                                    skill=skill
+                                                    skills=skills
+                                                    loading=loading
+                                                    error=error
+                                                />
                                             }
                                         }
                                     />
@@ -117,6 +180,9 @@ pub fn SkillsView() -> impl IntoView {
             <Show when=move || show_install_dialog.get()>
                 <InstallSkillDialog
                     on_close=move || show_install_dialog.set(false)
+                    skills=skills
+                    loading=loading
+                    error=error
                 />
             </Show>
         </div>
@@ -124,8 +190,15 @@ pub fn SkillsView() -> impl IntoView {
 }
 
 #[component]
-fn SkillCard(skill: SkillInfo) -> impl IntoView {
+fn SkillCard(
+    skill: SkillInfo,
+    skills: RwSignal<Vec<SkillInfo>>,
+    loading: RwSignal<bool>,
+    error: RwSignal<Option<String>>,
+) -> impl IntoView {
+    let state = expect_context::<DashboardState>();
     let deleting = RwSignal::new(false);
+    let skill_id = StoredValue::new(skill.id.clone());
 
     view! {
         <div class="p-4 bg-surface-raised border border-border rounded">
@@ -163,8 +236,18 @@ fn SkillCard(skill: SkillInfo) -> impl IntoView {
                                     title="Delete"
                                     on:click=move |_| {
                                         deleting.set(true);
-                                        // TODO: Call Gateway API
-                                        deleting.set(false);
+                                        let id = skill_id.get_value();
+                                        spawn_local(async move {
+                                            match state.rpc_call("skills.delete", json!({ "id": id })).await {
+                                                Ok(_) => {
+                                                    load_skills(state, skills, loading, error);
+                                                }
+                                                Err(e) => {
+                                                    error.set(Some(format!("Failed to delete skill: {}", e)));
+                                                    deleting.set(false);
+                                                }
+                                            }
+                                        });
                                     }
                                 >
                                     "🗑️"
@@ -179,20 +262,37 @@ fn SkillCard(skill: SkillInfo) -> impl IntoView {
 }
 
 #[component]
-fn InstallSkillDialog(on_close: impl Fn() + 'static + Copy) -> impl IntoView {
+fn InstallSkillDialog(
+    on_close: impl Fn() + 'static + Copy,
+    skills: RwSignal<Vec<SkillInfo>>,
+    loading: RwSignal<bool>,
+    error: RwSignal<Option<String>>,
+) -> impl IntoView {
+    let state = expect_context::<DashboardState>();
     let url = RwSignal::new(String::new());
-    let loading = RwSignal::new(false);
-    let error = RwSignal::new(Option::<String>::None);
+    let installing = RwSignal::new(false);
+    let dialog_error = RwSignal::new(Option::<String>::None);
 
     let handle_install = move |_| {
         if url.get().trim().is_empty() {
             return;
         }
-        loading.set(true);
-        error.set(None);
-        // TODO: Call Gateway API
-        loading.set(false);
-        on_close();
+        installing.set(true);
+        dialog_error.set(None);
+        let install_url = url.get().trim().to_string();
+        spawn_local(async move {
+            match state.rpc_call("skills.install", json!({ "url": install_url })).await {
+                Ok(_) => {
+                    installing.set(false);
+                    load_skills(state, skills, loading, error);
+                    on_close();
+                }
+                Err(e) => {
+                    dialog_error.set(Some(format!("Failed to install: {}", e)));
+                    installing.set(false);
+                }
+            }
+        });
     };
 
     view! {
@@ -215,7 +315,7 @@ fn InstallSkillDialog(on_close: impl Fn() + 'static + Copy) -> impl IntoView {
                         />
                     </div>
 
-                    {move || error.get().map(|err| view! {
+                    {move || dialog_error.get().map(|err| view! {
                         <div class="flex items-center gap-2 text-danger text-sm">
                             <span>"⚠️"</span>
                             <span>{err}</span>
@@ -232,10 +332,10 @@ fn InstallSkillDialog(on_close: impl Fn() + 'static + Copy) -> impl IntoView {
                     </button>
                     <button
                         class="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover text-sm disabled:opacity-50"
-                        disabled=move || url.get().trim().is_empty() || loading.get()
+                        disabled=move || url.get().trim().is_empty() || installing.get()
                         on:click=handle_install
                     >
-                        {move || if loading.get() { "Installing..." } else { "Install" }}
+                        {move || if installing.get() { "Installing..." } else { "Install" }}
                     </button>
                 </div>
             </div>
