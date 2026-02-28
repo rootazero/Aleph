@@ -121,6 +121,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         // WKWebView filling the window
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        config.websiteDataStore = .nonPersistent()
 
         let wv = WKWebView(frame: newWindow.contentView!.bounds, configuration: config)
         wv.autoresizingMask = [.width, .height]
