@@ -7,7 +7,7 @@ import os
 /// - Set activation policy to .accessory (hide from Dock)
 /// - Manage aleph-server process lifecycle via `ServerManager`
 /// - Set up menu bar status item via `MenuBarController`
-/// - Manage Halo floating window, Settings window, and Canvas overlay
+/// - Manage unified Panel window and Canvas overlay
 /// - Handle UDS bridge connection via `BridgeServer`
 /// - Register global keyboard shortcuts
 /// - Wire notification-based communication between bridge handlers and UI
@@ -19,8 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let serverManager = ServerManager()
     private let bridge = BridgeServer()
     private let menuBarController = MenuBarController()
-    private let haloWindow = HaloWindow()
-    private let settingsWindow = SettingsWindow()
+    private let panelWindow = PanelWindow()
     private let canvasOverlay = CanvasOverlay()
     private let globalShortcuts = GlobalShortcuts()
 
@@ -38,7 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Set up menu bar status item
         menuBarController.setup()
 
-        // Register global shortcuts (Cmd+Opt+/ to show Halo)
+        // Register global shortcuts (Cmd+Opt+/ to show Chat)
         globalShortcuts.register()
 
         // Set up all notification observers
@@ -79,9 +78,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             logger.error("Failed to start aleph-server: \(error.localizedDescription)")
         }
 
-        // Configure windows with server port
-        haloWindow.configure(serverPort: serverPort)
-        settingsWindow.configure(serverPort: serverPort)
+        // Configure panel window with server port
+        panelWindow.configure(serverPort: serverPort)
 
         // Register all desktop handlers and PIM handlers, then start bridge server
         bridge.registerDesktopHandlers()
@@ -106,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.haloWindow.show()
+            self?.panelWindow.showChat()
         }
 
         nc.addObserver(
@@ -114,7 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.settingsWindow.show()
+            self?.panelWindow.showSettings()
         }
 
         // Tray status updates from bridge
@@ -135,12 +133,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { [weak self] notification in
             guard let self else { return }
-            let label = notification.userInfo?["label"] as? String ?? "halo"
+            let label = notification.userInfo?["label"] as? String ?? "panel"
             switch label {
             case "settings":
-                self.settingsWindow.show()
+                self.panelWindow.showSettings()
+            case "dashboard":
+                self.panelWindow.showDashboard()
             default:
-                self.haloWindow.show()
+                self.panelWindow.show()
             }
         }
 
@@ -148,15 +148,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: .webviewHide,
             object: nil,
             queue: .main
-        ) { [weak self] notification in
-            guard let self else { return }
-            let label = notification.userInfo?["label"] as? String ?? "halo"
-            switch label {
-            case "settings":
-                self.settingsWindow.hide()
-            default:
-                self.haloWindow.hide()
-            }
+        ) { [weak self] _ in
+            self?.panelWindow.hide()
         }
 
         nc.addObserver(
@@ -165,15 +158,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { [weak self] notification in
             guard let self else { return }
-            let label = notification.userInfo?["label"] as? String ?? "halo"
             guard let urlString = notification.userInfo?["url"] as? String,
                   let url = URL(string: urlString) else { return }
-            switch label {
-            case "settings":
-                self.settingsWindow.navigate(to: url)
-            default:
-                self.haloWindow.navigate(to: url)
-            }
+            self.panelWindow.navigate(to: url)
         }
 
         // Canvas overlay from bridge

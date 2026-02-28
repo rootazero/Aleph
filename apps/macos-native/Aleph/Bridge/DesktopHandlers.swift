@@ -295,8 +295,8 @@ extension BridgeServer {
 
     /// Register `webview.show`, `webview.hide`, and `webview.navigate` handlers.
     ///
-    /// These handlers post notifications so that the UI layer (HaloWindow,
-    /// SettingsWindow) can respond on the main thread.
+    /// These handlers post notifications so that the UI layer (PanelWindow)
+    /// can respond on the main thread.
     private func registerWebviewHandlers() {
         // webview.show — show a named webview (halo or settings)
         // Params: { "label": "halo"|"settings", "url": "http://..." (optional) }
