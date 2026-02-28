@@ -307,6 +307,12 @@ impl HandlerRegistry {
         registry.register("markdown_skills.list", markdown_skills::handle_list);
         registry.register("markdown_skills.unload", markdown_skills::handle_unload);
 
+        // Skills handlers (SKILL.md file-based skills)
+        registry.register("skills.list", skills::handle_list);
+        registry.register("skills.install", skills::handle_install);
+        registry.register("skills.installFromZip", skills::handle_install_from_zip);
+        registry.register("skills.delete", skills::handle_delete);
+
         // Identity handlers (placeholders - actual handlers wired with IdentityResolver)
         registry.register("identity.get", |req| async move {
             JsonRpcResponse::error(

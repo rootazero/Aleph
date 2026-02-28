@@ -252,24 +252,56 @@ impl SkillsRegistry {
                 SkillSource::Project
             };
 
+            // Collect directories to scan (supports nested category folders)
+            let mut dirs_to_scan: Vec<PathBuf> = Vec::new();
+
             for entry in entries.flatten() {
                 let path = entry.path();
-
-                // Only process directories
                 if !path.is_dir() {
                     continue;
                 }
 
-                let skill_id = path
+                let dir_name = path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or_default()
                     .to_string();
 
                 // Skip hidden directories
-                if skill_id.starts_with('.') {
+                if dir_name.starts_with('.') {
                     continue;
                 }
+
+                let skill_md_path = path.join("SKILL.md");
+                if skill_md_path.exists() {
+                    // Direct skill directory: skills/<name>/SKILL.md
+                    dirs_to_scan.push(path);
+                } else {
+                    // Category directory: skills/<category>/<name>/SKILL.md
+                    // Recurse one level into subdirectories
+                    if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                        for sub_entry in sub_entries.flatten() {
+                            let sub_path = sub_entry.path();
+                            if sub_path.is_dir() {
+                                let sub_name = sub_path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or_default();
+                                if !sub_name.starts_with('.') && sub_path.join("SKILL.md").exists() {
+                                    dirs_to_scan.push(sub_path);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            for path in dirs_to_scan {
+                let skill_id = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+                    .to_string();
 
                 // Skip if already loaded (first occurrence wins)
                 if skills.contains_key(&skill_id) {
@@ -282,11 +314,6 @@ impl SkillsRegistry {
                 }
 
                 let skill_md_path = path.join("SKILL.md");
-
-                if !skill_md_path.exists() {
-                    debug!(skill_id = %skill_id, "No SKILL.md found, skipping");
-                    continue;
-                }
 
                 match self.load_skill(&skill_id, &skill_md_path) {
                     Ok(skill) => {
@@ -811,5 +838,32 @@ Instructions
         assert_eq!(degraded.len(), 1);
         assert_eq!(degraded[0].0.id, "broken-skill");
         assert_eq!(degraded[0].1, vec!["nonexistent_binary_12345"]);
+    }
+
+    #[test]
+    fn test_registry_nested_category_dirs() {
+        let temp_dir = TempDir::new().unwrap();
+        let skills_dir = temp_dir.path().to_path_buf();
+
+        // Create nested category structure: skills/<category>/<skill>/SKILL.md
+        let foundation = skills_dir.join("foundation");
+        create_test_skill(&foundation, "test", "Run tests");
+        create_test_skill(&foundation, "debug", "Debug code");
+
+        let automation = skills_dir.join("automation");
+        create_test_skill(&automation, "ssh", "SSH operations");
+
+        // Also create a flat skill alongside categories
+        create_test_skill(&skills_dir, "custom-skill", "A custom skill");
+
+        let registry = SkillsRegistry::new(skills_dir);
+        registry.load_all().unwrap();
+
+        // Should find all 4 skills (2 nested + 1 nested + 1 flat)
+        assert_eq!(registry.count(), 4);
+        assert!(registry.has_skill("test"));
+        assert!(registry.has_skill("debug"));
+        assert!(registry.has_skill("ssh"));
+        assert!(registry.has_skill("custom-skill"));
     }
 }

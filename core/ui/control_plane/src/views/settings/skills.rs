@@ -9,30 +9,44 @@ const OFFICIAL_SKILLS_URL: &str = "https://github.com/rootazero/AlephSkills";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillInfo {
+    pub id: String,
     pub name: String,
+    #[serde(default)]
     pub description: Option<String>,
-    pub source_path: Option<String>,
+    #[serde(default)]
+    pub triggers: Vec<String>,
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
 }
 
-/// Load skills list from Gateway
+/// Load skills list from Gateway (with retry for WebSocket timing)
 fn load_skills(state: DashboardState, skills: RwSignal<Vec<SkillInfo>>, loading: RwSignal<bool>, error: RwSignal<Option<String>>) {
     loading.set(true);
     error.set(None);
     spawn_local(async move {
-        match state.rpc_call("markdown_skills.list", json!({})).await {
-            Ok(result) => {
-                if let Some(list) = result.get("skills") {
-                    if let Ok(parsed) = serde_json::from_value::<Vec<SkillInfo>>(list.clone()) {
-                        skills.set(parsed);
-                    }
-                }
-                loading.set(false);
+        // Retry up to 3 times with short delays for WebSocket connection timing
+        let mut last_err = String::new();
+        for attempt in 0..3 {
+            if attempt > 0 {
+                gloo_timers::future::sleep(std::time::Duration::from_millis(500)).await;
             }
-            Err(e) => {
-                error.set(Some(format!("Failed to load skills: {}", e)));
-                loading.set(false);
+            match state.rpc_call("skills.list", json!({})).await {
+                Ok(result) => {
+                    if let Some(list) = result.get("skills") {
+                        if let Ok(parsed) = serde_json::from_value::<Vec<SkillInfo>>(list.clone()) {
+                            skills.set(parsed);
+                        }
+                    }
+                    loading.set(false);
+                    return;
+                }
+                Err(e) => {
+                    last_err = e;
+                }
             }
         }
+        error.set(Some(format!("Failed to load skills: {}", last_err)));
+        loading.set(false);
     });
 }
 
@@ -146,7 +160,7 @@ pub fn SkillsView() -> impl IntoView {
                                 <div class="space-y-3">
                                     <For
                                         each=move || skills.get()
-                                        key=|skill| skill.name.clone()
+                                        key=|skill| skill.id.clone()
                                         children=move |skill| {
                                             view! {
                                                 <SkillCard
@@ -197,7 +211,7 @@ fn SkillCard(
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let deleting = RwSignal::new(false);
-    let skill_name = StoredValue::new(skill.name.clone());
+    let skill_id = StoredValue::new(skill.id.clone());
 
     view! {
         <div class="p-4 bg-surface-raised border border-border rounded">
@@ -207,18 +221,10 @@ fn SkillCard(
                         <span class="text-primary">"⚡"</span>
                     </div>
                     <div>
-                        <p class="text-sm font-medium text-text-primary">{skill.name}</p>
+                        <p class="text-sm font-medium text-text-primary">{skill.name.clone()}</p>
                         <p class="text-xs text-text-secondary mt-1">
-                            {skill.description.unwrap_or_else(|| "No description".to_string())}
+                            {skill.description.clone().unwrap_or_else(|| "No description".to_string())}
                         </p>
-                        {skill.source_path.map(|source| view! {
-                            <div class="flex items-center gap-1 mt-2">
-                                <span class="text-xs text-text-tertiary">"🏷️"</span>
-                                <span class="px-2 py-0.5 bg-surface-sunken border border-border rounded text-xs text-text-secondary">
-                                    {source}
-                                </span>
-                            </div>
-                        })}
                     </div>
                 </div>
 
@@ -235,9 +241,9 @@ fn SkillCard(
                                     title="Delete"
                                     on:click=move |_| {
                                         deleting.set(true);
-                                        let name = skill_name.get_value();
+                                        let id = skill_id.get_value();
                                         spawn_local(async move {
-                                            match state.rpc_call("markdown_skills.unload", json!({ "name": name })).await {
+                                            match state.rpc_call("skills.delete", json!({ "id": id })).await {
                                                 Ok(_) => {
                                                     load_skills(state, skills, loading, error);
                                                 }
