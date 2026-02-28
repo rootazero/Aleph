@@ -147,32 +147,41 @@ pub struct MemoryFact {
 
 ## Embedding
 
-**Location**: `core/src/memory/smart_embedder.rs`
+**Location**: `core/src/memory/embedding_provider.rs`, `core/src/memory/embedding_manager.rs`
 
-Local embedding using `fastembed`:
+All embeddings go through remote OpenAI-compatible APIs via `EmbeddingProvider` trait:
 
 ```rust
-pub struct SmartEmbedder {
-    model: EmbeddingModel,  // bge-small-zh-v1.5 (384 dim)
+pub trait EmbeddingProvider: Send + Sync {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>>;
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
+    fn dimensions(&self) -> usize;
+    fn model_name(&self) -> &str;
+    fn provider_id(&self) -> &str;
 }
 
-impl SmartEmbedder {
-    pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        // Returns 384-dimensional vector
-    }
-
-    pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        // Batch embedding for efficiency
-    }
+pub struct RemoteEmbeddingProvider {
+    client: reqwest::Client,
+    api_base: String,       // e.g., https://api.siliconflow.cn/v1
+    api_key: String,
+    model: String,          // e.g., BAAI/bge-m3
+    dimension: usize,
+    batch_size: usize,
 }
 ```
 
-### Model Selection
+### Provider Presets
 
-| Model | Dimensions | Size | Best For |
-|-------|------------|------|----------|
-| `bge-small-zh-v1.5` | 384 | 24MB | Chinese + English |
-| `all-MiniLM-L6-v2` | 384 | 22MB | English only |
+| Preset | API Base | Model | Dimensions |
+|--------|----------|-------|------------|
+| SiliconFlow | `https://api.siliconflow.cn/v1` | BAAI/bge-m3 | 1024 |
+| OpenAI | `https://api.openai.com/v1` | text-embedding-3-small | 1536 |
+| Ollama | `http://localhost:11434/v1` | nomic-embed-text | 768 |
+| Custom | User-defined | User-defined | User-defined |
+
+### Multi-Dimension Support
+
+LanceDB stores multiple vector columns (`vec_768`, `vec_1024`, `vec_1536`) allowing provider switching without data loss.
 
 ---
 
@@ -184,8 +193,8 @@ Combines vector similarity and keyword search:
 
 ```rust
 pub struct HybridRetrieval {
-    embedder: Arc<SmartEmbedder>,
-    db: Arc<FactsDb>,
+    embedder: Arc<dyn EmbeddingProvider>,
+    database: MemoryBackend,
     strategy: RetrievalStrategy,
 }
 
@@ -510,7 +519,7 @@ Provides near-realtime conversation transcript indexing with semantic chunking.
 ```rust
 pub struct TranscriptIndexer {
     database: MemoryBackend,
-    embedder: Arc<SmartEmbedder>,
+    embedder: Arc<dyn EmbeddingProvider>,
     config: TranscriptIndexerConfig,
 }
 
@@ -532,7 +541,7 @@ Advanced chunking that preserves semantic coherence using embedding-based bounda
 
 ```rust
 pub struct SemanticChunker {
-    embedder: Arc<SmartEmbedder>,
+    embedder: Arc<dyn EmbeddingProvider>,
     config: SemanticChunkerConfig,
 }
 
@@ -563,7 +572,7 @@ Post-retrieval arbitration with redundancy detection and token budget management
 
 ```rust
 pub struct ContextComptroller {
-    embedder: Arc<SmartEmbedder>,
+    embedder: Arc<dyn EmbeddingProvider>,
     config: ContextComptrollerConfig,
 }
 
@@ -734,7 +743,7 @@ Automatic contradiction detection and resolution with evolution tracking.
 ```rust
 pub struct ContradictionDetector {
     provider: Arc<dyn AiProvider>,
-    embedder: Arc<SmartEmbedder>,
+    embedder: Arc<dyn EmbeddingProvider>,
 }
 
 pub struct EvolutionChain {
@@ -778,7 +787,7 @@ User profile distillation through frequency analysis and categorization.
 ```rust
 pub struct ConsolidationAnalyzer {
     database: MemoryBackend,
-    embedder: Arc<SmartEmbedder>,
+    embedder: Arc<dyn EmbeddingProvider>,
     config: ConsolidationConfig,
 }
 
@@ -863,10 +872,8 @@ pub struct MemorySearchOutput {
 ```toml
 [memory]
 enabled = true
-embedding_model = "bge-small-zh-v1.5"
 max_context_items = 5
 retention_days = 90
-vector_db = "lancedb"              # LanceDB unified storage (default)
 similarity_threshold = 0.7
 excluded_apps = ["com.apple.keychainaccess", "com.agilebits.onepassword7"]
 
