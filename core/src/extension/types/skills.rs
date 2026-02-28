@@ -175,6 +175,7 @@ impl ExtensionSkill {
             description: self.description.clone(),
             triggers: Vec::new(), // ExtensionSkill doesn't track triggers
             allowed_tools: Vec::new(), // ExtensionSkill doesn't track allowed tools
+            ecosystem: "aleph".to_string(),
         }
     }
 
