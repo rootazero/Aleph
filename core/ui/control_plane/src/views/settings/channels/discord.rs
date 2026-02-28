@@ -8,6 +8,7 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::components::A;
 use crate::context::DashboardState;
 use crate::api::DiscordApi;
 
@@ -96,6 +97,17 @@ pub fn DiscordChannelView() -> impl IntoView {
 
     view! {
         <div class="p-8 max-w-5xl mx-auto space-y-8">
+            // Back link
+            <A
+                href="/settings/channels"
+                attr:class="inline-flex items-center gap-1 text-sm text-text-tertiary hover:text-text-primary transition-colors"
+            >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="15 18 9 12 15 6"/>
+                </svg>
+                "Back to Channels"
+            </A>
+
             // Header
             <div class="mb-8">
                 <h1 class="text-3xl font-bold mb-2 text-text-primary">
