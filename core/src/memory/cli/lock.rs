@@ -147,14 +147,14 @@ impl MemoryLock {
 
     /// Get the default lock path
     pub fn default_lock_path() -> Result<PathBuf, LockError> {
-        let home = dirs::home_dir().ok_or_else(|| {
+        let memory_dir = crate::utils::paths::get_memory_db_path().map_err(|e| {
             LockError::IoError(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                "Could not determine home directory",
+                format!("Could not determine memory directory: {}", e),
             ))
         })?;
 
-        Ok(home.join(".aleph").join("memory.lock"))
+        Ok(memory_dir.join("memory.lock"))
     }
 
     /// Get the lock mode

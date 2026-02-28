@@ -86,11 +86,18 @@ pub fn get_cache_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("cache"))
 }
 
-/// Get the path for the memory database file
+/// Get the path for the memory database directory (LanceDB)
 ///
-/// Returns: `<config_dir>/memory.db`
+/// Returns: `<config_dir>/memory/`
+///
+/// Creates the directory if it doesn't exist.
 pub fn get_memory_db_path() -> Result<PathBuf> {
-    Ok(get_config_dir()?.join("memory.db"))
+    let memory_dir = get_config_dir()?.join("memory");
+    if !memory_dir.exists() {
+        std::fs::create_dir_all(&memory_dir)
+            .map_err(|e| AlephError::config(format!("Failed to create memory directory: {}", e)))?;
+    }
+    Ok(memory_dir)
 }
 
 /// Get embedding model directory
@@ -161,14 +168,46 @@ pub fn get_output_dir_string() -> Result<String> {
     Ok(get_output_dir()?.to_string_lossy().to_string())
 }
 
-/// Get the data directory for application data
+/// Get the data directory for operational databases
 ///
-/// This is an alias for get_config_dir() as all Aleph data is stored
-/// under the unified config directory.
+/// Returns: `<config_dir>/data/`
 ///
-/// Returns: `<config_dir>/` (same as get_config_dir)
+/// Creates the directory if it doesn't exist.
 pub fn get_data_dir() -> Result<PathBuf> {
-    get_config_dir()
+    let data_dir = get_config_dir()?.join("data");
+    if !data_dir.exists() {
+        std::fs::create_dir_all(&data_dir)
+            .map_err(|e| AlephError::config(format!("Failed to create data directory: {}", e)))?;
+    }
+    Ok(data_dir)
+}
+
+/// Get the path for the devices database
+///
+/// Returns: `<data_dir>/devices.db`
+pub fn get_devices_db_path() -> Result<PathBuf> {
+    Ok(get_data_dir()?.join("devices.db"))
+}
+
+/// Get the path for the security database
+///
+/// Returns: `<data_dir>/security.db`
+pub fn get_security_db_path() -> Result<PathBuf> {
+    Ok(get_data_dir()?.join("security.db"))
+}
+
+/// Get the path for the pairing database
+///
+/// Returns: `<data_dir>/pairing.db`
+pub fn get_pairing_db_path() -> Result<PathBuf> {
+    Ok(get_data_dir()?.join("pairing.db"))
+}
+
+/// Get the path for the sessions database
+///
+/// Returns: `<data_dir>/sessions.db`
+pub fn get_sessions_db_path() -> Result<PathBuf> {
+    Ok(get_data_dir()?.join("sessions.db"))
 }
 
 // ============================================================================
@@ -318,11 +357,11 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
 
 /// Get the tool output directory for storing full outputs
 ///
-/// Returns: `<data_dir>/tool_output/`
+/// Returns: `<config_dir>/tool_output/`
 ///
 /// The directory is created if it doesn't exist.
 pub fn get_tool_output_dir() -> Result<PathBuf> {
-    let output_dir = get_data_dir()?.join("tool_output");
+    let output_dir = get_config_dir()?.join("tool_output");
 
     // Create directory if it doesn't exist
     if !output_dir.exists() {
@@ -331,6 +370,28 @@ pub fn get_tool_output_dir() -> Result<PathBuf> {
     }
 
     Ok(output_dir)
+}
+
+/// Migrate legacy flat database files from ~/.aleph/*.db to ~/.aleph/data/*.db
+///
+/// This handles the transition from the old flat layout where databases were
+/// stored directly in ~/.aleph/ to the new organized layout under ~/.aleph/data/.
+/// Only moves files that exist at the old location and don't exist at the new location.
+pub fn migrate_legacy_db_files() {
+    let Ok(config_dir) = get_config_dir() else { return };
+    let Ok(data_dir) = get_data_dir() else { return };
+
+    for name in &["devices.db", "security.db", "pairing.db", "sessions.db"] {
+        let old = config_dir.join(name);
+        let new = data_dir.join(name);
+        if old.exists() && !new.exists() {
+            if let Err(e) = std::fs::rename(&old, &new) {
+                tracing::warn!("Failed to migrate {}: {}", name, e);
+            } else {
+                tracing::info!("Migrated {} to {}", old.display(), new.display());
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -157,9 +157,8 @@ pub struct SessionManagerConfig {
 impl Default for SessionManagerConfig {
     fn default() -> Self {
         Self {
-            db_path: dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join(".aleph/sessions.db"),
+            db_path: crate::utils::paths::get_sessions_db_path()
+                .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_sessions.db")),
             max_messages: 100,
             compaction_keep: 50,
             auto_reset_hour: Some(4), // 4 AM

@@ -171,9 +171,16 @@ impl Config {
         } else {
             info!(
                 path = %path.display(),
-                "Config file not found, using default configuration"
+                "Config file not found, generating default configuration"
             );
-            Ok(Self::default())
+            let config = Self::default();
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            if let Err(e) = config.save() {
+                warn!("Failed to save default config: {}", e);
+            }
+            Ok(config)
         }
     }
 

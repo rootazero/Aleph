@@ -1,13 +1,12 @@
 //! Device management command handlers
 
-use crate::commands::pairing::get_device_store_path;
-
 /// Handle devices list command
 #[cfg(feature = "gateway")]
 pub fn handle_devices_list() -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::device_store::DeviceStore;
 
-    let store_path = get_device_store_path();
+    let store_path = alephcore::utils::paths::get_devices_db_path()
+        .map_err(|e| format!("Failed to get device store path: {}", e))?;
     if !store_path.exists() {
         println!("No approved devices");
         return Ok(());
@@ -39,7 +38,8 @@ pub fn handle_devices_list() -> Result<(), Box<dyn std::error::Error>> {
 pub fn handle_devices_revoke(device_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::device_store::DeviceStore;
 
-    let store_path = get_device_store_path();
+    let store_path = alephcore::utils::paths::get_devices_db_path()
+        .map_err(|e| format!("Failed to get device store path: {}", e))?;
     if !store_path.exists() {
         eprintln!("Error: No device store found");
         std::process::exit(1);
