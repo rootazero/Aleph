@@ -7,7 +7,7 @@ use crate::context::DashboardState;
 
 const OFFICIAL_SKILLS_URL: &str = "https://github.com/rootazero/AlephSkills";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SkillInfo {
     pub id: String,
     pub name: String,
@@ -17,6 +17,12 @@ pub struct SkillInfo {
     pub triggers: Vec<String>,
     #[serde(default)]
     pub allowed_tools: Vec<String>,
+    #[serde(default = "default_ecosystem")]
+    pub ecosystem: String,
+}
+
+fn default_ecosystem() -> String {
+    "aleph".to_string()
 }
 
 /// Load skills list from Gateway (with retry for WebSocket timing)
@@ -59,6 +65,14 @@ pub fn SkillsView() -> impl IntoView {
     let show_install_dialog = RwSignal::new(false);
     let installing_official = RwSignal::new(false);
 
+    // Derived signals for filtering by ecosystem
+    let aleph_skills = Memo::new(move |_| {
+        skills.get().into_iter().filter(|s| s.ecosystem == "aleph").collect::<Vec<_>>()
+    });
+    let claude_skills = Memo::new(move |_| {
+        skills.get().into_iter().filter(|s| s.ecosystem == "claude").collect::<Vec<_>>()
+    });
+
     // Load skills when connected
     Effect::new(move || {
         if state.is_connected.get() {
@@ -76,7 +90,6 @@ pub fn SkillsView() -> impl IntoView {
             match state.rpc_call("markdown_skills.install", json!({ "url": OFFICIAL_SKILLS_URL, "flatten": true })).await {
                 Ok(_) => {
                     installing_official.set(false);
-                    // Reload skills list
                     load_skills(state, skills, loading, error);
                 }
                 Err(e) => {
@@ -132,59 +145,65 @@ pub fn SkillsView() -> impl IntoView {
                     </div>
                 })}
 
-                // Skills List Section
-                <div class="space-y-4">
-                    <h2 class="text-lg font-medium text-text-primary">
-                        {move || format!("Installed Skills ({})", skills.get().len())}
-                    </h2>
+                // Loading state
+                {move || {
+                    if loading.get() {
+                        Some(view! {
+                            <div class="flex items-center justify-center py-12">
+                                <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                            </div>
+                        })
+                    } else {
+                        None
+                    }
+                }}
 
-                    {move || {
-                        if loading.get() {
-                            view! {
-                                <div class="flex items-center justify-center py-12">
-                                    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                                </div>
-                            }.into_any()
-                        } else if skills.get().is_empty() {
-                            view! {
-                                <div class="text-center py-12 border border-dashed border-border rounded">
-                                    <div class="text-4xl mb-4">"✨"</div>
-                                    <p class="text-text-secondary">"No skills installed"</p>
-                                    <p class="text-xs text-text-tertiary mt-1">
-                                        "Install skills to extend AI capabilities"
-                                    </p>
-                                </div>
-                            }.into_any()
-                        } else {
-                            view! {
-                                <div class="space-y-3">
-                                    <For
-                                        each=move || skills.get()
-                                        key=|skill| skill.id.clone()
-                                        children=move |skill| {
-                                            view! {
-                                                <SkillCard
-                                                    skill=skill
-                                                    skills=skills
-                                                    loading=loading
-                                                    error=error
-                                                />
-                                            }
-                                        }
-                                    />
-                                </div>
-                            }.into_any()
-                        }
-                    }}
-                </div>
+                // Aleph Official Skills Section
+                <Show when=move || !loading.get()>
+                    <SkillSection
+                        title="Aleph Skills"
+                        icon="A"
+                        icon_bg="bg-primary-subtle"
+                        icon_color="text-primary"
+                        badge_bg="bg-primary-subtle"
+                        badge_text="text-primary"
+                        description="Native Aleph skills from ~/.aleph/skills"
+                        skills_list=aleph_skills
+                        all_skills=skills
+                        loading=loading
+                        error=error
+                        empty_text="No Aleph skills installed"
+                        empty_hint="Click 'Install Official Skills' to get started"
+                    />
+                </Show>
+
+                // Claude Compatible Skills Section
+                <Show when=move || !loading.get()>
+                    <SkillSection
+                        title="Claude Skills"
+                        icon="C"
+                        icon_bg="bg-[#da7756]/10"
+                        icon_color="text-[#da7756]"
+                        badge_bg="bg-[#da7756]/10"
+                        badge_text="text-[#da7756]"
+                        description="Claude Code compatible skills from ~/.claude/skills"
+                        skills_list=claude_skills
+                        all_skills=skills
+                        loading=loading
+                        error=error
+                        empty_text="No Claude skills installed"
+                        empty_hint="Add SKILL.md files to ~/.claude/skills/"
+                    />
+                </Show>
 
                 // Info Box
                 <div class="p-4 bg-primary-subtle border border-primary/20 rounded">
                     <div class="flex items-start gap-2">
                         <span class="text-info text-sm">"ℹ️"</span>
-                        <span class="text-sm text-info">
-                            "Skills extend the AI with specialized capabilities. Install skills from Git repositories or local folders."
-                        </span>
+                        <div class="text-sm text-info space-y-1">
+                            <p>"Skills extend the AI with specialized capabilities."</p>
+                            <p>"Aleph skills: ~/.aleph/skills/ | Claude skills: ~/.claude/skills/"</p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -198,6 +217,71 @@ pub fn SkillsView() -> impl IntoView {
                     error=error
                 />
             </Show>
+        </div>
+    }
+}
+
+#[component]
+fn SkillSection(
+    title: &'static str,
+    icon: &'static str,
+    icon_bg: &'static str,
+    icon_color: &'static str,
+    badge_bg: &'static str,
+    badge_text: &'static str,
+    description: &'static str,
+    skills_list: Memo<Vec<SkillInfo>>,
+    all_skills: RwSignal<Vec<SkillInfo>>,
+    loading: RwSignal<bool>,
+    error: RwSignal<Option<String>>,
+    empty_text: &'static str,
+    empty_hint: &'static str,
+) -> impl IntoView {
+    view! {
+        <div class="space-y-3">
+            <div class="flex items-center gap-3">
+                <div class={format!("w-7 h-7 rounded flex items-center justify-center flex-shrink-0 font-bold text-sm {} {}", icon_bg, icon_color)}>
+                    {icon}
+                </div>
+                <div class="flex items-center gap-2">
+                    <h2 class="text-lg font-medium text-text-primary">{title}</h2>
+                    <span class={format!("px-2 py-0.5 rounded-full text-xs font-medium {} {}", badge_bg, badge_text)}>
+                        {move || format!("{}", skills_list.get().len())}
+                    </span>
+                </div>
+                <span class="text-xs text-text-tertiary">{description}</span>
+            </div>
+
+            {move || {
+                let list = skills_list.get();
+                if list.is_empty() {
+                    view! {
+                        <div class="text-center py-6 border border-dashed border-border rounded">
+                            <p class="text-sm text-text-secondary">{empty_text}</p>
+                            <p class="text-xs text-text-tertiary mt-1">{empty_hint}</p>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div class="space-y-2">
+                            <For
+                                each=move || skills_list.get()
+                                key=|skill| skill.id.clone()
+                                children=move |skill| {
+                                    view! {
+                                        <SkillCard
+                                            skill=skill
+                                            skills=all_skills
+                                            loading=loading
+                                            error=error
+                                        />
+                                    }
+                                }
+                            />
+                        </div>
+                    }.into_any()
+                }
+            }}
         </div>
     }
 }

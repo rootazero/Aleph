@@ -53,6 +53,9 @@ pub struct SkillMetadata {
 
     /// Source of this skill (project or global)
     pub source: SkillSource,
+
+    /// Ecosystem (aleph or claude)
+    pub ecosystem: SkillEcosystem,
 }
 
 /// Where a skill was discovered from
@@ -63,6 +66,16 @@ pub enum SkillSource {
     Project,
     /// Global user-level skill (~/.aleph/skills or ~/.claude/skills)
     Global,
+}
+
+/// Which ecosystem a skill belongs to
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SkillEcosystem {
+    /// Aleph native skill (from .aleph/skills)
+    Aleph,
+    /// Claude Code compatible skill (from .claude/skills)
+    Claude,
 }
 
 // ============================================================================
@@ -325,12 +338,18 @@ impl SkillsRegistry {
                         );
 
                         // Create metadata for Progressive Disclosure
+                        let ecosystem = if skills_dir.to_string_lossy().contains("/.claude/") {
+                            SkillEcosystem::Claude
+                        } else {
+                            SkillEcosystem::Aleph
+                        };
                         let meta = SkillMetadata {
                             id: skill_id.clone(),
                             name: skill.frontmatter.name.clone(),
                             description: skill.frontmatter.description.clone(),
                             location: path.clone(),
                             source,
+                            ecosystem,
                         };
                         metadata.insert(skill_id.clone(), meta);
 

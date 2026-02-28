@@ -20,6 +20,8 @@ pub struct SkillInfoJson {
     pub triggers: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub allowed_tools: Vec<String>,
+    /// Ecosystem: "aleph" or "claude"
+    pub ecosystem: String,
 }
 
 impl From<SkillInfo> for SkillInfoJson {
@@ -30,6 +32,7 @@ impl From<SkillInfo> for SkillInfoJson {
             description: info.description,
             triggers: info.triggers,
             allowed_tools: info.allowed_tools,
+            ecosystem: info.ecosystem,
         }
     }
 }

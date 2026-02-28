@@ -171,6 +171,19 @@ impl Skill {
             description: self.frontmatter.description.clone(),
             triggers: self.frontmatter.triggers.clone(),
             allowed_tools: self.frontmatter.allowed_tools.clone(),
+            ecosystem: "aleph".to_string(),
+        }
+    }
+
+    /// Convert to SkillInfo with ecosystem tag
+    pub fn to_info_with_ecosystem(&self, ecosystem: &str) -> SkillInfo {
+        SkillInfo {
+            id: self.id.clone(),
+            name: self.frontmatter.name.clone(),
+            description: self.frontmatter.description.clone(),
+            triggers: self.frontmatter.triggers.clone(),
+            allowed_tools: self.frontmatter.allowed_tools.clone(),
+            ecosystem: ecosystem.to_string(),
         }
     }
 }
@@ -190,6 +203,8 @@ pub struct SkillInfo {
     pub triggers: Vec<String>,
     /// Allowed tools
     pub allowed_tools: Vec<String>,
+    /// Ecosystem (aleph or claude)
+    pub ecosystem: String,
 }
 
 // Re-exports
@@ -310,16 +325,27 @@ pub fn initialize_builtin_skills(bundle_skills_dir: &PathBuf) -> Result<()> {
 ///
 /// Scans multiple skills directories and returns info for each valid skill.
 /// Uses multi-location discovery to support both ~/.aleph/skills and ~/.claude/skills.
+/// Returns skills with ecosystem tag (aleph/claude) derived from their source directory.
 pub fn list_installed_skills() -> Result<Vec<SkillInfo>> {
-    // Use multi-location discovery to support both ~/.aleph/skills and ~/.claude/skills
-    // This enables Claude Code compatibility by scanning:
-    // - Project level: .aleph/skills/, .claude/skills/
-    // - Global level: ~/.aleph/skills, ~/.claude/skills
+    use crate::skills::registry::SkillEcosystem;
+
     let registry = SkillsRegistry::with_auto_discover(None)?;
     registry.load_all()?;
 
-    let skills = registry.list_skills();
-    Ok(skills.into_iter().map(|s| s.to_info()).collect())
+    let metadata_list = registry.list_skill_metadata();
+    let mut result = Vec::new();
+
+    for meta in &metadata_list {
+        if let Some(skill) = registry.get_skill(&meta.id) {
+            let eco = match meta.ecosystem {
+                SkillEcosystem::Aleph => "aleph",
+                SkillEcosystem::Claude => "claude",
+            };
+            result.push(skill.to_info_with_ecosystem(eco));
+        }
+    }
+
+    Ok(result)
 }
 
 /// Delete a skill by ID
