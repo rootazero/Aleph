@@ -123,6 +123,11 @@ pub mod worker;
 pub mod event_bus;
 pub mod events;
 
+#[cfg(test)]
+mod proptest_budget;
+#[cfg(test)]
+mod proptest_types;
+
 // Re-exports for convenient access
 // Interceptor directives
 pub use interceptor::{PoeLoopCallback, StepDirective, StepEvaluator};
