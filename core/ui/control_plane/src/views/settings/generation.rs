@@ -131,7 +131,7 @@ fn OutputDirSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                         type="text"
                         value=move || output_dir.get()
                         on:input=move |ev| output_dir.set(event_target_value(&ev))
-                        placeholder="~/Downloads/aleph-gen"
+                        placeholder="~/.aleph/generation"
                         class="w-full px-3 py-2 border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <p class="mt-1 text-xs text-text-tertiary">
