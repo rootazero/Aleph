@@ -121,6 +121,7 @@ final class HaloWindow: NSObject {
         // WKWebView with transparent background
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        config.websiteDataStore = .nonPersistent()
 
         let wv = WKWebView(frame: newPanel.contentView!.bounds, configuration: config)
         wv.autoresizingMask = [.width, .height]
