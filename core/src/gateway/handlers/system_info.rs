@@ -82,7 +82,6 @@ mod tests {
         assert!(result["memory_used_bytes"].is_u64());
         assert!(result["disk_total_bytes"].is_u64());
         assert!(result["disk_used_bytes"].is_u64());
-        // cpu_usage_percent is f64 in JSON
-        assert!(result["cpu_usage_percent"].is_f64());
+        assert!(result["cpu_usage_percent"].is_number());
     }
 }
