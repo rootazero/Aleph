@@ -18,6 +18,17 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, IN
 use super::parse_params;
 use super::super::router::{AgentRouter, SessionKey};
 
+/// A file attachment sent with a message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Attachment {
+    /// File name
+    pub name: String,
+    /// MIME type (e.g., "image/png", "application/pdf")
+    pub mime_type: String,
+    /// Base64-encoded file content
+    pub data: String,
+}
+
 /// Parameters for agent.run request
 #[derive(Debug, Clone, Deserialize)]
 pub struct AgentRunParams {
@@ -42,6 +53,9 @@ pub struct AgentRunParams {
     /// Default is "minimal" if not specified.
     #[serde(default)]
     pub thinking: Option<String>,
+    /// File attachments sent with the message
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
 
 fn default_stream() -> bool {
@@ -450,6 +464,7 @@ mod tests {
             peer_id: None,
             stream: false,
             thinking: None,
+            attachments: vec![],
         };
 
         let result = manager.start_run(params).await.unwrap();
@@ -470,6 +485,7 @@ mod tests {
             peer_id: None,
             stream: false,
             thinking: None,
+            attachments: vec![],
         };
 
         let result = manager.start_run(params).await.unwrap();

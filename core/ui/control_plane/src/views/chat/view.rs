@@ -3,10 +3,20 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use wasm_bindgen::prelude::*;
 use crate::context::DashboardState;
-use crate::api::chat::ChatApi;
+use crate::api::chat::{ChatApi, ChatAttachment};
 use super::state::{ChatState, ChatPhase, ChatMessage};
 use super::events::subscribe_run_events;
+
+/// A file attachment pending upload.
+#[derive(Clone, Debug)]
+struct FileAttachment {
+    name: String,
+    mime_type: String,
+    data_base64: String,
+    size: u64,
+}
 
 /// Top-level Chat view component.
 #[component]
@@ -158,31 +168,58 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
     }
 }
 
-/// Text input area with send button.
+/// Format file size as human-readable string.
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// Text input area with send button and file attachments.
 #[component]
 fn InputArea() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let input_text = RwSignal::new(String::new());
     let is_sending = RwSignal::new(false);
+    let attachments: RwSignal<Vec<FileAttachment>> = RwSignal::new(Vec::new());
+
+    // NodeRef for the hidden file input
+    let file_input_ref = NodeRef::<leptos::html::Input>::new();
 
     let send_message = move || {
         if is_sending.get_untracked() { return; }
         let text = input_text.get_untracked().trim().to_string();
-        if text.is_empty() { return; }
+        let files = attachments.get_untracked();
+        if text.is_empty() && files.is_empty() { return; }
 
         is_sending.set(true);
         input_text.set(String::new());
+        attachments.set(Vec::new());
         chat.push_user_message(&text);
+
+        // Convert to API attachments
+        let api_attachments: Vec<ChatAttachment> = files
+            .into_iter()
+            .map(|f| ChatAttachment {
+                name: f.name,
+                mime_type: f.mime_type,
+                data_base64: f.data_base64,
+                size: f.size,
+            })
+            .collect();
 
         let session_key = chat.session_key.get();
         spawn_local(async move {
             let dashboard = expect_context::<DashboardState>();
             let chat = expect_context::<ChatState>();
             let sk = session_key.as_deref();
-            match ChatApi::send(&dashboard, &text, sk).await {
+            match ChatApi::send(&dashboard, &text, sk, api_attachments).await {
                 Ok(resp) => {
                     chat.session_key.set(Some(resp.session_key));
-                    // run_accepted event will trigger start_assistant_message
                 }
                 Err(e) => {
                     chat.error_message.set(Some(e.clone()));
@@ -201,8 +238,83 @@ fn InputArea() -> impl IntoView {
     };
 
     let can_send = Memo::new(move |_| {
-        !input_text.get().trim().is_empty() && !is_sending.get()
+        (!input_text.get().trim().is_empty() || !attachments.get().is_empty()) && !is_sending.get()
     });
+
+    // Click the hidden file input
+    let on_attach_click = move |_: web_sys::MouseEvent| {
+        if let Some(input) = file_input_ref.get() {
+            let el: &web_sys::HtmlInputElement = &input;
+            el.click();
+        }
+    };
+
+    // Handle file selection
+    let on_file_change = move |_ev: web_sys::Event| {
+        let Some(input) = file_input_ref.get() else { return };
+        let el: &web_sys::HtmlInputElement = &input;
+        let Some(file_list) = el.files() else { return };
+
+        for i in 0..file_list.length() {
+            let Some(file) = file_list.get(i) else { continue };
+            let name = file.name();
+            let mime_type = file.type_();
+            let size = file.size() as u64;
+
+            let reader = match web_sys::FileReader::new() {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            let reader_clone = reader.clone();
+            let attachments_signal = attachments;
+            let file_name = name.clone();
+            let file_mime = if mime_type.is_empty() {
+                "application/octet-stream".to_string()
+            } else {
+                mime_type
+            };
+
+            let onload = Closure::wrap(Box::new(move || {
+                if let Ok(result) = reader_clone.result() {
+                    if let Some(data_url) = result.as_string() {
+                        // data URL format: "data:<mime>;base64,<data>"
+                        let base64_data = data_url
+                            .split(',')
+                            .nth(1)
+                            .unwrap_or("")
+                            .to_string();
+
+                        let attachment = FileAttachment {
+                            name: file_name.clone(),
+                            mime_type: file_mime.clone(),
+                            data_base64: base64_data,
+                            size,
+                        };
+
+                        attachments_signal.update(|list| list.push(attachment));
+                    }
+                }
+            }) as Box<dyn Fn()>);
+
+            reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+            onload.forget();
+
+            let _ = reader.read_as_data_url(&file);
+        }
+
+        // Reset input so the same file can be re-selected
+        el.set_value("");
+    };
+
+    // Remove attachment by index
+    let remove_attachment = move |idx: usize| {
+        attachments.update(|list| {
+            if idx < list.len() {
+                list.remove(idx);
+            }
+        });
+    };
 
     // Abort button handler
     let on_abort = move |_: web_sys::MouseEvent| {
@@ -216,7 +328,70 @@ fn InputArea() -> impl IntoView {
 
     view! {
         <div class="border-t border-border px-4 py-3">
+            // Attachment preview bar
+            <Show when=move || !attachments.get().is_empty()>
+                <div class="flex flex-wrap gap-2 mb-2">
+                    <For
+                        each=move || {
+                            attachments.get().into_iter().enumerate().collect::<Vec<_>>()
+                        }
+                        key=|(idx, f)| format!("{}:{}", idx, f.name)
+                        children=move |(idx, file)| {
+                            let file_name = file.name.clone();
+                            let file_size = format_size(file.size);
+                            view! {
+                                <div class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg
+                                            bg-surface-raised border border-border text-xs text-text-secondary">
+                                    // File icon
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 text-text-tertiary shrink-0"
+                                         viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd"
+                                              d="M4 4a2 2 0 0 1 2-2h4.586A2 2 0 0 1 12 2.586L15.414 6A2 2 0 0 1 16 7.414V16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4Z"
+                                              clip-rule="evenodd" />
+                                    </svg>
+                                    <span class="max-w-[120px] truncate">{file_name}</span>
+                                    <span class="text-text-tertiary">{file_size}</span>
+                                    // Delete button
+                                    <button
+                                        class="ml-0.5 p-0.5 rounded hover:bg-danger/10 hover:text-danger transition-colors"
+                                        title="Remove"
+                                        on:click=move |_| remove_attachment(idx)
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                                            <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            }
+                        }
+                    />
+                </div>
+            </Show>
+
             <div class="flex items-end gap-2">
+                // Hidden file input
+                <input
+                    type="file"
+                    multiple=true
+                    class="hidden"
+                    node_ref=file_input_ref
+                    on:change=on_file_change
+                />
+
+                // Attachment button (paperclip)
+                <button
+                    class="p-2.5 rounded-xl text-text-secondary hover:text-text-primary
+                           hover:bg-surface-raised transition-colors"
+                    title="Attach files"
+                    on:click=on_attach_click
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd"
+                              d="M15.621 4.379a3 3 0 0 0-4.242 0l-7 7a3 3 0 0 0 4.241 4.243h.001l.497-.5a.75.75 0 0 1 1.064 1.057l-.498.501-.002.002a4.5 4.5 0 0 1-6.364-6.364l7-7a4.5 4.5 0 0 1 6.368 6.36l-3.455 3.553A2.625 2.625 0 1 1 9.52 9.52l3.45-3.451a.75.75 0 1 1 1.061 1.06l-3.45 3.451a1.125 1.125 0 0 0 1.587 1.595l3.454-3.553a3 3 0 0 0 0-4.242Z"
+                              clip-rule="evenodd" />
+                    </svg>
+                </button>
+
                 <textarea
                     class="flex-1 resize-none rounded-xl border border-border bg-surface-sunken px-4 py-2.5
                            text-sm text-text-primary placeholder:text-text-tertiary
