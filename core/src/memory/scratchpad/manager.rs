@@ -2,7 +2,12 @@
 
 //! Scratchpad Manager
 //!
-//! Manages the lifecycle of project-local scratchpad files.
+//! Manages the lifecycle of project scratchpad files stored under
+//! `~/.aleph/projects/<project_id>/`.
+//!
+//! Aleph is conversation-driven — projects are generated artifacts managed
+//! by Aleph, not user-created directories entered via CLI. All project
+//! working memory lives in the unified `~/.aleph/` workspace.
 
 use crate::error::AlephError;
 use std::path::PathBuf;
@@ -13,8 +18,6 @@ use super::template::{generate_scratchpad, DEFAULT_TEMPLATE};
 /// Configuration for scratchpad behavior
 #[derive(Debug, Clone)]
 pub struct ScratchpadConfig {
-    /// Directory name within project root (default: ".aleph")
-    pub dir_name: String,
     /// Scratchpad filename (default: "scratchpad.md")
     pub filename: String,
     /// History log filename (default: "session_history.log")
@@ -26,7 +29,6 @@ pub struct ScratchpadConfig {
 impl Default for ScratchpadConfig {
     fn default() -> Self {
         Self {
-            dir_name: ".aleph".to_string(),
             filename: "scratchpad.md".to_string(),
             history_filename: "session_history.log".to_string(),
             backup_on_write: true,
@@ -34,52 +36,68 @@ impl Default for ScratchpadConfig {
     }
 }
 
-/// Manages project-local scratchpad files
+/// Manages project scratchpad files under `~/.aleph/projects/<project_id>/`
 pub struct ScratchpadManager {
-    project_root: PathBuf,
+    /// Base directory for this project's scratchpad files
+    project_dir: PathBuf,
     session_id: String,
     config: ScratchpadConfig,
 }
 
 impl ScratchpadManager {
     /// Create a new ScratchpadManager for a project
-    pub fn new(project_root: PathBuf, session_id: &str) -> Self {
+    ///
+    /// Files are stored under `~/.aleph/projects/<project_id>/`.
+    /// Falls back to a provided base directory for testing.
+    pub fn new(project_id: &str, session_id: &str) -> Self {
+        let project_dir = crate::utils::paths::get_project_dir(project_id)
+            .unwrap_or_else(|_| PathBuf::from(".").join(project_id));
+
         Self {
-            project_root,
+            project_dir,
+            session_id: session_id.to_string(),
+            config: ScratchpadConfig::default(),
+        }
+    }
+
+    /// Create with an explicit base directory (for testing)
+    pub fn with_dir(project_dir: PathBuf, session_id: &str) -> Self {
+        Self {
+            project_dir,
             session_id: session_id.to_string(),
             config: ScratchpadConfig::default(),
         }
     }
 
     /// Create with custom configuration
-    pub fn with_config(project_root: PathBuf, session_id: &str, config: ScratchpadConfig) -> Self {
+    pub fn with_config(project_dir: PathBuf, session_id: &str, config: ScratchpadConfig) -> Self {
         Self {
-            project_root,
+            project_dir,
             session_id: session_id.to_string(),
             config,
         }
     }
 
-    /// Get the .aleph directory path
-    pub fn aleph_dir(&self) -> PathBuf {
-        self.project_root.join(&self.config.dir_name)
+    /// Get the project directory path
+    pub fn project_dir(&self) -> &PathBuf {
+        &self.project_dir
     }
 
     /// Get the scratchpad file path
     pub fn scratchpad_path(&self) -> PathBuf {
-        self.aleph_dir().join(&self.config.filename)
+        self.project_dir.join(&self.config.filename)
     }
 
     /// Get the history log path
     pub fn history_path(&self) -> PathBuf {
-        self.aleph_dir().join(&self.config.history_filename)
+        self.project_dir.join(&self.config.history_filename)
     }
 
-    /// Ensure the .aleph directory exists
+    /// Ensure the project directory exists
     pub async fn ensure_dir(&self) -> Result<(), AlephError> {
-        fs::create_dir_all(self.aleph_dir())
+        fs::create_dir_all(&self.project_dir)
             .await
-            .map_err(|e| AlephError::other(format!("Failed to create .aleph dir: {}", e)))
+            .map_err(|e| AlephError::other(format!("Failed to create project dir: {}", e)))
     }
 
     /// Check if scratchpad file exists
@@ -270,20 +288,20 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn test_manager_new_creates_directory() {
+    async fn test_manager_creates_directory() {
         let temp = tempdir().unwrap();
-        let project_root = temp.path().to_path_buf();
+        let project_dir = temp.path().join("test-project");
 
-        let manager = ScratchpadManager::new(project_root.clone(), "test-session");
+        let manager = ScratchpadManager::with_dir(project_dir.clone(), "test-session");
         manager.ensure_dir().await.unwrap();
 
-        assert!(manager.aleph_dir().exists());
+        assert!(manager.project_dir().exists());
     }
 
     #[tokio::test]
     async fn test_initialize_creates_file() {
         let temp = tempdir().unwrap();
-        let manager = ScratchpadManager::new(temp.path().to_path_buf(), "sess-123");
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess-123");
 
         manager.initialize(Some("Test objective")).await.unwrap();
 
@@ -296,7 +314,7 @@ mod tests {
     #[tokio::test]
     async fn test_has_content_empty() {
         let temp = tempdir().unwrap();
-        let manager = ScratchpadManager::new(temp.path().to_path_buf(), "sess");
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
 
         manager.initialize(None).await.unwrap();
 
@@ -306,7 +324,7 @@ mod tests {
     #[tokio::test]
     async fn test_has_content_with_objective() {
         let temp = tempdir().unwrap();
-        let manager = ScratchpadManager::new(temp.path().to_path_buf(), "sess");
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
 
         manager.initialize(Some("Build feature X")).await.unwrap();
 
@@ -316,7 +334,7 @@ mod tests {
     #[tokio::test]
     async fn test_append_note() {
         let temp = tempdir().unwrap();
-        let manager = ScratchpadManager::new(temp.path().to_path_buf(), "sess");
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
 
         manager.initialize(None).await.unwrap();
         manager.append_note("This is a test note").await.unwrap();
@@ -328,7 +346,7 @@ mod tests {
     #[tokio::test]
     async fn test_set_plan() {
         let temp = tempdir().unwrap();
-        let manager = ScratchpadManager::new(temp.path().to_path_buf(), "sess");
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
 
         manager.initialize(None).await.unwrap();
         manager
@@ -345,7 +363,7 @@ mod tests {
     #[tokio::test]
     async fn test_complete_item() {
         let temp = tempdir().unwrap();
-        let manager = ScratchpadManager::new(temp.path().to_path_buf(), "sess");
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
 
         manager.initialize(None).await.unwrap();
         manager.set_plan(&["Step 1", "Step 2"]).await.unwrap();
@@ -359,7 +377,7 @@ mod tests {
     #[tokio::test]
     async fn test_backup_on_write() {
         let temp = tempdir().unwrap();
-        let manager = ScratchpadManager::new(temp.path().to_path_buf(), "sess");
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
 
         manager.write("First version").await.unwrap();
         manager.write("Second version").await.unwrap();
