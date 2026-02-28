@@ -29,6 +29,12 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
 
                 match (providers_result, presets_result) {
                     (Ok(list), Ok(preset_list)) => {
+                        // Auto-select the active provider on first load
+                        if selected_provider_id.get_untracked().is_none() {
+                            if let Some(active) = list.iter().find(|p| p.is_active) {
+                                set_selected_provider_id.set(Some(active.id.clone()));
+                            }
+                        }
                         set_providers.set(list);
                         set_presets.set(preset_list);
                         set_is_loading.set(false);
@@ -108,9 +114,6 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                                                 " \u{00B7} "
                                                                 {format!("{} dimensions", active.dimensions)}
                                                             </div>
-                                                        </div>
-                                                        <div class="px-3 py-1 bg-success-subtle text-success text-sm font-medium rounded">
-                                                            "Connected"
                                                         </div>
                                                     </div>
                                                 </div>
