@@ -107,7 +107,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                         } else {
                             let presets = current_presets();
                             view! {
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-6">
+                                <div class="grid grid-cols-1 gap-3 p-6">
                                     {presets.into_iter().map(|preset| {
                                         let preset_id = preset.id.clone();
                                         let configured = is_configured(&preset_id);

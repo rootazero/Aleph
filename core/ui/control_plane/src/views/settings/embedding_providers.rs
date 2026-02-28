@@ -141,7 +141,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                                 }.into_any()
                                             } else {
                                                 view! {
-                                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                    <div class="grid grid-cols-1 gap-3">
                                                         {provider_list.into_iter().map(|p| {
                                                             let pid = p.id.clone();
                                                             let is_selected = selected_provider_id.get() == Some(pid.clone());
@@ -752,7 +752,7 @@ fn AddProviderPanel(
             // Preset selector
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
                 <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"PRESET"</h3>
-                <div class="grid grid-cols-2 gap-2">
+                <div class="grid grid-cols-1 gap-2">
                     {move || {
                         let preset_list = presets.get();
                         preset_list.into_iter().map(|p| {
