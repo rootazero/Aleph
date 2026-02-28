@@ -250,11 +250,6 @@ impl SystemApi {
         serde_json::from_value(result)
             .map_err(|e| format!("Failed to parse system info: {}", e))
     }
-
-    /// Get system health status
-    pub async fn health(state: &DashboardState) -> Result<Value, String> {
-        state.rpc_call("system.health", Value::Null).await
-    }
 }
 
 // ============================================================================
