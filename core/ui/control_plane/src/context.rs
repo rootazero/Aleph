@@ -125,7 +125,7 @@ impl DashboardState {
     /// Subscribe to a specific event topic on the Gateway
     pub async fn subscribe_topic(&self, pattern: &str) -> Result<(), String> {
         self.rpc_call("events.subscribe", serde_json::json!({
-            "pattern": pattern
+            "topics": [pattern]
         })).await?;
         Ok(())
     }
@@ -133,7 +133,7 @@ impl DashboardState {
     /// Unsubscribe from an event topic
     pub async fn unsubscribe_topic(&self, pattern: &str) -> Result<(), String> {
         self.rpc_call("events.unsubscribe", serde_json::json!({
-            "pattern": pattern
+            "topics": [pattern]
         })).await?;
         Ok(())
     }
