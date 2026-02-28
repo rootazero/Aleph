@@ -5,35 +5,21 @@
 use serde_json::json;
 use sysinfo::{Disks, System};
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 
 /// Handle system.info requests
 ///
-/// Returns a JSON object with:
-/// - `version`: Crate version from Cargo.toml
-/// - `platform`: OS and architecture (e.g. "macos-aarch64")
-/// - `uptime_secs`: System uptime in seconds
-/// - `cpu_usage_percent`: Current global CPU usage percentage
-/// - `cpu_count`: Number of logical CPUs
-/// - `memory_used_bytes`: Used memory in bytes
-/// - `memory_total_bytes`: Total memory in bytes
-/// - `disk_used_bytes`: Total disk space used across all disks
-/// - `disk_total_bytes`: Total disk capacity across all disks
-///
-/// # Example Request
-///
-/// ```json
-/// {"jsonrpc":"2.0","method":"system.info","id":1}
-/// ```
+/// Returns a JSON object with real system metrics.
 pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
     // Spawn blocking because sysinfo does synchronous I/O
-    let info = tokio::task::spawn_blocking(|| {
-        let mut sys = System::new_all();
+    let result = tokio::task::spawn_blocking(|| {
+        let mut sys = System::new();
 
         // CPU requires two refreshes with a gap for accurate reading
         sys.refresh_cpu_all();
         std::thread::sleep(std::time::Duration::from_millis(200));
         sys.refresh_cpu_all();
+        sys.refresh_memory();
 
         let cpu_usage = sys.global_cpu_usage();
         let cpu_count = sys.cpus().len();
@@ -63,10 +49,16 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
             "disk_total_bytes": disk_total,
         })
     })
-    .await
-    .unwrap_or_else(|e| json!({"error": format!("Failed to collect system info: {}", e)}));
+    .await;
 
-    JsonRpcResponse::success(request.id, info)
+    match result {
+        Ok(info) => JsonRpcResponse::success(request.id, info),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to collect system info: {}", e),
+        ),
+    }
 }
 
 #[cfg(test)]
