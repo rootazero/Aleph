@@ -100,7 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Menu bar actions
         nc.addObserver(
-            forName: .showHalo,
+            forName: .showChat,
             object: nil,
             queue: .main
         ) { [weak self] _ in

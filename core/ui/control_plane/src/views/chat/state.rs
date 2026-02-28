@@ -1,12 +1,12 @@
-// core/ui/control_plane/src/views/halo/state.rs
-//! Halo reactive state — signals for chat messages, streaming, and UI mode.
+// core/ui/control_plane/src/views/chat/state.rs
+//! Chat reactive state — signals for chat messages, streaming, and UI mode.
 
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// A rendered chat message (user or assistant).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct HaloMessage {
+pub struct ChatMessage {
     pub id: String,
     pub role: String, // "user" | "assistant"
     pub content: String, // final or accumulated text
@@ -28,9 +28,9 @@ pub struct ToolCallEntry {
     pub duration_ms: Option<u64>,
 }
 
-/// Top-level Halo UI phase.
+/// Top-level Chat UI phase.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum HaloPhase {
+pub enum ChatPhase {
     Idle,
     Thinking,
     Streaming,
@@ -39,11 +39,11 @@ pub enum HaloPhase {
 
 /// Reactive state container provided via Leptos context.
 #[derive(Clone, Copy)]
-pub struct HaloState {
+pub struct ChatState {
     /// All messages in the current session.
-    pub messages: RwSignal<Vec<HaloMessage>>,
+    pub messages: RwSignal<Vec<ChatMessage>>,
     /// Current phase of the UI.
-    pub phase: RwSignal<HaloPhase>,
+    pub phase: RwSignal<ChatPhase>,
     /// Active run_id (Some while agent is running).
     pub active_run_id: RwSignal<Option<String>>,
     /// Resolved session key from first chat.send response.
@@ -56,11 +56,11 @@ pub struct HaloState {
     next_msg_id: RwSignal<u64>,
 }
 
-impl HaloState {
+impl ChatState {
     pub fn new() -> Self {
         Self {
             messages: RwSignal::new(Vec::new()),
-            phase: RwSignal::new(HaloPhase::Idle),
+            phase: RwSignal::new(ChatPhase::Idle),
             active_run_id: RwSignal::new(None),
             session_key: RwSignal::new(None),
             reasoning_text: RwSignal::new(String::new()),
@@ -75,7 +75,7 @@ impl HaloState {
         self.next_msg_id.set(seq + 1);
         let id = format!("user-{}", seq);
         self.messages.update(|msgs| {
-            msgs.push(HaloMessage {
+            msgs.push(ChatMessage {
                 id,
                 role: "user".into(),
                 content: text.to_string(),
@@ -91,7 +91,7 @@ impl HaloState {
     pub fn start_assistant_message(&self, run_id: &str) {
         let id = format!("assistant-{}", run_id);
         self.messages.update(|msgs| {
-            msgs.push(HaloMessage {
+            msgs.push(ChatMessage {
                 id,
                 role: "assistant".into(),
                 content: String::new(),
@@ -101,7 +101,7 @@ impl HaloState {
             });
         });
         self.active_run_id.set(Some(run_id.to_string()));
-        self.phase.set(HaloPhase::Thinking);
+        self.phase.set(ChatPhase::Thinking);
         self.reasoning_text.set(String::new());
     }
 
@@ -113,7 +113,7 @@ impl HaloState {
                 msg.content.push_str(content);
             }
         });
-        self.phase.set(HaloPhase::Streaming);
+        self.phase.set(ChatPhase::Streaming);
     }
 
     /// Record a tool call event.
@@ -152,7 +152,7 @@ impl HaloState {
             }
         });
         self.active_run_id.set(None);
-        self.phase.set(HaloPhase::Idle);
+        self.phase.set(ChatPhase::Idle);
     }
 
     /// Mark current run as errored.
@@ -165,14 +165,14 @@ impl HaloState {
             }
         });
         self.active_run_id.set(None);
-        self.phase.set(HaloPhase::Error);
+        self.phase.set(ChatPhase::Error);
         self.error_message.set(Some(error.to_string()));
     }
 
     /// Clear all messages and reset state.
     pub fn clear(&self) {
         self.messages.set(Vec::new());
-        self.phase.set(HaloPhase::Idle);
+        self.phase.set(ChatPhase::Idle);
         self.active_run_id.set(None);
         self.session_key.set(None);
         self.reasoning_text.set(String::new());

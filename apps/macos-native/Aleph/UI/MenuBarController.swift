@@ -102,7 +102,7 @@ final class MenuBarController: NSObject, ObservableObject {
     }
 
     @objc private func showChat() {
-        NotificationCenter.default.post(name: .showHalo, object: nil)
+        NotificationCenter.default.post(name: .showChat, object: nil)
     }
 
     @objc private func showSettings() {
@@ -118,7 +118,7 @@ final class MenuBarController: NSObject, ObservableObject {
 
 extension Notification.Name {
     /// Posted when the user selects "Show Chat" from the menu bar or presses the global shortcut.
-    static let showHalo = Notification.Name("com.aleph.showHalo")
+    static let showChat = Notification.Name("com.aleph.showChat")
 
     /// Posted when the user selects "Settings..." from the menu bar.
     static let showSettings = Notification.Name("com.aleph.showSettings")

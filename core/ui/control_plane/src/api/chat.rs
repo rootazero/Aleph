@@ -37,7 +37,7 @@ impl ChatApi {
         let params = serde_json::json!({
             "message": message,
             "session_key": session_key,
-            "channel": "gui:halo",
+            "channel": "gui:chat",
             "stream": true,
         });
         let result = state.rpc_call("chat.send", params).await?;
