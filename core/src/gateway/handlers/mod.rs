@@ -87,6 +87,7 @@ pub mod debug;
 pub mod guests;
 pub mod workspace;
 pub mod secret_approvals;
+pub mod system_info;
 #[cfg(feature = "discord")]
 pub mod discord_panel;
 
@@ -152,6 +153,7 @@ impl HandlerRegistry {
         registry.register("health", health::handle);
         registry.register("echo", echo::handle);
         registry.register("version", version::handle);
+        registry.register("system.info", system_info::handle);
 
         // Config handlers (schema is stateless)
         registry.register("config.schema", config::handle_schema);
