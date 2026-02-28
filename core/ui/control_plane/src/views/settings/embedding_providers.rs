@@ -59,11 +59,6 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
         });
     };
 
-    // Get the active provider
-    let active_provider = move || {
-        providers.get().into_iter().find(|p| p.is_active)
-    };
-
     view! {
         <div class="flex h-full">
             // Left panel - Provider list
@@ -96,39 +91,6 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                         } else {
                             view! {
                                 <div class="p-6 space-y-4">
-                                    // Active Provider Status Card
-                                    {move || {
-                                        if let Some(active) = active_provider() {
-                                            view! {
-                                                <div class="p-4 bg-primary-subtle border border-primary/20 rounded-lg">
-                                                    <div class="flex items-center justify-between">
-                                                        <div>
-                                                            <div class="text-xs font-medium text-primary uppercase tracking-wider mb-1">
-                                                                "Active Provider"
-                                                            </div>
-                                                            <div class="text-lg font-semibold text-text-primary">
-                                                                {active.name.clone()}
-                                                            </div>
-                                                            <div class="text-sm text-text-secondary mt-1">
-                                                                <span class="font-mono">{active.model.clone()}</span>
-                                                                " \u{00B7} "
-                                                                {format!("{} dimensions", active.dimensions)}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            }.into_any()
-                                        } else {
-                                            view! {
-                                                <div class="p-4 bg-warning-subtle border border-warning/20 rounded-lg">
-                                                    <div class="text-sm text-warning">
-                                                        "No active embedding provider configured. Add one below."
-                                                    </div>
-                                                </div>
-                                            }.into_any()
-                                        }
-                                    }}
-
                                     // Provider List
                                     <div class="space-y-3">
                                         <h2 class="text-sm font-semibold text-text-secondary uppercase tracking-wider">
@@ -301,6 +263,7 @@ fn ProviderDetailPanel(
 
     let provider_id = provider.id.clone();
     let is_active = provider.is_active;
+    let is_custom = provider.preset == "custom";
 
     // Clone fields needed in multiple closures and the view
     let provider_name = provider.name.clone();
@@ -604,23 +567,29 @@ fn ProviderDetailPanel(
                 None
             }}
 
-            // Delete button (disabled for active provider)
-            <button
-                on:click=handle_delete
-                disabled=move || deleting.get() || is_active
-                class="w-full px-4 py-2.5 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors font-medium"
-                title=move || if is_active { "Cannot delete the active provider" } else { "" }
-            >
-                {move || {
-                    if deleting.get() {
-                        "Deleting..."
-                    } else if is_active {
-                        "Delete (switch active first)"
-                    } else {
-                        "Delete Provider"
-                    }
-                }}
-            </button>
+            // Delete button (only for custom providers, disabled for active provider)
+            {if is_custom {
+                Some(view! {
+                    <button
+                        on:click=handle_delete
+                        disabled=move || deleting.get() || is_active
+                        class="w-full px-4 py-2.5 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors font-medium"
+                        title=move || if is_active { "Cannot delete the active provider" } else { "" }
+                    >
+                        {move || {
+                            if deleting.get() {
+                                "Deleting..."
+                            } else if is_active {
+                                "Delete (switch active first)"
+                            } else {
+                                "Delete Provider"
+                            }
+                        }}
+                    </button>
+                })
+            } else {
+                None
+            }}
 
             </div> // scrollable content
         </div> // flex wrapper
