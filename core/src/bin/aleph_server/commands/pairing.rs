@@ -1,12 +1,6 @@
 //! Pairing command handlers
 
 use std::path::PathBuf;
-use crate::daemon::expand_path;
-
-/// Get default device store path
-pub fn get_device_store_path() -> PathBuf {
-    expand_path("~/.aleph/devices.db")
-}
 
 /// Handle pairing list command
 #[cfg(feature = "gateway")]
@@ -14,10 +8,8 @@ pub async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::security::{PairingManager, PairingRequest, SecurityStore};
     use std::sync::Arc;
 
-    let store_path = get_device_store_path()
-        .parent()
-        .map(|p| p.join("security.db"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/aleph_security.db"));
+    let store_path = alephcore::utils::paths::get_security_db_path()
+        .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
     let store = Arc::new(SecurityStore::open(&store_path)?);
     let manager = PairingManager::new(store);
     let pending = manager.list_pending()?;
@@ -50,12 +42,11 @@ pub async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error
     use alephcore::gateway::device_store::{DeviceStore, ApprovedDevice};
     use std::sync::Arc;
 
-    // Create device store path and security store
-    let store_path = get_device_store_path();
-    if let Some(parent) = store_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let security_store_path = store_path.parent().unwrap().join("security.db");
+    // Get device store and security store paths
+    let store_path = alephcore::utils::paths::get_devices_db_path()
+        .map_err(|e| format!("Failed to get device store path: {}", e))?;
+    let security_store_path = alephcore::utils::paths::get_security_db_path()
+        .map_err(|e| format!("Failed to get security store path: {}", e))?;
     let security_store = Arc::new(SecurityStore::open(&security_store_path)?);
 
     let pairing_manager = PairingManager::new(security_store.clone());
@@ -131,10 +122,8 @@ pub async fn handle_pairing_reject(code: &str) -> Result<(), Box<dyn std::error:
     use alephcore::gateway::security::{PairingManager, SecurityStore};
     use std::sync::Arc;
 
-    let store_path = get_device_store_path()
-        .parent()
-        .map(|p| p.join("security.db"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/aleph_security.db"));
+    let store_path = alephcore::utils::paths::get_security_db_path()
+        .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
     let store = Arc::new(SecurityStore::open(&store_path)?);
     let manager = PairingManager::new(store);
 

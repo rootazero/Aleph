@@ -486,15 +486,11 @@ fn initialize_auth(
     require_auth: bool,
     daemon: bool,
 ) -> AuthBundle {
+    use alephcore::utils::paths;
     use tracing::{info, warn};
 
-    let device_store_path = dirs::home_dir()
-        .map(|h| h.join(".aleph/devices.db"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/aleph_devices.db"));
-
-    if let Some(parent) = device_store_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
+    let device_store_path = paths::get_devices_db_path()
+        .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_devices.db"));
 
     let device_store = Arc::new(
         DeviceStore::open(&device_store_path)
@@ -504,9 +500,8 @@ fn initialize_auth(
             })
     );
 
-    let security_store_path = device_store_path.parent()
-        .map(|p| p.join("security.db"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/aleph_security.db"));
+    let security_store_path = paths::get_security_db_path()
+        .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
     let security_store = Arc::new(
         alephcore::gateway::security::SecurityStore::open(&security_store_path)
             .unwrap_or_else(|e| {
@@ -765,13 +760,8 @@ async fn initialize_inbound_router(
     router: Arc<AgentRouter>,
     daemon: bool,
 ) {
-    let pairing_store_path = dirs::home_dir()
-        .map(|h| h.join(".aleph/pairing.db"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/aleph_pairing.db"));
-
-    if let Some(parent) = pairing_store_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
+    let pairing_store_path = alephcore::utils::paths::get_pairing_db_path()
+        .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_pairing.db"));
 
     let pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore> = Arc::new(
         SqlitePairingStore::new(&pairing_store_path)
@@ -804,6 +794,9 @@ async fn initialize_inbound_router(
 #[cfg(feature = "gateway")]
 pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::server::GatewayConfig as ServerConfig;
+
+    // Migrate legacy database files from ~/.aleph/*.db to ~/.aleph/data/*.db
+    alephcore::utils::paths::migrate_legacy_db_files();
 
     // Handle daemon mode
     if args.daemon {

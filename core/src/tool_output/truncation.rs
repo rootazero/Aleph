@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::Result;
-use crate::utils::paths::get_data_dir;
+use crate::utils::paths;
 
 /// Maximum lines before truncation (default: 2000, matches OpenCode)
 pub const MAX_LINES: usize = 2000;
@@ -256,8 +256,7 @@ fn save_full_output(content: &str) -> Result<PathBuf> {
 
 /// Get the tool output directory
 pub fn get_tool_output_dir() -> Result<PathBuf> {
-    let data_dir = get_data_dir()?;
-    Ok(data_dir.join("tool-output"))
+    paths::get_tool_output_dir()
 }
 
 #[cfg(test)]
