@@ -19,7 +19,7 @@ final class GlobalShortcuts {
     ///
     /// Creates a CGSession event tap that intercepts key-down events
     /// and watches for the Cmd+Opt+/ combination. When detected, it
-    /// posts a `.showHalo` notification and consumes the event.
+    /// posts a `.showChat` notification and consumes the event.
     func register() {
         let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
 
@@ -37,7 +37,7 @@ final class GlobalShortcuts {
                    flags.contains(.maskCommand),
                    flags.contains(.maskAlternate) {
                     DispatchQueue.main.async {
-                        NotificationCenter.default.post(name: .showHalo, object: nil)
+                        NotificationCenter.default.post(name: .showChat, object: nil)
                     }
                     return nil // Consume the event
                 }

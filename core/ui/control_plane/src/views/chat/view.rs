@@ -1,22 +1,22 @@
-// core/ui/control_plane/src/views/halo/view.rs
-//! Main Halo chat view — message list + input area.
+// core/ui/control_plane/src/views/chat/view.rs
+//! Main Chat view — message list + input area.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::context::DashboardState;
 use crate::api::chat::ChatApi;
-use super::state::{HaloState, HaloPhase, HaloMessage};
+use super::state::{ChatState, ChatPhase, ChatMessage};
 use super::events::subscribe_run_events;
 
-/// Top-level Halo view component.
+/// Top-level Chat view component.
 #[component]
-pub fn HaloView() -> impl IntoView {
+pub fn ChatView() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
-    let halo = HaloState::new();
-    provide_context(halo);
+    let chat = ChatState::new();
+    provide_context(chat);
 
     // Subscribe to run.* events directly (no Effect — this is a one-shot mount action)
-    let sub_id = subscribe_run_events(&dashboard, halo);
+    let sub_id = subscribe_run_events(&dashboard, chat);
 
     // Tell the Gateway to start forwarding run.* events
     spawn_local(async move {
@@ -36,7 +36,7 @@ pub fn HaloView() -> impl IntoView {
     });
 
     view! {
-        <div class="flex flex-col h-screen bg-surface">
+        <div class="flex flex-col h-full bg-surface">
             // Message list (scrollable)
             <MessageList />
             // Input area (pinned to bottom)
@@ -48,19 +48,19 @@ pub fn HaloView() -> impl IntoView {
 /// Scrollable message list.
 #[component]
 fn MessageList() -> impl IntoView {
-    let halo = expect_context::<HaloState>();
+    let chat = expect_context::<ChatState>();
 
     view! {
         <div class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
             <For
-                each=move || halo.messages.get()
+                each=move || chat.messages.get()
                 key=|msg| msg.id.clone()
                 children=move |msg| {
                     view! { <MessageBubble message=msg /> }
                 }
             />
             // Thinking indicator
-            <Show when=move || halo.phase.get() == HaloPhase::Thinking>
+            <Show when=move || chat.phase.get() == ChatPhase::Thinking>
                 <div class="flex items-center gap-2 text-text-secondary text-sm px-3 py-2">
                     <span class="inline-block w-2 h-2 rounded-full bg-primary animate-pulse"></span>
                     "Thinking..."
@@ -72,7 +72,7 @@ fn MessageList() -> impl IntoView {
 
 /// Single message bubble.
 #[component]
-fn MessageBubble(message: HaloMessage) -> impl IntoView {
+fn MessageBubble(message: ChatMessage) -> impl IntoView {
     let is_user = message.role == "user";
     let has_error = message.error.is_some();
     let has_tools = !message.tool_calls.is_empty();
@@ -161,7 +161,7 @@ fn MessageBubble(message: HaloMessage) -> impl IntoView {
 /// Text input area with send button.
 #[component]
 fn InputArea() -> impl IntoView {
-    let halo = expect_context::<HaloState>();
+    let chat = expect_context::<ChatState>();
     let input_text = RwSignal::new(String::new());
     let is_sending = RwSignal::new(false);
 
@@ -172,21 +172,21 @@ fn InputArea() -> impl IntoView {
 
         is_sending.set(true);
         input_text.set(String::new());
-        halo.push_user_message(&text);
+        chat.push_user_message(&text);
 
-        let session_key = halo.session_key.get();
+        let session_key = chat.session_key.get();
         spawn_local(async move {
             let dashboard = expect_context::<DashboardState>();
-            let halo = expect_context::<HaloState>();
+            let chat = expect_context::<ChatState>();
             let sk = session_key.as_deref();
             match ChatApi::send(&dashboard, &text, sk).await {
                 Ok(resp) => {
-                    halo.session_key.set(Some(resp.session_key));
+                    chat.session_key.set(Some(resp.session_key));
                     // run_accepted event will trigger start_assistant_message
                 }
                 Err(e) => {
-                    halo.error_message.set(Some(e.clone()));
-                    halo.phase.set(HaloPhase::Error);
+                    chat.error_message.set(Some(e.clone()));
+                    chat.phase.set(ChatPhase::Error);
                 }
             }
             is_sending.set(false);
@@ -206,7 +206,7 @@ fn InputArea() -> impl IntoView {
 
     // Abort button handler
     let on_abort = move |_: web_sys::MouseEvent| {
-        if let Some(run_id) = halo.active_run_id.get() {
+        if let Some(run_id) = chat.active_run_id.get() {
             spawn_local(async move {
                 let dashboard = expect_context::<DashboardState>();
                 let _ = ChatApi::abort(&dashboard, &run_id).await;
@@ -232,7 +232,7 @@ fn InputArea() -> impl IntoView {
                 />
 
                 // Abort button (when running)
-                <Show when=move || halo.active_run_id.get().is_some()>
+                <Show when=move || chat.active_run_id.get().is_some()>
                     <button
                         class="p-2.5 rounded-xl bg-danger/10 text-danger hover:bg-danger/20 transition-colors"
                         title="Stop"
@@ -245,7 +245,7 @@ fn InputArea() -> impl IntoView {
                 </Show>
 
                 // Send button (when idle)
-                <Show when=move || halo.active_run_id.get().is_none()>
+                <Show when=move || chat.active_run_id.get().is_none()>
                     <button
                         class="p-2.5 rounded-xl bg-primary text-white hover:bg-primary/90
                                disabled:opacity-40 disabled:cursor-not-allowed transition-colors"

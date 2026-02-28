@@ -44,7 +44,14 @@ fn SettingsSidebar() -> impl IntoView {
                             let icon_svg = tab.icon_svg();
                             let is_active = {
                                 let location = location.clone();
-                                move || location.pathname.get() == path
+                                move || {
+                                    let current = location.pathname.get();
+                                    if path == "/settings/channels" {
+                                        current.starts_with(path)
+                                    } else {
+                                        current == path
+                                    }
+                                }
                             };
 
                             view! {
