@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use leptos_router::components::*;
-use leptos_router::path;
+use leptos_router::components::Router;
+use leptos_router::hooks::use_location;
 
 // Views
 use crate::views::home::Home;
@@ -67,51 +67,9 @@ fn AppContent() -> impl IntoView {
                     // Context-aware sidebar
                     <ModeSidebar />
 
-                    // Main content area
+                    // Main content area — reactive routing via use_location()
                     <main class="flex-1 overflow-y-auto relative">
-                        <Routes fallback=|| view! { <div class="p-8">"404 - Not Found"</div> }>
-                            // Chat routes (default)
-                            <Route path=path!("/") view=ChatView />
-
-                            // Dashboard routes
-                            <Route path=path!("/dashboard") view=Home />
-                            <Route path=path!("/dashboard/trace") view=AgentTrace />
-                            <Route path=path!("/dashboard/health") view=SystemStatus />
-                            <Route path=path!("/dashboard/memory") view=Memory />
-
-                            // Settings routes
-                            <Route path=path!("/settings") view=Settings />
-                            <Route path=path!("/settings/general") view=GeneralView />
-                            <Route path=path!("/settings/shortcuts") view=ShortcutsView />
-                            <Route path=path!("/settings/behavior") view=BehaviorView />
-                            <Route path=path!("/settings/search") view=SearchView />
-                            <Route path=path!("/settings/providers") view=ProvidersView />
-                            <Route path=path!("/settings/embedding-providers") view=EmbeddingProvidersView />
-                            <Route path=path!("/settings/generation-providers") view=GenerationProvidersView />
-                            <Route path=path!("/settings/agent") view=AgentView />
-                            <Route path=path!("/settings/routing") view=RoutingRulesView />
-                            <Route path=path!("/settings/mcp") view=McpView />
-                            <Route path=path!("/settings/plugins") view=PluginsView />
-                            <Route path=path!("/settings/skills") view=SkillsView />
-                            <Route path=path!("/settings/memory") view=MemoryView />
-                            <Route path=path!("/settings/security") view=SecurityView />
-                            <Route path=path!("/settings/policies") view=PoliciesView />
-                            // Channels
-                            <Route path=path!("/settings/channels") view=ChannelsOverview />
-                            <Route path=path!("/settings/channels/discord") view=DiscordChannelView />
-                            <Route path=path!("/settings/channels/telegram") view=TelegramConfigPage />
-                            <Route path=path!("/settings/channels/whatsapp") view=WhatsAppConfigPage />
-                            <Route path=path!("/settings/channels/imessage") view=IMessageConfigPage />
-                            <Route path=path!("/settings/channels/slack") view=SlackConfigPage />
-                            <Route path=path!("/settings/channels/email") view=EmailConfigPage />
-                            <Route path=path!("/settings/channels/matrix") view=MatrixConfigPage />
-                            <Route path=path!("/settings/channels/signal") view=SignalConfigPage />
-                            <Route path=path!("/settings/channels/mattermost") view=MattermostConfigPage />
-                            <Route path=path!("/settings/channels/irc") view=IrcConfigPage />
-                            <Route path=path!("/settings/channels/webhook") view=WebhookConfigPage />
-                            <Route path=path!("/settings/channels/xmpp") view=XmppConfigPage />
-                            <Route path=path!("/settings/channels/nostr") view=NostrConfigPage />
-                        </Routes>
+                        <MainContent />
                     </main>
                 </div>
 
@@ -184,4 +142,67 @@ fn XmppConfigPage() -> impl IntoView {
 #[component]
 fn NostrConfigPage() -> impl IntoView {
     view! { <ChannelConfigTemplate definition=definitions::NOSTR /> }
+}
+
+/// Reactive main content routing — reads use_location() directly to guarantee
+/// synchronization with ModeSidebar (which uses the same signal).
+#[component]
+fn MainContent() -> impl IntoView {
+    let location = use_location();
+
+    move || {
+        let path = location.pathname.get();
+        match path.as_str() {
+            // Chat
+            "/" | "/chat" => view! { <ChatView /> }.into_any(),
+
+            // Dashboard
+            "/dashboard" => view! { <Home /> }.into_any(),
+            "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
+            "/dashboard/health" => view! { <SystemStatus /> }.into_any(),
+            "/dashboard/memory" => view! { <Memory /> }.into_any(),
+
+            // Settings — basic
+            "/settings" | "/settings/general" => view! { <GeneralView /> }.into_any(),
+            "/settings/shortcuts" => view! { <ShortcutsView /> }.into_any(),
+            "/settings/behavior" => view! { <BehaviorView /> }.into_any(),
+
+            // Settings — AI
+            "/settings/search" => view! { <SearchView /> }.into_any(),
+            "/settings/providers" => view! { <ProvidersView /> }.into_any(),
+            "/settings/embedding-providers" => view! { <EmbeddingProvidersView /> }.into_any(),
+            "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
+            "/settings/memory" => view! { <MemoryView /> }.into_any(),
+
+            // Settings — extensions
+            "/settings/agent" => view! { <AgentView /> }.into_any(),
+            "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),
+            "/settings/mcp" => view! { <McpView /> }.into_any(),
+            "/settings/plugins" => view! { <PluginsView /> }.into_any(),
+            "/settings/skills" => view! { <SkillsView /> }.into_any(),
+
+            // Settings — security
+            "/settings/security" => view! { <SecurityView /> }.into_any(),
+            "/settings/policies" => view! { <PoliciesView /> }.into_any(),
+
+            // Settings — channels
+            "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),
+            "/settings/channels/discord" => view! { <DiscordChannelView /> }.into_any(),
+            "/settings/channels/telegram" => view! { <TelegramConfigPage /> }.into_any(),
+            "/settings/channels/whatsapp" => view! { <WhatsAppConfigPage /> }.into_any(),
+            "/settings/channels/imessage" => view! { <IMessageConfigPage /> }.into_any(),
+            "/settings/channels/slack" => view! { <SlackConfigPage /> }.into_any(),
+            "/settings/channels/email" => view! { <EmailConfigPage /> }.into_any(),
+            "/settings/channels/matrix" => view! { <MatrixConfigPage /> }.into_any(),
+            "/settings/channels/signal" => view! { <SignalConfigPage /> }.into_any(),
+            "/settings/channels/mattermost" => view! { <MattermostConfigPage /> }.into_any(),
+            "/settings/channels/irc" => view! { <IrcConfigPage /> }.into_any(),
+            "/settings/channels/webhook" => view! { <WebhookConfigPage /> }.into_any(),
+            "/settings/channels/xmpp" => view! { <XmppConfigPage /> }.into_any(),
+            "/settings/channels/nostr" => view! { <NostrConfigPage /> }.into_any(),
+
+            // Fallback
+            _ => view! { <div class="p-8">"404 - Not Found"</div> }.into_any(),
+        }
+    }
 }
