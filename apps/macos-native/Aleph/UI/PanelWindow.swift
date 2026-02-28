@@ -19,7 +19,7 @@ import os
 /// panel.show()
 /// panel.showSettings()  // Navigate to /settings within the panel
 /// ```
-final class PanelWindow: NSObject, NSWindowDelegate {
+final class PanelWindow: NSObject, NSWindowDelegate, WKUIDelegate {
 
     // MARK: - Constants
 
@@ -122,6 +122,24 @@ final class PanelWindow: NSObject, NSWindowDelegate {
         logger.info("Panel window will close")
     }
 
+    // MARK: - WKUIDelegate
+
+    func webView(
+        _ webView: WKWebView,
+        runOpenPanelWith parameters: WKOpenPanelParameters,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping ([URL]?) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+
+        panel.beginSheetModal(for: webView.window ?? NSApp.keyWindow!) { response in
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
+    }
+
     // MARK: - Private
 
     /// Lazily create the NSWindow + WKWebView.
@@ -155,6 +173,7 @@ final class PanelWindow: NSObject, NSWindowDelegate {
 
         let wv = WKWebView(frame: newWindow.contentView!.bounds, configuration: config)
         wv.autoresizingMask = [.width, .height]
+        wv.uiDelegate = self
 
         newWindow.contentView?.addSubview(wv)
 
