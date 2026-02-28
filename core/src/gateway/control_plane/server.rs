@@ -49,7 +49,7 @@ async fn serve_static_or_index(AxumPath(path): AxumPath<String>) -> Response {
                 StatusCode::OK,
                 [
                     (header::CONTENT_TYPE, mime.as_ref()),
-                    (header::CACHE_CONTROL, "no-cache"),
+                    (header::CACHE_CONTROL, "no-store, must-revalidate"),
                 ],
                 content.data,
             ).into_response()

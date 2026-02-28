@@ -9,10 +9,9 @@ const OFFICIAL_SKILLS_URL: &str = "https://github.com/rootazero/AlephSkills";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillInfo {
-    pub id: String,
     pub name: String,
     pub description: Option<String>,
-    pub source: Option<String>,
+    pub source_path: Option<String>,
 }
 
 /// Load skills list from Gateway
@@ -20,7 +19,7 @@ fn load_skills(state: DashboardState, skills: RwSignal<Vec<SkillInfo>>, loading:
     loading.set(true);
     error.set(None);
     spawn_local(async move {
-        match state.rpc_call("skills.list", json!({})).await {
+        match state.rpc_call("markdown_skills.list", json!({})).await {
             Ok(result) => {
                 if let Some(list) = result.get("skills") {
                     if let Ok(parsed) = serde_json::from_value::<Vec<SkillInfo>>(list.clone()) {
@@ -46,15 +45,21 @@ pub fn SkillsView() -> impl IntoView {
     let show_install_dialog = RwSignal::new(false);
     let installing_official = RwSignal::new(false);
 
-    // Load skills on mount
-    load_skills(state, skills, loading, error);
+    // Load skills when connected
+    Effect::new(move || {
+        if state.is_connected.get() {
+            load_skills(state, skills, loading, error);
+        } else {
+            loading.set(false);
+        }
+    });
 
     // Install official skills handler
     let install_official = move |_| {
         installing_official.set(true);
         error.set(None);
         spawn_local(async move {
-            match state.rpc_call("skills.install", json!({ "url": OFFICIAL_SKILLS_URL })).await {
+            match state.rpc_call("markdown_skills.install", json!({ "url": OFFICIAL_SKILLS_URL, "flatten": true })).await {
                 Ok(_) => {
                     installing_official.set(false);
                     // Reload skills list
@@ -141,7 +146,7 @@ pub fn SkillsView() -> impl IntoView {
                                 <div class="space-y-3">
                                     <For
                                         each=move || skills.get()
-                                        key=|skill| skill.id.clone()
+                                        key=|skill| skill.name.clone()
                                         children=move |skill| {
                                             view! {
                                                 <SkillCard
@@ -192,7 +197,7 @@ fn SkillCard(
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let deleting = RwSignal::new(false);
-    let skill_id = StoredValue::new(skill.id.clone());
+    let skill_name = StoredValue::new(skill.name.clone());
 
     view! {
         <div class="p-4 bg-surface-raised border border-border rounded">
@@ -206,7 +211,7 @@ fn SkillCard(
                         <p class="text-xs text-text-secondary mt-1">
                             {skill.description.unwrap_or_else(|| "No description".to_string())}
                         </p>
-                        {skill.source.map(|source| view! {
+                        {skill.source_path.map(|source| view! {
                             <div class="flex items-center gap-1 mt-2">
                                 <span class="text-xs text-text-tertiary">"🏷️"</span>
                                 <span class="px-2 py-0.5 bg-surface-sunken border border-border rounded text-xs text-text-secondary">
@@ -230,9 +235,9 @@ fn SkillCard(
                                     title="Delete"
                                     on:click=move |_| {
                                         deleting.set(true);
-                                        let id = skill_id.get_value();
+                                        let name = skill_name.get_value();
                                         spawn_local(async move {
-                                            match state.rpc_call("skills.delete", json!({ "id": id })).await {
+                                            match state.rpc_call("markdown_skills.unload", json!({ "name": name })).await {
                                                 Ok(_) => {
                                                     load_skills(state, skills, loading, error);
                                                 }
@@ -263,6 +268,7 @@ fn InstallSkillDialog(
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let source = RwSignal::new("git".to_string());
     let url = RwSignal::new(String::new());
     let installing = RwSignal::new(false);
     let dialog_error = RwSignal::new(Option::<String>::None);
@@ -275,7 +281,7 @@ fn InstallSkillDialog(
         dialog_error.set(None);
         let install_url = url.get().trim().to_string();
         spawn_local(async move {
-            match state.rpc_call("skills.install", json!({ "url": install_url })).await {
+            match state.rpc_call("markdown_skills.install", json!({ "url": install_url })).await {
                 Ok(_) => {
                     installing.set(false);
                     load_skills(state, skills, loading, error);
@@ -294,16 +300,38 @@ fn InstallSkillDialog(
             <div class="bg-surface border border-border rounded-lg p-6 max-w-md w-full mx-4">
                 <h2 class="text-lg font-semibold text-text-primary mb-2">"Install Skill"</h2>
                 <p class="text-sm text-text-secondary mb-4">
-                    "Install a skill from a URL"
+                    "Install skills from Git repository, ZIP archive, or local folder"
                 </p>
 
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-2">"Skill URL"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-2">"Source"</label>
+                        <select
+                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
+                            on:change=move |ev| source.set(event_target_value(&ev))
+                        >
+                            <option value="git">"Git Repository"</option>
+                            <option value="zip">"ZIP Archive"</option>
+                            <option value="local">"Local Folder"</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-text-secondary mb-2">
+                            {move || match source.get().as_str() {
+                                "git" => "Repository URL",
+                                "zip" => "ZIP URL or Path",
+                                _ => "Folder Path",
+                            }}
+                        </label>
                         <input
                             type="text"
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
-                            placeholder="https://github.com/user/skill.git"
+                            placeholder=move || match source.get().as_str() {
+                                "git" => "https://github.com/user/skills.git",
+                                "zip" => "https://example.com/skills.zip",
+                                _ => "/path/to/skills",
+                            }
                             value=move || url.get()
                             on:input=move |ev| url.set(event_target_value(&ev))
                         />
