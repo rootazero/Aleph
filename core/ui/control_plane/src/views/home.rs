@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 use crate::context::DashboardState;
-use crate::api::{MemoryApi, SystemApi};
+use crate::api::{MemoryApi, SystemApi, SystemInfo};
 
 #[component]
 pub fn Home() -> impl IntoView {
@@ -8,8 +8,8 @@ pub fn Home() -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
     // State for stats
-    let memory_stats = RwSignal::new(None::<(u64, u64)>); // (count, size)
-    let system_info = RwSignal::new(None::<String>); // version
+    let memory_stats = RwSignal::new(None::<Option<(u64, u64)>>); // Some(Some((count, size))) = loaded, Some(None) = failed, None = not fetched
+    let system_info = RwSignal::new(None::<SystemInfo>);
 
     // Fetch stats when connected
     Effect::new(move || {
@@ -17,20 +17,15 @@ pub fn Home() -> impl IntoView {
             let state_clone = state.clone();
             leptos::task::spawn_local(async move {
                 // Fetch memory stats
-                if let Ok(stats) = MemoryApi::stats(&state_clone).await {
-                    memory_stats.set(Some((stats.total_facts, stats.total_size)));
+                match MemoryApi::stats(&state_clone).await {
+                    Ok(stats) => memory_stats.set(Some(Some((stats.total_facts, stats.total_size)))),
+                    Err(_) => memory_stats.set(Some(None)),
                 }
 
-                // Fetch system info
+                // Fetch system info (includes CPU usage)
                 if let Ok(info) = SystemApi::info(&state_clone).await {
-                    system_info.set(Some(info.version));
+                    system_info.set(Some(info));
                 }
-
-                // Note: The following stats are not yet available via Gateway RPC:
-                // - Active Tasks: No task.list or task.stats RPC method exists
-                // - CPU Usage: No system.metrics or system.resources RPC method exists
-                // - Gateway Latency: Could be calculated from RPC round-trip time
-                // These will show "—" until the corresponding RPC methods are implemented
             });
         } else {
             memory_stats.set(None);
@@ -72,16 +67,22 @@ pub fn Home() -> impl IntoView {
                 <StatCard label="Active Tasks" value=Signal::derive(move || "—".to_string()) icon_color="text-primary" icon_bg="bg-primary-subtle">
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                 </StatCard>
-                <StatCard label="CPU Usage" value=Signal::derive(move || "—".to_string()) icon_color="text-success" icon_bg="bg-success-subtle">
+                <StatCard label="CPU Usage" value=Signal::derive(move || {
+                    system_info.get()
+                        .map(|info| format!("{:.0}%", info.cpu_usage_percent))
+                        .unwrap_or_else(|| "—".to_string())
+                }) icon_color="text-success" icon_bg="bg-success-subtle">
                     <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
                     <rect x="9" y="9" width="6" height="6" />
                     <line x1="9" y1="1" x2="9" y2="4" />
                     <line x1="15" y1="1" x2="15" y2="4" />
                 </StatCard>
                 <StatCard label="Knowledge Base" value=Signal::derive(move || {
-                    memory_stats.get()
-                        .map(|(count, _)| format!("{} facts", count))
-                        .unwrap_or_else(|| "Loading...".to_string())
+                    match memory_stats.get() {
+                        Some(Some((count, _))) => format!("{} facts", count),
+                        Some(None) => "—".to_string(),
+                        None => "—".to_string(),
+                    }
                 }) icon_color="text-info" icon_bg="bg-info-subtle">
                     <ellipse cx="12" cy="5" rx="9" ry="3" />
                     <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
