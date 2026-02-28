@@ -9,6 +9,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::A;
+use crate::components::forms::ErrorMessageDynamic;
 use crate::context::DashboardState;
 use crate::api::DiscordApi;
 
@@ -96,88 +97,105 @@ pub fn DiscordChannelView() -> impl IntoView {
     let channel_id = "discord-default";
 
     view! {
-        <div class="p-8 max-w-5xl mx-auto space-y-8">
-            // Back link
-            <A
-                href="/settings/channels"
-                attr:class="inline-flex items-center gap-1 text-sm text-text-tertiary hover:text-text-primary transition-colors"
-            >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="15 18 9 12 15 6"/>
-                </svg>
-                "Back to Channels"
-            </A>
+        <div class="flex-1 p-6 overflow-y-auto bg-surface">
+            <div class="max-w-3xl space-y-6">
 
-            // Header
-            <div class="mb-8">
-                <h1 class="text-3xl font-bold mb-2 text-text-primary">
-                    "Discord"
-                </h1>
-                <p class="text-text-secondary">
-                    "Configure your Discord bot connection, manage guilds and channels, and audit permissions."
-                </p>
+                // Back link
+                <A
+                    href="/settings/channels"
+                    attr:class="inline-flex items-center gap-1 text-sm text-text-tertiary hover:text-text-primary transition-colors"
+                >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="15 18 9 12 15 6"/>
+                    </svg>
+                    "Back to Channels"
+                </A>
+
+                // Header — matches config_template.rs structure
+                <div>
+                    <div class="flex items-center gap-3 mb-1">
+                        <div
+                            class="w-10 h-10 rounded-lg flex items-center justify-center"
+                            style="background-color: #5865F215"
+                        >
+                            <svg
+                                width="22"
+                                height="22"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="#5865F2"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                inner_html=super::definitions::DISCORD.icon_svg
+                            />
+                        </div>
+                        <div>
+                            <h1 class="text-2xl font-semibold text-text-primary">"Discord"</h1>
+                        </div>
+                    </div>
+                    <p class="text-sm text-text-secondary mt-1">
+                        "Configure your Discord bot connection, manage guilds and channels, and audit permissions."
+                    </p>
+                </div>
+
+                // Error banner — uses shared ErrorMessageDynamic component
+                <ErrorMessageDynamic error=error.into() />
+
+                // Section 1: Bot Identity
+                <BotIdentitySection bot_identity=bot_identity />
+
+                // Section 2: Token Configuration
+                <TokenSection
+                    token=token
+                    bot_identity=bot_identity
+                    guilds=guilds
+                    error=error
+                    validating=validating
+                    loading_guilds=loading_guilds
+                    channel_id=channel_id
+                />
+
+                // Section 3: Guild & Channel Management
+                <GuildSection
+                    guilds=guilds
+                    selected_guild_id=selected_guild_id
+                    channels=channels
+                    permissions=permissions
+                    overall_health=overall_health
+                    loading_guilds=loading_guilds
+                    loading_channels=loading_channels
+                    loading_permissions=loading_permissions
+                    error=error
+                    channel_id=channel_id
+                />
+
+                // Section 4: Permission Audit
+                <PermissionAuditSection
+                    permissions=permissions
+                    overall_health=overall_health
+                    loading_permissions=loading_permissions
+                    selected_guild_id=selected_guild_id
+                />
+
+                // Documentation link — matches config_template.rs
+                <div class="flex items-center justify-end">
+                    <a
+                        href="https://discord.com/developers/docs"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="text-sm text-text-tertiary hover:text-primary transition-colors inline-flex items-center gap-1"
+                    >
+                        "Documentation"
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                            <polyline points="15 3 21 3 21 9"/>
+                            <line x1="10" y1="14" x2="21" y2="3"/>
+                        </svg>
+                    </a>
+                </div>
+
             </div>
-
-            // Error banner
-            {move || {
-                error.get().map(|e| {
-                    let is_connection = e.contains("Send failed") || e.contains("Not connected");
-                    if is_connection {
-                        view! {
-                            <div class="p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 text-sm flex items-center gap-2">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <circle cx="12" cy="12" r="10"/>
-                                    <line x1="12" y1="16" x2="12" y2="12"/>
-                                    <line x1="12" y1="8" x2="12.01" y2="8"/>
-                                </svg>
-                                "Gateway not available. Please start the Aleph server."
-                            </div>
-                        }.into_any()
-                    } else {
-                        view! {
-                            <div class="p-3 bg-red-50 border border-red-200 rounded-lg text-red-800 text-sm">
-                                {e}
-                            </div>
-                        }.into_any()
-                    }
-                })
-            }}
-
-            // Section 1: Bot Identity
-            <BotIdentitySection bot_identity=bot_identity />
-
-            // Section 2: Token Configuration
-            <TokenSection
-                token=token
-                bot_identity=bot_identity
-                guilds=guilds
-                error=error
-                validating=validating
-                loading_guilds=loading_guilds
-                channel_id=channel_id
-            />
-
-            // Section 3: Guild & Channel Management
-            <GuildSection
-                guilds=guilds
-                selected_guild_id=selected_guild_id
-                channels=channels
-                permissions=permissions
-                overall_health=overall_health
-                loading_guilds=loading_guilds
-                loading_channels=loading_channels
-                loading_permissions=loading_permissions
-                error=error
-                channel_id=channel_id
-            />
-
-            // Section 4: Permission Audit
-            <PermissionAuditSection
-                permissions=permissions
-                overall_health=overall_health
-                loading_permissions=loading_permissions
-                selected_guild_id=selected_guild_id
-            />
         </div>
     }
 }
@@ -203,7 +221,7 @@ fn BotIdentitySection(
                                 <div class="relative">
                                     {if bot.avatar_url.is_empty() {
                                         view! {
-                                            <div class="w-16 h-16 rounded-full bg-indigo-500 flex items-center justify-center text-white text-xl font-bold">
+                                            <div class="w-16 h-16 rounded-full bg-primary flex items-center justify-center text-white text-xl font-bold">
                                                 {bot.name.chars().next().unwrap_or('?').to_string()}
                                             </div>
                                         }.into_any()
@@ -416,7 +434,7 @@ fn TokenSection(
                         <button
                             on:click=on_validate
                             disabled=move || validating.get() || token.get().is_empty()
-                            class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium"
+                            class="px-4 py-2 bg-primary text-text-inverse rounded-lg hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium"
                         >
                             {move || if validating.get() { "Validating..." } else { "Validate" }}
                         </button>
@@ -648,7 +666,7 @@ fn GuildSection(
                                                 on:click=on_click
                                                 class=move || {
                                                     if is_selected() {
-                                                        "flex items-center gap-3 px-3 py-2.5 cursor-pointer bg-indigo-50 border-l-2 border-indigo-500"
+                                                        "flex items-center gap-3 px-3 py-2.5 cursor-pointer bg-primary-subtle border-l-2 border-primary"
                                                     } else {
                                                         "flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-surface-sunken border-l-2 border-transparent"
                                                     }
@@ -669,7 +687,7 @@ fn GuildSection(
                                                     None => {
                                                         let initial = gname.chars().next().unwrap_or('?').to_string();
                                                         view! {
-                                                            <div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 text-xs font-bold">
+                                                            <div class="w-8 h-8 rounded-full bg-primary-subtle flex items-center justify-center text-primary text-xs font-bold">
                                                                 {initial}
                                                             </div>
                                                         }.into_any()
@@ -750,7 +768,7 @@ fn GuildSection(
                                                                                 }
                                                                             });
                                                                         }
-                                                                        class="rounded border-border text-indigo-600 focus:ring-indigo-500"
+                                                                        class="rounded border-border text-primary focus:ring-primary"
                                                                     />
                                                                     <span class="text-xs text-text-tertiary font-mono w-4">
                                                                         {kind_icon}
@@ -903,11 +921,11 @@ fn PermissionAuditSection(
                                         None
                                     } else {
                                         Some(view! {
-                                            <div class="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                                                <h3 class="text-sm font-semibold text-yellow-800 mb-2">
+                                            <div class="mt-4 p-4 bg-warning-subtle border border-warning/30 rounded-lg">
+                                                <h3 class="text-sm font-semibold text-warning mb-2">
                                                     "Fix Suggestions"
                                                 </h3>
-                                                <ul class="space-y-1 text-xs text-yellow-700">
+                                                <ul class="space-y-1 text-xs text-warning">
                                                     {missing.iter().map(|p| {
                                                         let suggestion = format!(
                                                             "Grant '{}' permission in Server Settings > Roles",
@@ -915,13 +933,13 @@ fn PermissionAuditSection(
                                                         );
                                                         view! {
                                                             <li class="flex items-start gap-2">
-                                                                <span class="mt-0.5 text-yellow-500">">"</span>
+                                                                <span class="mt-0.5 text-warning">">"</span>
                                                                 <span>{suggestion}</span>
                                                             </li>
                                                         }
                                                     }).collect_view()}
-                                                    <li class="flex items-start gap-2 mt-2 pt-2 border-t border-yellow-200">
-                                                        <span class="mt-0.5 text-yellow-500">">"</span>
+                                                    <li class="flex items-start gap-2 mt-2 pt-2 border-t border-warning/30">
+                                                        <span class="mt-0.5 text-warning">">"</span>
                                                         <span>"Alternatively, generate an invite link with the required permissions and re-invite the bot."</span>
                                                     </li>
                                                 </ul>
