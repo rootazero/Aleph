@@ -4,7 +4,7 @@ import Cocoa
 ///
 /// Provides:
 /// - A persistent menu bar icon (brain.head.profile SF Symbol)
-/// - A dropdown menu with About, Show Halo, Settings, and Quit actions
+/// - A dropdown menu with About, Show Chat, Settings, and Quit actions
 /// - Dynamic status updates from the Rust core via `tray.update_status` bridge RPC
 ///
 /// Menu structure mirrors the Tauri tray (`apps/desktop/src-tauri/src/tray.rs`).
@@ -72,11 +72,11 @@ final class MenuBarController: NSObject, ObservableObject {
 
         menu.addItem(.separator())
 
-        // Show Halo — Cmd+Option+/
-        let haloItem = NSMenuItem(title: "Show Halo", action: #selector(showHalo), keyEquivalent: "/")
-        haloItem.keyEquivalentModifierMask = [.command, .option]
-        haloItem.target = self
-        menu.addItem(haloItem)
+        // Show Chat — Cmd+Option+/
+        let chatItem = NSMenuItem(title: "Show Chat", action: #selector(showChat), keyEquivalent: "/")
+        chatItem.keyEquivalentModifierMask = [.command, .option]
+        chatItem.target = self
+        menu.addItem(chatItem)
 
         menu.addItem(.separator())
 
@@ -101,7 +101,7 @@ final class MenuBarController: NSObject, ObservableObject {
         NSApp.orderFrontStandardAboutPanel(nil)
     }
 
-    @objc private func showHalo() {
+    @objc private func showChat() {
         NotificationCenter.default.post(name: .showHalo, object: nil)
     }
 
@@ -117,7 +117,7 @@ final class MenuBarController: NSObject, ObservableObject {
 // MARK: - Notification Names
 
 extension Notification.Name {
-    /// Posted when the user selects "Show Halo" from the menu bar.
+    /// Posted when the user selects "Show Chat" from the menu bar or presses the global shortcut.
     static let showHalo = Notification.Name("com.aleph.showHalo")
 
     /// Posted when the user selects "Settings..." from the menu bar.

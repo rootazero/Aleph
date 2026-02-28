@@ -6,7 +6,7 @@ import Carbon
 /// Registers system-wide keyboard shortcuts using a CGEvent tap.
 ///
 /// This replaces `tauri_plugin_global_shortcut` from the Tauri bridge.
-/// Currently registers Cmd+Opt+/ to show the Halo floating window.
+/// Currently registers Cmd+Opt+/ to show the Chat panel.
 ///
 /// **Accessibility permission is required** — the app must be granted
 /// permission in System Settings > Privacy & Security > Accessibility
