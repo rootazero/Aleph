@@ -223,8 +223,21 @@ impl ConfigApi {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemInfo {
     pub version: String,
-    pub uptime: u64,
+    #[serde(default)]
+    pub uptime_secs: u64,
     pub platform: String,
+    #[serde(default)]
+    pub cpu_usage_percent: f32,
+    #[serde(default)]
+    pub cpu_count: usize,
+    #[serde(default)]
+    pub memory_used_bytes: u64,
+    #[serde(default)]
+    pub memory_total_bytes: u64,
+    #[serde(default)]
+    pub disk_used_bytes: u64,
+    #[serde(default)]
+    pub disk_total_bytes: u64,
 }
 
 pub struct SystemApi;
