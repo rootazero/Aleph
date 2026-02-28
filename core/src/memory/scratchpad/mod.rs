@@ -2,8 +2,12 @@
 
 //! Session Scratchpad Module
 //!
-//! Provides working memory for active tasks, stored as project-local
-//! Markdown files that are immune to compression.
+//! Provides working memory for active tasks, stored as Markdown files
+//! under `~/.aleph/projects/<project_name>/` that are immune to compression.
+//!
+//! Aleph is conversation-driven — projects are generated artifacts managed
+//! by Aleph, not user-created directories entered via CLI. All project
+//! working memory lives in the unified `~/.aleph/` workspace.
 //!
 //! ## Architecture
 //!
@@ -13,7 +17,12 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! let manager = ScratchpadManager::new(project_root, "session-id");
+//! // Production: uses ~/.aleph/projects/<name>/
+//! let manager = ScratchpadManager::new("my-blog", "session-id");
+//!
+//! // Testing: uses an explicit directory
+//! let manager = ScratchpadManager::with_dir(temp_dir, "session-id");
+//!
 //! manager.initialize(Some("Build auth module")).await?;
 //! manager.set_plan(&["Design API", "Implement", "Test"]).await?;
 //! manager.complete_item(0).await?;

@@ -355,6 +355,44 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     Ok(dirs)
 }
 
+/// Get the projects directory for project-local working memory
+///
+/// All project-specific files (scratchpad, session history, identity) are
+/// stored under `~/.aleph/projects/<project_id>/` rather than in the project's
+/// own filesystem. This reflects Aleph's conversation-driven architecture:
+/// projects are generated artifacts managed by Aleph, not user-created
+/// directories entered via CLI.
+///
+/// Returns: `<config_dir>/projects/`
+///
+/// The directory is created if it doesn't exist.
+pub fn get_projects_dir() -> Result<PathBuf> {
+    let projects_dir = get_config_dir()?.join("projects");
+
+    if !projects_dir.exists() {
+        std::fs::create_dir_all(&projects_dir)
+            .map_err(|e| AlephError::config(format!("Failed to create projects directory: {}", e)))?;
+    }
+
+    Ok(projects_dir)
+}
+
+/// Get the directory for a specific project
+///
+/// Returns: `<config_dir>/projects/<project_id>/`
+///
+/// The directory is created if it doesn't exist.
+pub fn get_project_dir(project_id: &str) -> Result<PathBuf> {
+    let project_dir = get_projects_dir()?.join(project_id);
+
+    if !project_dir.exists() {
+        std::fs::create_dir_all(&project_dir)
+            .map_err(|e| AlephError::config(format!("Failed to create project directory: {}", e)))?;
+    }
+
+    Ok(project_dir)
+}
+
 /// Get the tool output directory for storing full outputs
 ///
 /// Returns: `<config_dir>/tool_output/`

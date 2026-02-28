@@ -180,7 +180,7 @@ mod tests {
     #[tokio::test]
     async fn test_archive_empty_scratchpad() {
         let temp = tempdir().unwrap();
-        let manager = ScratchpadManager::new(temp.path().to_path_buf(), "test-session");
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "test-session");
         let service = ArchivalService::with_defaults();
 
         let result = service
@@ -194,7 +194,7 @@ mod tests {
     #[tokio::test]
     async fn test_archive_with_content() {
         let temp = tempdir().unwrap();
-        let manager = ScratchpadManager::new(temp.path().to_path_buf(), "test-session");
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "test-session");
         let service = ArchivalService::with_defaults();
 
         // Initialize with content
