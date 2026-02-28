@@ -2,15 +2,21 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::*;
 use leptos_router::path;
+
+// Views
 use crate::views::home::Home;
 use crate::views::system_status::SystemStatus;
 use crate::views::agent_trace::AgentTrace;
 use crate::views::memory::Memory;
+use crate::views::chat::ChatView;
 use crate::views::settings::*;
 use crate::views::settings::channels::config_template::ChannelConfigTemplate;
 use crate::views::settings::channels::definitions;
-use crate::views::halo::HaloView;
-use crate::components::Sidebar;
+
+// Layout components
+use crate::components::top_bar::TopBar;
+use crate::components::mode_sidebar::ModeSidebar;
+use crate::components::bottom_bar::BottomBar;
 use crate::context::{DashboardContext, DashboardState};
 
 #[component]
@@ -29,12 +35,9 @@ fn AppContent() -> impl IntoView {
     // Setup WebSocket connection and alert subscriptions on mount
     Effect::new(move || {
         spawn_local(async move {
-            // Connect to Gateway
             match state.connect().await {
                 Ok(()) => {
                     web_sys::console::log_1(&"Connected to Gateway".into());
-
-                    // Setup alert subscriptions
                     if let Err(e) = state.setup_alert_subscriptions().await {
                         web_sys::console::error_1(&format!("Failed to setup alert subscriptions: {}", e).into());
                     }
@@ -54,57 +57,66 @@ fn AppContent() -> impl IntoView {
     });
 
     view! {
-        <div class="flex h-screen bg-surface text-text-primary font-sans selection:bg-primary/30">
+        <div class="flex flex-col h-screen bg-surface text-text-primary font-sans selection:bg-primary/30">
             <Router>
-                // Left Sidebar (unified flat navigation)
-                <Sidebar />
+                // Top bar (fixed)
+                <TopBar />
 
-                // Main Content
-                <main class="flex-1 overflow-y-auto relative">
-                    <Routes fallback=|| view! { <div class="p-8">"404 - Not Found"</div> }>
-                        // Dashboard routes
-                        <Route path=path!("/") view=Home />
-                        <Route path=path!("/status") view=SystemStatus />
-                        <Route path=path!("/trace") view=AgentTrace />
-                        <Route path=path!("/memory") view=Memory />
-                        <Route path=path!("/halo") view=HaloView />
+                // Middle: sidebar + main content
+                <div class="flex flex-1 overflow-hidden">
+                    // Context-aware sidebar
+                    <ModeSidebar />
 
-                        // Settings routes (promoted to top-level)
-                        <Route path=path!("/settings") view=Settings />
-                        <Route path=path!("/settings/general") view=GeneralView />
-                        <Route path=path!("/settings/shortcuts") view=ShortcutsView />
-                        <Route path=path!("/settings/behavior") view=BehaviorView />
-                        <Route path=path!("/settings/search") view=SearchView />
-                        <Route path=path!("/settings/providers") view=ProvidersView />
-                        <Route path=path!("/settings/embedding-providers") view=EmbeddingProvidersView />
-                        <Route path=path!("/settings/generation-providers") view=GenerationProvidersView />
-                        <Route path=path!("/settings/agent") view=AgentView />
-                        <Route path=path!("/settings/routing") view=RoutingRulesView />
-                        <Route path=path!("/settings/mcp") view=McpView />
-                        <Route path=path!("/settings/plugins") view=PluginsView />
-                        <Route path=path!("/settings/skills") view=SkillsView />
-                        <Route path=path!("/settings/memory") view=MemoryView />
-                        <Route path=path!("/settings/security") view=SecurityView />
-                        <Route path=path!("/settings/policies") view=PoliciesView />
-                        // Channels overview
-                        <Route path=path!("/settings/channels") view=ChannelsOverview />
-                        // Discord keeps its complex view
-                        <Route path=path!("/settings/channels/discord") view=DiscordChannelView />
-                        // Template-driven channel config pages
-                        <Route path=path!("/settings/channels/telegram") view=TelegramConfigPage />
-                        <Route path=path!("/settings/channels/whatsapp") view=WhatsAppConfigPage />
-                        <Route path=path!("/settings/channels/imessage") view=IMessageConfigPage />
-                        <Route path=path!("/settings/channels/slack") view=SlackConfigPage />
-                        <Route path=path!("/settings/channels/email") view=EmailConfigPage />
-                        <Route path=path!("/settings/channels/matrix") view=MatrixConfigPage />
-                        <Route path=path!("/settings/channels/signal") view=SignalConfigPage />
-                        <Route path=path!("/settings/channels/mattermost") view=MattermostConfigPage />
-                        <Route path=path!("/settings/channels/irc") view=IrcConfigPage />
-                        <Route path=path!("/settings/channels/webhook") view=WebhookConfigPage />
-                        <Route path=path!("/settings/channels/xmpp") view=XmppConfigPage />
-                        <Route path=path!("/settings/channels/nostr") view=NostrConfigPage />
-                    </Routes>
-                </main>
+                    // Main content area
+                    <main class="flex-1 overflow-y-auto relative">
+                        <Routes fallback=|| view! { <div class="p-8">"404 - Not Found"</div> }>
+                            // Chat routes (default)
+                            <Route path=path!("/") view=ChatView />
+
+                            // Dashboard routes
+                            <Route path=path!("/dashboard") view=Home />
+                            <Route path=path!("/dashboard/trace") view=AgentTrace />
+                            <Route path=path!("/dashboard/health") view=SystemStatus />
+                            <Route path=path!("/dashboard/memory") view=Memory />
+
+                            // Settings routes
+                            <Route path=path!("/settings") view=Settings />
+                            <Route path=path!("/settings/general") view=GeneralView />
+                            <Route path=path!("/settings/shortcuts") view=ShortcutsView />
+                            <Route path=path!("/settings/behavior") view=BehaviorView />
+                            <Route path=path!("/settings/search") view=SearchView />
+                            <Route path=path!("/settings/providers") view=ProvidersView />
+                            <Route path=path!("/settings/embedding-providers") view=EmbeddingProvidersView />
+                            <Route path=path!("/settings/generation-providers") view=GenerationProvidersView />
+                            <Route path=path!("/settings/agent") view=AgentView />
+                            <Route path=path!("/settings/routing") view=RoutingRulesView />
+                            <Route path=path!("/settings/mcp") view=McpView />
+                            <Route path=path!("/settings/plugins") view=PluginsView />
+                            <Route path=path!("/settings/skills") view=SkillsView />
+                            <Route path=path!("/settings/memory") view=MemoryView />
+                            <Route path=path!("/settings/security") view=SecurityView />
+                            <Route path=path!("/settings/policies") view=PoliciesView />
+                            // Channels
+                            <Route path=path!("/settings/channels") view=ChannelsOverview />
+                            <Route path=path!("/settings/channels/discord") view=DiscordChannelView />
+                            <Route path=path!("/settings/channels/telegram") view=TelegramConfigPage />
+                            <Route path=path!("/settings/channels/whatsapp") view=WhatsAppConfigPage />
+                            <Route path=path!("/settings/channels/imessage") view=IMessageConfigPage />
+                            <Route path=path!("/settings/channels/slack") view=SlackConfigPage />
+                            <Route path=path!("/settings/channels/email") view=EmailConfigPage />
+                            <Route path=path!("/settings/channels/matrix") view=MatrixConfigPage />
+                            <Route path=path!("/settings/channels/signal") view=SignalConfigPage />
+                            <Route path=path!("/settings/channels/mattermost") view=MattermostConfigPage />
+                            <Route path=path!("/settings/channels/irc") view=IrcConfigPage />
+                            <Route path=path!("/settings/channels/webhook") view=WebhookConfigPage />
+                            <Route path=path!("/settings/channels/xmpp") view=XmppConfigPage />
+                            <Route path=path!("/settings/channels/nostr") view=NostrConfigPage />
+                        </Routes>
+                    </main>
+                </div>
+
+                // Bottom navigation bar (fixed)
+                <BottomBar />
             </Router>
         </div>
     }

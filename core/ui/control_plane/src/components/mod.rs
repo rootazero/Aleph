@@ -1,11 +1,22 @@
 //! Component modules
 
+pub mod bottom_bar;
+pub mod chat_sidebar;
 pub mod connection_status;
+pub mod dashboard_sidebar;
 pub mod forms;
 pub mod layouts;
+pub mod mode_sidebar;
 pub mod settings_sidebar;
 pub mod sidebar;
+pub mod theme_toggle;
+pub mod top_bar;
 pub mod ui;
+
+// Re-export layout components
+pub use bottom_bar::{BottomBar, PanelMode};
+pub use top_bar::TopBar;
+pub use mode_sidebar::ModeSidebar;
 
 // Re-export commonly used form components
 pub use forms::{
@@ -14,4 +25,4 @@ pub use forms::{
 };
 
 // Re-export sidebar components
-pub use sidebar::{Sidebar, SidebarItem};
+pub use sidebar::SidebarItem;
