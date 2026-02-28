@@ -9,6 +9,7 @@
 //! | health | Health checks, ping |
 //! | echo | Echo/test |
 //! | version | Version info |
+//! | system_info | System metrics (CPU, memory, disk, uptime) |
 //! | config | Configuration management |
 //! | logs | Log level control |
 //! | commands | Command listing |
