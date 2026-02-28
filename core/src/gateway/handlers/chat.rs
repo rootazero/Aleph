@@ -18,7 +18,7 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, IN
 use super::parse_params;
 use super::super::router::SessionKey;
 use super::super::session_manager::SessionManager;
-use super::agent::{AgentRunManager, AgentRunParams};
+use super::agent::{AgentRunManager, AgentRunParams, Attachment};
 
 // ============================================================================
 // Request/Response Types
@@ -41,6 +41,9 @@ pub struct SendParams {
     /// Thinking level for LLM reasoning depth
     #[serde(default)]
     pub thinking: Option<String>,
+    /// File attachments sent with the message
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
 
 fn default_stream() -> bool {
@@ -137,6 +140,7 @@ pub async fn handle_send(
         peer_id: None,
         stream: params.stream,
         thinking: params.thinking,
+        attachments: params.attachments,
     };
 
     // Start the run

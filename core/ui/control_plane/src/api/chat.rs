@@ -25,6 +25,15 @@ pub struct ChatSendResponse {
     pub streaming: bool,
 }
 
+/// A file attachment to send with a chat message.
+#[derive(Debug, Clone)]
+pub struct ChatAttachment {
+    pub name: String,
+    pub mime_type: String,
+    pub data_base64: String,
+    pub size: u64,
+}
+
 pub struct ChatApi;
 
 impl ChatApi {
@@ -33,12 +42,23 @@ impl ChatApi {
         state: &DashboardState,
         message: &str,
         session_key: Option<&str>,
+        attachments: Vec<ChatAttachment>,
     ) -> Result<ChatSendResponse, String> {
+        let attachments_json: Vec<Value> = attachments
+            .iter()
+            .map(|a| serde_json::json!({
+                "name": a.name,
+                "mime_type": a.mime_type,
+                "data": a.data_base64,
+            }))
+            .collect();
+
         let params = serde_json::json!({
             "message": message,
             "session_key": session_key,
             "channel": "gui:chat",
             "stream": true,
+            "attachments": attachments_json,
         });
         let result = state.rpc_call("chat.send", params).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
