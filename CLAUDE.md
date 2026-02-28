@@ -273,7 +273,7 @@ aleph/
 | **Runtime** | Rust + Tokio (async/await) |
 | **Gateway** | tokio-tungstenite + axum |
 | **Database** | LanceDB (记忆：向量+元数据+FTS) + rusqlite (弹性状态：事件/任务/追踪) |
-| **Embedding** | fastembed (bge-small-zh-v1.5, 本地) |
+| **Embedding** | Remote OpenAI-compatible APIs (SiliconFlow/OpenAI/Ollama) |
 | **Providers** | Claude, GPT-4, Gemini, Ollama, DeepSeek, Moonshot |
 | **Plugins** | Extism (WASM), Node.js IPC |
 | **Desktop App** | macOS: Native Swift/Xcode, Linux/Windows: Tauri |

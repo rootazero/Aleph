@@ -284,10 +284,8 @@ provider = "openai"                      # Default to OpenAI
 # ============================================================================
 [memory]
 enabled = true                           # Enable/disable memory system
-embedding_model = "bge-small-zh-v1.5"   # Local embedding model (Chinese-optimized, 512-dim)
 max_context_items = 5                    # Max past interactions to retrieve
 retention_days = 90                      # Auto-delete old memories (0 = never)
-vector_db = "sqlite-vec"                 # Options: sqlite-vec, lancedb
 similarity_threshold = 0.7               # Minimum similarity score (0.0-1.0)
 
 # App bundle IDs to exclude from memory storage

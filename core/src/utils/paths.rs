@@ -100,21 +100,6 @@ pub fn get_memory_db_path() -> Result<PathBuf> {
     Ok(memory_dir)
 }
 
-/// Get embedding model directory
-///
-/// Returns: `<config_dir>/models/bge-small-zh-v1.5`
-///
-/// Creates the directory if it doesn't exist.
-pub fn get_embedding_model_dir() -> Result<PathBuf> {
-    let model_dir = get_config_dir()?.join("models").join("bge-small-zh-v1.5");
-
-    // Create directory if it doesn't exist
-    std::fs::create_dir_all(&model_dir)
-        .map_err(|e| AlephError::config(format!("Failed to create model directory: {}", e)))?;
-
-    Ok(model_dir)
-}
-
 /// Get skills directory path
 ///
 /// Returns: `<config_dir>/skills`
@@ -132,13 +117,6 @@ pub fn get_skills_dir_string() -> Result<String> {
 /// Returns: `<config_dir>/runtimes`
 pub fn get_runtimes_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("runtimes"))
-}
-
-/// Get models directory path
-///
-/// Returns: `<config_dir>/models`
-pub fn get_models_dir() -> Result<PathBuf> {
-    Ok(get_config_dir()?.join("models"))
 }
 
 /// Get the output directory for generated files

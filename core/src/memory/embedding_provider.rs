@@ -1,7 +1,6 @@
 //! Embedding provider abstraction
 //!
 //! All embeddings go through remote OpenAI-compatible APIs.
-//! Local fastembed has been removed.
 
 use crate::config::types::memory::EmbeddingProviderConfig;
 use crate::error::AlephError;
