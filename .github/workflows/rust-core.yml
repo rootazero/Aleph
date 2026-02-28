@@ -26,6 +26,8 @@ jobs:
           workspaces: core
       - name: Run tests
         run: cargo test --workspace
+        env:
+          PROPTEST_CASES: 1024
 
   lint:
     name: Lint
@@ -42,6 +44,23 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
+
+  loom-tests:
+    name: Loom Concurrency
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Run loom tests
+        run: cargo test --features loom --lib
+        env:
+          RUSTFLAGS: "--cfg loom"
+          LOOM_MAX_PREEMPTIONS: 3
+        timeout-minutes: 30
 
   build-macos:
     name: Build macOS
