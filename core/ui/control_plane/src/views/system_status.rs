@@ -19,11 +19,14 @@ fn format_uptime(secs: u64) -> String {
 fn format_bytes(bytes: u64) -> String {
     const GB: f64 = 1_073_741_824.0;
     const MB: f64 = 1_048_576.0;
+    const KB: f64 = 1_024.0;
     let b = bytes as f64;
     if b >= GB {
         format!("{:.1} GB", b / GB)
-    } else {
+    } else if b >= MB {
         format!("{:.0} MB", b / MB)
+    } else {
+        format!("{:.0} KB", b / KB)
     }
 }
 
@@ -353,9 +356,11 @@ fn ServiceCard(
                 </div>
             </div>
             <div class="w-24 text-right">
-                <Badge variant=badge_variant()>
-                    {move || status.get()}
-                </Badge>
+                {move || view! {
+                    <Badge variant=badge_variant()>
+                        {status.get()}
+                    </Badge>
+                }}
             </div>
         </div>
     }
