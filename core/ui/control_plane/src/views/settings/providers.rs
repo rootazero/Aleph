@@ -126,24 +126,17 @@ pub fn ProvidersView() -> impl IntoView {
     let error = RwSignal::new(Option::<String>::None);
 
     // Load providers on mount
-    Effect::new(move || {
-        if state.is_connected.get() {
-            spawn_local(async move {
-                loading.set(true);
-                match ProvidersApi::list(&state).await {
-                    Ok(list) => {
-                        providers.set(list);
-                        error.set(None);
-                    }
-                    Err(e) => {
-                        error.set(Some(format!("Failed to load providers: {}", e)));
-                    }
-                }
-                loading.set(false);
-            });
-        } else {
-            loading.set(false);
+    spawn_local(async move {
+        match ProvidersApi::list(&state).await {
+            Ok(list) => {
+                providers.set(list);
+                error.set(None);
+            }
+            Err(e) => {
+                error.set(Some(format!("Failed to load providers: {}", e)));
+            }
         }
+        loading.set(false);
     });
 
     view! {

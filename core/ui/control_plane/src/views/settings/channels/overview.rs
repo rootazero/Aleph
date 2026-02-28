@@ -23,30 +23,26 @@ pub fn ChannelsOverview() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let statuses = RwSignal::new(HashMap::<String, String>::new());
 
-    // Fetch channel statuses on mount when the gateway connection is active.
-    Effect::new(move || {
-        if state.is_connected.get() {
-            spawn_local(async move {
-                match state.rpc_call("channels.list", json!({})).await {
-                    Ok(val) => {
-                        if let Some(channels) = val.get("channels").and_then(|c| c.as_array()) {
-                            let mut map = HashMap::new();
-                            for ch in channels {
-                                if let (Some(id), Some(status)) = (
-                                    ch.get("channel_type").and_then(|v| v.as_str()),
-                                    ch.get("status").and_then(|v| v.as_str()),
-                                ) {
-                                    map.insert(id.to_string(), status.to_string());
-                                }
-                            }
-                            statuses.set(map);
+    // Fetch channel statuses on mount
+    spawn_local(async move {
+        match state.rpc_call("channels.list", json!({})).await {
+            Ok(val) => {
+                if let Some(channels) = val.get("channels").and_then(|c| c.as_array()) {
+                    let mut map = HashMap::new();
+                    for ch in channels {
+                        if let (Some(id), Some(status)) = (
+                            ch.get("channel_type").and_then(|v| v.as_str()),
+                            ch.get("status").and_then(|v| v.as_str()),
+                        ) {
+                            map.insert(id.to_string(), status.to_string());
                         }
                     }
-                    Err(_) => {
-                        // Cards will show "Disconnected" by default — no user-facing error needed.
-                    }
+                    statuses.set(map);
                 }
-            });
+            }
+            Err(_) => {
+                // Cards will show "Disconnected" by default — no user-facing error needed.
+            }
         }
     });
 

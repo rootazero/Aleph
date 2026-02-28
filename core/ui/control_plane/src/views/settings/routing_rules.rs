@@ -23,22 +23,16 @@ pub fn RoutingRulesView() -> impl IntoView {
     let error = RwSignal::new(Option::<String>::None);
 
     // Load rules on mount
-    Effect::new(move || {
-        if state.is_connected.get() {
-            spawn_local(async move {
-                match RoutingRulesApi::list(&state).await {
-                    Ok(list) => {
-                        rules.set(list);
-                        loading.set(false);
-                    }
-                    Err(e) => {
-                        error.set(Some(format!("Failed to load rules: {}", e)));
-                        loading.set(false);
-                    }
-                }
-            });
-        } else {
-            loading.set(false);
+    spawn_local(async move {
+        match RoutingRulesApi::list(&state).await {
+            Ok(list) => {
+                rules.set(list);
+                loading.set(false);
+            }
+            Err(e) => {
+                error.set(Some(format!("Failed to load rules: {}", e)));
+                loading.set(false);
+            }
         }
     });
 

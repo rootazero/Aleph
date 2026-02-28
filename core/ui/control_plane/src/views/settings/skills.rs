@@ -47,13 +47,7 @@ pub fn SkillsView() -> impl IntoView {
     let installing_official = RwSignal::new(false);
 
     // Load skills on mount
-    Effect::new(move || {
-        if state.is_connected.get() {
-            load_skills(state, skills, loading, error);
-        } else {
-            loading.set(false);
-        }
-    });
+    load_skills(state, skills, loading, error);
 
     // Install official skills handler
     let install_official = move |_| {

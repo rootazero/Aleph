@@ -26,20 +26,16 @@ pub fn GenerationView() -> impl IntoView {
     let error = RwSignal::new(Option::<String>::None);
 
     // Load config on mount
-    Effect::new(move || {
-        if state.is_connected.get() {
-            spawn_local(async move {
-                match GenerationConfigApi::get(&state).await {
-                    Ok(cfg) => {
-                        config.set(cfg);
-                        loading.set(false);
-                    }
-                    Err(e) => {
-                        error.set(Some(format!("Failed to load config: {}", e)));
-                        loading.set(false);
-                    }
-                }
-            });
+    spawn_local(async move {
+        match GenerationConfigApi::get(&state).await {
+            Ok(cfg) => {
+                config.set(cfg);
+                loading.set(false);
+            }
+            Err(e) => {
+                error.set(Some(format!("Failed to load config: {}", e)));
+                loading.set(false);
+            }
         }
     });
 

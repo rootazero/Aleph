@@ -16,7 +16,7 @@ use crate::views::settings::channels::definitions;
 // Layout components
 use crate::components::top_bar::TopBar;
 use crate::components::mode_sidebar::ModeSidebar;
-use crate::components::bottom_bar::BottomBar;
+use crate::components::bottom_bar::{BottomBar, PanelMode};
 use crate::context::{DashboardContext, DashboardState};
 
 #[component]
@@ -144,48 +144,78 @@ fn NostrConfigPage() -> impl IntoView {
     view! { <ChannelConfigTemplate definition=definitions::NOSTR /> }
 }
 
-/// Reactive main content routing — reads use_location() directly to guarantee
-/// synchronization with ModeSidebar (which uses the same signal).
+/// Main content routing — uses CSS display toggling for mode switching to keep
+/// mode containers alive, avoiding reactive scope issues with Effect::new()
+/// inside re-evaluating closures. Sub-routing within each mode is handled by
+/// dedicated router components.
 #[component]
 fn MainContent() -> impl IntoView {
+    let location = use_location();
+    let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
+
+    view! {
+        <div style:display=move || if mode.get() == PanelMode::Chat { "contents" } else { "none" }>
+            <ChatView />
+        </div>
+        <div style:display=move || if mode.get() == PanelMode::Dashboard { "contents" } else { "none" }>
+            <DashboardRouter />
+        </div>
+        <div style:display=move || if mode.get() == PanelMode::Settings { "contents" } else { "none" }>
+            <SettingsRouter />
+        </div>
+    }
+}
+
+/// Dashboard sub-routing
+#[component]
+fn DashboardRouter() -> impl IntoView {
     let location = use_location();
 
     move || {
         let path = location.pathname.get();
         match path.as_str() {
-            // Chat
-            "/" | "/chat" => view! { <ChatView /> }.into_any(),
-
-            // Dashboard
             "/dashboard" => view! { <Home /> }.into_any(),
             "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
             "/dashboard/health" => view! { <SystemStatus /> }.into_any(),
             "/dashboard/memory" => view! { <Memory /> }.into_any(),
+            // Not in dashboard mode — render nothing (div is hidden)
+            _ => ().into_any(),
+        }
+    }
+}
 
-            // Settings — basic
+/// Settings sub-routing
+#[component]
+fn SettingsRouter() -> impl IntoView {
+    let location = use_location();
+
+    move || {
+        let path = location.pathname.get();
+        match path.as_str() {
+            // Basic
             "/settings" | "/settings/general" => view! { <GeneralView /> }.into_any(),
             "/settings/shortcuts" => view! { <ShortcutsView /> }.into_any(),
             "/settings/behavior" => view! { <BehaviorView /> }.into_any(),
 
-            // Settings — AI
+            // AI
             "/settings/search" => view! { <SearchView /> }.into_any(),
             "/settings/providers" => view! { <ProvidersView /> }.into_any(),
             "/settings/embedding-providers" => view! { <EmbeddingProvidersView /> }.into_any(),
             "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
             "/settings/memory" => view! { <MemoryView /> }.into_any(),
 
-            // Settings — extensions
+            // Extensions
             "/settings/agent" => view! { <AgentView /> }.into_any(),
             "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),
             "/settings/mcp" => view! { <McpView /> }.into_any(),
             "/settings/plugins" => view! { <PluginsView /> }.into_any(),
             "/settings/skills" => view! { <SkillsView /> }.into_any(),
 
-            // Settings — security
+            // Security
             "/settings/security" => view! { <SecurityView /> }.into_any(),
             "/settings/policies" => view! { <PoliciesView /> }.into_any(),
 
-            // Settings — channels
+            // Channels
             "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),
             "/settings/channels/discord" => view! { <DiscordChannelView /> }.into_any(),
             "/settings/channels/telegram" => view! { <TelegramConfigPage /> }.into_any(),
@@ -201,8 +231,8 @@ fn MainContent() -> impl IntoView {
             "/settings/channels/xmpp" => view! { <XmppConfigPage /> }.into_any(),
             "/settings/channels/nostr" => view! { <NostrConfigPage /> }.into_any(),
 
-            // Fallback
-            _ => view! { <div class="p-8">"404 - Not Found"</div> }.into_any(),
+            // Not in settings mode or unknown path — render nothing (div is hidden)
+            _ => ().into_any(),
         }
     }
 }
