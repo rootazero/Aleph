@@ -21,8 +21,8 @@ pub fn SidebarItem(
 
     let is_active = move || {
         let path = location.pathname.get();
-        if href == "/" {
-            path == "/"
+        if href == "/" || href == "/dashboard" {
+            path == href
         } else {
             path.starts_with(href)
         }
