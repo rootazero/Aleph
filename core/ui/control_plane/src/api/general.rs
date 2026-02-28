@@ -7,7 +7,6 @@ use crate::context::DashboardState;
 pub struct GeneralConfig {
     pub default_provider: Option<String>,
     pub language: Option<String>,
-    pub output_dir: Option<String>,
 }
 
 pub struct GeneralConfigApi;

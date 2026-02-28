@@ -20,23 +20,16 @@ pub fn GenerationProvidersView() -> impl IntoView {
     let (error_message, set_error_message) = create_signal(Option::<String>::None);
 
     // Load providers on mount
-    create_effect(move |_| {
-        if state.is_connected.get() {
-            spawn_local(async move {
-                set_is_loading.set(true);
-                match GenerationProvidersApi::list(&state).await {
-                    Ok(list) => {
-                        set_providers.set(list);
-                        set_is_loading.set(false);
-                    }
-                    Err(e) => {
-                        set_error_message.set(Some(format!("Failed to load providers: {}", e)));
-                        set_is_loading.set(false);
-                    }
-                }
-            });
-        } else {
-            set_is_loading.set(false);
+    spawn_local(async move {
+        match GenerationProvidersApi::list(&state).await {
+            Ok(list) => {
+                set_providers.set(list);
+                set_is_loading.set(false);
+            }
+            Err(e) => {
+                set_error_message.set(Some(format!("Failed to load providers: {}", e)));
+                set_is_loading.set(false);
+            }
         }
     });
 
@@ -592,19 +585,15 @@ fn GenerationSettingsPanel() -> impl IntoView {
     let save_error = RwSignal::new(Option::<String>::None);
     let save_success = RwSignal::new(false);
 
-    Effect::new(move || {
-        if state.is_connected.get() {
-            spawn_local(async move {
-                match GenerationConfigApi::get(&state).await {
-                    Ok(cfg) => {
-                        config.set(cfg);
-                        loading.set(false);
-                    }
-                    Err(_) => {
-                        loading.set(false);
-                    }
-                }
-            });
+    spawn_local(async move {
+        match GenerationConfigApi::get(&state).await {
+            Ok(cfg) => {
+                config.set(cfg);
+                loading.set(false);
+            }
+            Err(_) => {
+                loading.set(false);
+            }
         }
     });
 

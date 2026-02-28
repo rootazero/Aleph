@@ -40,26 +40,18 @@ pub fn AgentView() -> impl IntoView {
     let (error_message, set_error_message) = signal(Option::<String>::None);
     let (success_message, set_success_message) = signal(Option::<String>::None);
 
-    // Load configuration
-    Effect::new(move |_| {
-        if state.is_connected.get() {
-            spawn_local(async move {
-                set_is_loading.set(true);
-                set_error_message.set(None);
-
-                match AgentConfigApi::get(&state).await {
-                    Ok(cfg) => {
-                        set_config.set(Some(cfg));
-                        set_is_loading.set(false);
-                    }
-                    Err(e) => {
-                        set_error_message.set(Some(format!("Failed to load configuration: {}", e)));
-                        set_is_loading.set(false);
-                    }
-                }
-            });
-        } else {
-            set_is_loading.set(false);
+    // Load configuration on mount
+    spawn_local(async move {
+        set_error_message.set(None);
+        match AgentConfigApi::get(&state).await {
+            Ok(cfg) => {
+                set_config.set(Some(cfg));
+                set_is_loading.set(false);
+            }
+            Err(e) => {
+                set_error_message.set(Some(format!("Failed to load configuration: {}", e)));
+                set_is_loading.set(false);
+            }
         }
     });
 

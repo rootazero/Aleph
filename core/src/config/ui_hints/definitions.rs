@@ -65,13 +65,6 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             group: "general",
             order: 2,
         },
-        "general.output_dir" => {
-            label: "Output Directory",
-            help: "Directory for generated files",
-            group: "general",
-            order: 3,
-            placeholder: "~/.aleph/output",
-        },
 
         // === Providers (wildcard) ===
         "providers.*.api_key" => {

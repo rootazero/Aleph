@@ -54,67 +54,58 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
         .split_once('.')
         .unwrap_or((config_section, ""));
 
-    Effect::new(move || {
-        if state.is_connected.get() {
-            let section = top_section.to_string();
-            let sub_key = channel_sub_key.to_string();
-            spawn_local(async move {
-                match state
-                    .rpc_call("config.get", json!({ "section": section }))
-                    .await
-                {
-                    Ok(val) => {
-                        // The response is the full section object (e.g. all channels).
-                        // Extract the channel-specific sub-object if a sub-key exists.
-                        let channel_val = if sub_key.is_empty() {
-                            Some(&val)
-                        } else {
-                            val.get(&sub_key)
-                        };
-                        if let Some(obj) = channel_val.and_then(|v| v.as_object()) {
-                            field_values.set(obj.clone());
-                        }
-                        loading.set(false);
+    {
+        let section = top_section.to_string();
+        let sub_key = channel_sub_key.to_string();
+        spawn_local(async move {
+            match state
+                .rpc_call("config.get", json!({ "section": section }))
+                .await
+            {
+                Ok(val) => {
+                    let channel_val = if sub_key.is_empty() {
+                        Some(&val)
+                    } else {
+                        val.get(&sub_key)
+                    };
+                    if let Some(obj) = channel_val.and_then(|v| v.as_object()) {
+                        field_values.set(obj.clone());
                     }
-                    Err(e) => {
-                        // Non-fatal: show defaults
-                        web_sys::console::warn_1(
-                            &format!("Failed to load config for {}: {}", channel_id, e).into(),
-                        );
-                        loading.set(false);
-                    }
+                    loading.set(false);
                 }
-            });
-        } else {
-            loading.set(false);
-        }
-    });
+                Err(e) => {
+                    web_sys::console::warn_1(
+                        &format!("Failed to load config for {}: {}", channel_id, e).into(),
+                    );
+                    loading.set(false);
+                }
+            }
+        });
+    }
 
-    // ---- Effect: fetch channel status ----
-    Effect::new(move || {
-        if state.is_connected.get() {
-            let id = channel_id.to_string();
-            spawn_local(async move {
-                match state
-                    .rpc_call("channels.status", json!({ "channel_id": id }))
-                    .await
-                {
-                    Ok(val) => {
-                        if let Some(s) = val.as_str() {
-                            channel_status.set(ChannelStatus::from_str(s));
-                        } else if let Some(s) =
-                            val.get("status").and_then(|v| v.as_str())
-                        {
-                            channel_status.set(ChannelStatus::from_str(s));
-                        }
-                    }
-                    Err(_) => {
-                        // Channel status endpoint may not exist yet; keep Disconnected
+    // Fetch channel status on mount
+    {
+        let id = channel_id.to_string();
+        spawn_local(async move {
+            match state
+                .rpc_call("channels.status", json!({ "channel_id": id }))
+                .await
+            {
+                Ok(val) => {
+                    if let Some(s) = val.as_str() {
+                        channel_status.set(ChannelStatus::from_str(s));
+                    } else if let Some(s) =
+                        val.get("status").and_then(|v| v.as_str())
+                    {
+                        channel_status.set(ChannelStatus::from_str(s));
                     }
                 }
-            });
-        }
-    });
+                Err(_) => {
+                    // Channel status endpoint may not exist yet; keep Disconnected
+                }
+            }
+        });
+    }
 
     // ---- Save handler ----
     let on_save = move || {

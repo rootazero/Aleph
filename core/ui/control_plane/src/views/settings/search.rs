@@ -115,25 +115,18 @@ pub fn SearchView() -> impl IntoView {
     let selected = RwSignal::new(Option::<String>::None);
 
     // Load config on mount
-    Effect::new(move || {
-        if state.is_connected.get() {
-            spawn_local(async move {
-                loading.set(true);
-                match SearchConfigApi::get(&state).await {
-                    Ok(cfg) => {
-                        selected.set(Some(cfg.default_provider.clone()));
-                        config.set(cfg);
-                        error.set(None);
-                    }
-                    Err(e) => {
-                        error.set(Some(format!("Failed to load config: {}", e)));
-                    }
-                }
-                loading.set(false);
-            });
-        } else {
-            loading.set(false);
+    spawn_local(async move {
+        match SearchConfigApi::get(&state).await {
+            Ok(cfg) => {
+                selected.set(Some(cfg.default_provider.clone()));
+                config.set(cfg);
+                error.set(None);
+            }
+            Err(e) => {
+                error.set(Some(format!("Failed to load config: {}", e)));
+            }
         }
+        loading.set(false);
     });
 
     view! {
