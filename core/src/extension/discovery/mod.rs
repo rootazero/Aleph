@@ -2,7 +2,7 @@
 //!
 //! Implements 4-layer discovery with priority-based conflict resolution:
 //! 1. Config-specified paths (highest)
-//! 2. Workspace local
+//! 2. Project-level (`~/.aleph/projects/<id>/extensions/`)
 //! 3. Global user-level
 //! 4. Bundled (lowest)
 //!
@@ -12,7 +12,7 @@
 //! use alephcore::extension::discovery::{DiscoveryConfig, discover_all};
 //!
 //! let config = DiscoveryConfig {
-//!     workspace_dir: Some("/path/to/project".into()),
+//!     project_id: Some("my-project".into()),
 //!     ..Default::default()
 //! };
 //!
@@ -38,19 +38,21 @@ use crate::extension::types::PluginOrigin;
 pub struct DiscoveryConfig {
     /// Extra paths from config (Priority 1)
     pub extra_paths: Vec<PathBuf>,
-    /// Workspace root directory
-    pub workspace_dir: Option<PathBuf>,
+    /// Project name for project-level extensions (`~/.aleph/projects/<id>/extensions/`)
+    pub project_id: Option<String>,
     /// User home directory override
     pub home_dir: Option<PathBuf>,
     /// Bundled plugins directory
     pub bundled_dir: Option<PathBuf>,
+    /// Override base directory for project resolution (testing only)
+    pub projects_base_dir: Option<PathBuf>,
 }
 
 impl DiscoveryConfig {
-    /// Create a new discovery config with workspace directory
-    pub fn with_workspace(workspace: impl Into<PathBuf>) -> Self {
+    /// Create a new discovery config with project ID
+    pub fn with_project(project_id: impl Into<String>) -> Self {
         Self {
-            workspace_dir: Some(workspace.into()),
+            project_id: Some(project_id.into()),
             ..Default::default()
         }
     }
@@ -77,7 +79,7 @@ impl DiscoveryConfig {
 ///
 /// Scans all 4 layers in order:
 /// 1. Config-specified paths (highest priority)
-/// 2. Workspace `.aleph/extensions` and `.claude/extensions`
+/// 2. Project-level `~/.aleph/projects/<id>/extensions/`
 /// 3. Global `~/.aleph/extensions` and `~/.claude/extensions`
 /// 4. Bundled plugins (lowest priority)
 ///
@@ -97,11 +99,17 @@ pub fn discover_all(config: &DiscoveryConfig) -> ExtensionResult<ResolvedPlugins
         }
     }
 
-    // Priority 2: Workspace local
-    if let Some(workspace) = &config.workspace_dir {
-        for subdir in [".aleph/extensions", ".claude/extensions"] {
-            let path = workspace.join(subdir);
-            debug!("Scanning workspace path: {:?}", path);
+    // Priority 2: Project-level (~/.aleph/projects/<id>/extensions/)
+    if let Some(project_id) = &config.project_id {
+        let project_dir = if let Some(base) = &config.projects_base_dir {
+            Some(base.join(project_id))
+        } else {
+            crate::utils::paths::get_project_dir(project_id).ok()
+        };
+
+        if let Some(project_dir) = project_dir {
+            let path = project_dir.join("extensions");
+            debug!("Scanning project path: {:?}", path);
             let results = scan_directory(&path, PluginOrigin::Workspace);
             for result in results {
                 match result {
@@ -166,21 +174,24 @@ mod tests {
     #[test]
     fn test_discover_all_layers() {
         let home = tempdir().unwrap();
-        let workspace = tempdir().unwrap();
+        let projects_base = tempdir().unwrap();
 
         // Create global plugin
         let global_ext = home.path().join(".aleph/extensions/global-plugin");
         fs::create_dir_all(&global_ext).unwrap();
         fs::write(global_ext.join("SKILL.md"), "# Global").unwrap();
 
-        // Create workspace plugin
-        let ws_ext = workspace.path().join(".aleph/extensions/ws-plugin");
-        fs::create_dir_all(&ws_ext).unwrap();
-        fs::write(ws_ext.join("SKILL.md"), "# Workspace").unwrap();
+        // Create project plugin at projects/<id>/extensions/
+        let project_ext = projects_base
+            .path()
+            .join("my-project/extensions/proj-plugin");
+        fs::create_dir_all(&project_ext).unwrap();
+        fs::write(project_ext.join("SKILL.md"), "# Project").unwrap();
 
         let config = DiscoveryConfig {
-            workspace_dir: Some(workspace.path().to_path_buf()),
+            project_id: Some("my-project".into()),
             home_dir: Some(home.path().to_path_buf()),
+            projects_base_dir: Some(projects_base.path().to_path_buf()),
             ..Default::default()
         };
 
@@ -189,22 +200,25 @@ mod tests {
     }
 
     #[test]
-    fn test_discover_workspace_overrides_global() {
+    fn test_discover_project_overrides_global() {
         let home = tempdir().unwrap();
-        let workspace = tempdir().unwrap();
+        let projects_base = tempdir().unwrap();
 
         // Create same-named plugin in both locations
         let global_ext = home.path().join(".aleph/extensions/same-plugin");
         fs::create_dir_all(&global_ext).unwrap();
         fs::write(global_ext.join("SKILL.md"), "# Global").unwrap();
 
-        let ws_ext = workspace.path().join(".aleph/extensions/same-plugin");
-        fs::create_dir_all(&ws_ext).unwrap();
-        fs::write(ws_ext.join("SKILL.md"), "# Workspace").unwrap();
+        let project_ext = projects_base
+            .path()
+            .join("my-project/extensions/same-plugin");
+        fs::create_dir_all(&project_ext).unwrap();
+        fs::write(project_ext.join("SKILL.md"), "# Project").unwrap();
 
         let config = DiscoveryConfig {
-            workspace_dir: Some(workspace.path().to_path_buf()),
+            project_id: Some("my-project".into()),
             home_dir: Some(home.path().to_path_buf()),
+            projects_base_dir: Some(projects_base.path().to_path_buf()),
             ..Default::default()
         };
 
@@ -215,15 +229,17 @@ mod tests {
     }
 
     #[test]
-    fn test_discover_config_overrides_workspace() {
+    fn test_discover_config_overrides_project() {
         let home = tempdir().unwrap();
-        let workspace = tempdir().unwrap();
+        let projects_base = tempdir().unwrap();
         let config_path = tempdir().unwrap();
 
-        // Create plugin in workspace
-        let ws_ext = workspace.path().join(".aleph/extensions/my-plugin");
-        fs::create_dir_all(&ws_ext).unwrap();
-        fs::write(ws_ext.join("SKILL.md"), "# Workspace").unwrap();
+        // Create plugin in project extensions
+        let project_ext = projects_base
+            .path()
+            .join("my-project/extensions/my-plugin");
+        fs::create_dir_all(&project_ext).unwrap();
+        fs::write(project_ext.join("SKILL.md"), "# Project").unwrap();
 
         // Create plugin in config path
         let config_ext = config_path.path().join("my-plugin");
@@ -232,8 +248,9 @@ mod tests {
 
         let config = DiscoveryConfig {
             extra_paths: vec![config_path.path().to_path_buf()],
-            workspace_dir: Some(workspace.path().to_path_buf()),
+            project_id: Some("my-project".into()),
             home_dir: Some(home.path().to_path_buf()),
+            projects_base_dir: Some(projects_base.path().to_path_buf()),
             ..Default::default()
         };
 
@@ -298,14 +315,11 @@ mod tests {
 
     #[test]
     fn test_discovery_config_builder() {
-        let config = DiscoveryConfig::with_workspace("/path/to/workspace")
+        let config = DiscoveryConfig::with_project("my-project")
             .with_bundled_dir("/path/to/bundled")
             .with_home_dir("/path/to/home");
 
-        assert_eq!(
-            config.workspace_dir,
-            Some(PathBuf::from("/path/to/workspace"))
-        );
+        assert_eq!(config.project_id, Some("my-project".into()));
         assert_eq!(
             config.bundled_dir,
             Some(PathBuf::from("/path/to/bundled"))

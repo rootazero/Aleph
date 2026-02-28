@@ -6,7 +6,7 @@
 //! # Priority Order (highest to lowest)
 //!
 //! 1. Session override - Runtime identity set programmatically
-//! 2. Project identity - `.soul/identity.md` or `.aleph/identity.md`
+//! 2. Project identity - `~/.aleph/projects/<id>/identity.{md,json,toml}`
 //! 3. Global soul - `~/.aleph/soul.md`
 //! 4. Default - Empty SoulManifest
 //!
@@ -20,7 +20,7 @@
 //! │  │   ┌─────────────┐                                    │    │
 //! │  │   │  Session    │ ← Runtime override (highest)       │    │
 //! │  │   ├─────────────┤                                    │    │
-//! │  │   │  Project    │ ← .soul/identity.md                │    │
+//! │  │   │  Project    │ ← ~/.aleph/projects/<id>/identity  │    │
 //! │  │   ├─────────────┤                                    │    │
 //! │  │   │  Global     │ ← ~/.aleph/soul.md                 │    │
 //! │  │   ├─────────────┤                                    │    │
@@ -35,21 +35,24 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::soul::SoulManifest;
+use crate::utils::paths::get_project_dir;
 
 /// Resolves identity from layered sources
 ///
 /// Priority (highest to lowest):
 /// 1. Session override
-/// 2. Project identity (.soul/identity.md or .aleph/identity.md)
+/// 2. Project identity (`~/.aleph/projects/<id>/identity.{md,json,toml}`)
 /// 3. Global soul (~/.aleph/soul.md)
 /// 4. Default (empty SoulManifest)
 pub struct IdentityResolver {
     /// Global soul path (~/.aleph/soul.md)
     global_path: PathBuf,
-    /// Project roots to search for .soul/identity.md
-    project_roots: Vec<PathBuf>,
+    /// Project names to search for identity files in ~/.aleph/projects/<id>/
+    project_ids: Vec<String>,
     /// Current session override
     session_override: Option<SoulManifest>,
+    /// Override base directory for project resolution (testing only)
+    projects_base_dir: Option<PathBuf>,
 }
 
 impl IdentityResolver {
@@ -57,8 +60,9 @@ impl IdentityResolver {
     pub fn new(global_path: PathBuf) -> Self {
         Self {
             global_path,
-            project_roots: Vec::new(),
+            project_ids: Vec::new(),
             session_override: None,
+            projects_base_dir: None,
         }
     }
 
@@ -68,9 +72,11 @@ impl IdentityResolver {
         Self::new(home.join(".aleph").join("soul.md"))
     }
 
-    /// Add a project root to search
-    pub fn add_project_root(&mut self, path: PathBuf) {
-        self.project_roots.push(path);
+    /// Add a project by name to search for identity files
+    ///
+    /// Identity files are looked up at `~/.aleph/projects/<project_id>/identity.{md,json,toml}`
+    pub fn add_project(&mut self, project_id: &str) {
+        self.project_ids.push(project_id.to_string());
     }
 
     /// Set session-level identity override
@@ -93,9 +99,9 @@ impl IdentityResolver {
         &self.global_path
     }
 
-    /// Get the project roots
-    pub fn project_roots(&self) -> &[PathBuf] {
-        &self.project_roots
+    /// Get the project IDs
+    pub fn project_ids(&self) -> &[String] {
+        &self.project_ids
     }
 
     /// Resolve the effective SoulManifest for current context
@@ -116,17 +122,27 @@ impl IdentityResolver {
         }
     }
 
-    /// Load soul from project directory
+    /// Resolve project directory for a given project ID
+    fn resolve_project_dir(&self, project_id: &str) -> Option<PathBuf> {
+        if let Some(base) = &self.projects_base_dir {
+            Some(base.join(project_id))
+        } else {
+            get_project_dir(project_id).ok()
+        }
+    }
+
+    /// Load soul from project directory (~/.aleph/projects/<id>/)
     fn load_project_soul(&self) -> Option<SoulManifest> {
-        for root in &self.project_roots {
-            // Check multiple possible paths
+        for project_id in &self.project_ids {
+            let project_dir = match self.resolve_project_dir(project_id) {
+                Some(dir) => dir,
+                None => continue,
+            };
+
             let paths = [
-                root.join(".soul").join("identity.md"),
-                root.join(".soul").join("identity.json"),
-                root.join(".soul").join("identity.toml"),
-                root.join(".aleph").join("identity.md"),
-                root.join(".aleph").join("identity.json"),
-                root.join(".aleph").join("identity.toml"),
+                project_dir.join("identity.md"),
+                project_dir.join("identity.json"),
+                project_dir.join("identity.toml"),
             ];
             for path in paths {
                 if path.exists() {
@@ -176,14 +192,16 @@ impl IdentityResolver {
         }
 
         // Check projects
-        for root in &self.project_roots {
+        for project_id in &self.project_ids {
+            let project_dir = match self.resolve_project_dir(project_id) {
+                Some(dir) => dir,
+                None => continue,
+            };
+
             let paths = [
-                root.join(".soul").join("identity.md"),
-                root.join(".soul").join("identity.json"),
-                root.join(".soul").join("identity.toml"),
-                root.join(".aleph").join("identity.md"),
-                root.join(".aleph").join("identity.json"),
-                root.join(".aleph").join("identity.toml"),
+                project_dir.join("identity.md"),
+                project_dir.join("identity.json"),
+                project_dir.join("identity.toml"),
             ];
             for path in paths {
                 if path.exists() {
@@ -237,6 +255,13 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// Helper to create a resolver with a temp-based projects directory
+    fn resolver_with_temp_projects(tmp: &TempDir) -> IdentityResolver {
+        let mut resolver = IdentityResolver::new(PathBuf::from("/nonexistent"));
+        resolver.projects_base_dir = Some(tmp.path().join("projects"));
+        resolver
+    }
 
     #[test]
     fn test_resolver_default_empty() {
@@ -303,21 +328,22 @@ mod tests {
         };
         fs::write(&global_path, serde_json::to_string(&global_soul).unwrap()).unwrap();
 
-        // Create project soul
-        let project_root = tmp.path().join("project");
-        fs::create_dir_all(project_root.join(".soul")).unwrap();
+        // Create project identity at projects/<id>/identity.json
+        let project_dir = tmp.path().join("projects").join("my-project");
+        fs::create_dir_all(&project_dir).unwrap();
         let project_soul = SoulManifest {
             identity: "Project identity".to_string(),
             ..Default::default()
         };
         fs::write(
-            project_root.join(".soul").join("identity.json"),
+            project_dir.join("identity.json"),
             serde_json::to_string(&project_soul).unwrap(),
         )
         .unwrap();
 
         let mut resolver = IdentityResolver::new(global_path);
-        resolver.add_project_root(project_root);
+        resolver.projects_base_dir = Some(tmp.path().join("projects"));
+        resolver.add_project("my-project");
 
         let resolved = resolver.resolve();
         // Project identity overrides global
@@ -327,27 +353,48 @@ mod tests {
     }
 
     #[test]
-    fn test_aleph_directory_works() {
+    fn test_project_identity_json() {
         let tmp = TempDir::new().unwrap();
 
-        // Create project soul in .aleph directory
-        let project_root = tmp.path().join("project");
-        fs::create_dir_all(project_root.join(".aleph")).unwrap();
+        // Create project identity at projects/<id>/identity.json
+        let project_dir = tmp.path().join("projects").join("test-project");
+        fs::create_dir_all(&project_dir).unwrap();
         let project_soul = SoulManifest {
-            identity: "Aleph project identity".to_string(),
+            identity: "Project identity via json".to_string(),
             ..Default::default()
         };
         fs::write(
-            project_root.join(".aleph").join("identity.json"),
+            project_dir.join("identity.json"),
             serde_json::to_string(&project_soul).unwrap(),
         )
         .unwrap();
 
-        let mut resolver = IdentityResolver::new(PathBuf::from("/nonexistent"));
-        resolver.add_project_root(project_root);
+        let mut resolver = resolver_with_temp_projects(&tmp);
+        resolver.add_project("test-project");
 
         let resolved = resolver.resolve();
-        assert_eq!(resolved.identity, "Aleph project identity");
+        assert_eq!(resolved.identity, "Project identity via json");
+    }
+
+    #[test]
+    fn test_project_identity_toml() {
+        let tmp = TempDir::new().unwrap();
+
+        // Create project identity at projects/<id>/identity.toml
+        let project_dir = tmp.path().join("projects").join("toml-project");
+        fs::create_dir_all(&project_dir).unwrap();
+        let toml_content = r#"
+identity = "Project identity via toml"
+directives = ["Be concise"]
+"#;
+        fs::write(project_dir.join("identity.toml"), toml_content).unwrap();
+
+        let mut resolver = resolver_with_temp_projects(&tmp);
+        resolver.add_project("toml-project");
+
+        let resolved = resolver.resolve();
+        assert_eq!(resolved.identity, "Project identity via toml");
+        assert_eq!(resolved.directives, vec!["Be concise".to_string()]);
     }
 
     #[test]
@@ -434,21 +481,22 @@ directives = ["Be concise"]
         };
         fs::write(&global_path, serde_json::to_string(&global_soul).unwrap()).unwrap();
 
-        // Create project soul
-        let project_root = tmp.path().join("project");
-        fs::create_dir_all(project_root.join(".soul")).unwrap();
+        // Create project identity
+        let project_dir = tmp.path().join("projects").join("my-project");
+        fs::create_dir_all(&project_dir).unwrap();
         let project_soul = SoulManifest {
             identity: "Project".to_string(),
             ..Default::default()
         };
         fs::write(
-            project_root.join(".soul").join("identity.json"),
+            project_dir.join("identity.json"),
             serde_json::to_string(&project_soul).unwrap(),
         )
         .unwrap();
 
         let mut resolver = IdentityResolver::new(global_path);
-        resolver.add_project_root(project_root);
+        resolver.projects_base_dir = Some(tmp.path().join("projects"));
+        resolver.add_project("my-project");
 
         // Session override should take priority
         resolver.set_session_override(SoulManifest {
@@ -458,5 +506,13 @@ directives = ["Be concise"]
 
         let resolved = resolver.resolve();
         assert_eq!(resolved.identity, "Session");
+    }
+
+    #[test]
+    fn test_add_project_stores_id() {
+        let mut resolver = IdentityResolver::new(PathBuf::from("/nonexistent"));
+        resolver.add_project("project-a");
+        resolver.add_project("project-b");
+        assert_eq!(resolver.project_ids(), &["project-a", "project-b"]);
     }
 }
