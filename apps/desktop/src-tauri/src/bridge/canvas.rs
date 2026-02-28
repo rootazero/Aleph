@@ -86,7 +86,6 @@ pub fn handle_canvas_show(params: Value) -> Result<Value, (i32, String)> {
         )
         .title("Aleph Canvas")
         .decorations(false)
-        .transparent(true)
         .always_on_top(true)
         .inner_size(width, height)
         .position(x, y)

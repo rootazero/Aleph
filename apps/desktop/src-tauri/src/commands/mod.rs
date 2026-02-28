@@ -49,6 +49,18 @@ pub fn get_cursor_position() -> Result<Position> {
         // TODO: Implement for Linux using X11 or Wayland
         Ok(Position { x: 0, y: 0 })
     }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Use enigo to get mouse location (already a dependency)
+        use enigo::{Coordinate, Enigo, Mouse, Settings};
+
+        let enigo = Enigo::new(&Settings::default())
+            .map_err(|e| AlephError::Unknown(format!("Failed to create Enigo: {}", e)))?;
+        let (x, y) = enigo.location()
+            .map_err(|e| AlephError::Unknown(format!("Failed to get cursor position: {}", e)))?;
+        Ok(Position { x, y })
+    }
 }
 
 /// Show halo window at fixed screen position (center horizontally, 30% from bottom)
