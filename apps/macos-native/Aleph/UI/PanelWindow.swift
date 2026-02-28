@@ -92,10 +92,10 @@ final class PanelWindow: NSObject, NSWindowDelegate {
         webView?.load(URLRequest(url: url))
     }
 
-    /// Show the Chat view (panel root).
+    /// Show the Chat view.
     func showChat() {
         show()
-        navigate(to: "/")
+        navigate(to: "/chat")
     }
 
     /// Show the Settings view within the panel.
