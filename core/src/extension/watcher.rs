@@ -4,10 +4,9 @@
 //! reload when skill, command, agent, or plugin files are modified.
 //!
 //! Watched directories:
-//! - `~/.claude/` (skills/, commands/, agents/, plugins/)
-//! - `~/.aleph/` (skills/, commands/, agents/, plugins/)
-//! - `.claude/` (project-local)
-//! - `.aleph/` (project-local)
+//! - `~/.claude/` (global, Claude Code compatible)
+//! - `~/.aleph/` (global)
+//! - `~/.aleph/projects/<id>/` (project-level, if project_id provided)
 //!
 //! Uses macOS FSEvents for efficient file system monitoring with debouncing.
 
@@ -89,15 +88,14 @@ impl ExtensionWatcher {
     /// Create a new extension watcher with default directories
     ///
     /// Watches:
-    /// - `~/.claude/` (global)
+    /// - `~/.claude/` (global, Claude Code compatible)
     /// - `~/.aleph/` (global)
-    /// - `.claude/` (project-local, if exists)
-    /// - `.aleph/` (project-local, if exists)
+    /// - `~/.aleph/projects/<id>/` (project-level, if project_id provided)
     ///
     /// # Arguments
-    /// * `project_root` - Optional project root for watching local directories
+    /// * `project_id` - Optional project name for watching project-level directories
     /// * `callback` - Function to call when extensions change
-    pub fn new<F>(project_root: Option<PathBuf>, callback: F) -> Self
+    pub fn new<F>(project_id: Option<&str>, callback: F) -> Self
     where
         F: Fn(ExtensionChangeEvent) + Send + Sync + 'static,
     {
@@ -116,16 +114,12 @@ impl ExtensionWatcher {
             }
         }
 
-        // Project-local directories
-        if let Some(root) = project_root {
-            let claude_local = root.join(".claude");
-            let aleph_local = root.join(".aleph");
-
-            if claude_local.exists() {
-                watch_dirs.push(claude_local);
-            }
-            if aleph_local.exists() {
-                watch_dirs.push(aleph_local);
+        // Project-level directory (~/.aleph/projects/<id>/)
+        if let Some(id) = project_id {
+            if let Ok(project_dir) = crate::utils::paths::get_project_dir(id) {
+                if project_dir.exists() {
+                    watch_dirs.push(project_dir);
+                }
             }
         }
 
