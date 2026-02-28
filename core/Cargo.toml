@@ -53,6 +53,8 @@ plugin-nodejs = []
 plugin-all = ["plugin-wasm", "plugin-nodejs"]
 # Test helpers for integration tests
 test-helpers = []
+# Loom concurrency testing (replaces std sync primitives)
+loom = ["dep:loom"]
 
 [dependencies]
 # REMOVED: UniFFI - using Gateway WebSocket architecture
@@ -221,6 +223,9 @@ extism = { version = "1.7", optional = true }
 # CLI interactive prompts
 inquire = { version = "0.7", optional = true }
 
+# Loom concurrency testing (optional, activated via --features loom)
+loom = { version = "0.7", optional = true }
+
 [build-dependencies]
 # No build dependencies - using Gateway WebSocket architecture
 
@@ -237,6 +242,7 @@ filetime = "0.2"
 serial_test = "3.0"
 aleph-sdk = { path = "../apps/shared" }
 aleph-protocol = { path = "../shared/protocol" }
+proptest = "1.4"
 
 [[bench]]
 name = "memory_benchmarks_simple"
