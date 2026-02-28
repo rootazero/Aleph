@@ -1,7 +1,34 @@
 use leptos::prelude::*;
 use crate::components::ui::*;
 use crate::context::DashboardState;
-use crate::api::SystemApi;
+use crate::api::{SystemApi, SystemInfo};
+
+fn format_uptime(secs: u64) -> String {
+    let days = secs / 86400;
+    let hours = (secs % 86400) / 3600;
+    let mins = (secs % 3600) / 60;
+    if days > 0 {
+        format!("{}d {}h {}m", days, hours, mins)
+    } else if hours > 0 {
+        format!("{}h {}m", hours, mins)
+    } else {
+        format!("{}m", mins)
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const GB: f64 = 1_073_741_824.0;
+    const MB: f64 = 1_048_576.0;
+    const KB: f64 = 1_024.0;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.0} MB", b / MB)
+    } else {
+        format!("{:.0} KB", b / KB)
+    }
+}
 
 #[component]
 pub fn SystemStatus() -> impl IntoView {
@@ -9,7 +36,7 @@ pub fn SystemStatus() -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
     let is_connecting = RwSignal::new(false);
-    let system_info = RwSignal::new(None::<String>);
+    let system_info = RwSignal::new(None::<SystemInfo>);
 
     // Fetch system info when connected
     Effect::new(move || {
@@ -18,9 +45,7 @@ pub fn SystemStatus() -> impl IntoView {
             leptos::task::spawn_local(async move {
                 match SystemApi::info(&state).await {
                     Ok(info) => {
-                        let info_text = format!("Version: {} | Platform: {} | Uptime: {}s",
-                            info.version, info.platform, info.uptime);
-                        system_info.set(Some(info_text));
+                        system_info.set(Some(info));
                     }
                     Err(e) => {
                         web_sys::console::error_1(&format!("Failed to fetch system info: {}", e).into());
@@ -187,51 +212,120 @@ pub fn SystemStatus() -> impl IntoView {
                         <ServiceCard
                             name="Gateway Engine"
                             status=gateway_status
-                            uptime="12d 4h"
-                            latency="14ms"
                         />
-                        <ServiceCard
-                            name="Agent Runtime"
-                            status=gateway_status
-                            uptime="12d 4h"
-                            latency="2ms"
-                        />
-                        <ServiceCard
-                            name="Memory Vector DB"
-                            status=RwSignal::new("Degraded")
-                            uptime="5h 12m"
-                            latency="145ms"
-                        />
-                        <ServiceCard
-                            name="MCP Tool Server"
-                            status=RwSignal::new("Healthy")
-                            uptime="4d 18h"
-                            latency="45ms"
-                        />
+
+                        // System info card — version, platform, uptime
+                        {move || {
+                            if let Some(info) = system_info.get() {
+                                view! {
+                                    <Card class="p-5 space-y-3">
+                                        <div class="flex items-center gap-3 mb-2">
+                                            <div class="p-2 rounded-lg bg-surface-sunken">
+                                                <svg width="16" height="16" attr:class="w-4 h-4 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                    <circle cx="12" cy="12" r="3" />
+                                                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                                                </svg>
+                                            </div>
+                                            <span class="font-medium text-text-primary text-sm">"System Info"</span>
+                                        </div>
+                                        <div class="grid grid-cols-3 gap-4">
+                                            <div>
+                                                <div class="text-[9px] text-text-tertiary uppercase font-bold tracking-widest mb-1">"Version"</div>
+                                                <div class="font-mono text-xs text-text-secondary">{info.version.clone()}</div>
+                                            </div>
+                                            <div>
+                                                <div class="text-[9px] text-text-tertiary uppercase font-bold tracking-widest mb-1">"Platform"</div>
+                                                <div class="font-mono text-xs text-text-secondary">{info.platform.clone()}</div>
+                                            </div>
+                                            <div>
+                                                <div class="text-[9px] text-text-tertiary uppercase font-bold tracking-widest mb-1">"Uptime"</div>
+                                                <div class="font-mono text-xs text-text-secondary">{format_uptime(info.uptime_secs)}</div>
+                                            </div>
+                                        </div>
+                                    </Card>
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <Card class="p-5">
+                                        <div class="flex items-center gap-3">
+                                            <div class="p-2 rounded-lg bg-surface-sunken">
+                                                <svg width="16" height="16" attr:class="w-4 h-4 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                    <circle cx="12" cy="12" r="3" />
+                                                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                                                </svg>
+                                            </div>
+                                            <span class="text-sm text-text-tertiary">"Connect to view system info"</span>
+                                        </div>
+                                    </Card>
+                                }.into_any()
+                            }
+                        }}
                     </div>
                 </div>
 
                 // Resource Usage
                 <div class="space-y-6">
                     <h3 class="text-xl font-semibold px-1 text-text-secondary">"Resource Utilization"</h3>
-                    <Card class="p-8 space-y-8">
-                        <ResourceMetric label="CPU Clusters" value="24%" sub="16 Cores Active" color="bg-success" progress=24>
-                            <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
-                            <rect x="9" y="9" width="6" height="6" />
-                            <line x1="9" y1="1" x2="9" y2="4" />
-                            <line x1="15" y1="1" x2="15" y2="4" />
-                        </ResourceMetric>
-                        <ResourceMetric label="Neural Memory" value="4.2 GB" sub="Total 16 GB Allocated" color="bg-primary" progress=26>
-                             <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-                        </ResourceMetric>
-                        <ResourceMetric label="Encrypted Storage" value="128 GB" sub="842 GB Remaining" color="bg-primary" progress=15>
-                             <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
-                             <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-                        </ResourceMetric>
-                        <ResourceMetric label="Security Layer" value="Enabled" sub="All Guards Active" color="bg-info" progress=100>
-                             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                        </ResourceMetric>
-                    </Card>
+                    {move || {
+                        if let Some(info) = system_info.get() {
+                            let cpu_value = format!("{:.0}%", info.cpu_usage_percent);
+                            let cpu_sub = format!("{} Cores", info.cpu_count);
+                            let cpu_progress = info.cpu_usage_percent as u32;
+
+                            let mem_value = format_bytes(info.memory_used_bytes);
+                            let mem_sub = format!("of {} Total", format_bytes(info.memory_total_bytes));
+                            let mem_progress = if info.memory_total_bytes > 0 {
+                                ((info.memory_used_bytes as f64 / info.memory_total_bytes as f64) * 100.0) as u32
+                            } else {
+                                0
+                            };
+
+                            let disk_value = format_bytes(info.disk_used_bytes);
+                            let disk_free_bytes = info.disk_total_bytes.saturating_sub(info.disk_used_bytes);
+                            let disk_sub = format!("{} Free", format_bytes(disk_free_bytes));
+                            let disk_progress = if info.disk_total_bytes > 0 {
+                                ((info.disk_used_bytes as f64 / info.disk_total_bytes as f64) * 100.0) as u32
+                            } else {
+                                0
+                            };
+
+                            view! {
+                                <Card class="p-8 space-y-8">
+                                    <ResourceMetric label="CPU" value=cpu_value sub=cpu_sub color="bg-success" progress=cpu_progress>
+                                        <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
+                                        <rect x="9" y="9" width="6" height="6" />
+                                        <line x1="9" y1="1" x2="9" y2="4" />
+                                        <line x1="15" y1="1" x2="15" y2="4" />
+                                    </ResourceMetric>
+                                    <ResourceMetric label="Memory" value=mem_value sub=mem_sub color="bg-primary" progress=mem_progress>
+                                         <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                                    </ResourceMetric>
+                                    <ResourceMetric label="Storage" value=disk_value sub=disk_sub color="bg-primary" progress=disk_progress>
+                                         <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+                                         <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+                                    </ResourceMetric>
+                                </Card>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <Card class="p-8 space-y-8">
+                                    <ResourceMetric label="CPU" value="--".to_string() sub="Connect to view".to_string() color="bg-surface-sunken" progress=0>
+                                        <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
+                                        <rect x="9" y="9" width="6" height="6" />
+                                        <line x1="9" y1="1" x2="9" y2="4" />
+                                        <line x1="15" y1="1" x2="15" y2="4" />
+                                    </ResourceMetric>
+                                    <ResourceMetric label="Memory" value="--".to_string() sub="Connect to view".to_string() color="bg-surface-sunken" progress=0>
+                                         <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                                    </ResourceMetric>
+                                    <ResourceMetric label="Storage" value="--".to_string() sub="Connect to view".to_string() color="bg-surface-sunken" progress=0>
+                                         <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+                                         <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+                                    </ResourceMetric>
+                                </Card>
+                            }.into_any()
+                        }
+                    }}
                 </div>
             </div>
         </div>
@@ -242,8 +336,6 @@ pub fn SystemStatus() -> impl IntoView {
 fn ServiceCard(
     name: &'static str,
     status: RwSignal<&'static str>,
-    uptime: &'static str,
-    latency: &'static str,
 ) -> impl IntoView {
     let badge_variant = move || match status.get() {
         "Healthy" => BadgeVariant::Emerald,
@@ -261,20 +353,14 @@ fn ServiceCard(
                 )></div>
                 <div>
                     <div class="font-medium text-text-primary text-sm">{name}</div>
-                    <div class="text-[10px] text-text-tertiary font-mono uppercase tracking-tight">{uptime} " uptime"</div>
                 </div>
             </div>
-            <div class="flex items-center gap-6">
-                <div class="text-right">
-                    <div class="text-[9px] text-text-tertiary uppercase font-bold tracking-widest mb-0.5">"Latency"</div>
-                    <div class="font-mono text-xs text-text-secondary">{latency}</div>
-                </div>
-                <div class="w-px h-8 bg-border"></div>
-                <div class="w-24 text-right">
+            <div class="w-24 text-right">
+                {move || view! {
                     <Badge variant=badge_variant()>
-                        {move || status.get()}
+                        {status.get()}
                     </Badge>
-                </div>
+                }}
             </div>
         </div>
     }
@@ -283,8 +369,8 @@ fn ServiceCard(
 #[component]
 fn ResourceMetric(
     label: &'static str,
-    value: &'static str,
-    sub: &'static str,
+    value: String,
+    sub: String,
     color: &'static str,
     progress: u32,
     children: Children,

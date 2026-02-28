@@ -411,6 +411,7 @@ mod tests {
                 description: "Improve and polish writing".to_string(),
                 triggers: vec![],
                 allowed_tools: vec![],
+                ecosystem: "aleph".to_string(),
             },
             SkillInfo {
                 id: "code-review".to_string(),
@@ -418,6 +419,7 @@ mod tests {
                 description: "Review code for issues".to_string(),
                 triggers: vec![],
                 allowed_tools: vec![],
+                ecosystem: "aleph".to_string(),
             },
         ];
 
@@ -479,6 +481,7 @@ mod tests {
             description: "Test skill".to_string(),
             triggers: vec![],
             allowed_tools: vec![],
+            ecosystem: "aleph".to_string(),
         }];
         registry.register_skills(&skills).await;
 
