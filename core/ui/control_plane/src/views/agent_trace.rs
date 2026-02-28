@@ -1,6 +1,35 @@
 use leptos::prelude::*;
-use crate::models::{TraceNode, TraceNodeType};
+use crate::models::{TraceNode, TraceNodeType, TraceStatus};
 use crate::context::{DashboardState, GatewayEvent};
+
+/// Generate a unique node ID
+fn next_node_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    format!("trace-{}", COUNTER.fetch_add(1, Ordering::SeqCst))
+}
+
+/// Get current timestamp as ms since epoch
+fn now_ms() -> f64 {
+    js_sys::Date::now()
+}
+
+/// Extract a string field from JSON value
+fn json_str(data: &serde_json::Value, key: &str) -> String {
+    data.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Format epoch ms timestamp to HH:MM:SS
+fn format_timestamp(epoch_ms: f64) -> String {
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(epoch_ms));
+    let h = date.get_hours();
+    let m = date.get_minutes();
+    let s = date.get_seconds();
+    format!("{:02}:{:02}:{:02}", h, m, s)
+}
 
 #[component]
 pub fn AgentTrace() -> impl IntoView {
@@ -11,52 +40,274 @@ pub fn AgentTrace() -> impl IntoView {
     let nodes = RwSignal::new(Vec::<TraceNode>::new());
     let is_active = RwSignal::new(true);
 
+    // Track tool start times for duration calculation
+    let tool_start_times = StoredValue::new(std::sync::Arc::new(std::sync::Mutex::new(
+        std::collections::HashMap::<String, f64>::new(),
+    )));
+
     // Subscribe to agent events when connected
     Effect::new(move || {
         if state.is_connected.get() {
             let state = state.clone();
-            let nodes = nodes.clone();
 
             // Subscribe to agent events
+            // Note: context.rs remaps "stream.*" → "run.*" topics before dispatch
             let _subscription_id = state.subscribe_events(move |event: GatewayEvent| {
                 // Only process if active
                 if !is_active.get() {
                     return;
                 }
 
-                // Handle different event types
-                match event.topic.as_str() {
-                    "agent.started" => {
-                        web_sys::console::log_1(&format!("Agent started: {:?}", event.data).into());
-                        // Add trace node for agent start
+                let topic = event.topic.as_str();
+
+                // Handle stream events (remapped from "stream.*" to "run.*" by context.rs)
+                let node = match topic {
+                    "run.run_accepted" => {
+                        let run_id = json_str(&event.data, "run_id");
+                        Some(TraceNode {
+                            id: next_node_id(),
+                            node_type: TraceNodeType::Decision,
+                            timestamp: now_ms(),
+                            duration_ms: None,
+                            content: format!("Agent run started ({})", if run_id.is_empty() { "unknown".to_string() } else { run_id }),
+                            status: TraceStatus::InProgress,
+                            children: vec![],
+                        })
                     }
-                    "agent.completed" => {
-                        web_sys::console::log_1(&format!("Agent completed: {:?}", event.data).into());
-                        // Add trace node for agent completion
+                    "run.reasoning" => {
+                        let content = json_str(&event.data, "content");
+                        if content.is_empty() {
+                            None
+                        } else {
+                            Some(TraceNode {
+                                id: next_node_id(),
+                                node_type: TraceNodeType::Thinking,
+                                timestamp: now_ms(),
+                                duration_ms: None,
+                                content,
+                                status: TraceStatus::Success,
+                                children: vec![],
+                            })
+                        }
                     }
-                    "stream.chunk" => {
-                        web_sys::console::log_1(&format!("Stream chunk: {:?}", event.data).into());
-                        // Add trace node for stream chunk
+                    "run.reasoning_block" => {
+                        let label = json_str(&event.data, "label");
+                        let content = json_str(&event.data, "content");
+                        let display = if label.is_empty() { content } else { format!("{}: {}", label, content) };
+                        Some(TraceNode {
+                            id: next_node_id(),
+                            node_type: TraceNodeType::Thinking,
+                            timestamp: now_ms(),
+                            duration_ms: None,
+                            content: display,
+                            status: TraceStatus::Success,
+                            children: vec![],
+                        })
                     }
-                    "stream.tool_start" => {
-                        web_sys::console::log_1(&format!("Tool start: {:?}", event.data).into());
-                        // Add trace node for tool start
+                    "run.tool_start" => {
+                        let tool_name = json_str(&event.data, "tool_name");
+                        let tool_id = json_str(&event.data, "tool_id");
+                        let params = event.data.get("params")
+                            .map(|p| serde_json::to_string(p).unwrap_or_default())
+                            .unwrap_or_default();
+
+                        // Record start time for duration calculation
+                        if !tool_id.is_empty() {
+                            let times = tool_start_times.get_value();
+                            let lock_result = times.lock();
+                            if let Ok(mut map) = lock_result {
+                                map.insert(tool_id.clone(), now_ms());
+                            }
+                        }
+
+                        let content = if params.is_empty() || params == "{}" {
+                            format!("Calling tool: {}", tool_name)
+                        } else {
+                            // Truncate long params
+                            let truncated = if params.len() > 200 {
+                                format!("{}...", &params[..200])
+                            } else {
+                                params
+                            };
+                            format!("Calling tool: {} ({})", tool_name, truncated)
+                        };
+
+                        Some(TraceNode {
+                            id: next_node_id(),
+                            node_type: TraceNodeType::ToolCall,
+                            timestamp: now_ms(),
+                            duration_ms: None,
+                            content,
+                            status: TraceStatus::InProgress,
+                            children: vec![],
+                        })
                     }
-                    "stream.tool_end" => {
-                        web_sys::console::log_1(&format!("Tool end: {:?}", event.data).into());
-                        // Add trace node for tool end
+                    "run.tool_end" => {
+                        let tool_id = json_str(&event.data, "tool_id");
+                        let duration_ms = event.data.get("duration_ms")
+                            .and_then(|v| v.as_u64());
+                        let success = event.data.get("result")
+                            .and_then(|r| r.get("success"))
+                            .and_then(|s| s.as_bool())
+                            .unwrap_or(true);
+                        let output = event.data.get("result")
+                            .and_then(|r| r.get("output"))
+                            .and_then(|o| o.as_str())
+                            .unwrap_or("");
+                        let error = event.data.get("result")
+                            .and_then(|r| r.get("error"))
+                            .and_then(|e| e.as_str())
+                            .unwrap_or("");
+
+                        // Calculate duration from start time if not provided
+                        let final_duration = duration_ms.or_else(|| {
+                            if !tool_id.is_empty() {
+                                let times = tool_start_times.get_value();
+                                let lock_result = times.lock();
+                                if let Ok(mut map) = lock_result {
+                                    map.remove(&tool_id).map(|start| (now_ms() - start) as u64)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        });
+
+                        let content = if success {
+                            let display = if output.len() > 300 {
+                                format!("{}...", &output[..300])
+                            } else {
+                                output.to_string()
+                            };
+                            if display.is_empty() {
+                                "Tool completed successfully".to_string()
+                            } else {
+                                format!("Result: {}", display)
+                            }
+                        } else {
+                            format!("Tool failed: {}", if error.is_empty() { "unknown error" } else { error })
+                        };
+
+                        Some(TraceNode {
+                            id: next_node_id(),
+                            node_type: TraceNodeType::ToolResult,
+                            timestamp: now_ms(),
+                            duration_ms: final_duration,
+                            content,
+                            status: if success { TraceStatus::Success } else { TraceStatus::Failed },
+                            children: vec![],
+                        })
+                    }
+                    "run.response_chunk" => {
+                        // Only show final response chunks to avoid flooding
+                        let is_final = event.data.get("is_final")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        if is_final {
+                            let content = json_str(&event.data, "content");
+                            if !content.is_empty() {
+                                Some(TraceNode {
+                                    id: next_node_id(),
+                                    node_type: TraceNodeType::Observation,
+                                    timestamp: now_ms(),
+                                    duration_ms: None,
+                                    content: if content.len() > 500 {
+                                        format!("{}...", &content[..500])
+                                    } else {
+                                        content
+                                    },
+                                    status: TraceStatus::Success,
+                                    children: vec![],
+                                })
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    "run.run_complete" => {
+                        let duration = event.data.get("total_duration_ms")
+                            .and_then(|v| v.as_u64());
+                        let tool_calls = event.data.get("summary")
+                            .and_then(|s| s.get("tool_calls"))
+                            .and_then(|t| t.as_u64())
+                            .unwrap_or(0);
+                        let loops = event.data.get("summary")
+                            .and_then(|s| s.get("loops"))
+                            .and_then(|l| l.as_u64())
+                            .unwrap_or(0);
+
+                        Some(TraceNode {
+                            id: next_node_id(),
+                            node_type: TraceNodeType::Decision,
+                            timestamp: now_ms(),
+                            duration_ms: duration,
+                            content: format!("Run complete ({} tool calls, {} loops)", tool_calls, loops),
+                            status: TraceStatus::Success,
+                            children: vec![],
+                        })
+                    }
+                    "run.run_error" => {
+                        let error = json_str(&event.data, "error");
+                        Some(TraceNode {
+                            id: next_node_id(),
+                            node_type: TraceNodeType::Decision,
+                            timestamp: now_ms(),
+                            duration_ms: None,
+                            content: format!("Run failed: {}", if error.is_empty() { "unknown error".to_string() } else { error }),
+                            status: TraceStatus::Failed,
+                            children: vec![],
+                        })
+                    }
+                    "run.ask_user" => {
+                        let question = json_str(&event.data, "question");
+                        Some(TraceNode {
+                            id: next_node_id(),
+                            node_type: TraceNodeType::Observation,
+                            timestamp: now_ms(),
+                            duration_ms: None,
+                            content: format!("Asking user: {}", question),
+                            status: TraceStatus::InProgress,
+                            children: vec![],
+                        })
+                    }
+                    "run.uncertainty_signal" => {
+                        let uncertainty = json_str(&event.data, "uncertainty");
+                        Some(TraceNode {
+                            id: next_node_id(),
+                            node_type: TraceNodeType::Observation,
+                            timestamp: now_ms(),
+                            duration_ms: None,
+                            content: format!("Uncertainty: {}", uncertainty),
+                            status: TraceStatus::InProgress,
+                            children: vec![],
+                        })
                     }
                     _ => {
-                        web_sys::console::log_1(&format!("Unknown event: {}", event.topic).into());
+                        // Handle agent.* events (dispatched directly as "event" notifications)
+                        if topic.starts_with("agent.") || topic.starts_with("run.") {
+                            web_sys::console::log_1(&format!("Trace event: {} - {:?}", topic, event.data).into());
+                        }
+                        None
                     }
+                };
+
+                // Append node if created
+                if let Some(node) = node {
+                    nodes.update(|list| {
+                        list.push(node);
+                        // Keep at most 200 nodes to prevent memory bloat
+                        if list.len() > 200 {
+                            list.drain(0..list.len() - 200);
+                        }
+                    });
                 }
             });
 
-            // Subscribe to agent.* events on the Gateway
+            // Subscribe to stream events on the Gateway
             leptos::task::spawn_local(async move {
-                if let Err(e) = state.subscribe_topic("agent.*").await {
-                    web_sys::console::error_1(&format!("Failed to subscribe to agent events: {}", e).into());
-                }
                 if let Err(e) = state.subscribe_topic("stream.*").await {
                     web_sys::console::error_1(&format!("Failed to subscribe to stream events: {}", e).into());
                 }
@@ -222,9 +473,18 @@ fn TraceNodeItem(node: TraceNode) -> impl IntoView {
                         <span class=format!("text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded border {}", accent_color)>
                             {format!("{:?}", node.node_type)}
                         </span>
-                        <span class="text-[10px] text-text-tertiary font-mono">"0.4s duration"</span>
+                        {node.duration_ms.map(|ms| {
+                            let duration_str = if ms < 1000 {
+                                format!("{}ms", ms)
+                            } else {
+                                format!("{:.1}s", ms as f64 / 1000.0)
+                            };
+                            view! {
+                                <span class="text-[10px] text-text-tertiary font-mono">{duration_str}</span>
+                            }
+                        })}
                     </div>
-                    <span class="text-[10px] text-text-tertiary font-mono">"14:20:45"</span>
+                    <span class="text-[10px] text-text-tertiary font-mono">{format_timestamp(node.timestamp)}</span>
                 </div>
 
                 <div class="text-text-primary leading-relaxed font-sans text-sm">
