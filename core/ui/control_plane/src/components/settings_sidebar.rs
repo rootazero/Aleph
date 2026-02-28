@@ -72,7 +72,7 @@ impl SettingsTab {
             Self::EmbeddingProviders => "Embedding",
             Self::GenerationProviders => "Generation Providers",
             Self::Memory => "Memory & Knowledge",
-            Self::Mcp => "MCP Plugins",
+            Self::Mcp => "MCP",
             Self::Plugins => "Plugins",
             Self::Skills => "Skills",
             Self::Channels => "Channels",

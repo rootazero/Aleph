@@ -16,6 +16,7 @@ pub struct AlephSkillSpec {
     pub description: String,
 
     /// OpenClaw + Aleph metadata
+    #[serde(default)]
     pub metadata: SkillMetadata,
 
     /// Markdown content (injected as context)

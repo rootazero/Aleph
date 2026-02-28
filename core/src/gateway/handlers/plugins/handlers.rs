@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::handlers::parse_params;
-use crate::extension::{ComponentLoader, ExtensionManager, SyncExtensionManager};
+use crate::extension::{ComponentLoader, ExtensionManager};
 
 use super::types::*;
 
@@ -68,24 +68,14 @@ pub fn is_extension_manager_initialized() -> bool {
 
 /// List all installed plugins
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
-    let manager = match SyncExtensionManager::new() {
+    let manager = match get_extension_manager() {
         Ok(m) => m,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to create extension manager: {}", e),
-            );
-        }
+        Err(e) => return e.with_id(request.id),
     };
-
-    // Load all plugins
-    if let Err(e) = manager.load_all() {
-        tracing::warn!(error = %e, "Error loading some plugins");
-    }
 
     let plugins: Vec<PluginInfoJson> = manager
         .get_plugin_info()
+        .await
         .into_iter()
         .map(PluginInfoJson::from)
         .collect();

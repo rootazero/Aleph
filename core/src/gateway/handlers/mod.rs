@@ -301,6 +301,7 @@ impl HandlerRegistry {
         registry.register("mcp.cancel_approval", mcp::handle_cancel_approval);
 
         // Markdown Skills handlers
+        registry.register("markdown_skills.install", markdown_skills::handle_install);
         registry.register("markdown_skills.load", markdown_skills::handle_load);
         registry.register("markdown_skills.reload", markdown_skills::handle_reload);
         registry.register("markdown_skills.list", markdown_skills::handle_list);
