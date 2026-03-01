@@ -8,6 +8,17 @@ use crate::skill::eligibility::current_os;
 ///
 /// Returns `None` for `Download` specs that have no URL.
 pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
+    // Validate package name: reject shell metacharacters to prevent command injection
+    fn is_safe_shell_arg(s: &str) -> bool {
+        !s.contains(';') && !s.contains('|') && !s.contains('&')
+            && !s.contains('`') && !s.contains("$(")
+            && !s.contains('\n') && !s.contains('\r')
+    }
+
+    if !is_safe_shell_arg(&spec.package) {
+        return None;
+    }
+
     match spec.kind {
         InstallKind::Brew => Some(format!("brew install {}", spec.package)),
         InstallKind::Apt => Some(format!("sudo apt-get install -y {}", spec.package)),
@@ -15,8 +26,11 @@ pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
         InstallKind::Uv => Some(format!("uv pip install {}", spec.package)),
         InstallKind::Go => Some(format!("go install {}", spec.package)),
         InstallKind::Download => {
-            spec.url.as_ref().map(|url| {
-                format!("curl -fsSL -o {} {}", spec.package, url)
+            spec.url.as_ref().and_then(|url| {
+                if !is_safe_shell_arg(url) {
+                    return None;
+                }
+                Some(format!("curl -fsSL -o {} {}", spec.package, url))
             })
         }
     }

@@ -274,7 +274,8 @@ impl SessionCompactor {
                     let status = if tc.error.is_some() { "failed" } else { "completed" };
                     let output_preview = tc.output.as_ref().map(|o| {
                         if o.len() > 200 {
-                            format!("{}...", &o[..200])
+                            let end = (0..=200).rev().find(|&i| o.is_char_boundary(i)).unwrap_or(0);
+                            format!("{}...", &o[..end])
                         } else {
                             o.clone()
                         }
@@ -294,7 +295,8 @@ impl SessionCompactor {
                 SessionPart::SubAgentCall(sa) => {
                     let result = sa.result.as_ref().map(|r| {
                         if r.len() > 200 {
-                            format!("{}...", &r[..200])
+                            let end = (0..=200).rev().find(|&i| r.is_char_boundary(i)).unwrap_or(0);
+                            format!("{}...", &r[..end])
                         } else {
                             r.clone()
                         }
@@ -329,7 +331,8 @@ impl SessionCompactor {
                 SessionPart::StreamingText(t) => {
                     if t.is_complete && !t.content.is_empty() {
                         let preview = if t.content.len() > 200 {
-                            format!("{}...", &t.content[..200])
+                            let end = (0..=200).rev().find(|&i| t.content.is_char_boundary(i)).unwrap_or(0);
+                            format!("{}...", &t.content[..end])
                         } else {
                             t.content.clone()
                         };

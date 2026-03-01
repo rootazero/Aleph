@@ -101,6 +101,9 @@ impl WorldModel {
             self.config.periodic_interval
         );
 
+        let mut batch_timer = tokio::time::interval(batch_interval);
+        let mut periodic_timer = tokio::time::interval(periodic_interval);
+
         loop {
             tokio::select! {
                 // Strategy 1: Immediate processing for key events
@@ -115,14 +118,14 @@ impl WorldModel {
                 }
 
                 // Strategy 2: Batch processing every batch_interval seconds
-                _ = tokio::time::sleep(batch_interval), if !batch_buffer.is_empty() => {
+                _ = batch_timer.tick(), if !batch_buffer.is_empty() => {
                     log::debug!("Processing batch of {} events", batch_buffer.len());
                     self.process_batch(&batch_buffer).await?;
                     batch_buffer.clear();
                 }
 
                 // Strategy 3: Periodic inference safety net
-                _ = tokio::time::sleep(periodic_interval) => {
+                _ = periodic_timer.tick() => {
                     log::debug!("Running periodic inference");
                     self.periodic_inference().await?;
                 }

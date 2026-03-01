@@ -52,6 +52,16 @@ impl CliWrapperValidator {
             .next()
             .ok_or(CliWrapperError::EmptyCommand)?;
 
+        // Reject shell metacharacters that could enable command injection
+        if command.contains(';') || command.contains('|') || command.contains('&')
+            || command.contains('`') || command.contains("$(")
+        {
+            return Err(CliWrapperError::UnauthorizedBinary {
+                attempted: "shell metacharacters detected".to_string(),
+                allowed: req.binaries.clone(),
+            });
+        }
+
         if !req.binaries.iter().any(|b| b == binary) {
             return Err(CliWrapperError::UnauthorizedBinary {
                 attempted: binary.to_string(),

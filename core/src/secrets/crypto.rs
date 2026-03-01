@@ -74,9 +74,9 @@ impl SecretsCrypto {
             .encrypt(nonce, plaintext.as_bytes())
             .map_err(|e| SecretError::EncryptionFailed(format!("AES encrypt failed: {}", e)))?;
 
-        // Zeroize derived key
-        // (key goes out of scope and is on the stack, but let's be explicit)
-        let _ = key;
+        // Zeroize derived key on stack
+        let mut key = key;
+        key.fill(0);
 
         Ok(EncryptedData {
             ciphertext,

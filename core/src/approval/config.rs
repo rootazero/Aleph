@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::policy::ApprovalPolicy;
 use super::types::{ActionRequest, ActionType, ApprovalDecision, DefaultDecision};
@@ -188,7 +188,12 @@ impl ConfigApprovalPolicy {
     /// Return the expected path for the configuration file.
     fn config_path() -> PathBuf {
         dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
+            .unwrap_or_else(|| {
+                warn!(
+                    "Cannot determine home directory; approval policy will use /tmp fallback"
+                );
+                PathBuf::from("/tmp")
+            })
             .join(".aleph")
             .join("approval-policy.json")
     }

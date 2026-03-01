@@ -36,7 +36,7 @@ impl BaselineApi {
 
         // Check cache
         {
-            let cache = self.cache.lock().unwrap();
+            let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(cached) = cache.get(&cache_key) {
                 if cached.expires_at > Utc::now() {
                     log::debug!("Baseline cache hit: {}", cache_key);
@@ -51,7 +51,7 @@ impl BaselineApi {
 
         // Store in cache
         {
-            let mut cache = self.cache.lock().unwrap();
+            let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.insert(cache_key, CachedBaseline {
                 value,
                 expires_at: Utc::now() + self.ttl,
@@ -71,7 +71,13 @@ impl BaselineApi {
         let metric = self.metric.clone();
 
         let events = std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    log::error!("Failed to create tokio runtime: {}", e);
+                    return Vec::new();
+                }
+            };
             rt.block_on(async {
                 worldmodel.query_derived_events(now - target_window, now).await
             })

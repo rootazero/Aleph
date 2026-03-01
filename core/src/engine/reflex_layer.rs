@@ -79,20 +79,20 @@ impl ReflexLayer {
     pub fn try_reflex(&self, input: &str) -> Option<AtomicAction> {
         // L1: Exact match
         if let Some(action) = self.exact_cache.get(input) {
-            self.stats.write().unwrap().l1_hits += 1;
+            if let Ok(mut stats) = self.stats.write() { stats.l1_hits += 1; }
             debug!(input = %input, "L1 cache hit");
             return Some(action.clone());
         }
 
         // L2: Keyword routing
         if let Some(action) = self.route_by_keywords(input) {
-            self.stats.write().unwrap().l2_hits += 1;
+            if let Ok(mut stats) = self.stats.write() { stats.l2_hits += 1; }
             debug!(input = %input, action = ?action, "L2 keyword routing hit");
             return Some(action);
         }
 
         // Need L3 reasoning
-        self.stats.write().unwrap().l3_fallbacks += 1;
+        if let Ok(mut stats) = self.stats.write() { stats.l3_fallbacks += 1; }
         debug!(input = %input, "Falling back to L3 reasoning");
         None
     }
@@ -280,7 +280,7 @@ impl ReflexLayer {
 
     /// Get statistics
     pub fn stats(&self) -> ReflexStats {
-        self.stats.read().unwrap().clone()
+        self.stats.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Clear L1 cache
