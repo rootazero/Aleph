@@ -193,6 +193,41 @@ impl AlephToolServer {
         self.tool(DesktopTool::new())
     }
 
+    /// Register the config read tool (read-only config inspection).
+    ///
+    /// Allows the LLM to read current configuration with sensitive fields masked.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use tokio::sync::RwLock;
+    /// use alephcore::config::Config;
+    ///
+    /// let config = Arc::new(RwLock::new(Config::default()));
+    /// let server = AlephToolServer::new()
+    ///     .with_config_read(config);
+    /// ```
+    pub fn with_config_read(self, config: std::sync::Arc<tokio::sync::RwLock<crate::config::Config>>) -> Self {
+        self.tool(ConfigReadTool::new(config))
+    }
+
+    /// Register the config update tool (write with validation + secret vault).
+    ///
+    /// Allows the LLM to update configuration. Requires user confirmation.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use alephcore::config::ConfigPatcher;
+    ///
+    /// let patcher = Arc::new(patcher);
+    /// let server = AlephToolServer::new()
+    ///     .with_config_update(patcher);
+    /// ```
+    pub fn with_config_update(self, patcher: std::sync::Arc<crate::config::ConfigPatcher>) -> Self {
+        self.tool(ConfigUpdateTool::new(patcher))
+    }
+
     /// Register the vision tool (image understanding + OCR).
     ///
     /// Requires a [`VisionPipeline`](crate::vision::VisionPipeline) configured

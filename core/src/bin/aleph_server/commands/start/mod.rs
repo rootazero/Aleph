@@ -851,7 +851,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // App config loading and handler registration
     let app_config = Arc::new(tokio::sync::RwLock::new(load_app_config().await));
-    register_config_handlers(&mut server, app_config, event_bus.clone(), auth_bundle.device_store.clone());
+    let config_patcher = {
+        let config_path = alephcore::Config::default_path();
+        let backup = alephcore::ConfigBackup::new(
+            alephcore::ConfigBackup::default_dir(),
+            10,
+        );
+        Arc::new(alephcore::ConfigPatcher::new(
+            app_config.clone(),
+            config_path,
+            None, // Vault will be wired in a future iteration
+            backup,
+        ))
+    };
+    register_config_handlers(&mut server, app_config, config_patcher, event_bus.clone(), auth_bundle.device_store.clone());
 
     register_session_handlers(&mut server, &session_manager, args.daemon);
 

@@ -360,6 +360,7 @@ pub(in crate::commands::start) async fn start_control_plane_server(final_bind: &
 pub(in crate::commands::start) fn register_config_handlers(
     server: &mut GatewayServer,
     config: Arc<tokio::sync::RwLock<alephcore::Config>>,
+    config_patcher: Arc<alephcore::ConfigPatcher>,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     device_store: Arc<alephcore::gateway::device_store::DeviceStore>,
 ) {
@@ -380,7 +381,7 @@ pub(in crate::commands::start) fn register_config_handlers(
 
     // Config CRUD
     register_handler!(server, "config.get", handle_get_full_config, config);
-    register_handler!(server, "config.patch", handle_patch_config, config, event_bus);
+    register_handler!(server, "config.patch", handle_patch_config, config_patcher, event_bus);
 
     // Providers
     register_handler!(server, "providers.list", providers::handle_list, config);

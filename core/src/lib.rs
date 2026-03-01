@@ -124,6 +124,8 @@ pub use crate::error::{AlephError, AlephException, Result};
 pub use crate::config::{
     Config, FullConfig, ProviderConfig, RoutingRuleConfig,
     MemoryConfig, BehaviorConfig, ShortcutsConfig, GeneralConfig, SmartFlowConfig,
+    backup::ConfigBackup,
+    patcher::ConfigPatcher,
 };
 
 // Initialization
