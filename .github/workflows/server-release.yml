@@ -44,24 +44,10 @@ jobs:
             target: aarch64-apple-darwin
             features: control-plane,desktop
             asset: aleph-server-darwin-aarch64
-          - os: macos-15-large
-            target: x86_64-apple-darwin
-            features: control-plane,desktop
-            asset: aleph-server-darwin-x86_64
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            features: control-plane,desktop
-            asset: aleph-server-linux-x86_64
-          # TODO: use ubuntu-24.04-arm native runner when available
-          # Cross-compiling ARM64 requires too many arch-specific system libs
-          # - os: ubuntu-22.04
-          #   target: aarch64-unknown-linux-gnu
-          #   features: control-plane
-          #   asset: aleph-server-linux-aarch64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            features: control-plane
-            asset: aleph-server-windows-x86_64.exe
+          # TODO: macOS x86_64 — needs macos-15-large (paid) or cross-compile openssl fix
+          # TODO: Linux x86_64 — alephcore has cross-platform compile errors; desktop needs pipewire 0.3.77+
+          # TODO: Linux ARM64 — cross-compiling requires arch-specific system libs; use native ARM runner
+          # TODO: Windows — alephcore has 22 compile errors on MSVC (type inference issues)
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -135,10 +121,10 @@ jobs:
           </html>
           HTMLEOF
 
-      # ── Linux build dependencies ──
+      # ── Platform-specific dependencies ──
 
       - name: Install Linux system libraries
-        if: matrix.os == 'ubuntu-22.04' && matrix.target == 'x86_64-unknown-linux-gnu'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -178,6 +164,3 @@ jobs:
         with:
           files: |
             aleph-server-darwin-aarch64/aleph-server-darwin-aarch64
-            aleph-server-darwin-x86_64/aleph-server-darwin-x86_64
-            aleph-server-linux-x86_64/aleph-server-linux-x86_64
-            aleph-server-windows-x86_64.exe/aleph-server-windows-x86_64.exe
