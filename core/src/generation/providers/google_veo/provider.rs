@@ -189,6 +189,9 @@ impl GoogleVeoProvider {
 
         // If width and height provided, determine ratio
         if let (Some(w), Some(h)) = (request.params.width, request.params.height) {
+            if h == 0 {
+                return DEFAULT_ASPECT_RATIO.to_string();
+            }
             let ratio = w as f32 / h as f32;
             if ratio > 1.0 {
                 return "16:9".to_string();

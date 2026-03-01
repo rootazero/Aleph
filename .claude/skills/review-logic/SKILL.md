@@ -1,26 +1,30 @@
 ---
 name: review-logic
 description: >
-  Deep logic bug review for Aleph codebase. Performs four-phase semantic analysis:
-  context alignment, invariant checking, control flow simulation, and red-teaming.
-  Integrates L1 proptest and L2 loom automated verification for full coverage.
-  Use when reviewing code for logic bugs, state machine errors, error propagation
-  issues, or concurrency defects. Trigger: /review-logic [module|commit] [--strict]
+  Deep logic bug review for Aleph Rust codebase. Five-phase analysis: (1) context
+  alignment against reference docs, (2) semantic invariant checking (state machines,
+  error propagation, unwrap/panic, locks, atomics), (3) control flow simulation,
+  (4) red-teaming with adversarial inputs, (5) automated L1 proptest + L2 loom
+  verification. Use when: reviewing code for logic bugs, state machine errors,
+  error propagation issues, concurrency defects, or before merging significant
+  changes. Also use after implementing new concurrency patterns, modifying DAG
+  scheduling, or touching memory/gateway/agent_loop modules.
+  Trigger: /review-logic [module|commit] [--strict]
 ---
 
 # Logic Review — Three-Layer Defense System
 
-This skill is L3 (AI Semantic Audit) of a three-layer logic review system:
+This skill is the L3 (AI Semantic Audit) layer of a three-layer defense system. The five phases below are the L3 methodology:
 
-| Layer | Method | What it catches | Command |
-|-------|--------|----------------|---------|
-| **L1** | proptest (property-based) | Invariant violations, boundary errors | `just test-proptest` |
-| **L2** | loom (concurrency) | Deadlocks, data races, atomics bugs | `just test-loom` |
+| Layer | Method | Coverage | Command |
+|-------|--------|----------|---------|
+| **L1** | proptest (property-based) | 77 tests across 9 files — invariant violations, boundary errors | `just test-proptest` |
+| **L2** | loom (concurrency) | 21 tests across 5 modules — deadlocks, data races, atomics bugs | `just test-loom` |
 | **L3** | AI semantic audit (this skill) | Logic bugs, state errors, design flaws | `/review-logic` |
 
-All three layers run together via `just test-logic`.
+Run all layers together: `just test-logic`.
 
-You are performing a deep logic review of Aleph code. Follow the four phases below strictly and in order. After the report, run automated verification (L1 + L2) if concurrency-related code was changed.
+Follow the five phases below strictly and in order.
 
 ## Arguments
 
@@ -97,15 +101,15 @@ For each changed function, check:
 - Check TOCTOU patterns: load → check → store with separate critical sections is a race
 - Flag unprotected read-modify-write sequences (should use `fetch_add`, `compare_exchange`, etc.)
 
-**Loom test coverage** (5 modules have loom tests):
+**Loom test coverage** (21 tests across 5 modules):
 
-| Module | Test file | Tests |
-|--------|-----------|-------|
-| dispatcher | `dispatcher/loom_concurrency.rs` | registry R/W, pause/resume flags, atomic counter, progress snapshot |
-| gateway | `gateway/loom_concurrency.rs` | seq counter, connection state, request ID, chunk reset, run limit TOCTOU |
-| agent_loop | `agent_loop/loom_concurrency.rs` | anchor store, state flags, Arc ref counting |
-| memory | `memory/loom_concurrency.rs` | singleton init, compression trigger, timestamps, metrics, provider swap |
-| resilience | `resilience/loom_concurrency.rs` | lane counter, token budget, per-task seq, mutex contention |
+| Module | Test file | # | Tests |
+|--------|-----------|---|-------|
+| dispatcher | `dispatcher/loom_concurrency.rs` | 4 | registry R/W, pause/resume flags, atomic counter, progress snapshot |
+| gateway | `gateway/loom_concurrency.rs` | 5 | seq counter, connection state, request ID, chunk reset, run limit TOCTOU |
+| agent_loop | `agent_loop/loom_concurrency.rs` | 3 | anchor store, state flags, Arc ref counting |
+| memory | `memory/loom_concurrency.rs` | 5 | singleton init, compression trigger, timestamps, metrics, provider swap |
+| resilience | `resilience/loom_concurrency.rs` | 4 | lane counter, token budget, per-task seq, mutex contention |
 
 If the reviewed code touches concurrency patterns in these modules, check if existing loom tests cover the change. If not, suggest adding a loom test.
 
@@ -161,8 +165,18 @@ If the reviewed code touches any of these, run automated tests:
 | Code changed | Run command | What it verifies |
 |-------------|-------------|------------------|
 | Concurrency (Mutex, RwLock, atomics, Arc) | `just test-loom` | 21 loom tests across 5 modules |
-| Business logic, data structures, parsing | `just test-proptest` | Property-based invariant tests |
-| Both or unclear | `just test-logic` | Runs proptest + loom together |
+| Business logic, data structures, parsing | `just test-proptest` | 77 proptest tests across 9 files |
+| Both or unclear | `just test-logic` | All proptest + loom tests |
+
+**Proptest coverage** (77 tests across 9 files):
+
+| Module | Test files |
+|--------|-----------|
+| agent_loop | `proptest_decision.rs` (10), `proptest_state.rs` (10) |
+| dispatcher | `agent_types/proptest_graph.rs` (8), `agent_types/proptest_task.rs` (7) |
+| gateway | `proptest_channel.rs` (7), `proptest_protocol.rs` (7) |
+| memory | `proptest_enums.rs` (7) |
+| poe | `proptest_types.rs` (11), `proptest_budget.rs` (10) |
 
 Report the test results in the findings section. If a loom or proptest test fails, escalate to **Critical**.
 
@@ -237,9 +251,20 @@ fn test_name() {
 
 In `--strict` mode: lower the bar for Warning (include more "might be a problem" items).
 
-## Aleph-Specific Rules
+## Known Bug Patterns
 
-These are project-specific invariants to always check:
+Patterns confirmed by full-codebase review — always check for these:
+
+- **UTF-8 byte slicing**: `&s[..n]` panics on multi-byte chars — use `s.get(..n)`, `char_indices()`, `strip_suffix()`
+- **Lock poisoning**: `lock().unwrap()` cascades panics — use `.unwrap_or_else(|e| e.into_inner())`
+- **SQL filter injection**: LanceDB DataFusion filters built via `format!()` — must escape with `escape_sql_string()`
+- **`expect()`/`unwrap()` on user-facing paths**: home_dir, timestamps, HTTP clients — use fallbacks
+- **`static mut`**: unsound in Rust — use `OnceLock` or `Lazy`
+- **HashMap iteration order**: non-deterministic for security rules — sort explicitly
+
+## Aleph-Specific Invariants
+
+Project-specific rules to always check:
 
 1. **R1 Brain-Limb Separation**: No platform-specific APIs (AppKit, Vision, windows-rs) in `core/src/`
 2. **DAG Acyclicity**: Any code touching TaskGraph must preserve the no-cycle invariant

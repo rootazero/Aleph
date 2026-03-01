@@ -77,7 +77,7 @@ impl LaunchdService {
         let mut soft_limits = Dictionary::new();
         soft_limits.insert(
             "MemoryLimit".to_string(),
-            Value::Integer(Integer::from(config.soft_mem_limit as i64)),
+            Value::Integer(Integer::from(i64::try_from(config.soft_mem_limit).unwrap_or(i64::MAX))),
         );
         dict.insert(
             "SoftResourceLimits".to_string(),
@@ -87,7 +87,7 @@ impl LaunchdService {
         let mut hard_limits = Dictionary::new();
         hard_limits.insert(
             "MemoryLimit".to_string(),
-            Value::Integer(Integer::from(config.hard_mem_limit as i64)),
+            Value::Integer(Integer::from(i64::try_from(config.hard_mem_limit).unwrap_or(i64::MAX))),
         );
         dict.insert(
             "HardResourceLimits".to_string(),

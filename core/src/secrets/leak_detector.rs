@@ -124,7 +124,11 @@ impl LeakDetector {
         // Check hash-based detection for content fragments
         for word in content.split_whitespace() {
             if word.len() >= 8 {
-                let mut hasher = siphasher::sip::SipHasher::new();
+                // Use same keys as InjectedSecret::from_value
+                let mut hasher = siphasher::sip::SipHasher::new_with_keys(
+                    0x517c_c1b7_2722_0a95,
+                    0x6c62_272e_07bb_0142,
+                );
                 word.hash(&mut hasher);
                 let hash = hasher.finish();
                 if self.injected_hashes.contains(&hash) {
