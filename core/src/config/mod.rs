@@ -18,12 +18,16 @@ mod save;
 mod validate;
 mod migration;
 mod methods;
+pub mod backup;
 pub mod schema;
 pub mod types;
 pub mod ui_hints;
 
 // Re-export main types
 pub use structs::{Config, FullConfig};
+
+// Re-export backup types
+pub use backup::{BackupEntry, ConfigBackup};
 
 // Re-export schema generation functions
 pub use schema::generate_config_schema_json;
