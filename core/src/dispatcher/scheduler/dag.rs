@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::future::join_all;
+use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
@@ -440,50 +440,46 @@ impl DagScheduler {
                 }
             }
 
-            // Execute tasks in parallel
-            let futures: Vec<_> = ready_tasks
-                .into_iter()
-                .map(|(task_id, task_name, deps)| {
-                    let executor = Arc::clone(&executor);
-                    let callback = Arc::clone(&callback);
-                    let task = graph.get_task(&task_id).cloned();
-                    let dep_refs: Vec<&str> = deps.iter().map(|s| s.as_str()).collect();
-                    let prompt_context = context.build_prompt_context(&task_id, &dep_refs);
+            // Execute tasks in parallel with streaming results
+            let mut futs = FuturesUnordered::new();
+            for (task_id, task_name, deps) in ready_tasks {
+                let executor = Arc::clone(&executor);
+                let callback = Arc::clone(&callback);
+                let task = graph.get_task(&task_id).cloned();
+                let dep_refs: Vec<&str> = deps.iter().map(|s| s.as_str()).collect();
+                let prompt_context = context.build_prompt_context(&task_id, &dep_refs);
 
-                    async move {
-                        if let Some(task) = task {
-                            // Notify task start
-                            callback.on_task_start(&task_id, &task_name).await;
+                futs.push(async move {
+                    if let Some(task) = task {
+                        // Notify task start
+                        callback.on_task_start(&task_id, &task_name).await;
 
-                            // Execute with retry
-                            let exec_result = execute_with_retry(
-                                &task,
-                                &executor,
-                                &callback,
-                                &prompt_context,
-                                max_task_retries,
-                            )
-                            .await;
+                        // Execute with retry
+                        let exec_result = execute_with_retry(
+                            &task,
+                            &executor,
+                            &callback,
+                            &prompt_context,
+                            max_task_retries,
+                        )
+                        .await;
 
-                            (task_id, task_name, exec_result)
-                        } else {
-                            (
-                                task_id.clone(),
-                                task_name,
-                                Err(crate::error::AlephError::NotFound(format!(
-                                    "Task '{}' not found in graph",
-                                    task_id
-                                ))),
-                            )
-                        }
+                        (task_id, task_name, exec_result)
+                    } else {
+                        (
+                            task_id.clone(),
+                            task_name,
+                            Err(crate::error::AlephError::NotFound(format!(
+                                "Task '{}' not found in graph",
+                                task_id
+                            ))),
+                        )
                     }
-                })
-                .collect();
+                });
+            }
 
-            let results = join_all(futures).await;
-
-            // Process results
-            for (task_id, task_name, exec_result) in results {
+            // Process results as they complete (streaming, not batched)
+            while let Some((task_id, task_name, exec_result)) = futs.next().await {
                 let mut sched = scheduler.lock().await;
 
                 match exec_result {
