@@ -169,6 +169,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "aleph-desktop"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "enigo",
+ "image 0.25.9",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "windows 0.58.0",
+ "xcap",
+]
+
+[[package]]
 name = "aleph-protocol"
 version = "0.1.0"
 dependencies = [

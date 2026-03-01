@@ -1,0 +1,49 @@
+[package]
+name = "aleph-desktop"
+description = "Cross-platform desktop capabilities: screen capture, input automation, OCR"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Encoding
+base64 = { workspace = true }
+
+# Screen capture (xcap 0.8 requires image 0.25)
+xcap = "0.8"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Input automation
+enigo = { version = "0.3", features = ["serde"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    # OCR (WinRT Media.Ocr)
+    "Media_Ocr",
+    "Globalization",
+    "Graphics_Imaging",
+    "Storage_Streams",
+    # UI Automation (AX tree)
+    "Win32_UI_Accessibility",
+    "Win32_System_Com",
+] }
