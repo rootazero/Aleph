@@ -4,12 +4,11 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use crate::config::patcher::set_nested_value;
+use crate::config::patcher::{ConfigPatcher, PatchRequest};
 use crate::config::{build_ui_hints, generate_config_schema_json, Config, ConfigUiHints};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::hot_reload::ConfigWatcher;
@@ -382,7 +381,8 @@ pub async fn handle_get_full_config(
 
 /// Handle config.patch RPC method
 ///
-/// Applies partial configuration updates and broadcasts ConfigChanged event.
+/// Delegates to ConfigPatcher for the full pipeline: schema validation,
+/// conflict detection, backup, secret routing, and atomic save.
 ///
 /// # Request
 ///
@@ -392,8 +392,11 @@ pub async fn handle_get_full_config(
 ///   "method": "config.patch",
 ///   "id": 1,
 ///   "params": {
-///     "ui.theme": "dark",
-///     "auth.identity": "owner@local"
+///     "path": "providers.openai",
+///     "patch": { "model": "gpt-4o", "temperature": 0.8 },
+///     "secret_fields": { "api_key": "sk-xxx" },
+///     "dry_run": false,
+///     "health_check": true
 ///   }
 /// }
 /// ```
@@ -405,25 +408,30 @@ pub async fn handle_get_full_config(
 ///   "jsonrpc": "2.0",
 ///   "id": 1,
 ///   "result": {
-///     "status": "ok"
+///     "status": "ok",
+///     "applied_sections": ["providers"],
+///     "diff": [...],
+///     "warnings": []
 ///   }
 /// }
 /// ```
 pub async fn handle_patch_config(
     req: JsonRpcRequest,
-    config: Arc<RwLock<Config>>,
+    patcher: Arc<ConfigPatcher>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     debug!("Handling config.patch");
 
-    // Parse patch from params
-    let patch: HashMap<String, Value> = match parse_params(&req) {
+    // Parse params into PatchRequest
+    let patch_request: PatchRequest = match parse_params(&req) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
-    // Validate non-empty
-    if patch.is_empty() {
+    // Validate non-empty patch
+    if patch_request.patch == serde_json::Value::Null
+        || patch_request.patch == serde_json::Value::Object(Default::default())
+    {
         return JsonRpcResponse::error(
             req.id,
             INVALID_PARAMS,
@@ -431,75 +439,19 @@ pub async fn handle_patch_config(
         );
     }
 
-    // Collect top-level sections touched (for incremental save)
-    let touched_sections: Vec<String> = patch
-        .keys()
-        .filter_map(|k| k.split('.').next().map(|s| s.to_string()))
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
+    let path = patch_request.path.clone();
 
-    // Apply patch under write lock
-    {
-        let mut config_write = config.write().await;
-
-        // Serialize current config to JSON
-        let mut config_json = match serde_json::to_value(&*config_write) {
-            Ok(v) => v,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    req.id,
-                    INTERNAL_ERROR,
-                    format!("Failed to serialize config: {}", e),
-                );
-            }
-        };
-
-        // Apply each dot-path key via set_nested_value
-        for (path, value) in &patch {
-            if let Err(e) = set_nested_value(&mut config_json, path, value) {
-                return JsonRpcResponse::error(
-                    req.id,
-                    INVALID_PARAMS,
-                    format!("Failed to apply patch at '{}': {}", path, e),
-                );
-            }
-        }
-
-        // Deserialize back to Config
-        let new_config: Config = match serde_json::from_value(config_json) {
-            Ok(c) => c,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    req.id,
-                    INVALID_PARAMS,
-                    format!("Patched config is invalid: {}", e),
-                );
-            }
-        };
-
-        // Run structural validation
-        if let Err(e) = new_config.validate() {
+    // Delegate to ConfigPatcher (full pipeline: validate, backup, save)
+    let result = match patcher.apply(patch_request).await {
+        Ok(r) => r,
+        Err(e) => {
             return JsonRpcResponse::error(
                 req.id,
                 INVALID_PARAMS,
-                format!("Config validation failed: {}", e),
+                format!("Config patch failed: {}", e),
             );
         }
-
-        // Replace in-memory config
-        *config_write = new_config;
-
-        // Save touched sections to disk
-        let section_refs: Vec<&str> = touched_sections.iter().map(|s| s.as_str()).collect();
-        if let Err(e) = config_write.save_incremental(&section_refs) {
-            return JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                format!("Failed to save config: {}", e),
-            );
-        }
-    }
+    };
 
     // Broadcast ConfigChanged event
     let timestamp = std::time::SystemTime::now()
@@ -507,15 +459,15 @@ pub async fn handle_patch_config(
         .unwrap_or_default()
         .as_millis() as i64;
 
-    let section = if touched_sections.len() == 1 {
-        Some(touched_sections[0].clone())
+    let section = if result.applied_sections.len() == 1 {
+        Some(result.applied_sections[0].clone())
     } else {
         None
     };
 
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
         section,
-        value: json!(patch),
+        value: json!({ "path": path }),
         timestamp,
     });
 
@@ -527,9 +479,15 @@ pub async fn handle_patch_config(
         );
     }
 
-    info!("Config patched: {} keys updated", patch.len());
+    info!(
+        sections = ?result.applied_sections,
+        "Config patched via RPC"
+    );
 
-    JsonRpcResponse::success(req.id, json!({"status": "ok"}))
+    match serde_json::to_value(&result) {
+        Ok(v) => JsonRpcResponse::success(req.id, v),
+        Err(_) => JsonRpcResponse::success(req.id, json!({"status": "ok"})),
+    }
 }
 
 #[cfg(test)]
@@ -714,50 +672,68 @@ model = "claude-opus-4-5"
     // Patch Tests
     // ========================================================================
 
+    fn create_test_patcher() -> (Arc<ConfigPatcher>, tempfile::TempDir) {
+        use crate::config::backup::ConfigBackup;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+
+        // Write minimal valid config
+        let config = Config::default();
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        std::fs::write(&config_path, &toml_str).unwrap();
+
+        let config = Arc::new(RwLock::new(config));
+        let backup = ConfigBackup::new(temp_dir.path().join("backups"), 3);
+        let patcher = Arc::new(ConfigPatcher::new(config, config_path, None, backup));
+
+        (patcher, temp_dir)
+    }
+
     #[tokio::test]
     async fn test_handle_patch_config() {
         use crate::gateway::event_bus::GatewayEventBus;
 
-        let config = Config::default();
-        let config = Arc::new(RwLock::new(config));
+        let (patcher, _temp_dir) = create_test_patcher();
         let event_bus = Arc::new(GatewayEventBus::new());
 
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: "config.patch".to_string(),
             params: Some(json!({
-                "ui.theme": "dark",
-                "auth.identity": "owner@local"
+                "path": "ui",
+                "patch": { "theme": "dark" }
             })),
             id: Some(json!(1)),
         };
 
-        let response = handle_patch_config(req, config, event_bus).await;
+        let response = handle_patch_config(req, patcher, event_bus).await;
 
-        assert!(response.error.is_none());
+        assert!(response.error.is_none(), "error: {:?}", response.error);
         assert!(response.result.is_some());
         let result = response.result.unwrap();
-        assert_eq!(result.get("status").unwrap().as_str().unwrap(), "ok");
+        assert_eq!(result["success"], true);
     }
 
     #[tokio::test]
     async fn test_patch_rejects_empty() {
         use crate::gateway::event_bus::GatewayEventBus;
 
-        let config = Config::default();
-        let config = Arc::new(RwLock::new(config));
+        let (patcher, _temp_dir) = create_test_patcher();
         let event_bus = Arc::new(GatewayEventBus::new());
 
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: "config.patch".to_string(),
-            params: Some(json!({})),
+            params: Some(json!({
+                "path": "ui",
+                "patch": {}
+            })),
             id: Some(json!(1)),
         };
 
-        let response = handle_patch_config(req, config, event_bus).await;
+        let response = handle_patch_config(req, patcher, event_bus).await;
 
-        assert!(response.result.is_none());
         assert!(response.error.is_some());
         let error = response.error.unwrap();
         assert_eq!(error.code, INVALID_PARAMS);

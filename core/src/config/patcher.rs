@@ -17,9 +17,19 @@ use crate::secrets::{EntryMetadata, SecretVault};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::SystemTime;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
+
+/// Cached JSON Schema for Config validation (generated once, reused).
+fn cached_config_schema() -> &'static serde_json::Value {
+    static SCHEMA: OnceLock<serde_json::Value> = OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        let schema = generate_config_schema();
+        serde_json::to_value(&schema).expect("Config schema serialization is infallible")
+    })
+}
 
 // =============================================================================
 // Request / Response Types
@@ -152,6 +162,18 @@ impl ConfigPatcher {
     pub async fn apply(&self, request: PatchRequest) -> Result<PatchResult> {
         let mut warnings: Vec<String> = Vec::new();
 
+        // 0. Validate path format
+        if request.path.is_empty()
+            || request.path.contains("..")
+            || request.path.starts_with('.')
+            || request.path.ends_with('.')
+        {
+            return Err(AlephError::invalid_config(format!(
+                "Invalid config path: '{}'",
+                request.path
+            )));
+        }
+
         // 1. Parse top-level section from the dot-path
         let top_section = request
             .path
@@ -217,9 +239,10 @@ impl ConfigPatcher {
         // 10. Check conflict (mtime) — hard error if file was modified externally
         self.check_conflict().await?;
 
-        // 11. Route secrets to vault
+        // 11. Route secrets to vault and sanitize config
+        let mut new_config = new_config;
         if !request.secret_fields.is_empty() {
-            self.route_secrets(&request.path, &request.secret_fields, &new_config)
+            self.route_secrets(&request.path, &request.secret_fields, &mut new_config)
                 .await?;
         }
 
@@ -263,12 +286,9 @@ impl ConfigPatcher {
 
     /// Validate a JSON value against the Config JSON Schema.
     pub fn validate_schema(&self, config_json: &serde_json::Value) -> Result<()> {
-        let schema = generate_config_schema();
-        let schema_json = serde_json::to_value(&schema).map_err(|e| {
-            AlephError::invalid_config(format!("Failed to serialize schema: {}", e))
-        })?;
+        let schema_json = cached_config_schema();
 
-        let validator = jsonschema::validator_for(&schema_json).map_err(|e| {
+        let validator = jsonschema::validator_for(schema_json).map_err(|e| {
             AlephError::invalid_config(format!("Invalid JSON Schema: {}", e))
         })?;
 
@@ -311,16 +331,16 @@ impl ConfigPatcher {
         Ok(())
     }
 
-    /// Route secret fields to the encrypted vault.
+    /// Route secret fields to the encrypted vault and sanitize the config.
     ///
     /// For each key in `secret_fields`, the plaintext value is stored in the
-    /// vault under the name `<path>.<field_name>`, and the config field is
-    /// left unmodified (the caller should use `secret_name` references).
+    /// vault under `<path>.<field_name>`, and the corresponding provider config
+    /// is updated to use `secret_name` instead of a plaintext `api_key`.
     pub async fn route_secrets(
         &self,
         path: &str,
         secret_fields: &HashMap<String, String>,
-        _config: &Config,
+        config: &mut Config,
     ) -> Result<()> {
         let vault = match &self.vault {
             Some(v) => v,
@@ -331,13 +351,14 @@ impl ConfigPatcher {
             }
         };
 
+        let parts: Vec<&str> = path.split('.').collect();
         let mut vault_guard = vault.lock().await;
 
         for (field_name, secret_value) in secret_fields {
             let vault_key = format!("{}.{}", path, field_name);
             let metadata = EntryMetadata {
                 description: Some(format!("Auto-stored by config patcher for {}", path)),
-                provider: path.split('.').next().map(|s| s.to_string()),
+                provider: parts.first().map(|s| s.to_string()),
             };
 
             vault_guard.set(&vault_key, secret_value, metadata).map_err(|e| {
@@ -346,6 +367,19 @@ impl ConfigPatcher {
                     vault_key, e
                 ))
             })?;
+
+            // Sanitize: replace plaintext api_key with secret_name reference
+            if field_name == "api_key" && parts.first() == Some(&"providers") && parts.len() >= 2 {
+                if let Some(provider) = config.providers.get_mut(parts[1]) {
+                    provider.secret_name = Some(vault_key.clone());
+                    provider.api_key = None;
+                    debug!(
+                        provider = parts[1],
+                        vault_key = %vault_key,
+                        "Replaced plaintext api_key with secret_name reference"
+                    );
+                }
+            }
 
             debug!(vault_key = %vault_key, "Secret routed to vault");
         }

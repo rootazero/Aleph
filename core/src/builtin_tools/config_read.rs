@@ -23,11 +23,13 @@ use super::{notify_tool_result, notify_tool_start};
 // =============================================================================
 
 /// Field names whose string values should be replaced with "***".
+/// Uses exact match (not substring) to avoid false positives on fields like `secret_name`.
 const SENSITIVE_FIELDS: &[&str] = &[
     "api_key",
     "token",
-    "secret",
     "password",
+    "client_secret",
+    "secret_key",
     "service_account_token_env",
 ];
 
@@ -83,7 +85,7 @@ impl ConfigReadTool {
 /// Check if a field name matches any sensitive pattern
 fn is_sensitive_field(key: &str) -> bool {
     let lower = key.to_lowercase();
-    SENSITIVE_FIELDS.iter().any(|s| lower.contains(s))
+    SENSITIVE_FIELDS.iter().any(|s| lower == *s)
 }
 
 /// Recursively mask sensitive fields in a JSON value.
@@ -273,7 +275,8 @@ mod tests {
         mask_sensitive_fields(&mut val);
         assert_eq!(val["api_key"], "***");
         assert_eq!(val["model"], "gpt-4");
-        assert_eq!(val["secret_name"], "***");
+        // secret_name is a vault reference, NOT a secret — should NOT be masked
+        assert_eq!(val["secret_name"], "my_secret");
     }
 
     #[test]
