@@ -367,9 +367,11 @@ impl EventHandler for LoopController {
                 }
 
                 let recent = self.recent_calls.read().await;
-                let mut session = ExecutionSession::default();
-                session.iteration_count = iteration;
-                session.recent_calls = recent.clone();
+                let session = ExecutionSession {
+                    iteration_count: iteration,
+                    recent_calls: recent.clone(),
+                    ..Default::default()
+                };
 
                 // Check guards
                 if let Some(stop_reason) = self.check_guards(&session, ctx) {

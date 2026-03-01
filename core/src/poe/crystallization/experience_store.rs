@@ -10,6 +10,9 @@ use tokio::sync::RwLock;
 
 use crate::error::AlephError;
 
+/// A stored experience entry with its embedding vector.
+type ExperienceEntry = (PoeExperience, Vec<f32>);
+
 // ============================================================================
 // PoeExperience -- crystallized execution experience
 // ============================================================================
@@ -104,7 +107,7 @@ pub trait ExperienceStore: Send + Sync {
 /// Stores experiences and embeddings in memory. Vector search uses
 /// cosine similarity.
 pub struct InMemoryExperienceStore {
-    entries: Arc<RwLock<Vec<(PoeExperience, Vec<f32>)>>>,
+    entries: Arc<RwLock<Vec<ExperienceEntry>>>,
 }
 
 impl InMemoryExperienceStore {

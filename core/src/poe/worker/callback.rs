@@ -156,7 +156,7 @@ impl LoopCallback for PoeLoopCallback {
         }
 
         // Log the step (acquire locks sequentially, not nested)
-        let (current_step, log_entry) = {
+        let (_current_step, log_entry) = {
             let mut step_id = self.step_counter.write().await;
             let current = *step_id;
             *step_id += 1;

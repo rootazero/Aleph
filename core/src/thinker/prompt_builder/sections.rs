@@ -2,7 +2,6 @@
 //!
 //! All `append_*` methods that build individual prompt sections live here.
 
-use crate::agent_loop::ToolInfo;
 use crate::dispatcher::tool_index::HydrationResult;
 
 use super::PromptBuilder;
@@ -14,7 +13,8 @@ use crate::thinker::soul::SoulManifest;
 impl PromptBuilder {
     // ========== Shared prompt section builders ==========
 
-    /// Append runtime capabilities section
+    /// Append runtime capabilities section (test-only; pipeline uses RuntimeCapabilitiesLayer)
+    #[cfg(test)]
     pub(crate) fn append_runtime_capabilities(&self, prompt: &mut String) {
         if let Some(ref runtimes) = self.config.runtime_capabilities {
             let runtimes = sanitize_for_prompt(runtimes, SanitizeLevel::Light);
@@ -45,37 +45,8 @@ impl PromptBuilder {
         prompt.push_str("\n\n");
     }
 
-    /// Append available tools section
-    pub(crate) fn append_tools(&self, prompt: &mut String, tools: &[ToolInfo]) {
-        prompt.push_str("## Available Tools\n");
-        if tools.is_empty() && self.config.tool_index.is_none() {
-            prompt.push_str("No tools available. You can only use special actions.\n\n");
-        } else {
-            if !tools.is_empty() {
-                prompt.push_str("### Tools (with full parameters)\n");
-                for tool in tools {
-                    prompt.push_str(&format!("#### {}\n", tool.name));
-                    prompt.push_str(&format!("{}\n", tool.description));
-                    if !tool.parameters_schema.is_empty() {
-                        prompt.push_str(&format!("Parameters: {}\n", tool.parameters_schema));
-                    }
-                    prompt.push('\n');
-                }
-            }
-
-            if let Some(ref index) = self.config.tool_index {
-                prompt.push_str("### Additional Tools (use `get_tool_schema` to get parameters)\n");
-                prompt.push_str("The following tools are available but not shown with full parameters.\n");
-                prompt.push_str(
-                    "Call `get_tool_schema(tool_name)` to get the complete parameter schema before using.\n\n",
-                );
-                prompt.push_str(index);
-                prompt.push('\n');
-            }
-        }
-    }
-
-    /// Append generation models section
+    /// Append generation models section (test-only; pipeline uses GenerationModelsLayer)
+    #[cfg(test)]
     pub(crate) fn append_generation_models(&self, prompt: &mut String) {
         if let Some(ref models) = self.config.generation_models {
             let models = sanitize_for_prompt(models, SanitizeLevel::Light);
@@ -131,131 +102,6 @@ impl PromptBuilder {
             prompt.push_str(&result.indexed_tool_names.join(", "));
             prompt.push_str("\n\n");
         }
-    }
-
-    /// Append special actions section
-    pub(crate) fn append_special_actions(&self, prompt: &mut String) {
-        prompt.push_str("## Special Actions\n");
-        prompt.push_str("- `complete`: Call when the task is fully done. The `summary` field MUST be a comprehensive report that includes:\n");
-        prompt.push_str("  1. A brief overview of what was accomplished\n");
-        prompt.push_str("  2. Key results and findings (data, insights, metrics)\n");
-        prompt.push_str("  3. List of all generated files with their purposes\n");
-        prompt.push_str("  4. Any important notes or recommendations\n");
-        prompt.push_str(
-            "  **DO NOT** just say 'Task completed'. Write a detailed summary the user can immediately understand.\n",
-        );
-        prompt.push_str("- `ask_user`: Call when you need clarification or user decision\n");
-        prompt.push_str("- `fail`: Call when the task cannot be completed\n\n");
-    }
-
-    /// Append response format section
-    pub(crate) fn append_response_format(&self, prompt: &mut String) {
-        prompt.push_str("## Response Format\n");
-        prompt.push_str("You must respond with a JSON object:\n");
-        prompt.push_str("```json\n");
-        prompt.push_str("{\n");
-        prompt.push_str("  \"reasoning\": \"Brief explanation of your thinking\",\n");
-        prompt.push_str("  \"action\": {\n");
-        prompt.push_str("    \"type\": \"tool|ask_user|complete|fail\",\n");
-        prompt.push_str("    \"tool_name\": \"...\",      // if type=tool\n");
-        prompt.push_str("    \"arguments\": {...},       // if type=tool\n");
-        prompt.push_str("    \"question\": \"...\",        // if type=ask_user\n");
-        prompt.push_str("    \"options\": [...],         // if type=ask_user (optional)\n");
-        prompt.push_str("    \"summary\": \"...\",         // if type=complete (MUST be detailed report)\n");
-        prompt.push_str("    \"reason\": \"...\"           // if type=fail\n");
-        prompt.push_str("  }\n");
-        prompt.push_str("}\n");
-        prompt.push_str("```\n\n");
-        prompt.push_str("### ask_user Format Details\n");
-        prompt.push_str("When using `ask_user`, you have TWO modes:\n\n");
-
-        prompt.push_str("**Mode 1: Single Question** (simple selection or text input)\n");
-        prompt.push_str("- Use `options` field as an array of SEPARATE choices:\n");
-        prompt.push_str("  - ✅ CORRECT: [\"Option 1\", \"Option 2\", \"Option 3\"]\n");
-        prompt.push_str("  - ❌ WRONG: [\"Option 1 / Option 2 / Option 3\"] (single merged string)\n");
-        prompt.push_str("- Each option should be a standalone, selectable choice\n");
-        prompt.push_str("- If no options (free-form text input), omit the field or use empty array\n\n");
-
-        prompt.push_str("**Mode 2: Multi-Group Questions** (multiple related questions)\n");
-        prompt.push_str("Use this when you need answers to MULTIPLE independent questions simultaneously.\n");
-        prompt.push_str("Instead of asking one by one, group them together for better UX.\n\n");
-
-        prompt.push_str("```json\n");
-        prompt.push_str("{\n");
-        prompt.push_str("  \"reasoning\": \"Need multiple image generation parameters\",\n");
-        prompt.push_str("  \"action\": {\n");
-        prompt.push_str("    \"type\": \"ask_user_multigroup\",\n");
-        prompt.push_str("    \"question\": \"Please configure the image generation settings\",  // Overall prompt\n");
-        prompt.push_str("    \"groups\": [\n");
-        prompt.push_str("      {\n");
-        prompt.push_str("        \"id\": \"format\",  // Unique group ID (alphanumeric)\n");
-        prompt.push_str("        \"prompt\": \"Output format\",\n");
-        prompt.push_str("        \"options\": [\"PNG\", \"JPEG\", \"WebP\"]\n");
-        prompt.push_str("      },\n");
-        prompt.push_str("      {\n");
-        prompt.push_str("        \"id\": \"quality\",\n");
-        prompt.push_str("        \"prompt\": \"Quality level\",\n");
-        prompt.push_str("        \"options\": [\"Low\", \"Medium\", \"High\", \"Best\"]\n");
-        prompt.push_str("      },\n");
-        prompt.push_str("      {\n");
-        prompt.push_str("        \"id\": \"size\",\n");
-        prompt.push_str("        \"prompt\": \"Image size\",\n");
-        prompt.push_str("        \"options\": [\"512x512\", \"1024x1024\", \"2048x2048\"]\n");
-        prompt.push_str("      }\n");
-        prompt.push_str("    ]\n");
-        prompt.push_str("  }\n");
-        prompt.push_str("}\n");
-        prompt.push_str("```\n\n");
-
-        prompt.push_str("**When to use Multi-Group**:\n");
-        prompt.push_str("- Multiple configuration options needed (3+ choices)\n");
-        prompt.push_str("- Questions are independent but related\n");
-        prompt.push_str("- Better UX than asking one-by-one\n");
-        prompt.push_str("- Example: \"Choose format (PNG/JPEG), quality (Low/Medium/High), size (Small/Large)\"\n\n");
-
-        prompt.push_str("**When NOT to use Multi-Group**:\n");
-        prompt.push_str("- Single question with multiple options → Use simple `ask_user`\n");
-        prompt.push_str("- Questions depend on previous answers → Ask sequentially\n");
-        prompt.push_str("- Free-form text input → Use `ask_user` with no options\n\n");
-
-        prompt.push_str("**Simple ask_user Example**:\n");
-        prompt.push_str("```json\n");
-        prompt.push_str("{\n");
-        prompt.push_str("  \"reasoning\": \"Need user to select image format\",\n");
-        prompt.push_str("  \"action\": {\n");
-        prompt.push_str("    \"type\": \"ask_user\",\n");
-        prompt.push_str("    \"question\": \"Which output format do you prefer?\",\n");
-        prompt.push_str("    \"options\": [\"PNG\", \"JPEG\", \"WebP\"]\n");
-        prompt.push_str("  }\n");
-        prompt.push_str("}\n");
-        prompt.push_str("```\n\n");
-        prompt.push_str("### Completion Summary Format\n");
-        prompt.push_str("When `type=complete`, the `summary` should be a well-formatted report:\n");
-        prompt.push_str("```\n");
-        prompt.push_str("## Task Completed\n");
-        prompt.push_str("[Brief description of what was accomplished]\n\n");
-        prompt.push_str("### Results\n");
-        prompt.push_str("[Key findings, data, or outcomes]\n\n");
-        prompt.push_str("### Generated Files\n");
-        prompt.push_str("- file1.json: [description]\n");
-        prompt.push_str("- file2.png: [description]\n\n");
-        prompt.push_str("### Notes\n");
-        prompt.push_str("[Any recommendations or important observations]\n");
-        prompt.push_str("```\n\n");
-    }
-
-    /// Append guidelines section
-    pub(crate) fn append_guidelines(&self, prompt: &mut String) {
-        prompt.push_str("## Guidelines\n");
-        prompt.push_str("1. Take ONE action at a time, observe the result, then decide next\n");
-        prompt.push_str("2. Use tool results to inform subsequent decisions\n");
-        prompt.push_str(
-            "3. Ask user when: multiple valid approaches, unclear requirements, need confirmation\n",
-        );
-        prompt.push_str(
-            "4. Complete when: task is done, or you've provided the requested information\n",
-        );
-        prompt.push_str("5. Fail when: impossible to proceed, missing critical resources\n\n");
     }
 
     /// Append constitutional AI safety guardrails
@@ -330,83 +176,8 @@ impl PromptBuilder {
         );
     }
 
-    /// Append thinking transparency guidance section
-    ///
-    /// Guides the AI on structured reasoning output:
-    /// Observation -> Analysis -> Planning -> Decision
-    pub(crate) fn append_thinking_guidance(&self, prompt: &mut String) {
-        if !self.config.thinking_transparency {
-            return;
-        }
-
-        prompt.push_str("## Thinking Transparency\n\n");
-        prompt.push_str("Structure your reasoning to be transparent and understandable:\n\n");
-
-        prompt.push_str("### Reasoning Flow\n");
-        prompt.push_str("Follow this progression in your `reasoning` field:\n\n");
-        prompt.push_str("1. **Observation** (👁️): Start by observing the current state\n");
-        prompt.push_str("   - \"Looking at the request, I see...\"\n");
-        prompt.push_str("   - \"The user wants to...\"\n");
-        prompt.push_str("   - \"Based on the previous result...\"\n\n");
-        prompt.push_str("2. **Analysis** (🔍): Analyze options and trade-offs\n");
-        prompt.push_str("   - \"Considering the options: A vs B vs C...\"\n");
-        prompt.push_str("   - \"The trade-off here is...\"\n");
-        prompt.push_str("   - \"Comparing approaches...\"\n\n");
-        prompt.push_str("3. **Planning** (📝): Outline your approach\n");
-        prompt.push_str("   - \"I'll start by...\"\n");
-        prompt.push_str("   - \"First, ... then...\"\n");
-        prompt.push_str("   - \"My strategy is to...\"\n\n");
-        prompt.push_str("4. **Decision** (✅): State your conclusion\n");
-        prompt.push_str("   - \"Therefore, I will...\"\n");
-        prompt.push_str("   - \"The best approach is...\"\n");
-        prompt.push_str("   - \"So I've decided to...\"\n\n");
-
-        prompt.push_str("### Expressing Uncertainty\n");
-        prompt.push_str("When uncertain, be explicit rather than hiding it:\n\n");
-        prompt.push_str("- **High confidence**: \"I'm confident that...\" or \"Clearly,...\"\n");
-        prompt.push_str("- **Medium confidence**: \"I think...\" or \"This should work...\"\n");
-        prompt.push_str("- **Low confidence**: \"I'm not sure, but...\" or \"This might...\"\n");
-        prompt.push_str("- **Exploratory**: \"Let's try...\" or \"Worth experimenting with...\"\n\n");
-
-        prompt.push_str("### Acknowledging Alternatives\n");
-        prompt.push_str("When relevant, mention alternatives you considered:\n");
-        prompt.push_str("- \"Alternatively, we could...\"\n");
-        prompt.push_str("- \"Another option would be...\"\n");
-        prompt.push_str("- \"I chose X over Y because...\"\n\n");
-
-        prompt.push_str("This structured thinking helps users understand your reasoning process.\n\n");
-    }
-
-    /// Append skill mode section
-    pub(crate) fn append_skill_mode(&self, prompt: &mut String) {
-        if self.config.skill_mode {
-            prompt.push_str("## ⚠️ Skill Execution Mode - CRITICAL RULES\n\n");
-            prompt.push_str("You are executing a SKILL workflow. You MUST follow these rules EXACTLY:\n\n");
-            prompt.push_str("### 🔴 RESPONSE FORMAT (MANDATORY)\n");
-            prompt.push_str("**EVERY response MUST be a valid JSON action object. NEVER output raw content directly!**\n\n");
-            prompt.push_str("❌ WRONG: Outputting processed text, data, or results directly\n");
-            prompt.push_str("✅ CORRECT: Always return {\"reasoning\": \"...\", \"action\": {...}}\n\n");
-            prompt.push_str("If you need to process data and save it, use the `file_ops` tool:\n");
-            prompt.push_str("```json\n");
-            prompt.push_str("{\"reasoning\": \"Writing processed data to file\", \"action\": {\"type\": \"tool\", \"tool_name\": \"file_ops\", \"arguments\": {\"operation\": \"write\", \"path\": \"output.json\", \"content\": \"...\"}}}\n");
-            prompt.push_str("```\n\n");
-            prompt.push_str("### Workflow Requirements\n");
-            prompt.push_str("1. Complete ALL steps in the skill workflow - NO exceptions\n");
-            prompt.push_str("2. Generate ALL output files specified (JSON, .mmd, .txt, images, etc.)\n");
-            prompt.push_str("3. Use `file_ops` with `operation: \"write\"` to save each file\n");
-            prompt.push_str("4. DO NOT skip any step, even if you think it's redundant\n");
-            prompt.push_str("5. Before calling `complete`, verify ALL required outputs exist\n\n");
-            prompt.push_str("### Common skill outputs to generate\n");
-            prompt.push_str("- Data files: `triples.json`, `*.json`\n");
-            prompt.push_str("- Visualization code: `graph.mmd`, `*.mmd`\n");
-            prompt.push_str("- Prompts: `image-prompt.txt`, `*.txt`\n");
-            prompt.push_str("- Images: via `generate_image` tool\n");
-            prompt.push_str("- Merged outputs: `merged-*.json`, `full-*.mmd`\n\n");
-            prompt.push_str("**If you output raw content instead of JSON action, you have FAILED.**\n\n");
-        }
-    }
-
-    /// Append skill instructions from SkillSystem v2 snapshot
+    /// Append skill instructions from SkillSystem v2 snapshot (test-only; pipeline uses SkillInstructionsLayer)
+    #[cfg(test)]
     pub(crate) fn append_skill_instructions(&self, prompt: &mut String) {
         if let Some(ref instructions) = self.config.skill_instructions {
             if !instructions.is_empty() {
@@ -421,7 +192,8 @@ impl PromptBuilder {
         }
     }
 
-    /// Append custom instructions section
+    /// Append custom instructions section (test-only; pipeline uses CustomInstructionsLayer)
+    #[cfg(test)]
     pub(crate) fn append_custom_instructions(&self, prompt: &mut String) {
         if let Some(instructions) = &self.config.custom_instructions {
             let instructions = sanitize_for_prompt(instructions, SanitizeLevel::Moderate);
@@ -432,7 +204,8 @@ impl PromptBuilder {
         }
     }
 
-    /// Append language setting section
+    /// Append language setting section (test-only; pipeline uses LanguageSettingLayer)
+    #[cfg(test)]
     pub(crate) fn append_language_setting(&self, prompt: &mut String) {
         if let Some(lang) = &self.config.language {
             let lang = sanitize_for_prompt(lang, SanitizeLevel::Strict);

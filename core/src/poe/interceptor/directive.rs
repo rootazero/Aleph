@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 
 /// POE directive to AgentLoop after evaluating a step.
 /// Returned by `LoopCallback::on_step_evaluate()`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum StepDirective {
     /// Normal continuation — no intervention.
+    #[default]
     Continue,
     /// Continue but inject a hint into the next Think step.
     ContinueWithHint { hint: String },
@@ -12,12 +13,6 @@ pub enum StepDirective {
     SuggestStrategySwitch { reason: String, suggestion: String },
     /// Force loop termination.
     Abort { reason: String },
-}
-
-impl Default for StepDirective {
-    fn default() -> Self {
-        Self::Continue
-    }
 }
 
 impl StepDirective {

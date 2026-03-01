@@ -198,9 +198,7 @@ impl ConfigPatcher {
         set_nested_value(&mut patched_json, &request.path, &request.patch)?;
 
         // 5. Validate against JSON Schema
-        if let Err(e) = self.validate_schema(&patched_json) {
-            return Err(e);
-        }
+        self.validate_schema(&patched_json)?;
 
         // 6. Deserialize back to Config
         let new_config: Config = serde_json::from_value(patched_json.clone()).map_err(|e| {

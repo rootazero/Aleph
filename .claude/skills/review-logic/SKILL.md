@@ -32,7 +32,54 @@ Parse the user's input:
 - No args → review uncommitted changes (`git diff` + `git diff --cached`)
 - Module name (e.g., `dispatcher`, `gateway`) → review that module's recent changes
 - Commit hash → review that specific commit (`git show <hash>`)
+- `--all` flag → full repo scan (all modules under `core/src/`)
 - `--strict` flag → lower the Warning threshold (report more potential issues)
+
+## Scope Management
+
+Before starting the five phases, assess scope and choose a batch strategy.
+
+**Estimate scope:**
+
+| Input type | Measure with |
+|-----------|-------------|
+| Uncommitted changes | `git diff --stat` |
+| Commit | `git show --stat <hash>` |
+| Module | `find core/src/<module> -name '*.rs' \| wc -l` |
+| `--all` | All 63 modules under `core/src/` (~1200 .rs files) |
+
+**Choose strategy:**
+
+| Scope | Strategy |
+|-------|----------|
+| ≤ 10 changed files | **Single pass** — run five phases directly |
+| 11-30 changed files | **Module batching** — group by module, run phases per batch |
+| > 30 files or `--all` | **Subagent dispatch** — parallel subagents per module |
+
+### Module batching (medium scope)
+
+1. Group changed files by module using the Phase 1 module→doc mapping
+2. Run all five phases for each module batch sequentially
+3. Track cross-module concerns (see below) across batches
+4. After all batches: merge findings into one consolidated report
+
+### Subagent dispatch (large scope)
+
+1. **Tier 1 — high-risk modules** (review first):
+   agent_loop, dispatcher, gateway, memory, poe, exec, resilience, extension, thinker
+2. **Tier 2**: all remaining `core/src/` directories
+3. Dispatch one subagent per module. For tiny modules (≤ 5 files), group 3-4 into one subagent
+4. Each subagent prompt: module name, reference doc path (from Phase 1 table), full five-phase instructions, flags
+5. Collect all subagent reports → produce consolidated summary
+
+### Cross-module tracking
+
+These issues only surface when comparing findings across batches — actively track them:
+
+- **Lock hierarchy violations** spanning modules (e.g., gateway holds Level 2 while calling memory at Level 1)
+- **Error context loss** at module boundaries (`map_err` strips inner context)
+- **Shared state inconsistency** — same data accessed from different modules with different lock patterns
+- **API contract drift** — caller assumes invariant the callee doesn't guarantee
 
 ## Phase 1: Context Alignment
 
@@ -241,6 +288,26 @@ fn test_name() {
 | Critical | N |
 | Warning | N |
 | Suggested Test | N |
+```
+
+For batched reviews, append cross-module section and batch summary:
+
+```markdown
+## Cross-Module Findings
+
+### [Critical] <title spanning modules>
+- **Modules**: `module_a/file.rs` → `module_b/file.rs`
+- **Risk**: <description>
+- **Suggested fix**: <how to fix>
+
+## Batch Summary
+| Module | Critical | Warning | Suggested Test |
+|--------|----------|---------|----------------|
+| gateway | 2 | 5 | 3 |
+| dispatcher | 0 | 3 | 1 |
+| ... | ... | ... | ... |
+| **Cross-module** | **1** | **0** | **0** |
+| **Total** | **N** | **N** | **N** |
 ```
 
 ## Quality Bar

@@ -291,7 +291,7 @@ impl RollbackManager {
     /// Vector of `RollbackResult` for each entry
     pub async fn rollback_all(&self) -> Vec<RollbackResult> {
         // Drain entries under lock, then process without holding the lock
-        let mut drained: Vec<_> = {
+        let drained: Vec<_> = {
             let mut entries = self.pending_entries.write().await;
             entries.drain(..).rev().collect()
         };

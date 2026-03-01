@@ -398,7 +398,7 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
 fn find_split_point(candidate: &str) -> usize {
     // Count fence openings/closings in the candidate to detect if we're mid-block.
     let fence_count = candidate.matches("```").count();
-    let in_code_block = fence_count % 2 != 0;
+    let in_code_block = !fence_count.is_multiple_of(2);
 
     if in_code_block {
         // We're in the middle of a code block. Try to split BEFORE the opening
@@ -435,26 +435,22 @@ fn find_split_point(candidate: &str) -> usize {
 /// Replace paired markers like `**` with open/close tags.
 fn replace_paired_marker(text: &str, marker: &str, open: &str, close: &str) -> String {
     let mut result = text.to_string();
-    loop {
-        if let Some(start) = result.find(marker) {
-            let after_start = start + marker.len();
-            if after_start >= result.len() {
-                break;
-            }
-            if let Some(rel_end) = result[after_start..].find(marker) {
-                let end = after_start + rel_end;
-                let inner = &result[after_start..end];
-                result = format!(
-                    "{}{}{}{}{}",
-                    &result[..start],
-                    open,
-                    inner,
-                    close,
-                    &result[end + marker.len()..]
-                );
-            } else {
-                break;
-            }
+    while let Some(start) = result.find(marker) {
+        let after_start = start + marker.len();
+        if after_start >= result.len() {
+            break;
+        }
+        if let Some(rel_end) = result[after_start..].find(marker) {
+            let end = after_start + rel_end;
+            let inner = &result[after_start..end];
+            result = format!(
+                "{}{}{}{}{}",
+                &result[..start],
+                open,
+                inner,
+                close,
+                &result[end + marker.len()..]
+            );
         } else {
             break;
         }
@@ -699,7 +695,7 @@ fn extract_language_from_attrs(attrs: &str) -> String {
     if let Some(class_start) = attrs.find("language-") {
         let after = &attrs[class_start + 9..];
         let end = after
-            .find(|c: char| c == '"' || c == '\'' || c == ' ' || c == '>')
+            .find(['"', '\'', ' ', '>'])
             .unwrap_or(after.len());
         after[..end].to_string()
     } else {
