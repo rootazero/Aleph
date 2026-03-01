@@ -11,7 +11,9 @@ use reqwest::Client;
 use schemars::JsonSchema;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use tracing::{debug, info};
+use url::Url;
 
 
 /// Arguments for web fetch tool
@@ -113,6 +115,13 @@ impl WebFetchTool {
                 "Invalid URL format: {}. URL must start with http:// or https://",
                 args.url
             );
+            notify_tool_result(Self::NAME, &error_msg, false);
+            return Err(ToolError::InvalidArgs(error_msg));
+        }
+
+        // SSRF protection: block requests to internal/private hosts
+        if let Err(reason) = is_safe_url(&args.url) {
+            let error_msg = format!("URL blocked (SSRF protection): {}", reason);
             notify_tool_result(Self::NAME, &error_msg, false);
             return Err(ToolError::InvalidArgs(error_msg));
         }
@@ -242,6 +251,81 @@ impl WebFetchTool {
     }
 }
 
+/// Check if a URL is safe to fetch (not targeting internal/private services)
+fn is_safe_url(url_str: &str) -> std::result::Result<(), String> {
+    let parsed = Url::parse(url_str).map_err(|e| format!("invalid URL: {}", e))?;
+
+    let host = parsed.host_str().ok_or("URL has no host")?;
+
+    // Block known dangerous hostnames
+    let blocked_hostnames = [
+        "localhost",
+        "metadata.google.internal",
+        "metadata.google",
+    ];
+    let lower_host = host.to_lowercase();
+    for blocked in &blocked_hostnames {
+        if lower_host == *blocked {
+            return Err(format!("blocked host: {}", host));
+        }
+    }
+
+    // Try to parse as IP directly
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return check_ip_safety(ip);
+    }
+
+    // Resolve hostname to IP addresses and check each one
+    let port = parsed.port().unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+    let socket_addr = format!("{}:{}", host, port);
+    if let Ok(addrs) = socket_addr.to_socket_addrs() {
+        for addr in addrs {
+            check_ip_safety(addr.ip())?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Check if an IP address is safe (not loopback, private, link-local, or cloud metadata)
+fn check_ip_safety(ip: IpAddr) -> std::result::Result<(), String> {
+    match ip {
+        IpAddr::V4(ipv4) => {
+            if ipv4.is_loopback() {
+                return Err(format!("loopback address: {}", ipv4));
+            }
+            if ipv4.is_private() {
+                return Err(format!("private network address: {}", ipv4));
+            }
+            if ipv4.is_link_local() {
+                return Err(format!("link-local address: {}", ipv4));
+            }
+            // AWS/cloud metadata endpoint: 169.254.169.254
+            if ipv4 == Ipv4Addr::new(169, 254, 169, 254) {
+                return Err("cloud metadata endpoint".to_string());
+            }
+            // Block 0.0.0.0/8
+            if ipv4.octets()[0] == 0 {
+                return Err(format!("unspecified address: {}", ipv4));
+            }
+        }
+        IpAddr::V6(ipv6) => {
+            if ipv6.is_loopback() {
+                return Err(format!("loopback address: {}", ipv6));
+            }
+            // IPv4-mapped IPv6 addresses (::ffff:x.x.x.x)
+            if let Some(mapped) = ipv6.to_ipv4_mapped() {
+                return check_ip_safety(IpAddr::V4(mapped));
+            }
+            // IPv6 unspecified
+            if ipv6 == Ipv6Addr::UNSPECIFIED {
+                return Err("unspecified address: ::".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Default for WebFetchTool {
     fn default() -> Self {
         Self::new()
@@ -345,6 +429,37 @@ mod tests {
         let text = "  Hello   world  \n\t  test  ";
         let cleaned = tool.clean_text(text);
         assert_eq!(cleaned, "Hello world test");
+    }
+
+    #[test]
+    fn test_ssrf_blocks_localhost() {
+        assert!(is_safe_url("http://localhost/admin").is_err());
+        assert!(is_safe_url("http://127.0.0.1/secret").is_err());
+        assert!(is_safe_url("http://127.0.0.1:8080/api").is_err());
+    }
+
+    #[test]
+    fn test_ssrf_blocks_private_networks() {
+        assert!(is_safe_url("http://10.0.0.1/internal").is_err());
+        assert!(is_safe_url("http://192.168.1.1/admin").is_err());
+        assert!(is_safe_url("http://172.16.0.1/secret").is_err());
+    }
+
+    #[test]
+    fn test_ssrf_blocks_metadata_endpoints() {
+        assert!(is_safe_url("http://169.254.169.254/latest/meta-data/").is_err());
+        assert!(is_safe_url("http://metadata.google.internal/computeMetadata/").is_err());
+    }
+
+    #[test]
+    fn test_ssrf_allows_public_urls() {
+        assert!(is_safe_url("https://example.com").is_ok());
+        assert!(is_safe_url("https://8.8.8.8").is_ok());
+    }
+
+    #[test]
+    fn test_ssrf_blocks_ipv6_loopback() {
+        assert!(is_safe_url("http://[::1]/admin").is_err());
     }
 
     #[test]
