@@ -41,22 +41,22 @@ impl MessageOperationsRegistry {
     pub fn register(&self, adapter: Arc<dyn MessageOperations>) {
         let channel_id = adapter.channel_id().to_string();
         debug!(channel_id = %channel_id, "Registering message operations adapter");
-        self.adapters.write().unwrap().insert(channel_id, adapter);
+        self.adapters.write().unwrap_or_else(|e| e.into_inner()).insert(channel_id, adapter);
     }
 
     /// Get an adapter by channel ID
     pub fn get(&self, channel_id: &str) -> Option<Arc<dyn MessageOperations>> {
-        self.adapters.read().unwrap().get(channel_id).cloned()
+        self.adapters.read().unwrap_or_else(|e| e.into_inner()).get(channel_id).cloned()
     }
 
     /// List all registered channel IDs
     pub fn list_channels(&self) -> Vec<String> {
-        self.adapters.read().unwrap().keys().cloned().collect()
+        self.adapters.read().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect()
     }
 
     /// Get capabilities for a channel
     pub fn capabilities(&self, channel_id: &str) -> Option<ChannelCapabilities> {
-        self.adapters.read().unwrap().get(channel_id).map(|a| a.capabilities())
+        self.adapters.read().unwrap_or_else(|e| e.into_inner()).get(channel_id).map(|a| a.capabilities())
     }
 }
 

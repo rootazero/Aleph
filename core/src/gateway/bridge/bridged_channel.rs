@@ -42,11 +42,11 @@ impl SharedStatus {
     }
 
     fn get(&self) -> ChannelStatus {
-        *self.0.read().expect("SharedStatus lock poisoned")
+        *self.0.read().unwrap_or_else(|e| e.into_inner())
     }
 
     fn set(&self, status: ChannelStatus) {
-        *self.0.write().expect("SharedStatus lock poisoned") = status;
+        *self.0.write().unwrap_or_else(|e| e.into_inner()) = status;
     }
 }
 

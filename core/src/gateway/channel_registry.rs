@@ -260,7 +260,7 @@ impl ChannelRegistry {
     ///
     /// This can only be called once - subsequent calls return None.
     pub fn take_inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        let mut rx_guard = self.inbound_rx.lock().expect("inbound_rx mutex poisoned");
+        let mut rx_guard = self.inbound_rx.lock().unwrap_or_else(|e| e.into_inner());
         rx_guard.take()
     }
 

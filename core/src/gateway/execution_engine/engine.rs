@@ -207,7 +207,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         agent.set_state(AgentState::Idle).await;
 
         // Emit completion event
-        let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds() as u64;
+        let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
 
         let final_result = match &result {
             Ok(response) => {

@@ -92,7 +92,7 @@ impl RpcPrompter {
 
     /// Generate next step ID
     fn next_id(&self) -> String {
-        let mut counter = self.step_counter.write().unwrap();
+        let mut counter = self.step_counter.write().unwrap_or_else(|e| e.into_inner());
         *counter += 1;
         format!("step-{}", *counter)
     }
@@ -103,7 +103,7 @@ impl RpcPrompter {
 
         // Register pending answer
         {
-            let mut answers = self.answers.write().unwrap();
+            let mut answers = self.answers.write().unwrap_or_else(|e| e.into_inner());
             answers.insert(step.id.clone(), PendingAnswer { sender: tx });
         }
 

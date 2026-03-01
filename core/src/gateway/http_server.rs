@@ -129,6 +129,15 @@ pub async fn serve_static_file(
         static_dir.join(path.trim_start_matches('/'))
     };
 
+    // Prevent path traversal: ensure resolved path stays within static_dir
+    if let (Ok(canonical), Ok(canonical_static)) =
+        (file_path.canonicalize(), static_dir.canonicalize())
+    {
+        if !canonical.starts_with(&canonical_static) {
+            return not_found();
+        }
+    }
+
     // Try to serve the file
     if file_path.exists() && file_path.is_file() {
         match tokio::fs::read(&file_path).await {

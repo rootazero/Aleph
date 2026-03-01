@@ -161,7 +161,7 @@ impl EvolutionAutoLoader {
 
     /// Clear the generated skills tracking list
     pub fn clear_tracking(&self) {
-        self.generated_skills.write().unwrap().clear();
+        self.generated_skills.write().unwrap_or_else(|e| e.into_inner()).clear();
     }
 }
 

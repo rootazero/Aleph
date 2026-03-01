@@ -448,13 +448,21 @@ impl ThinkingParser {
 
         for marker in markers {
             if let Some(pos) = lower.find(marker) {
-                // Extract the sentence containing this marker
-                let start = reasoning[..pos].rfind('.').map(|p| p + 1).unwrap_or(0);
-                let end = reasoning[pos..]
+                // Use original string if byte positions are valid char boundaries,
+                // otherwise fall back to lowercased string for safety
+                let (source, source_len) = if reasoning.len() == lower.len()
+                    && reasoning.is_char_boundary(pos)
+                {
+                    (reasoning, reasoning.len())
+                } else {
+                    (lower.as_str(), lower.len())
+                };
+                let start = source[..pos].rfind('.').map(|p| p + 1).unwrap_or(0);
+                let end = source[pos..]
                     .find('.')
                     .map(|p| pos + p + 1)
-                    .unwrap_or(reasoning.len());
-                let sentence = reasoning[start..end].trim();
+                    .unwrap_or(source_len);
+                let sentence = source[start..end].trim();
                 if !sentence.is_empty() && !alternatives.contains(&sentence.to_string()) {
                     alternatives.push(sentence.to_string());
                 }
@@ -486,12 +494,21 @@ impl ThinkingParser {
 
         for marker in markers {
             if let Some(pos) = lower.find(marker) {
-                let start = reasoning[..pos].rfind('.').map(|p| p + 1).unwrap_or(0);
-                let end = reasoning[pos..]
+                // Use original string if byte positions are valid char boundaries,
+                // otherwise fall back to lowercased string for safety
+                let (source, source_len) = if reasoning.len() == lower.len()
+                    && reasoning.is_char_boundary(pos)
+                {
+                    (reasoning, reasoning.len())
+                } else {
+                    (lower.as_str(), lower.len())
+                };
+                let start = source[..pos].rfind('.').map(|p| p + 1).unwrap_or(0);
+                let end = source[pos..]
                     .find('.')
                     .map(|p| pos + p + 1)
-                    .unwrap_or(reasoning.len());
-                let sentence = reasoning[start..end].trim();
+                    .unwrap_or(source_len);
+                let sentence = source[start..end].trim();
                 if !sentence.is_empty() && !uncertainties.contains(&sentence.to_string()) {
                     uncertainties.push(sentence.to_string());
                 }

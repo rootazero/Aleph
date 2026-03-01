@@ -96,12 +96,13 @@ impl WasmCapabilityKernel {
     }
 
     pub fn log(&self, _level: &str, msg: &str) -> Result<(), CapabilityError> {
-        let count = self.log_count.fetch_add(1, Ordering::Relaxed);
+        let count = self.log_count.load(Ordering::Relaxed);
         if count >= self.limits.max_log_entries {
             return Err(CapabilityError::ResourceExhausted(
                 "log entry limit exceeded".to_string(),
             ));
         }
+        self.log_count.store(count + 1, Ordering::Relaxed);
         let _msg = if msg.len() > self.limits.max_log_message_bytes {
             // Find a valid char boundary at or before the byte limit
             let mut end = self.limits.max_log_message_bytes;
@@ -123,22 +124,24 @@ impl WasmCapabilityKernel {
     }
 
     pub fn check_http_limit(&self) -> Result<(), CapabilityError> {
-        let count = self.http_call_count.fetch_add(1, Ordering::Relaxed);
+        let count = self.http_call_count.load(Ordering::Relaxed);
         if count >= self.limits.max_http_calls {
             return Err(CapabilityError::ResourceExhausted(
                 "HTTP call limit exceeded".to_string(),
             ));
         }
+        self.http_call_count.store(count + 1, Ordering::Relaxed);
         Ok(())
     }
 
     pub fn check_tool_invoke_limit(&self) -> Result<(), CapabilityError> {
-        let count = self.tool_invoke_count.fetch_add(1, Ordering::Relaxed);
+        let count = self.tool_invoke_count.load(Ordering::Relaxed);
         if count >= self.limits.max_tool_invokes {
             return Err(CapabilityError::ResourceExhausted(
                 "tool invoke limit exceeded".to_string(),
             ));
         }
+        self.tool_invoke_count.store(count + 1, Ordering::Relaxed);
         Ok(())
     }
 

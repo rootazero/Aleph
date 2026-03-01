@@ -439,13 +439,17 @@ fn expand_path(path: &str) -> PathBuf {
 /// Expand ${ENV_VAR} in strings
 fn expand_env_var(s: &str) -> String {
     let mut result = s.to_string();
+    let mut search_from = 0;
 
-    // Find ${...} patterns
-    while let Some(start) = result.find("${") {
+    // Find ${...} patterns, advancing past substituted values to prevent infinite loops
+    while let Some(rel_start) = result[search_from..].find("${") {
+        let start = search_from + rel_start;
         if let Some(end) = result[start..].find('}') {
             let var_name = &result[start + 2..start + end];
             let value = std::env::var(var_name).unwrap_or_default();
+            let value_len = value.len();
             result = format!("{}{}{}", &result[..start], value, &result[start + end + 1..]);
+            search_from = start + value_len;
         } else {
             break;
         }

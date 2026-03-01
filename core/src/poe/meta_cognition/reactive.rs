@@ -175,9 +175,7 @@ impl ReactiveReflector {
 
         // Step 4: Persist anchor to store
         {
-            let mut store = self.anchor_store.write().map_err(|e| {
-                AlephError::config(format!("Failed to acquire anchor store lock: {}", e))
-            })?;
+            let mut store = self.anchor_store.write().unwrap_or_else(|e| e.into_inner());
             store.add(anchor.clone()).map_err(|e| {
                 AlephError::config(format!("Failed to persist anchor: {}", e))
             })?;
@@ -468,9 +466,7 @@ impl ReactiveReflector {
 
         // Persist anchor to store
         {
-            let mut store = self.anchor_store.write().map_err(|e| {
-                AlephError::config(format!("Failed to acquire anchor store lock: {}", e))
-            })?;
+            let mut store = self.anchor_store.write().unwrap_or_else(|e| e.into_inner());
             store.add(anchor.clone()).map_err(|e| {
                 AlephError::config(format!("Failed to persist anchor: {}", e))
             })?;

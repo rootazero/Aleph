@@ -176,7 +176,11 @@ impl PiiEngine {
             match action {
                 PiiAction::Block => {
                     // Safety: ensure indices are valid UTF-8 boundaries
-                    if detection.start <= detection.end && detection.end <= result.len() {
+                    if detection.start <= detection.end
+                        && detection.end <= result.len()
+                        && result.is_char_boundary(detection.start)
+                        && result.is_char_boundary(detection.end)
+                    {
                         result
                             .replace_range(detection.start..detection.end, &detection.placeholder);
                         blocked_count += 1;

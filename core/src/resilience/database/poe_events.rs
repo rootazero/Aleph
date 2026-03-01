@@ -64,7 +64,7 @@ impl StateDatabase {
                 Ok(PoeEventRow {
                     id: row.get(0)?,
                     task_id: row.get(1)?,
-                    seq: row.get::<_, i64>(2)? as u32,
+                    seq: u32::try_from(row.get::<_, i64>(2)?).unwrap_or(u32::MAX),
                     _event_type: row.get::<_, String>(3)?,
                     event_json: row.get(4)?,
                     _tier: row.get::<_, String>(5)?,
@@ -107,7 +107,7 @@ impl StateDatabase {
                 Ok(PoeEventRow {
                     id: row.get(0)?,
                     task_id: row.get(1)?,
-                    seq: row.get::<_, i64>(2)? as u32,
+                    seq: u32::try_from(row.get::<_, i64>(2)?).unwrap_or(u32::MAX),
                     _event_type: row.get::<_, String>(3)?,
                     event_json: row.get(4)?,
                     _tier: row.get::<_, String>(5)?,

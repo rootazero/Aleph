@@ -210,7 +210,7 @@ impl MemoryCommands {
             .collect();
 
         // Sort by strength descending
-        summaries.sort_by(|a, b| b.strength.partial_cmp(&a.strength).unwrap());
+        summaries.sort_by(|a, b| b.strength.partial_cmp(&a.strength).unwrap_or(std::cmp::Ordering::Equal));
 
         // Apply limit
         if let Some(limit) = filter.limit {

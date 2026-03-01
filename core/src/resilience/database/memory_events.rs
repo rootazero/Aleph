@@ -106,7 +106,7 @@ impl StateDatabase {
                 Ok(MemoryEventRow {
                     id: row.get(0)?,
                     fact_id: row.get(1)?,
-                    seq: row.get::<_, i64>(2)? as u64,
+                    seq: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
                     _event_type: row.get::<_, String>(3)?,
                     event_json: row.get(4)?,
                     actor: row.get(5)?,
@@ -148,7 +148,7 @@ impl StateDatabase {
                 Ok(MemoryEventRow {
                     id: row.get(0)?,
                     fact_id: row.get(1)?,
-                    seq: row.get::<_, i64>(2)? as u64,
+                    seq: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
                     _event_type: row.get::<_, String>(3)?,
                     event_json: row.get(4)?,
                     actor: row.get(5)?,
@@ -190,7 +190,7 @@ impl StateDatabase {
                 Ok(MemoryEventRow {
                     id: row.get(0)?,
                     fact_id: row.get(1)?,
-                    seq: row.get::<_, i64>(2)? as u64,
+                    seq: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
                     _event_type: row.get::<_, String>(3)?,
                     event_json: row.get(4)?,
                     actor: row.get(5)?,
@@ -234,7 +234,7 @@ impl StateDatabase {
                 Ok(MemoryEventRow {
                     id: row.get(0)?,
                     fact_id: row.get(1)?,
-                    seq: row.get::<_, i64>(2)? as u64,
+                    seq: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
                     _event_type: row.get::<_, String>(3)?,
                     event_json: row.get(4)?,
                     actor: row.get(5)?,

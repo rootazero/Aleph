@@ -72,8 +72,8 @@ impl StateDatabase {
                 |row| {
                     Ok(TrustScoreRow {
                         pattern_id: row.get(0)?,
-                        total_executions: row.get::<_, i64>(1)? as u32,
-                        successful_executions: row.get::<_, i64>(2)? as u32,
+                        total_executions: u32::try_from(row.get::<_, i64>(1)?).unwrap_or(u32::MAX),
+                        successful_executions: u32::try_from(row.get::<_, i64>(2)?).unwrap_or(u32::MAX),
                         trust_score: row.get::<_, f64>(3)? as f32,
                         last_updated: row.get(4)?,
                     })

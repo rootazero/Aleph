@@ -118,7 +118,7 @@ impl SimpleExecutionEngine {
             }
         };
 
-        let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds() as u64;
+        let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
 
         match &result {
             Ok(response) => {

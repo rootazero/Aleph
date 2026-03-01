@@ -39,7 +39,7 @@ impl ProtocolRegistry {
 
     /// Register built-in protocols
     pub fn register_builtin(&self) {
-        let mut builtin = self.builtin.write().unwrap();
+        let mut builtin = self.builtin.write().unwrap_or_else(|e| e.into_inner());
 
         builtin.insert(
             "openai".to_string(),
@@ -62,24 +62,24 @@ impl ProtocolRegistry {
 
     /// Register a dynamic protocol
     pub fn register(&self, name: String, protocol: Arc<dyn ProtocolAdapter>) -> Result<()> {
-        self.dynamic.write().unwrap().insert(name, protocol);
+        self.dynamic.write().unwrap_or_else(|e| e.into_inner()).insert(name, protocol);
         Ok(())
     }
 
     /// Unregister a dynamic protocol
     pub fn unregister(&self, name: &str) {
-        self.dynamic.write().unwrap().remove(name);
+        self.dynamic.write().unwrap_or_else(|e| e.into_inner()).remove(name);
     }
 
     /// Get a protocol by name
     pub fn get(&self, name: &str) -> Option<Arc<dyn ProtocolAdapter>> {
         // 1. Check dynamic protocols first
-        if let Some(protocol) = self.dynamic.read().unwrap().get(name) {
+        if let Some(protocol) = self.dynamic.read().unwrap_or_else(|e| e.into_inner()).get(name) {
             return Some(protocol.clone());
         }
 
         // 2. Fall back to built-in protocols
-        self.builtin.read().unwrap().get(name).map(|factory| {
+        self.builtin.read().unwrap_or_else(|e| e.into_inner()).get(name).map(|factory| {
             let client = Client::new();
             factory(client)
         })
@@ -87,8 +87,8 @@ impl ProtocolRegistry {
 
     /// List all available protocol names
     pub fn list_protocols(&self) -> Vec<String> {
-        let mut protocols: Vec<String> = self.builtin.read().unwrap().keys().cloned().collect();
-        protocols.extend(self.dynamic.read().unwrap().keys().cloned());
+        let mut protocols: Vec<String> = self.builtin.read().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
+        protocols.extend(self.dynamic.read().unwrap_or_else(|e| e.into_inner()).keys().cloned());
         protocols.sort();
         protocols
     }
