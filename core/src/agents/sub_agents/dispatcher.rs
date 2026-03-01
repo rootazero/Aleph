@@ -219,7 +219,11 @@ impl SubAgentDispatcher {
 
         if !capable_agents.is_empty() {
             // Prefer more specific agents (fewer capabilities = more specialized)
-            capable_agents.sort_by_key(|agent| agent.capabilities().len());
+            // Break ties by name for deterministic selection
+            capable_agents.sort_by(|a, b| {
+                a.capabilities().len().cmp(&b.capabilities().len())
+                    .then_with(|| a.name().cmp(b.name()))
+            });
             let agent = capable_agents[0];
             debug!(
                 "Dispatching to capable agent: {} ({})",

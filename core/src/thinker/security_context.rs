@@ -329,16 +329,11 @@ impl SecurityContext {
             }
         }
 
-        // Denied tools note
+        // Denied tools note (sorted for deterministic output)
         if !self.denied_tools.is_empty() {
-            notes.push(format!(
-                "Denied Tools: {}",
-                self.denied_tools
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+            let mut tools: Vec<_> = self.denied_tools.iter().cloned().collect();
+            tools.sort();
+            notes.push(format!("Denied Tools: {}", tools.join(", ")));
         }
 
         notes
