@@ -11,7 +11,7 @@ use crate::agents::sub_agents::SubAgentDispatcher;
 use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
 use crate::error::{AlephError, Result};
 use crate::generation::GenerationProviderRegistry;
-use crate::builtin_tools::{BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, PimTool, SearchTool, WebFetchTool, YouTubeTool};
+use crate::builtin_tools::{BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, PimTool, SearchTool, WebFetchTool, YouTubeTool};
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::builtin_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillListTool};
 #[cfg(feature = "gateway")]
@@ -55,6 +55,10 @@ pub struct BuiltinToolRegistry {
     pub(crate) desktop_tool: DesktopTool,
     /// PIM (Personal Information Management) tool instance
     pub(crate) pim_tool: PimTool,
+    /// Config read tool instance (optional - requires config handle)
+    pub(crate) config_read_tool: Option<ConfigReadTool>,
+    /// Config update tool instance (optional - requires ConfigPatcher)
+    pub(crate) config_update_tool: Option<ConfigUpdateTool>,
     /// Generation provider registry for video/audio generation
     pub(crate) generation_registry: Option<Arc<std::sync::RwLock<GenerationProviderRegistry>>>,
     /// Dispatcher tool registry for meta tools (smart tool discovery)
@@ -101,6 +105,16 @@ impl BuiltinToolRegistry {
 
         // PIM tool (Calendar, Reminders, Notes, Contacts via Desktop Bridge)
         let pim_tool = PimTool::new();
+
+        // Create config tools if handles are provided
+        let config_read_tool = config.config.as_ref().map(|cfg| {
+            info!("Creating ConfigReadTool with config handle");
+            ConfigReadTool::new(Arc::clone(cfg))
+        });
+        let config_update_tool = config.config_patcher.as_ref().map(|patcher| {
+            info!("Creating ConfigUpdateTool with ConfigPatcher");
+            ConfigUpdateTool::new(Arc::clone(patcher))
+        });
 
         // Create image generation tool if generation registry is provided
         let image_generate_tool = config.generation_registry.as_ref().map(|registry| {
@@ -223,6 +237,32 @@ impl BuiltinToolRegistry {
         );
 
         info!("Registered skill reading tools (read_skill, list_skills) in BuiltinToolRegistry");
+
+        // Add config tools if handles are available
+        if config_read_tool.is_some() {
+            tools.insert(
+                "config_read".to_string(),
+                UnifiedTool::new(
+                    "builtin:config_read",
+                    "config_read",
+                    ConfigReadTool::DESCRIPTION,
+                    ToolSource::Builtin,
+                ),
+            );
+            info!("Registered config_read tool in BuiltinToolRegistry");
+        }
+        if config_update_tool.is_some() {
+            tools.insert(
+                "config_update".to_string(),
+                UnifiedTool::new(
+                    "builtin:config_update",
+                    "config_update",
+                    ConfigUpdateTool::DESCRIPTION,
+                    ToolSource::Builtin,
+                ),
+            );
+            info!("Registered config_update tool in BuiltinToolRegistry");
+        }
 
         // Add generation tools if registry is available
         let generation_registry = config.generation_registry.clone();
@@ -357,6 +397,8 @@ impl BuiltinToolRegistry {
             list_skills_tool,
             desktop_tool,
             pim_tool,
+            config_read_tool,
+            config_update_tool,
             generation_registry,
             dispatcher_registry,
             sub_agent_dispatcher,
@@ -449,6 +491,20 @@ impl ToolRegistry for BuiltinToolRegistry {
             "list_skills" => Box::pin(async move { self.list_skills_tool.call_json(arguments).await }),
             "desktop" => Box::pin(async move { self.desktop_tool.call_json(arguments).await }),
             "pim" => Box::pin(async move { self.pim_tool.call_json(arguments).await }),
+
+            // Config tools - read/update Aleph configuration
+            "config_read" => Box::pin(async move {
+                let tool = self.config_read_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("config_read not available: no config handle configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "config_update" => Box::pin(async move {
+                let tool = self.config_update_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("config_update not available: no ConfigPatcher configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
 
             // Sessions tools for cross-session communication (requires gateway feature)
             #[cfg(feature = "gateway")]

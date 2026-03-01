@@ -71,6 +71,8 @@ pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> AlephTo
             generation_registry: cfg.generation_registry.clone(),
             dispatcher_registry: None,
             sub_agent_dispatcher: None,
+            config: None,
+            config_patcher: None,
             #[cfg(feature = "gateway")]
             gateway_context: None,
         };
