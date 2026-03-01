@@ -127,7 +127,7 @@ impl ExecApprovalForwarder {
             .saturating_sub(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+            .unwrap_or_default()
                     .as_millis() as u64,
             )
             / 1000;
@@ -303,7 +303,7 @@ mod tests {
     fn mock_record() -> ExecApprovalRecord {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as u64;
 
         ExecApprovalRecord {

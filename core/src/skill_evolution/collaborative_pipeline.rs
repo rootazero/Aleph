@@ -535,7 +535,7 @@ mod tests {
                 session_id: format!("session-{}", i),
                 invoked_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+            .unwrap_or_default()
                     .as_secs() as i64,
                 duration_ms: 1000,
                 status: ExecutionStatus::Success,

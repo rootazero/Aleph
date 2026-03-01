@@ -294,7 +294,7 @@ impl SkillCompiler {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         self.last_compilation
             .store(now, std::sync::atomic::Ordering::Relaxed);
@@ -368,7 +368,7 @@ impl SkillCompiler {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         self.last_compilation
             .store(now, std::sync::atomic::Ordering::Relaxed);

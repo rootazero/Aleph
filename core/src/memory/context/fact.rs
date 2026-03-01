@@ -118,7 +118,7 @@ impl MemoryFact {
     pub fn new(content: String, fact_type: FactType, source_ids: Vec<String>) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         let path = fact_type.default_path().to_string();
@@ -162,7 +162,7 @@ impl MemoryFact {
     pub fn with_id(id: String, content: String, fact_type: FactType) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         let path = fact_type.default_path().to_string();
@@ -281,7 +281,7 @@ impl MemoryFact {
         self.invalidation_reason = Some(reason.to_string());
         self.updated_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         self
     }

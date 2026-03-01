@@ -68,7 +68,7 @@ impl LazyDecayEngine {
     pub async fn evaluate(&self, facts: Vec<MemoryFact>) -> DecayEvaluation {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         let mut valid_facts = Vec::new();

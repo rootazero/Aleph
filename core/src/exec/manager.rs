@@ -54,7 +54,7 @@ impl ExecApprovalRecord {
     pub fn from_request(request: &ApprovalRequest, timeout_ms: u64) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as u64;
 
         let executable = request
@@ -94,7 +94,7 @@ impl ExecApprovalRecord {
     pub fn is_expired(&self) -> bool {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as u64;
         now > self.expires_at_ms
     }
@@ -392,7 +392,7 @@ impl ExecApprovalManager {
             last_used_at: Some(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+            .unwrap_or_default()
                     .as_secs() as i64,
             ),
             last_used_command: None,

@@ -71,7 +71,7 @@ impl ApprovalRequest {
     pub fn new(suggestion: SolidificationSuggestion) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         Self {
@@ -98,7 +98,7 @@ impl ApprovalRequest {
     pub fn is_expired(&self, max_age_days: u32) -> bool {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         let age_days = (now - self.created_at) / 86400;
@@ -242,7 +242,7 @@ impl ApprovalManager {
                     req.status = ApprovalStatus::Expired;
                     req.updated_at = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
+            .unwrap_or_default()
                         .as_secs() as i64;
                     debug!(id = %id, "Auto-expired pending request");
                 }
@@ -304,7 +304,7 @@ impl ApprovalManager {
         request.status = ApprovalStatus::Approved;
         request.updated_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         request.notes = notes;
 
@@ -347,7 +347,7 @@ impl ApprovalManager {
         request.status = ApprovalStatus::Rejected;
         request.updated_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         request.notes = reason;
 
@@ -581,7 +581,7 @@ mod tests {
         // Simulate old request (8 days ago)
         request.created_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64
             - (8 * 86400);
 

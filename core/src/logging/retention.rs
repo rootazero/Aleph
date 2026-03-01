@@ -119,7 +119,7 @@ mod tests {
             .unwrap();
 
         // Convert to filetime
-        let duration_since_epoch = old_time.duration_since(UNIX_EPOCH).unwrap();
+        let duration_since_epoch = old_time.duration_since(UNIX_EPOCH).unwrap_or_default();
         let filetime = filetime::FileTime::from_unix_time(
             duration_since_epoch.as_secs() as i64,
             duration_since_epoch.subsec_nanos(),

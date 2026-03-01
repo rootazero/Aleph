@@ -146,7 +146,7 @@ pub async fn handle_connect(
                     }),
                     timestamp: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
+            .unwrap_or_default()
                         .as_millis() as u64,
                 };
                 let _ = ctx.event_bus.publish_json(&event);
@@ -580,7 +580,7 @@ pub async fn handle_pairing_list(
                     let remaining = if expires_at > created_at {
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
+            .unwrap_or_default()
                             .as_millis() as i64;
                         if expires_at > now {
                             ((expires_at - now) / 1000) as u64
@@ -602,7 +602,7 @@ pub async fn handle_pairing_list(
                     let remaining = if expires_at > created_at {
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
+            .unwrap_or_default()
                             .as_millis() as i64;
                         if expires_at > now {
                             ((expires_at - now) / 1000) as u64

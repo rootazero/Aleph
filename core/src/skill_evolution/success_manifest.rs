@@ -208,7 +208,7 @@ impl SuccessManifest {
                 version: "1.0.0".to_string(),
                 created_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+            .unwrap_or_default()
                     .as_secs() as i64,
                 author: "llm-generated".to_string(),
             },
