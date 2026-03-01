@@ -2,6 +2,30 @@ use super::types::{EscalationReason, EscalationTrigger};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Resolve a path by following symlinks where possible.
+///
+/// Tries `fs::canonicalize()` first (resolves all symlinks + normalizes).
+/// If the full path doesn't exist, tries canonicalizing the parent and appending the filename.
+/// Falls back to lexical normalization as a last resort.
+fn resolve_path_with_symlinks(path: &Path) -> PathBuf {
+    // Best case: full path exists, canonicalize resolves all symlinks
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+
+    // Partial resolution: canonicalize parent directory + append filename
+    if let Some(parent) = path.parent() {
+        if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+            if let Some(filename) = path.file_name() {
+                return canonical_parent.join(filename);
+            }
+        }
+    }
+
+    // Fallback: lexical normalization (handles ".." without filesystem access)
+    normalize_path_components(path)
+}
+
 /// Check if path escalation is needed
 pub fn check_path_escalation(
     params: &HashMap<String, String>,
@@ -9,9 +33,10 @@ pub fn check_path_escalation(
 ) -> Option<EscalationTrigger> {
     for (key, value) in params {
         if key.contains("path") || key.contains("file") || key.contains("dir") {
-            // Normalize path to resolve ".." traversal before comparing against approved paths.
-            // This prevents bypasses like "/tmp/../etc/passwd" matching "/tmp/*".
-            let path = normalize_path_components(&PathBuf::from(value));
+            // Resolve path with symlink resolution to prevent TOCTOU bypasses.
+            // This ensures symlinks like "/tmp/safe -> /etc" are resolved before
+            // comparing against approved paths.
+            let path = resolve_path_with_symlinks(&PathBuf::from(value));
             let normalized_value = path.to_string_lossy();
 
             // Check if normalized path is within approved paths
@@ -118,5 +143,34 @@ mod tests {
 
         let path = PathBuf::from("/Users/test/Documents/file.txt");
         assert!(!is_sensitive_directory(&path));
+    }
+
+    #[test]
+    fn test_resolve_path_with_symlinks_nonexistent() {
+        // Non-existent path falls back to lexical normalization
+        let path = PathBuf::from("/nonexistent/../etc/passwd");
+        let resolved = resolve_path_with_symlinks(&path);
+        assert_eq!(resolved, PathBuf::from("/etc/passwd"));
+    }
+
+    #[test]
+    fn test_resolve_path_with_symlinks_real_path() {
+        // Real path should be canonicalized
+        let path = PathBuf::from("/tmp/./");
+        let resolved = resolve_path_with_symlinks(&path);
+        // canonicalize should resolve /tmp to its real path (e.g. /private/tmp on macOS)
+        assert!(!resolved.to_string_lossy().contains("./"));
+    }
+
+    #[test]
+    fn test_symlink_escalation_detection() {
+        // Even through symlink resolution, /etc/passwd should not be in /tmp/*
+        let approved_paths = vec!["/tmp/*".to_string()];
+        let mut params = HashMap::new();
+        params.insert("file_path".to_string(), "/tmp/../etc/passwd".to_string());
+
+        let trigger = check_path_escalation(&params, &approved_paths);
+        assert!(trigger.is_some());
+        assert_eq!(trigger.unwrap().reason, EscalationReason::PathOutOfScope);
     }
 }
