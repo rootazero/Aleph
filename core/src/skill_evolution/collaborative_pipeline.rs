@@ -396,6 +396,7 @@ impl CollaborativeSolidificationPipeline {
             );
 
             // Analyze validation errors and fix them
+            let previous_error_count = current_proposal.validation.errors.len();
             current_proposal = self.apply_fixes(&current_proposal)?;
 
             // Re-validate
@@ -419,6 +420,16 @@ impl CollaborativeSolidificationPipeline {
                     "Successfully fixed proposal"
                 );
                 return Ok(current_proposal);
+            }
+
+            // Early exit if fixes made no progress (same or more errors)
+            if current_proposal.validation.errors.len() >= previous_error_count {
+                warn!(
+                    attempt = attempt + 1,
+                    errors = current_proposal.validation.errors.len(),
+                    "Static fixes made no progress, aborting fix loop"
+                );
+                break;
             }
         }
 

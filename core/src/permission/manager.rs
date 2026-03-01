@@ -353,12 +353,11 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // TODO: HashMap iteration order is non-deterministic, causing rule matching issues
     async fn test_denied_by_rule() {
         let manager = create_test_manager();
 
         // rm -rf /path should be denied by default config (matches "rm -rf *")
-        // Note: This test is flaky due to HashMap iteration order in config.rs
+        // Note: Rules are now sorted deterministically (Deny first) in config.rs
         let request = PermissionRequest::new("req-1", "session-1", "bash", vec!["rm -rf /home/user".into()]);
 
         // Use timeout to avoid hanging if it falls through to Ask

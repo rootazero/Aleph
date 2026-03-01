@@ -9,7 +9,7 @@
 
 use crate::sync_primitives::Arc;
 
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
@@ -269,16 +269,20 @@ Please implement this and ensure all tests pass."#,
     }
 
     /// Run tests (placeholder - actual implementation depends on language).
+    ///
+    /// WARNING: This always returns `passed: true` for all tests. The evaluation
+    /// results are therefore unreliable. A real test runner must be implemented
+    /// for production use.
     async fn run_tests(&self, tests: &[TestCase], _workspace: &str) -> Result<Vec<TestResult>> {
-        // For now, return placeholder results
-        // Real implementation would run actual tests based on target language
+        // PLACEHOLDER: Real implementation would run actual tests based on target language
+        warn!("run_tests is a placeholder — all tests reported as passed without actual execution");
         Ok(tests
             .iter()
             .map(|t| TestResult {
                 test_name: t.name.clone(),
-                passed: true, // Placeholder
+                passed: true, // Placeholder — NOT actually tested
                 actual_output: None,
-                error: None,
+                error: Some("Placeholder: test not actually executed".to_string()),
                 duration_ms: 0,
             })
             .collect())

@@ -82,6 +82,8 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
 
     for line in text.lines() {
         let line_start = offset;
+        // lines() strips \n and \r\n, so compute actual line length from source text
+        // to correctly advance offset past the line terminator
         let line_end = offset + line.len();
 
         if let Some(caps) = FENCE_REGEX.captures(line) {
@@ -130,8 +132,17 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
             }
         }
 
-        // Move offset past line and newline
-        offset = line_end + 1; // +1 for newline
+        // Move offset past line and line terminator (\n or \r\n)
+        // Check if there's a \r\n sequence (the \r comes before the \n that lines() split on)
+        offset = if text.as_bytes().get(line_end) == Some(&b'\r')
+            && text.as_bytes().get(line_end + 1) == Some(&b'\n')
+        {
+            line_end + 2 // \r\n
+        } else if line_end < text.len() {
+            line_end + 1 // \n
+        } else {
+            line_end // end of text, no trailing newline
+        };
     }
 
     // Handle unclosed fence (extends to end of text)

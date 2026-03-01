@@ -56,7 +56,7 @@ impl LaneScheduler {
             // Track enqueue time for anti-starvation
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_millis() as i64;
             self.wait_tracker.track_enqueue(&run_id, lane, now).await;
 
@@ -95,17 +95,32 @@ impl LaneScheduler {
                 if state.available_permits() > 0 {
                     // Try to dequeue a run
                     if let Some(run_id) = state.try_dequeue().await {
+                        // Acquire permits (these will be held until on_run_complete)
+                        let global_permit = match self.global_semaphore.try_acquire() {
+                            Ok(permit) => permit,
+                            Err(_) => {
+                                // Re-enqueue the run — don't lose it
+                                state.enqueue(run_id).await;
+                                continue;
+                            }
+                        };
+                        let lane_permit = match state.try_acquire_permit() {
+                            Some(permit) => permit,
+                            None => {
+                                // Release global permit and re-enqueue
+                                drop(global_permit);
+                                state.enqueue(run_id).await;
+                                continue;
+                            }
+                        };
+
                         // Remove from wait tracker (no longer waiting)
                         self.wait_tracker.remove(&run_id).await;
 
-                        // Acquire permits (these will be held until on_run_complete)
-                        let _global_permit = self.global_semaphore.try_acquire().ok()?;
-                        let _lane_permit = state.try_acquire_permit()?;
-
                         // Mark as running and forget the permits (they'll be released on complete)
                         state.mark_running(run_id.clone()).await;
-                        std::mem::forget(_global_permit);
-                        std::mem::forget(_lane_permit);
+                        std::mem::forget(global_permit);
+                        std::mem::forget(lane_permit);
 
                         return Some((run_id, lane));
                     }
