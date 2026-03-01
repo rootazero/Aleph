@@ -147,6 +147,9 @@ impl ConflictResolver {
     /// This is the preferred way to register tools in flat namespace mode.
     /// It automatically handles name conflicts according to priority rules.
     ///
+    /// Uses a single write lock to prevent TOCTOU races between conflict
+    /// check and tool insertion.
+    ///
     /// # Arguments
     ///
     /// * `tool` - The tool to register
@@ -155,8 +158,20 @@ impl ConflictResolver {
     ///
     /// The final tool ID after registration (may differ from input if renamed)
     pub async fn register_with_conflict_resolution(&self, mut tool: UnifiedTool) -> String {
-        // Check for conflict
-        if let Some(conflict) = self.check_conflict(&tool.name).await {
+        let mut tools = self.tools.write().await;
+
+        // Inline conflict check under write lock (no TOCTOU race)
+        let name_lower = tool.name.to_lowercase();
+        let conflict = tools.values().find(|t| t.name.to_lowercase() == name_lower).map(|t| {
+            ConflictInfo {
+                existing_id: t.id.clone(),
+                existing_name: t.name.clone(),
+                existing_source: t.source.clone(),
+                existing_priority: t.source.priority(),
+            }
+        });
+
+        if let Some(conflict) = conflict {
             let resolution = self.resolve_conflict(&tool.name, &conflict, &tool.source);
 
             match resolution {
@@ -164,9 +179,31 @@ impl ConflictResolver {
                     original_name,
                     new_name,
                 } => {
-                    // Rename the existing tool
-                    self.rename_existing_tool(&conflict.existing_id, &new_name)
-                        .await;
+                    // Rename the existing tool inline (under same write lock)
+                    if let Some(mut existing) = tools.remove(&conflict.existing_id) {
+                        let orig_name = existing.name.clone();
+                        existing.original_name = Some(orig_name.clone());
+                        existing.was_renamed = true;
+                        existing.name = new_name.clone();
+                        existing.display_name = format!("{} (renamed)", new_name);
+
+                        let new_id = match &existing.source {
+                            ToolSource::Native => format!("native:{}", new_name),
+                            ToolSource::Builtin => format!("builtin:{}", new_name),
+                            ToolSource::Mcp { server } => format!("mcp:{}:{}", server, new_name),
+                            ToolSource::Skill { id } => format!("skill:{}", id),
+                            ToolSource::Custom { rule_index } => format!("custom:{}:{}", rule_index, new_name),
+                        };
+
+                        debug!(
+                            "Tool conflict resolved: '{}' renamed to '{}' (priority system)",
+                            orig_name, new_name
+                        );
+
+                        existing.id = new_id.clone();
+                        tools.insert(new_id, existing);
+                    }
+
                     info!(
                         "Conflict resolved: existing tool '{}' renamed to '{}', new tool '{}' takes priority",
                         original_name, new_name, tool.name
@@ -199,13 +236,12 @@ impl ConflictResolver {
                     );
                 }
                 ConflictResolution::NoConflict => {
-                    // Should not happen if check_conflict returned Some
+                    // Should not happen if conflict was detected
                 }
             }
         }
 
         let id = tool.id.clone();
-        let mut tools = self.tools.write().await;
         tools.insert(id.clone(), tool);
         id
     }
