@@ -230,11 +230,11 @@ impl ConfigPatcher {
             }
         }
 
-        // 13. Write lock -> replace config -> save
+        // 13. Write lock -> replace config -> save to the patcher's config path
         {
             let mut config = self.config.write().await;
             *config = new_config;
-            config.save_incremental(&[&top_section])?;
+            config.save_to_file(&self.config_path)?;
         }
 
         // 14. Update mtime
@@ -730,5 +730,150 @@ mod tests {
         assert_eq!(diffs[0].path, "providers.deepseek.model");
         assert_eq!(diffs[0].old_value, Some(json!("deepseek-chat")));
         assert_eq!(diffs[0].new_value, json!("deepseek-v2"));
+    }
+
+    // =========================================================================
+    // Integration tests — full ConfigPatcher pipeline
+    // =========================================================================
+
+    use crate::config::backup::ConfigBackup;
+    use crate::config::Config;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    /// Helper: build a ConfigPatcher wired to a temp directory.
+    fn setup_patcher(tmp: &TempDir) -> (ConfigPatcher, PathBuf, PathBuf) {
+        let config_path = tmp.path().join("config.toml");
+        let backup_dir = tmp.path().join("backups");
+
+        let initial_config = Config::default();
+        initial_config.save_to_file(&config_path).unwrap();
+
+        let config = Arc::new(tokio::sync::RwLock::new(initial_config));
+        let backup = ConfigBackup::new(backup_dir.clone(), 10);
+        let patcher = ConfigPatcher::new(config, config_path.clone(), None, backup);
+
+        (patcher, config_path, backup_dir)
+    }
+
+    #[tokio::test]
+    async fn test_patcher_apply_dry_run() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, _backup_dir) = setup_patcher(&tmp);
+        patcher.record_mtime().await;
+
+        // Snapshot the file content before the patch
+        let before = std::fs::read_to_string(&config_path).unwrap();
+
+        let request = PatchRequest {
+            path: "general".to_string(),
+            patch: json!({"language": "zh-Hans"}),
+            secret_fields: HashMap::new(),
+            health_check: false,
+            dry_run: true,
+        };
+
+        let result = patcher.apply(request).await.unwrap();
+
+        // Dry-run should report success and produce a non-empty diff
+        assert!(result.success);
+        assert!(!result.diff.is_empty());
+
+        // But the file on disk must NOT have changed
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        assert_eq!(before, after, "File should be unchanged after dry_run");
+    }
+
+    #[tokio::test]
+    async fn test_patcher_apply_writes_config() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, _backup_dir) = setup_patcher(&tmp);
+        patcher.record_mtime().await;
+
+        let request = PatchRequest {
+            path: "general".to_string(),
+            patch: json!({"language": "zh-Hans"}),
+            secret_fields: HashMap::new(),
+            health_check: false,
+            dry_run: false,
+        };
+
+        let result = patcher.apply(request).await.unwrap();
+        assert!(result.success);
+        assert!(!result.diff.is_empty());
+
+        // In-memory config should reflect the change
+        let config = patcher.config.read().await;
+        assert_eq!(config.general.language, Some("zh-Hans".to_string()));
+
+        // File on disk should contain the new language value
+        let file_content = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            file_content.contains("zh-Hans"),
+            "Saved file should contain the patched language value"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_patcher_creates_backup() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, _config_path, backup_dir) = setup_patcher(&tmp);
+        patcher.record_mtime().await;
+
+        let request = PatchRequest {
+            path: "general".to_string(),
+            patch: json!({"language": "zh-Hans"}),
+            secret_fields: HashMap::new(),
+            health_check: false,
+            dry_run: false,
+        };
+
+        patcher.apply(request).await.unwrap();
+
+        // A backup should have been created in the backup directory
+        assert!(backup_dir.exists(), "Backup directory should be created");
+        let entries: Vec<_> = std::fs::read_dir(&backup_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(entries.len(), 1, "Exactly one backup snapshot expected");
+    }
+
+    #[tokio::test]
+    async fn test_patcher_conflict_detection() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, _backup_dir) = setup_patcher(&tmp);
+        patcher.record_mtime().await;
+
+        // First patch succeeds
+        let request1 = PatchRequest {
+            path: "general".to_string(),
+            patch: json!({"language": "en"}),
+            secret_fields: HashMap::new(),
+            health_check: false,
+            dry_run: false,
+        };
+        patcher.apply(request1).await.unwrap();
+
+        // Externally modify the file behind the patcher's back
+        // Sleep briefly to guarantee a different mtime
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::fs::write(&config_path, "# externally modified\n").unwrap();
+
+        // Second patch should fail with conflict
+        let request2 = PatchRequest {
+            path: "general".to_string(),
+            patch: json!({"language": "zh-Hans"}),
+            secret_fields: HashMap::new(),
+            health_check: false,
+            dry_run: false,
+        };
+        let err = patcher.apply(request2).await.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("modified externally"),
+            "Expected 'modified externally' in error, got: {}",
+            err_msg
+        );
     }
 }
