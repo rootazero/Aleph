@@ -57,6 +57,8 @@ test-helpers = []
 loom = ["dep:loom"]
 # Native desktop capabilities (in-process, no IPC)
 desktop-native = ["dep:aleph-desktop"]
+# Server-friendly alias: `cargo build --bin aleph-server --features desktop`
+desktop = ["desktop-native"]
 
 [dependencies]
 # REMOVED: UniFFI - using Gateway WebSocket architecture
