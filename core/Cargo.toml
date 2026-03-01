@@ -55,6 +55,8 @@ plugin-all = ["plugin-wasm", "plugin-nodejs"]
 test-helpers = []
 # Loom concurrency testing (replaces std sync primitives)
 loom = ["dep:loom"]
+# Native desktop capabilities (in-process, no IPC)
+desktop-native = ["dep:aleph-desktop"]
 
 [dependencies]
 # REMOVED: UniFFI - using Gateway WebSocket architecture
@@ -227,6 +229,9 @@ inquire = { version = "0.7", optional = true }
 
 # Loom concurrency testing (optional, activated via --features loom)
 loom = { version = "0.7", optional = true }
+
+# Native desktop capabilities (optional, in-process alternative to IPC bridge)
+aleph-desktop = { path = "../crates/desktop", optional = true }
 
 [build-dependencies]
 # No build dependencies - using Gateway WebSocket architecture
