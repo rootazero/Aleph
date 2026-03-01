@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::sync_primitives::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // Global sequence counter for events
 static EVENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);

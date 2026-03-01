@@ -277,7 +277,7 @@ mod tests {
 
         // Verify output has PII scrubbed
         let output = captured.lock().unwrap();
-        assert!(output.contains("[EMAIL]"), "Output: {}", output);
-        assert!(!output.contains("john@example.com"), "Output: {}", output);
+        assert!(output.contains("[EMAIL]"), "Output: {}", &*output);
+        assert!(!output.contains("john@example.com"), "Output: {}", &*output);
     }
 }

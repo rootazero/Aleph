@@ -59,7 +59,7 @@ pub mod workspace_store;
 mod integration_tests;
 #[cfg(test)]
 mod proptest_enums;
-#[cfg(all(test, loom))]
+#[cfg(all(test, feature = "loom"))]
 mod loom_concurrency;
 
 // Re-export commonly used types

@@ -163,7 +163,7 @@ pub use tool_index::{
     ToolMeta, ToolRetrieval, ToolRetrievalConfig,
 };
 
-#[cfg(all(test, loom))]
+#[cfg(all(test, feature = "loom"))]
 mod loom_concurrency;
 
 #[cfg(test)]
