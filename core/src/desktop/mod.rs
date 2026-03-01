@@ -9,6 +9,8 @@ pub use types::{
     ResolvedElement, ScreenRegion, SnapshotStats,
 };
 
-// Re-export NativeDesktop when desktop-native feature is enabled
+// Re-export desktop capability types when desktop-native feature is enabled
 #[cfg(feature = "desktop-native")]
-pub use aleph_desktop::{DesktopCapability, NativeDesktop};
+pub use aleph_desktop::{
+    Capability, DesktopCapability, NativeDesktop, OcrResult, Screenshot, WindowInfo,
+};

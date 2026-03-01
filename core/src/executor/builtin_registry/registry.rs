@@ -100,7 +100,14 @@ impl BuiltinToolRegistry {
         let read_skill_tool = ReadSkillTool::default();
         let list_skills_tool = SkillListTool::default();
 
-        // Desktop bridge tool (macOS App required at runtime; gracefully unavailable otherwise)
+        // Desktop bridge tool — use native in-process path when desktop-native feature is enabled,
+        // otherwise fall back to IPC bridge (macOS App required at runtime)
+        #[cfg(feature = "desktop-native")]
+        let desktop_tool = {
+            let native = std::sync::Arc::new(aleph_desktop::NativeDesktop::new());
+            DesktopTool::new().with_native(native)
+        };
+        #[cfg(not(feature = "desktop-native"))]
         let desktop_tool = DesktopTool::new();
 
         // PIM tool (Calendar, Reminders, Notes, Contacts via Desktop Bridge)
