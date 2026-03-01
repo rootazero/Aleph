@@ -221,7 +221,7 @@ impl ChannelCrystallizer {
             session_id: task.manifest.task_id.clone(),
             invoked_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs() as i64,
             duration_ms: duration,
             status,
@@ -346,12 +346,18 @@ impl CrystallizerWorker {
 // Helper Functions
 // ============================================================================
 
-/// Truncate a string to a maximum length, adding ellipsis if needed.
+/// Truncate a string to a maximum length, adding ellipsis if needed (UTF-8 safe).
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        let target = max_len.saturating_sub(3);
+        let end = s.char_indices()
+            .take_while(|(i, _)| *i <= target)
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        format!("{}...", &s[..end])
     }
 }
 
@@ -504,7 +510,7 @@ impl ExperienceCrystallizer {
             session_id: task.manifest.task_id.clone(),
             invoked_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs() as i64,
             duration_ms,
             status,
