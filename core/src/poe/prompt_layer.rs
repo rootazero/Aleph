@@ -153,7 +153,12 @@ fn format_rule(rule: &ValidationRule) -> String {
         }
         ValidationRule::JsonSchemaValid { path, schema } => {
             let schema_preview = if schema.len() > 60 {
-                format!("{}...", &schema[..60])
+                let end = schema.char_indices()
+                    .take_while(|(i, _)| *i <= 60)
+                    .last()
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+                format!("{}...", &schema[..end])
             } else {
                 schema.clone()
             };

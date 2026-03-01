@@ -85,11 +85,16 @@ impl Worker for PlaceholderWorker {
     }
 }
 
-/// Truncate instruction for logging.
+/// Truncate instruction for logging (UTF-8 safe).
 fn truncate_instruction(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len])
+        let end = s.char_indices()
+            .take_while(|(i, _)| *i <= max_len)
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        format!("{}...", &s[..end])
     }
 }

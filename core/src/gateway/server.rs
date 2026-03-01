@@ -342,7 +342,8 @@ async fn handle_connection(
             msg = read.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        debug!("Received from {}: {}", conn_id, &text[..text.len().min(200)]);
+                        let preview_end = text.char_indices().take_while(|(i, _)| *i < 200).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(text.len());
+                        debug!("Received from {}: {}", conn_id, &text[..preview_end]);
 
                         // Parse request to check method for auth gating
                         let request: Result<JsonRpcRequest, _> = serde_json::from_str(&text);
@@ -675,13 +676,13 @@ async fn handle_connection(
                                 "connected_at": session.connected_at,
                                 "disconnected_at": std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
+                                    .unwrap_or_default()
                                     .as_millis() as u64,
                                 "request_count": session.request_count,
                             }),
                             timestamp: std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
+                                .unwrap_or_default()
                                 .as_millis() as u64,
                         };
                         let _ = ctx.event_bus.publish_json(&event);
