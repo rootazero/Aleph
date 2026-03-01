@@ -18,6 +18,8 @@ pub mod perception;
 pub mod recovery;
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, loom))]
+mod loom_concurrency;
 pub mod types;
 
 pub use types::{
