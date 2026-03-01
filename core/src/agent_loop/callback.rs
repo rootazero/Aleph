@@ -714,6 +714,7 @@ mod tests {
                     summary: "done".to_string(),
                 },
                 structured: None,
+                tokens_used: None,
             },
             action: Action::Completion {
                 summary: "done".to_string(),

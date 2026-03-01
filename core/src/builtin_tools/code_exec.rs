@@ -264,49 +264,63 @@ Examples:
         // Execute with timeout
         let timeout = Duration::from_secs(timeout_secs);
         let result = tokio::time::timeout(timeout, async {
-            let mut stdout_buf = Vec::new();
-            let mut stderr_buf = Vec::new();
-            let mut truncated = false;
+            // Read stdout and stderr concurrently to prevent pipe buffer deadlock.
+            // Sequential reading can deadlock when a process fills one pipe's buffer
+            // (typically 64KB) while we're blocked reading the other pipe.
+            let mut stdout_handle = child.stdout.take();
+            let mut stderr_handle = child.stderr.take();
 
-            // Read stdout
-            if let Some(mut stdout) = child.stdout.take() {
-                let mut buf = vec![0u8; 8192];
-                loop {
-                    match stdout.read(&mut buf).await {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if stdout_buf.len() + n > MAX_STDOUT_SIZE {
-                                let remaining = MAX_STDOUT_SIZE - stdout_buf.len();
-                                stdout_buf.extend_from_slice(&buf[..remaining]);
-                                truncated = true;
-                                break;
+            let stdout_fut = async {
+                let mut buf_out = Vec::new();
+                let mut trunc = false;
+                if let Some(ref mut stdout) = stdout_handle {
+                    let mut buf = vec![0u8; 8192];
+                    loop {
+                        match stdout.read(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                if buf_out.len() + n > MAX_STDOUT_SIZE {
+                                    let remaining = MAX_STDOUT_SIZE - buf_out.len();
+                                    buf_out.extend_from_slice(&buf[..remaining]);
+                                    trunc = true;
+                                    break;
+                                }
+                                buf_out.extend_from_slice(&buf[..n]);
                             }
-                            stdout_buf.extend_from_slice(&buf[..n]);
+                            Err(_) => break,
                         }
-                        Err(_) => break,
                     }
                 }
-            }
+                (buf_out, trunc)
+            };
 
-            // Read stderr
-            if let Some(mut stderr) = child.stderr.take() {
-                let mut buf = vec![0u8; 8192];
-                loop {
-                    match stderr.read(&mut buf).await {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if stderr_buf.len() + n > MAX_STDERR_SIZE {
-                                let remaining = MAX_STDERR_SIZE - stderr_buf.len();
-                                stderr_buf.extend_from_slice(&buf[..remaining]);
-                                truncated = true;
-                                break;
+            let stderr_fut = async {
+                let mut buf_err = Vec::new();
+                let mut trunc = false;
+                if let Some(ref mut stderr) = stderr_handle {
+                    let mut buf = vec![0u8; 8192];
+                    loop {
+                        match stderr.read(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                if buf_err.len() + n > MAX_STDERR_SIZE {
+                                    let remaining = MAX_STDERR_SIZE - buf_err.len();
+                                    buf_err.extend_from_slice(&buf[..remaining]);
+                                    trunc = true;
+                                    break;
+                                }
+                                buf_err.extend_from_slice(&buf[..n]);
                             }
-                            stderr_buf.extend_from_slice(&buf[..n]);
+                            Err(_) => break,
                         }
-                        Err(_) => break,
                     }
                 }
-            }
+                (buf_err, trunc)
+            };
+
+            let ((stdout_buf, stdout_trunc), (stderr_buf, stderr_trunc)) =
+                tokio::join!(stdout_fut, stderr_fut);
+            let truncated = stdout_trunc || stderr_trunc;
 
             // Wait for process
             let status = child.wait().await?;

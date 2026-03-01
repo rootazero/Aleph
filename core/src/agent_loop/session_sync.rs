@@ -333,6 +333,7 @@ mod tests {
                     arguments: json!({"query": "*.rs"}),
                 },
                 structured: None,
+                tokens_used: None,
             },
             action: Action::ToolCall {
                 tool_name: "search".to_string(),
@@ -496,6 +497,7 @@ mod tests {
                         summary: "done".to_string(),
                     },
                     structured: None,
+                    tokens_used: None,
                 },
                 action: Action::Completion {
                     summary: format!("Step {} done", i),

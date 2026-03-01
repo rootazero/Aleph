@@ -380,9 +380,16 @@ impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
             );
         }
 
-        let thinking = thinking?;
+        let mut thinking = thinking?;
 
-        // 9. Validate decision
+        // 9. Estimate token usage from response length.
+        // This is a rough approximation (~4 chars per token) until providers
+        // return actual usage metadata. The guard needs a non-zero value to work.
+        let input_chars: usize = system.len() + messages.iter().map(|m| m.content.len()).sum::<usize>();
+        let estimated_tokens = (input_chars + response.len()) / 4;
+        thinking.tokens_used = Some(estimated_tokens);
+
+        // 10. Validate decision
         self.decision_parser.validate(&thinking.decision)?;
 
         Ok(thinking)

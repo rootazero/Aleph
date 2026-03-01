@@ -209,41 +209,57 @@ impl Config {
         })?;
 
         // Only update specified sections
-        if let (toml::Value::Table(ref mut existing_table), toml::Value::Table(ref current_table)) =
-            (&mut existing, &current)
-        {
+        // Collect values from current config first (immutable borrow)
+        let mut section_values: Vec<(&str, Vec<&str>, toml::Value)> = Vec::new();
+        if let toml::Value::Table(ref current_table) = current {
             for section in sections {
-                // Handle nested sections like "search.pii"
                 let parts: Vec<&str> = section.split('.').collect();
+                if parts.is_empty() {
+                    continue;
+                }
 
-                if parts.len() == 1 {
-                    // Top-level section
-                    if let Some(value) = current_table.get(parts[0]) {
-                        existing_table.insert(parts[0].to_string(), value.clone());
-                        debug!(section = %section, "Updated top-level section");
+                // Navigate to the value in current config
+                let mut node: &toml::Value = &current;
+                let mut found = true;
+                for part in &parts {
+                    match node {
+                        toml::Value::Table(t) => match t.get(*part) {
+                            Some(v) => node = v,
+                            None => { found = false; break; }
+                        },
+                        _ => { found = false; break; }
                     }
-                } else if parts.len() == 2 {
-                    // Nested section (e.g., "search.pii")
-                    let parent_key = parts[0];
-                    let child_key = parts[1];
+                }
+                if found {
+                    section_values.push((section, parts, node.clone()));
+                }
+            }
+            let _ = current_table; // explicitly drop borrow
+        }
 
-                    // Get or create parent table in existing
-                    let parent_table = existing_table
-                        .entry(parent_key.to_string())
-                        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+        // Now apply to existing config (mutable borrow)
+        for (section, parts, value) in section_values {
+            // Navigate/create intermediate tables at arbitrary depth
+            let (path_parts, leaf) = parts.split_at(parts.len() - 1);
+            let leaf_key = leaf[0];
 
-                    if let toml::Value::Table(ref mut parent) = parent_table {
-                        // Get value from current config
-                        #[allow(clippy::collapsible_match)]
-                        if let Some(current_parent) = current_table.get(parent_key) {
-                            if let toml::Value::Table(ref cp) = current_parent {
-                                if let Some(value) = cp.get(child_key) {
-                                    parent.insert(child_key.to_string(), value.clone());
-                                    debug!(section = %section, "Updated nested section");
-                                }
-                            }
-                        }
+            let mut target: &mut toml::Value = &mut existing;
+            let mut navigated = true;
+            for part in path_parts {
+                match target {
+                    toml::Value::Table(t) => {
+                        target = t
+                            .entry(part.to_string())
+                            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
                     }
+                    _ => { navigated = false; break; }
+                }
+            }
+
+            if navigated {
+                if let toml::Value::Table(ref mut t) = target {
+                    t.insert(leaf_key.to_string(), value);
+                    debug!(section = %section, "Updated section");
                 }
             }
         }

@@ -822,10 +822,10 @@ where
             let step = LoopStep {
                 step_id: state.step_count,
                 observation_summary: String::new(), // Will be filled by compressor
+                tokens_used: thinking.tokens_used.unwrap_or(0),
                 thinking,
                 action,
                 result,
-                tokens_used: 0, // Will be updated by thinker
                 duration_ms,
             };
             state.record_step(step);

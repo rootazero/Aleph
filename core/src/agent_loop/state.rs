@@ -132,6 +132,9 @@ pub struct Thinking {
     /// Contains parsed steps, confidence, alternatives, and uncertainties
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured: Option<StructuredThinking>,
+    /// Token usage from this thinking step (populated from provider response)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_used: Option<usize>,
 }
 
 /// Request context containing attachments and environment info from UI layer
@@ -314,6 +317,7 @@ mod tests {
                         summary: "done".to_string(),
                     },
                     structured: None,
+                    tokens_used: None,
                 },
                 action: Action::Completion {
                     summary: "done".to_string(),
@@ -346,6 +350,7 @@ mod tests {
                         summary: "done".to_string(),
                     },
                     structured: None,
+                    tokens_used: None,
                 },
                 action: Action::Completion {
                     summary: "done".to_string(),

@@ -187,6 +187,7 @@ mod tests {
                     summary: "mock complete".to_string(),
                 },
                 structured: None,
+                tokens_used: None,
             })
         }
 

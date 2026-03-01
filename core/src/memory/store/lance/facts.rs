@@ -41,13 +41,25 @@ async fn scan_facts(
     filter: Option<&str>,
     limit: Option<usize>,
 ) -> Result<Vec<MemoryFact>, AlephError> {
+    scan_facts_with_offset(table, filter, limit, 0).await
+}
+
+/// Scan facts with offset-based pagination.
+/// LanceDB doesn't support SQL OFFSET, so we use limit(offset+count) and skip.
+async fn scan_facts_with_offset(
+    table: &lancedb::Table,
+    filter: Option<&str>,
+    limit: Option<usize>,
+    offset: usize,
+) -> Result<Vec<MemoryFact>, AlephError> {
     let mut query = table.query();
 
     if let Some(f) = filter {
         query = query.only_if(f);
     }
+    // Fetch offset + limit rows, then skip the first `offset`
     if let Some(lim) = limit {
-        query = query.limit(lim);
+        query = query.limit(offset + lim);
     }
 
     query = query.select(Select::All);
@@ -60,6 +72,19 @@ async fn scan_facts(
         let mut batch_facts = record_batch_to_facts(batch)?;
         facts.append(&mut batch_facts);
     }
+
+    // Skip offset rows
+    if offset > 0 && offset < facts.len() {
+        facts = facts.split_off(offset);
+    } else if offset >= facts.len() {
+        facts.clear();
+    }
+
+    // Apply limit after offset
+    if let Some(lim) = limit {
+        facts.truncate(lim);
+    }
+
     Ok(facts)
 }
 
@@ -133,9 +158,16 @@ impl MemoryStore for LanceMemoryBackend {
     }
 
     async fn update_fact(&self, fact: &MemoryFact) -> Result<(), AlephError> {
-        // LanceDB's update API is limited; delete-then-insert is simpler.
+        // LanceDB lacks native upsert. We use delete-then-insert with a safety net:
+        // if the insert fails after delete, we retry once to avoid losing the fact.
         self.delete_fact(&fact.id).await?;
-        self.insert_fact(fact).await
+        match self.insert_fact(fact).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                tracing::warn!(id = %fact.id, error = %e, "Fact insert failed after delete, retrying");
+                self.insert_fact(fact).await
+            }
+        }
     }
 
     async fn delete_fact(&self, id: &str) -> Result<(), AlephError> {
@@ -464,42 +496,65 @@ impl MemoryStore for LanceMemoryBackend {
         half_life_days: f32,
         min_score: f32,
     ) -> Result<usize, AlephError> {
-        // Fetch all valid facts.
-        let facts = scan_facts(&self.facts_table, Some("is_valid = true"), None).await?;
+        const BATCH_SIZE: usize = 1000;
         let mut affected = 0usize;
+        let mut offset = 0usize;
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
 
-        for fact in &facts {
-            // Compute days since last access (or creation if never accessed).
-            let last_access = fact.last_accessed_at.unwrap_or(fact.updated_at);
-            let days_since_access = (now - last_access) as f64 / 86400.0;
+        // Process facts in batches to avoid loading all into memory at once.
+        loop {
+            let batch = scan_facts_with_offset(
+                &self.facts_table,
+                Some("is_valid = true"),
+                Some(BATCH_SIZE),
+                offset,
+            )
+            .await?;
 
-            // Ebbinghaus exponential decay: exp(-t * ln(2) / half_life)
-            let decay = (-(days_since_access) * (2.0_f64.ln()) / half_life_days as f64).exp() as f32;
-            let new_confidence = fact.confidence * decay;
-
-            if new_confidence < min_score {
-                // Invalidate the fact due to decay.
-                let mut invalidated = fact.clone();
-                invalidated.is_valid = false;
-                invalidated.invalidation_reason = Some("decay_prune".to_string());
-                invalidated.decay_invalidated_at = Some(now);
-                invalidated.confidence = new_confidence;
-                invalidated.updated_at = now;
-                self.update_fact(&invalidated).await?;
-                affected += 1;
-            } else if (new_confidence - fact.confidence).abs() > f32::EPSILON {
-                // Update confidence with decayed value.
-                let mut updated = fact.clone();
-                updated.confidence = new_confidence;
-                updated.updated_at = now;
-                self.update_fact(&updated).await?;
-                affected += 1;
+            if batch.is_empty() {
+                break;
             }
+
+            let batch_len = batch.len();
+
+            for fact in &batch {
+                // Compute days since last access (or creation if never accessed).
+                let last_access = fact.last_accessed_at.unwrap_or(fact.updated_at);
+                let days_since_access = (now - last_access) as f64 / 86400.0;
+
+                // Ebbinghaus exponential decay: exp(-t * ln(2) / half_life)
+                let decay =
+                    (-(days_since_access) * (2.0_f64.ln()) / half_life_days as f64).exp() as f32;
+                let new_confidence = fact.confidence * decay;
+
+                if new_confidence < min_score {
+                    // Invalidate the fact due to decay.
+                    let mut invalidated = fact.clone();
+                    invalidated.is_valid = false;
+                    invalidated.invalidation_reason = Some("decay_prune".to_string());
+                    invalidated.decay_invalidated_at = Some(now);
+                    invalidated.confidence = new_confidence;
+                    invalidated.updated_at = now;
+                    self.update_fact(&invalidated).await?;
+                    affected += 1;
+                } else if (new_confidence - fact.confidence).abs() > f32::EPSILON {
+                    // Update confidence with decayed value.
+                    let mut updated = fact.clone();
+                    updated.confidence = new_confidence;
+                    updated.updated_at = now;
+                    self.update_fact(&updated).await?;
+                    affected += 1;
+                }
+            }
+
+            if batch_len < BATCH_SIZE {
+                break; // Last batch
+            }
+            offset += batch_len;
         }
 
         Ok(affected)

@@ -222,6 +222,7 @@ mod tests {
                     summary: "done".to_string(),
                 },
                 structured: None,
+                tokens_used: None,
             },
             action: Action::ToolCall {
                 tool_name: format!("tool_{}", id),

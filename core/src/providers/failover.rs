@@ -436,6 +436,16 @@ impl AiProvider for FailoverProvider {
                                 self.mark_unhealthy(i, error_msg).await;
                                 break;
                             }
+
+                            // Rate-limited: skip remaining retries, move to next provider
+                            if matches!(e, AlephError::RateLimitError { .. }) {
+                                tracing::info!(
+                                    "Provider '{}' rate-limited, failing over to next provider",
+                                    name
+                                );
+                                self.mark_unhealthy(i, error_msg).await;
+                                break;
+                            }
                         }
                     }
                 }
@@ -476,11 +486,62 @@ impl AiProvider for FailoverProvider {
         image: Option<&crate::clipboard::ImageData>,
         system_prompt: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        // For vision, we need to try providers that support it
-        // Simplified: just use the text process for now
-        // TODO: Implement proper vision failover
-        let _ = image;
-        self.process(input, system_prompt)
+        let input = input.to_string();
+        let system_prompt = system_prompt.map(|s| s.to_string());
+        let image = image.cloned();
+
+        Box::pin(async move {
+            let providers = self.providers.read().await;
+            let provider_count = providers.len();
+            drop(providers);
+
+            let mut last_error = None;
+
+            for i in 0..provider_count {
+                if !self.is_provider_healthy(i).await {
+                    continue;
+                }
+
+                let provider = {
+                    let providers = self.providers.read().await;
+                    providers.get(i).map(|p| (p.provider.clone(), p.entry.name.clone()))
+                };
+
+                let Some((provider, name)) = provider else { continue };
+
+                // Skip providers that don't support vision when image is present
+                if image.is_some() && !provider.supports_vision() {
+                    tracing::debug!("Skipping provider '{}' (no vision support)", name);
+                    continue;
+                }
+
+                let start = std::time::Instant::now();
+                match provider
+                    .process_with_image(&input, image.as_ref(), system_prompt.as_deref())
+                    .await
+                {
+                    Ok(response) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        self.mark_healthy(i, latency_ms).await;
+                        return Ok(response);
+                    }
+                    Err(e) => {
+                        let error_msg = e.to_string();
+                        tracing::warn!("Provider '{}' vision failed: {}", name, error_msg);
+                        last_error = Some(error_msg.clone());
+                        if Self::is_non_retryable_error(&e) {
+                            self.mark_unhealthy(i, error_msg).await;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            Err(AlephError::provider(format!(
+                "All providers failed for vision request. Last error: {}",
+                last_error.unwrap_or_else(|| "No providers available".to_string())
+            )))
+        })
     }
 }
 

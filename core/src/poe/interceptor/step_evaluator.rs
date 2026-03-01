@@ -90,6 +90,7 @@ mod tests {
                     summary: "done".into(),
                 },
                 structured: None,
+                tokens_used: None,
             },
             action: Action::ToolCall {
                 tool_name: "test".into(),
