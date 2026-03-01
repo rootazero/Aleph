@@ -8,7 +8,8 @@ use crate::executor::{
 };
 use crate::generation::GenerationProviderRegistry;
 use crate::tools::{AlephToolServer, AlephToolServerHandle};
-use crate::sync_primitives::{Arc, RwLock};
+use crate::sync_primitives::Arc;
+use std::sync::RwLock;
 use tracing::{info, warn};
 
 /// Built-in tool names

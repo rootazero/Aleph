@@ -18,7 +18,7 @@ pub mod perception;
 pub mod recovery;
 #[cfg(test)]
 mod tests;
-#[cfg(all(test, loom))]
+#[cfg(all(test, feature = "loom"))]
 mod loom_concurrency;
 pub mod types;
 

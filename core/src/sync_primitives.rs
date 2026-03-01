@@ -1,8 +1,11 @@
 //! Conditional sync primitives for loom compatibility.
 //!
 //! Under normal compilation, these re-export `std::sync` types at zero cost.
-//! Under `--features loom` (with `RUSTFLAGS="--cfg loom"`), these switch to
-//! loom's instrumented versions that enable exhaustive concurrency testing.
+//! Under `--features loom`, Mutex/RwLock/atomics switch to loom's instrumented
+//! versions that enable exhaustive concurrency testing.
+//!
+//! Note: `Arc` is always `std::sync::Arc` because `loom::sync::Arc` is not a
+//! drop-in replacement when used with external crate APIs (tokio, etc.).
 //!
 //! ## Lock Hierarchy
 //!
@@ -13,16 +16,20 @@
 //! - Level 2: ToolRegistry, ChannelRegistry (dispatcher/, gateway/)
 //! - Level 3: UI state, progress monitors
 
-#[cfg(loom)]
-pub(crate) use loom::sync::{Arc, Mutex, MutexGuard, RwLock};
-#[cfg(loom)]
+// Arc is always std::sync::Arc — loom::sync::Arc is incompatible with
+// external crate APIs that expect std::sync::Arc (e.g. tokio::sync).
+pub(crate) use std::sync::Arc;
+
+#[cfg(feature = "loom")]
+pub(crate) use loom::sync::{Mutex, MutexGuard, RwLock};
+#[cfg(feature = "loom")]
 pub(crate) use loom::sync::atomic::{
     AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering,
 };
 
-#[cfg(not(loom))]
-pub(crate) use std::sync::{Arc, Mutex, MutexGuard, RwLock};
-#[cfg(not(loom))]
+#[cfg(not(feature = "loom"))]
+pub(crate) use std::sync::{Mutex, MutexGuard, RwLock};
+#[cfg(not(feature = "loom"))]
 pub(crate) use std::sync::atomic::{
     AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering,
 };
