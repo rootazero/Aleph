@@ -18,7 +18,7 @@ pub fn Home() -> impl IntoView {
             leptos::task::spawn_local(async move {
                 // Fetch memory stats
                 match MemoryApi::stats(&state_clone).await {
-                    Ok(stats) => memory_stats.set(Some(Some((stats.total_facts, stats.total_size)))),
+                    Ok(stats) => memory_stats.set(Some(Some((stats.total_facts, stats.total_memories)))),
                     Err(_) => memory_stats.set(Some(None)),
                 }
 
