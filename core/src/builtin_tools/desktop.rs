@@ -250,12 +250,43 @@ impl DesktopTool {
     ) -> Result<Option<DesktopOutput>> {
         match args.action.as_str() {
             "screenshot" => {
-                let region = args.region.as_ref().map(|r| aleph_desktop::ScreenRegion {
-                    x: r.x as u32,
-                    y: r.y as u32,
-                    width: r.width as u32,
-                    height: r.height as u32,
-                });
+                let region = match args.region.as_ref() {
+                    Some(r) => {
+                        // Validate f64 → u32 conversion: reject negative values and
+                        // values that exceed u32::MAX to avoid silent truncation.
+                        if r.x < 0.0 || r.y < 0.0 || r.width < 0.0 || r.height < 0.0 {
+                            return Ok(Some(DesktopOutput {
+                                success: false,
+                                data: None,
+                                message: Some(
+                                    "screenshot region coordinates must be non-negative"
+                                        .to_string(),
+                                ),
+                            }));
+                        }
+                        if r.x > u32::MAX as f64
+                            || r.y > u32::MAX as f64
+                            || r.width > u32::MAX as f64
+                            || r.height > u32::MAX as f64
+                        {
+                            return Ok(Some(DesktopOutput {
+                                success: false,
+                                data: None,
+                                message: Some(
+                                    "screenshot region coordinates exceed maximum value"
+                                        .to_string(),
+                                ),
+                            }));
+                        }
+                        Some(aleph_desktop::ScreenRegion {
+                            x: r.x as u32,
+                            y: r.y as u32,
+                            width: r.width as u32,
+                            height: r.height as u32,
+                        })
+                    }
+                    None => None,
+                };
                 match native.screenshot(region).await {
                     Ok(s) => Ok(Some(DesktopOutput {
                         success: true,
@@ -405,6 +436,15 @@ impl DesktopTool {
                 // Convert delta_x/delta_y to direction + amount for native API
                 let delta_y = args.delta_y.unwrap_or(0.0);
                 let delta_x = args.delta_x.unwrap_or(0.0);
+                if delta_x == 0.0 && delta_y == 0.0 {
+                    return Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(
+                            "scroll requires non-zero delta_x or delta_y".to_string(),
+                        ),
+                    }));
+                }
                 // Pick the dominant axis
                 let (direction, amount) = if delta_y.abs() >= delta_x.abs() {
                     if delta_y < 0.0 {
@@ -489,7 +529,16 @@ impl DesktopTool {
                 }
             }
             "launch_app" => {
-                let bundle_id = args.bundle_id.as_deref().unwrap_or("");
+                let bundle_id = match args.bundle_id.as_deref() {
+                    Some(id) if !id.is_empty() => id,
+                    _ => {
+                        return Ok(Some(DesktopOutput {
+                            success: false,
+                            data: None,
+                            message: Some("launch_app requires 'bundle_id'".to_string()),
+                        }));
+                    }
+                };
                 match native.launch_app(bundle_id).await {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
@@ -614,7 +663,8 @@ Examples:
                 args.text.clone().unwrap_or_default(),
             )),
             // Read-only actions skip approval
-            "screenshot" | "ocr" | "ax_tree" | "window_list" | "focus_window" => None,
+            "screenshot" | "ocr" | "ax_tree" | "window_list" | "focus_window"
+            | "canvas_show" | "canvas_hide" | "canvas_update" | "snapshot" => None,
             // Unknown actions default to requiring approval for safety
             _ => Some((
                 ActionType::DesktopClick,
