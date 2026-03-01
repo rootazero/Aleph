@@ -462,7 +462,7 @@ mod tests {
         // Manually track an old run (simulating 60 seconds wait)
         let old_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as i64
             - 60_000;
 
@@ -489,7 +489,7 @@ mod tests {
         // Track a recent run (10 seconds ago, below 30s threshold)
         let recent_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as i64
             - 10_000;
 

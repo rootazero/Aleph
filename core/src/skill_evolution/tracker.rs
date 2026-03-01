@@ -245,7 +245,7 @@ impl EvolutionTracker {
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         let min_age_secs = config.min_age_days as i64 * 86400;
@@ -431,7 +431,7 @@ impl EvolutionTracker {
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         conn.execute(
@@ -474,7 +474,7 @@ impl EvolutionTracker {
     pub fn save_last_run(&self) -> Result<()> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
         self.save_status("last_run", &now.to_string())
     }
@@ -526,7 +526,7 @@ impl EvolutionTracker {
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         let sample_contexts_json =
@@ -565,7 +565,7 @@ impl EvolutionTracker {
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         conn.execute(
@@ -610,7 +610,7 @@ impl EvolutionTracker {
 
         let cutoff = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64
             - (max_age_days as i64 * 86400);
 

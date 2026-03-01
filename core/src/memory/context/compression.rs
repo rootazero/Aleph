@@ -33,7 +33,7 @@ impl CompressionSession {
             extracted_fact_ids,
             compressed_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+            .unwrap_or_default()
                 .as_secs() as i64,
             provider_used,
             duration_ms,

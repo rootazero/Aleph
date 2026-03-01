@@ -165,7 +165,7 @@ impl MemoryCommands {
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         // Apply filters and convert to summaries
@@ -226,7 +226,7 @@ impl MemoryCommands {
         if let Some(fact) = self.db.get_fact(id).await? {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+            .unwrap_or_default()
                 .as_secs() as i64;
             let days_old = (now - fact.updated_at) as f32 / 86400.0;
             let strength = if fact.is_valid {
@@ -247,7 +247,7 @@ impl MemoryCommands {
                 let fact = matches[0];
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+            .unwrap_or_default()
                     .as_secs() as i64;
                 let days_old = (now - fact.updated_at) as f32 / 86400.0;
                 let strength = if fact.is_valid {
@@ -451,7 +451,7 @@ impl MemoryCommands {
             version: 1,
             exported_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+            .unwrap_or_default()
                 .as_secs() as i64,
             facts: facts.into_iter().map(ExportedFact::from).collect(),
         };

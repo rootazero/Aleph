@@ -432,7 +432,7 @@ impl FirstRunConfirmation {
         self.confirmed_at = Some(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+            .unwrap_or_default()
                 .as_secs() as i64,
         );
         self.confirmed_by = Some(user.to_string());

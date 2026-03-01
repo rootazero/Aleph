@@ -28,7 +28,7 @@ impl SubAgentRunFact {
             created_at: run.created_at / 1000, // Convert ms to seconds
             updated_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+            .unwrap_or_default()
                 .as_secs() as i64,
             confidence: 1.0,
             is_valid: true,

@@ -218,7 +218,7 @@ pub fn generate_signature(format: SignatureFormat, secret: &str, payload: &[u8])
         SignatureFormat::Stripe => {
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+            .unwrap_or_default()
                 .as_secs();
             let signed_payload = format!("{}.{}", timestamp, String::from_utf8_lossy(payload));
             let stripe_hmac = compute_hmac_sha256(secret, signed_payload.as_bytes());

@@ -56,7 +56,7 @@ impl SkillExecution {
             session_id: session_id.into(),
             invoked_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+            .unwrap_or_default()
                 .as_secs() as i64,
             duration_ms,
             status: ExecutionStatus::Success,
@@ -79,7 +79,7 @@ impl SkillExecution {
             session_id: session_id.into(),
             invoked_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+            .unwrap_or_default()
                 .as_secs() as i64,
             duration_ms: 0,
             status: ExecutionStatus::Failed,
@@ -125,7 +125,7 @@ impl SkillMetrics {
     pub fn new(skill_id: impl Into<String>) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         Self {
             skill_id: skill_id.into(),

@@ -218,7 +218,7 @@ impl SubAgentRegistry {
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as i64;
 
         // Update timestamps based on transition

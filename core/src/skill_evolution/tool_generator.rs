@@ -198,7 +198,7 @@ impl ToolGenerator {
                 confidence: suggestion.confidence,
                 generated_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+            .unwrap_or_default()
                     .as_secs() as i64,
                 generator_version: "1.0.0".to_string(),
             },
