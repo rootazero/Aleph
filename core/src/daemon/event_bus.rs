@@ -2,7 +2,7 @@
 //!
 //! Pub/sub event distribution using tokio::sync::broadcast.
 
-use crate::daemon::{DaemonError, DaemonEvent, Result};
+use crate::daemon::{DaemonEvent, Result};
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 

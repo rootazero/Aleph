@@ -27,11 +27,8 @@ pub mod ui_hints;
 // Re-export main types
 pub use structs::{Config, FullConfig};
 
-// Re-export backup types
-pub use backup::{BackupEntry, ConfigBackup};
-
 // Re-export patcher types
-pub use patcher::{ConfigPatcher, FieldDiff, HealthCheckResult, PatchRequest, PatchResult};
+pub use patcher::ConfigPatcher;
 
 // Re-export schema generation functions
 pub use schema::generate_config_schema_json;

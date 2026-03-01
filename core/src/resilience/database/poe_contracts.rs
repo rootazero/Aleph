@@ -21,6 +21,7 @@ pub struct PoeContractRow {
 
 impl StateDatabase {
     /// Insert a new pending contract.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_poe_contract(
         &self,
         id: &str,

@@ -21,15 +21,16 @@
 pub(crate) use std::sync::Arc;
 
 #[cfg(feature = "loom")]
-pub(crate) use loom::sync::{Mutex, MutexGuard, RwLock};
+pub(crate) use loom::sync::{Mutex, RwLock};
 #[cfg(feature = "loom")]
 pub(crate) use loom::sync::atomic::{
     AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering,
 };
 
 #[cfg(not(feature = "loom"))]
-pub(crate) use std::sync::{Mutex, MutexGuard, RwLock};
+pub(crate) use std::sync::{Mutex, RwLock};
 #[cfg(not(feature = "loom"))]
+#[allow(unused_imports)] // AtomicUsize/MutexGuard used by test code only
 pub(crate) use std::sync::atomic::{
     AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering,
 };
