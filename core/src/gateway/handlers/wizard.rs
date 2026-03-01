@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

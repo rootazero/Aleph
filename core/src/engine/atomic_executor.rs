@@ -14,7 +14,7 @@
 //! All handlers share a common **ExecutorContext** for working directory and security checks.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tracing::debug;
 

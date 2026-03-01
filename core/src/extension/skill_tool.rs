@@ -12,7 +12,7 @@ use super::types::{
 use crate::event::{
     AlephEvent, EventFilter, EventType, GlobalBus, PermissionReply, PermissionRequest,
 };
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tracing::{debug, info, warn};

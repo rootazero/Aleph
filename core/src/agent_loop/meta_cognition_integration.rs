@@ -11,7 +11,7 @@ use crate::poe::meta_cognition::{
 };
 use crate::memory::store::MemoryBackend;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 
 /// Configuration for meta-cognition integration
 #[derive(Debug, Clone)]

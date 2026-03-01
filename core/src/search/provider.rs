@@ -51,7 +51,7 @@ pub trait SearchProvider: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     // Mock implementation for testing
     struct MockSearchProvider {

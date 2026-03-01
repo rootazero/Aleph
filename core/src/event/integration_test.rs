@@ -5,8 +5,8 @@
 mod tests {
     use crate::event::*;
     use async_trait::async_trait;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use crate::sync_primitives::{AtomicUsize, Ordering};
+    use crate::sync_primitives::Arc;
 
     /// Simulates IntentAnalyzer: receives InputReceived, publishes ToolCallRequested
     struct MockIntentAnalyzer;

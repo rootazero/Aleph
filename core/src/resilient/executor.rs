@@ -269,8 +269,8 @@ mod tests {
     use super::*;
     use crate::error::AlephError;
     use crate::resilient::ResilienceConfig;
-    use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Arc;
+    use crate::sync_primitives::{AtomicU32, Ordering};
+    use crate::sync_primitives::Arc;
 
     struct CountingTask {
         id: String,
@@ -393,7 +393,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_executor_notify_on_fail() {
-        use std::sync::Mutex;
+        use crate::sync_primitives::Mutex;
 
         let notifications = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
         let notifications_clone = notifications.clone();

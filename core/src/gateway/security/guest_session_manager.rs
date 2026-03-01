@@ -7,7 +7,7 @@
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use thiserror::Error;
 
 use aleph_protocol::GuestScope;

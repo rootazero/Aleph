@@ -1,6 +1,6 @@
 //! Tests for evolution module
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::memory::{
     FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,

@@ -12,7 +12,7 @@ use axum::{
 };
 use chrono::Utc;
 use serde::Serialize;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;

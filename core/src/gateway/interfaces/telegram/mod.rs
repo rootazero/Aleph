@@ -36,7 +36,7 @@ use crate::gateway::channel::{
 };
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
 #[cfg(feature = "telegram")]

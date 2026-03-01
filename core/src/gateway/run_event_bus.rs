@@ -37,8 +37,8 @@
 //! let result = wait_for_run_end(&mut events, Duration::from_secs(30)).await;
 //! ```
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{AtomicU32, AtomicU64, Ordering};
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};

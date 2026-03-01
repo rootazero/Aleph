@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{watch, RwLock};
 
 use crate::agent_loop::{

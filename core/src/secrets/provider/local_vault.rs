@@ -4,7 +4,7 @@
 //! enabling the local encrypted vault to participate in the
 //! provider-based secret routing system.
 
-use std::sync::RwLock;
+use crate::sync_primitives::RwLock;
 
 use async_trait::async_trait;
 use chrono::Utc;

@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{debug, info};
 
 use super::error::ToolError;

@@ -38,7 +38,7 @@ use super::{AtomicAction, NaiveBayesClassifier};
 use rusqlite::{params, Connection, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 

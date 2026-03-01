@@ -934,7 +934,7 @@ mod tests {
 
     #[test]
     fn test_provider_as_trait_object() {
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
 
         let provider: Arc<dyn GenerationProvider> = Arc::new(
             T8StarVeoProviderBuilder::new("key", "https://example.com")

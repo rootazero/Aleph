@@ -11,8 +11,8 @@ pub use config::CompressionDaemonConfig;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use crate::sync_primitives::{AtomicUsize, Ordering};
+    use crate::sync_primitives::Arc;
     use std::time::Duration;
 
     #[tokio::test]

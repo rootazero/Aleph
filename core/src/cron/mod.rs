@@ -69,7 +69,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{oneshot, RwLock, Semaphore};
 
 #[cfg(feature = "cron")]

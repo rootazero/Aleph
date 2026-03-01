@@ -31,7 +31,7 @@ use crate::extension::error::ExtensionError;
 use crate::extension::manifest::PluginManifest;
 
 #[cfg(feature = "plugin-wasm")]
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 #[cfg(feature = "plugin-wasm")]
 use extism::{Manifest as ExtismManifest, PluginBuilder, UserData, Wasm, PTR};

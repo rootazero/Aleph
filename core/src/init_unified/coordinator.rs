@@ -4,7 +4,7 @@ use super::error::InitError;
 use crate::config::Config;
 use crate::utils::paths::get_config_dir;
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{info, warn};
 
 /// Initialization phase identifier

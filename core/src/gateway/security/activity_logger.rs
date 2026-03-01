@@ -9,7 +9,7 @@ use super::activity_log::{
     ActivityLogQuery, ActivityLogQueryResult, ActivityStatus, ActivityType, GuestActivityLog,
 };
 use dashmap::DashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, warn};
 

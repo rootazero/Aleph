@@ -6,7 +6,7 @@
 //!
 //! All modifications are persisted to config file and broadcast as events.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use crate::config::Config;

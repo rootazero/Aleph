@@ -3,7 +3,7 @@
 //! Listens for `OutcomeRecorded` events and generates memory facts
 //! for successful executions (core tier) and budget exhaustion (lessons learned).
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::debug;
 
 use crate::poe::events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind};
@@ -120,7 +120,7 @@ impl MemoryProjector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::sync_primitives::{AtomicUsize, Ordering};
 
     use crate::poe::events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind};
 

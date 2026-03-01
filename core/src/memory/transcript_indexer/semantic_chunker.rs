@@ -1,6 +1,6 @@
 //! Semantic chunking based on embedding similarity
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::memory::EmbeddingProvider;
 use crate::Result;

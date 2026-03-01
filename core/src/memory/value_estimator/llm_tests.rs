@@ -1,6 +1,6 @@
 //! Integration tests for LLM-based scoring
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::memory::{ContextAnchor, MemoryEntry, ValueEstimator};
 use crate::providers::AiProvider;

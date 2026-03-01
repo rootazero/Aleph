@@ -15,7 +15,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use crate::sync_primitives::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
@@ -291,7 +291,7 @@ impl Drop for ExtensionWatcher {
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use crate::sync_primitives::{AtomicBool, Ordering};
     use std::thread;
     use tempfile::TempDir;
 

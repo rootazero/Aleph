@@ -57,7 +57,7 @@ pub use utils::{cosine_similarity, hash_prompt, normalize_prompt, prompt_preview
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use std::time::Duration;
 
     // Mock embedder for testing

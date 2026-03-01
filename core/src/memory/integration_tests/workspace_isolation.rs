@@ -229,7 +229,7 @@ mod tests {
     #[tokio::test]
     async fn test_workspace_crud_operations() {
         use crate::memory::workspace::Workspace;
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().unwrap();
         let backend = Arc::new(

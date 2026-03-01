@@ -25,7 +25,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 
@@ -46,7 +46,7 @@ pub struct ChannelRegistry {
     /// Unified inbound message sender
     inbound_tx: mpsc::Sender<InboundMessage>,
     /// Unified inbound message receiver (for consumers)
-    inbound_rx: Arc<RwLock<Option<mpsc::Receiver<InboundMessage>>>>,
+    inbound_rx: Arc<Mutex<Option<mpsc::Receiver<InboundMessage>>>>,
 }
 
 impl ChannelRegistry {
@@ -58,7 +58,7 @@ impl ChannelRegistry {
             channels: RwLock::new(HashMap::new()),
             factories: RwLock::new(HashMap::new()),
             inbound_tx,
-            inbound_rx: Arc::new(RwLock::new(Some(inbound_rx))),
+            inbound_rx: Arc::new(Mutex::new(Some(inbound_rx))),
         }
     }
 
@@ -259,8 +259,8 @@ impl ChannelRegistry {
     /// Take the inbound message receiver
     ///
     /// This can only be called once - subsequent calls return None.
-    pub async fn take_inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        let mut rx_guard = self.inbound_rx.write().await;
+    pub fn take_inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
+        let mut rx_guard = self.inbound_rx.lock().expect("inbound_rx mutex poisoned");
         rx_guard.take()
     }
 

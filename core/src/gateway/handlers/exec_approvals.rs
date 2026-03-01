@@ -10,7 +10,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;

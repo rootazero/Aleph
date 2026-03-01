@@ -1,6 +1,6 @@
 use crate::daemon::{DaemonEventBus, Result};
 use async_trait::async_trait;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::watch;
 
 /// Watcher control signal

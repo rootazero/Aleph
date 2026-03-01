@@ -4,7 +4,7 @@
 //! current-state [`crate::memory::context::MemoryFact`] projection.
 //! Used both for rebuilding read-side state and for time-travel queries.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::error::AlephError;
 use crate::memory::context::{

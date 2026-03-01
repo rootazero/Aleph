@@ -30,7 +30,7 @@
 //! Use `set_tool_progress_handler` to receive notifications when tools start/complete.
 
 use once_cell::sync::Lazy;
-use std::sync::{Arc, Mutex};
+use crate::sync_primitives::{Arc, Mutex};
 use tracing::debug;
 
 pub mod atomic_ops;

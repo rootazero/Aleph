@@ -3,7 +3,7 @@
 //! Monitors SKILL.md files for changes and triggers reload callbacks.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -250,7 +250,7 @@ impl SkillWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
     use tempfile::TempDir;
 
     #[test]

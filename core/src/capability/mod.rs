@@ -43,7 +43,7 @@ use crate::memory::store::MemoryBackend;
 use crate::memory::{EmbeddingProvider, FactRetrieval, FactRetrievalConfig};
 use crate::payload::{AgentPayload, Capability};
 use crate::skills::SkillsRegistry;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{debug, info, warn};
 
 /// Capability executor that enriches AgentPayload with context data

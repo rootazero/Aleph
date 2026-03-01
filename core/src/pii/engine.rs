@@ -4,7 +4,8 @@ use crate::config::PiiAction;
 use crate::config::PrivacyConfig;
 use crate::pii::allowlist::PiiAllowlist;
 use crate::pii::rules::PiiRule;
-use std::sync::{Arc, OnceLock, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
+use std::sync::OnceLock;
 use tracing::warn;
 
 /// Severity level for PII detections

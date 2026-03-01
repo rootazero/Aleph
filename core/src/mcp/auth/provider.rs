@@ -10,7 +10,7 @@
 //! 4. `finish_authorization()` - Exchange code for tokens
 //! 5. `refresh_token()` - Refresh expired tokens
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::Rng;

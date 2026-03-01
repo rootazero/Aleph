@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use rusqlite::{params, Connection};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use crate::sync_primitives::{Arc, Mutex};
 
 use crate::event::{
     AlephEvent,

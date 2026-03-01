@@ -5,7 +5,7 @@
 //! Unified pairing system supporting both device authentication
 //! and channel sender verification with 8-character Base32 codes.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use thiserror::Error;
 use uuid::Uuid;
 

@@ -12,7 +12,7 @@
 //! ```rust,no_run
 //! use alephcore::skill_evolution::collaborative_pipeline::CollaborativeSolidificationPipeline;
 //! use alephcore::skill_evolution::tracker::EvolutionTracker;
-//! use std::sync::Arc;
+//! use crate::sync_primitives::Arc;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let tracker = Arc::new(EvolutionTracker::new("evolution.db")?);
@@ -65,7 +65,7 @@
 //! └─────────────────┘
 //! ```
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{debug, info, warn};
 
 use crate::error::{AlephError, Result};

@@ -1,14 +1,14 @@
 //! Tests for the execution engine module.
 
 use super::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::sync_primitives::{AtomicUsize, Ordering};
 
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
 use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::router::SessionKey;
 
 use async_trait::async_trait;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 /// Test event emitter that collects events

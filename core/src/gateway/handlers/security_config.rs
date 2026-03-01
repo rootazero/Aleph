@@ -8,7 +8,7 @@
 //!
 //! All modifications are persisted and broadcast as events.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, INTERNAL_ERROR};

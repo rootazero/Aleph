@@ -4,7 +4,7 @@
 //! components. This is passed to session tools (sessions_list, sessions_send)
 //! via `BuiltinToolConfig` to enable agent-to-agent communication.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::a2a_policy::AgentToAgentPolicy;
 use super::agent_instance::AgentRegistry;

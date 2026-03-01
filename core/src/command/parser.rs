@@ -14,7 +14,7 @@ use crate::command::CommandRegistry;
 use crate::config::RoutingRuleConfig;
 use crate::dispatcher::ToolSourceType;
 use crate::skills::{Skill, SkillsRegistry};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::debug;
 
 /// Parsed command result

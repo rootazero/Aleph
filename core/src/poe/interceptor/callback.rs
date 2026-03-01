@@ -3,7 +3,7 @@
 //! All LoopCallback methods delegate to the inner callback, except `on_step_evaluate`
 //! which uses the shared StepEvaluator to evaluate each step against the SuccessManifest.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;

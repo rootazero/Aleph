@@ -5,7 +5,7 @@
 use rusqlite::{params, Connection, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::sync::Mutex;
+use crate::sync_primitives::Mutex;
 use tracing::{debug, info};
 
 /// An approved device that can connect to the Gateway

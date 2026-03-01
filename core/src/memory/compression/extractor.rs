@@ -21,7 +21,7 @@ use crate::memory::context::{FactType, MemoryEntry, MemoryFact};
 use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// A fact extracted by the LLM before embedding
 #[derive(Debug, Clone, Serialize, Deserialize)]

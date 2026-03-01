@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::cron::config::{
     CronJob, DeliveryConfig, DeliveryMode, DeliveryOutcome, DeliveryTargetConfig, JobRun,
@@ -128,7 +128,7 @@ impl DeliveryEngine {
 mod tests {
     use super::*;
     use crate::cron::config::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use crate::sync_primitives::{AtomicU32, Ordering};
 
     /// Test delivery target that records calls
     struct MockTarget {

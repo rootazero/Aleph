@@ -6,7 +6,7 @@
 //! for safety during testing.
 
 use crate::daemon::{ProposedAction, Result};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Action executor - executes proactive actions
 pub struct ActionExecutor {

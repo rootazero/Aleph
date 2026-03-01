@@ -9,7 +9,7 @@ use crate::poe::crystallization::experience::{
 };
 use crate::poe::crystallization::experience_store::{ExperienceStore, PoeExperience};
 use crate::memory::EmbeddingProvider;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{debug, info};
 
 /// Configuration for Experience Replay Layer

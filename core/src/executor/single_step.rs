@@ -30,7 +30,7 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info};
 
@@ -669,7 +669,7 @@ mod tests {
     async fn test_exec_gate_blocks_dangerous_command() {
         use crate::exec::ExecApprovalManager;
         use crate::executor::ExecSecurityGate;
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
         use aleph_protocol::IdentityContext;
 
         let tool_registry = Arc::new(crate::executor::BuiltinToolRegistry::new());

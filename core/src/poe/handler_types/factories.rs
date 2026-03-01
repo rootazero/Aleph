@@ -1,6 +1,6 @@
 //! POE factory types
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::poe::CompositeValidator;
 

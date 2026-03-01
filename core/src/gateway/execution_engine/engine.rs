@@ -4,8 +4,8 @@
 //! to the actual agent loop infrastructure using Thinker, Executor, and tools.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicU64};
-use std::sync::Arc;
+use crate::sync_primitives::{AtomicU32, AtomicU64};
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::{mpsc, watch, RwLock};
@@ -93,9 +93,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     ) -> Result<(), ExecutionError> {
         let run_id = request.run_id.clone();
 
-        // Check concurrent run limit
+        // Create cancellation channel
+        let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
+
+        // Atomically check concurrent run limit and register the run
         {
-            let runs = self.active_runs.read().await;
+            let mut runs = self.active_runs.write().await;
             let agent_runs = runs
                 .values()
                 .filter(|r| r.request.session_key.agent_id() == request.session_key.agent_id())
@@ -109,19 +112,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     self.config.max_concurrent_runs
                 )));
             }
-        }
 
-        // Check agent state
-        if !agent.is_idle().await {
-            return Err(ExecutionError::AgentBusy(agent.id().to_string()));
-        }
-
-        // Create cancellation channel
-        let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
-
-        // Register the run
-        {
-            let mut runs = self.active_runs.write().await;
             runs.insert(
                 run_id.clone(),
                 ActiveRun {
@@ -135,6 +126,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     chunk_counter: AtomicU32::new(0),
                 },
             );
+        }
+
+        // Check agent state (after registration to reserve the slot)
+        if !agent.is_idle().await {
+            // Remove the just-inserted run since agent is busy
+            let mut runs = self.active_runs.write().await;
+            runs.remove(&run_id);
+            return Err(ExecutionError::AgentBusy(agent.id().to_string()));
         }
 
         // Emit run accepted event

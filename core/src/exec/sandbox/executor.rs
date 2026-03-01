@@ -8,7 +8,7 @@ use crate::exec::sandbox::adapter::{ExecutionResult, SandboxAdapter, SandboxComm
 use crate::exec::sandbox::audit::{ExecutionStatus, SandboxAuditLog};
 use crate::exec::sandbox::capabilities::Capabilities;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Policy for handling sandbox unavailability
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

@@ -3,7 +3,7 @@
 //! Provides async approval flow with timeout and event broadcasting.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};

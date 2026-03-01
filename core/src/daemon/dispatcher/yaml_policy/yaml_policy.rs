@@ -6,7 +6,7 @@ use crate::daemon::dispatcher::scripting::{create_sandboxed_engine, register_dur
 use crate::daemon::events::DerivedEvent;
 use crate::daemon::worldmodel::state::EnhancedContext;
 use crate::daemon::worldmodel::WorldModel;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 pub struct YamlPolicy {
     rule: YamlRule,

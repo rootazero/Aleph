@@ -4,7 +4,7 @@
 //! messages to the appropriate Agent/Session.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -240,7 +240,7 @@ impl InboundMessageRouter {
     /// This takes ownership of the inbound receiver from ChannelRegistry.
     /// Returns a handle that can be used to stop the router.
     pub async fn start(self: Arc<Self>) -> Option<tokio::task::JoinHandle<()>> {
-        let rx = self.channel_registry.take_inbound_receiver().await?;
+        let rx = self.channel_registry.take_inbound_receiver()?;
 
         let handle = tokio::spawn(async move {
             self.run_loop(rx).await;

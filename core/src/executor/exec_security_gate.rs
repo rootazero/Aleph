@@ -6,7 +6,7 @@
 //! 3. Sandbox execution for Safe/Caution (macOS only)
 //! 4. SecretMasker applied to all ToolSuccess outputs
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde_json::Value;
 use tracing::{info, warn};
@@ -279,7 +279,7 @@ impl ExecSecurityGate {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use crate::exec::ExecApprovalManager;
 
     #[allow(dead_code)]

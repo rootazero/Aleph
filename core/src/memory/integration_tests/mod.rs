@@ -79,7 +79,7 @@ mod integration_tests {
 
 #[cfg(test)]
 mod event_sourcing {
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     use crate::memory::context::*;
     use crate::memory::events::commands::*;

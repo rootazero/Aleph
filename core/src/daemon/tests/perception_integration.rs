@@ -4,7 +4,7 @@ mod tests {
         DaemonEvent, DaemonEventBus, PerceptionConfig, RawEvent, WatcherRegistry,
     };
     use crate::daemon::perception::watchers::{ProcessWatcher, TimeWatcher};
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use tokio::time::{timeout, Duration};
 
     #[tokio::test]

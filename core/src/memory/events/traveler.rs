@@ -8,7 +8,7 @@
 //! the actual state reconstruction, and provides higher-level query
 //! methods for timeline and explanation use cases.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::error::AlephError;
 use crate::memory::audit::{ExplainedEvent, FactExplanation};

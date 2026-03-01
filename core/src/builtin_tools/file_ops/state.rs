@@ -4,7 +4,7 @@
 
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use crate::sync_primitives::Mutex;
 use std::time::SystemTime;
 use tracing::{info, warn};
 use walkdir::WalkDir;

@@ -8,7 +8,7 @@ use super::status::{
 };
 use super::transition::{CallResult, HealthTransitionEngine};
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::SystemTime;
 use tokio::sync::{broadcast, RwLock};
 

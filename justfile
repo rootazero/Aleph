@@ -127,7 +127,7 @@ test-proptest:
 
 # Run loom concurrency tests
 test-loom:
-    RUSTFLAGS="--cfg loom" LOOM_MAX_PREEMPTIONS=3 cargo test --features loom --lib
+    LOOM_MAX_PREEMPTIONS=3 cargo test --features loom --lib
 
 # Run full logic review suite (proptest + loom)
 test-logic: test-proptest test-loom

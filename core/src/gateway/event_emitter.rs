@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{AtomicU64, Ordering};
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 

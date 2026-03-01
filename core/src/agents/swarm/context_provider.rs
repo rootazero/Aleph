@@ -4,7 +4,7 @@
 //! Retrieves Tier 2 (Important) events from ContextInjector and formats
 //! them as XML team communication protocol.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use crate::agent_loop::ContextProvider;
 use super::context_injector::ContextInjector;
 

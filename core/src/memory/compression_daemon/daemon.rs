@@ -3,8 +3,8 @@
 use super::config::CompressionDaemonConfig;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
+use crate::sync_primitives::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio::time::interval;

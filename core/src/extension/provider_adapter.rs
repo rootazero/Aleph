@@ -41,7 +41,7 @@
 //! let response = adapter.chat(request).await?;
 //! ```
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use super::plugin_loader::PluginLoader;

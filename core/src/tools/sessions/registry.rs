@@ -3,7 +3,7 @@
 //! Tracks active sub-agent runs for cleanup and result announcement.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 /// Information about a spawned sub-agent run

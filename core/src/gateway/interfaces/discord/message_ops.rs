@@ -3,7 +3,7 @@
 //! Implements the MessageOperations trait for Discord API via serenity.
 
 use async_trait::async_trait;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 

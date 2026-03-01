@@ -39,7 +39,7 @@ use crate::gateway::webhook_receiver::{WebhookHandler, WebhookReceiver};
 use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::http::HeaderMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{mpsc, RwLock};
 
 /// Generic webhook channel implementation.

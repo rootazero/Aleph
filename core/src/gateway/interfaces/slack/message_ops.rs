@@ -8,7 +8,7 @@ use crate::gateway::channel::{
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 use chrono::Utc;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
