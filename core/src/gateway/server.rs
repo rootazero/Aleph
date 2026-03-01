@@ -22,12 +22,17 @@ use crate::providers::protocols::ProtocolLoader;
 use notify::RecommendedWatcher;
 use notify_debouncer_full::{Debouncer, FileIdMap};
 
+/// Maximum number of failed authentication attempts before disconnecting
+const MAX_AUTH_ATTEMPTS: u8 = 5;
+
 /// State for an individual WebSocket connection
 pub struct ConnectionState {
     /// Whether the connection has been authenticated
     pub authenticated: bool,
     /// Whether this is the first message (for handshake enforcement)
     pub first_message: bool,
+    /// Number of failed authentication attempts
+    pub auth_attempts: u8,
     /// Event topics this connection is subscribed to
     pub subscriptions: Vec<String>,
     /// Connection metadata
@@ -46,6 +51,7 @@ impl ConnectionState {
         Self {
             authenticated: false,
             first_message: true,
+            auth_attempts: 0,
             subscriptions: vec![],
             metadata: HashMap::new(),
             device_id: None,
@@ -444,10 +450,28 @@ async fn handle_connection(
                                         }
 
                                         // Mark first_message = false even if connect failed
+                                        // Track failed auth attempts and disconnect if limit reached
                                         {
                                             let mut conns = ctx.connections.write().await;
                                             if let Some(state) = conns.get_mut(&conn_id) {
                                                 state.first_message = false;
+                                                if !state.authenticated {
+                                                    state.auth_attempts += 1;
+                                                    if state.auth_attempts >= MAX_AUTH_ATTEMPTS {
+                                                        warn!(
+                                                            "Connection {} exceeded max auth attempts ({}), disconnecting",
+                                                            conn_id, MAX_AUTH_ATTEMPTS
+                                                        );
+                                                        let response_str = serde_json::to_string(&JsonRpcResponse::error(
+                                                            req.id.clone(),
+                                                            AUTH_REQUIRED,
+                                                            "Too many failed authentication attempts",
+                                                        )).unwrap_or_default();
+                                                        drop(conns);
+                                                        let _ = write.send(Message::Text(response_str.into())).await;
+                                                        break;
+                                                    }
+                                                }
                                             }
                                         }
 
