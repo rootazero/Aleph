@@ -59,6 +59,8 @@ pub mod workspace_store;
 mod integration_tests;
 #[cfg(test)]
 mod proptest_enums;
+#[cfg(all(test, loom))]
+mod loom_concurrency;
 
 // Re-export commonly used types
 pub use adaptive_retrieval::{AdaptiveRetrievalConfig, AdaptiveRetrievalGate, RetrievalDecision};
