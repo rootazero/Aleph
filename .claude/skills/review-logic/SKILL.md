@@ -3,13 +3,24 @@ name: review-logic
 description: >
   Deep logic bug review for Aleph codebase. Performs four-phase semantic analysis:
   context alignment, invariant checking, control flow simulation, and red-teaming.
+  Integrates L1 proptest and L2 loom automated verification for full coverage.
   Use when reviewing code for logic bugs, state machine errors, error propagation
   issues, or concurrency defects. Trigger: /review-logic [module|commit] [--strict]
 ---
 
-# Logic Review — AI Semantic Audit (L3)
+# Logic Review — Three-Layer Defense System
 
-You are performing a deep logic review of Aleph code. Follow the four phases below strictly and in order. Output a structured report at the end.
+This skill is L3 (AI Semantic Audit) of a three-layer logic review system:
+
+| Layer | Method | What it catches | Command |
+|-------|--------|----------------|---------|
+| **L1** | proptest (property-based) | Invariant violations, boundary errors | `just test-proptest` |
+| **L2** | loom (concurrency) | Deadlocks, data races, atomics bugs | `just test-loom` |
+| **L3** | AI semantic audit (this skill) | Logic bugs, state errors, design flaws | `/review-logic` |
+
+All three layers run together via `just test-logic`.
+
+You are performing a deep logic review of Aleph code. Follow the four phases below strictly and in order. After the report, run automated verification (L1 + L2) if concurrency-related code was changed.
 
 ## Arguments
 
@@ -61,10 +72,42 @@ For each changed function, check:
 - For each: is it in a test-only path, or could it trigger in production?
 - Rate: SAFE (proven by type system), RISKY (depends on runtime state), CRITICAL (user-facing path)
 
-### Lock Scope Analysis
+### Lock & Concurrency Analysis
+
+**Imports check:**
+- Verify sync primitives import from `crate::sync_primitives`, NOT directly from `std::sync`
+- Exceptions: `OnceLock`, `LazyLock`, `Once`, `Weak`, `AtomicU8`, `std::sync::mpsc` (not in sync_primitives)
+- Exception: static `AtomicU64`/`AtomicU32` (loom's `new()` is not `const fn`, must use `std::sync::atomic`)
+- Exception: types that interface with external crate APIs (e.g., `rhai::Locked` requires `std::sync::RwLock`)
+
+**Lock hierarchy** (defined in `core/src/sync_primitives.rs`):
+- Level 0: StateDatabase (resilience/database)
+- Level 1: MemoryStore (memory/)
+- Level 2: ToolRegistry, ChannelRegistry (dispatcher/, gateway/)
+- Level 3: UI state, progress monitors
+- Flag any code that acquires locks out of order
+
+**Lock scope:**
 - Find all `Mutex::lock()`, `RwLock::read()`, `RwLock::write()`
 - Check: is the guard held across an `.await` point? (deadlock risk with std::sync::Mutex)
 - Check: are multiple locks acquired? If so, is the order consistent across all call sites?
+
+**Atomic operations:**
+- Check ordering (`Relaxed` vs `SeqCst` vs `Acquire`/`Release`) — is it strong enough?
+- Check TOCTOU patterns: load → check → store with separate critical sections is a race
+- Flag unprotected read-modify-write sequences (should use `fetch_add`, `compare_exchange`, etc.)
+
+**Loom test coverage** (5 modules have loom tests):
+
+| Module | Test file | Tests |
+|--------|-----------|-------|
+| dispatcher | `dispatcher/loom_concurrency.rs` | registry R/W, pause/resume flags, atomic counter, progress snapshot |
+| gateway | `gateway/loom_concurrency.rs` | seq counter, connection state, request ID, chunk reset, run limit TOCTOU |
+| agent_loop | `agent_loop/loom_concurrency.rs` | anchor store, state flags, Arc ref counting |
+| memory | `memory/loom_concurrency.rs` | singleton init, compression trigger, timestamps, metrics, provider swap |
+| resilience | `resilience/loom_concurrency.rs` | lane counter, token budget, per-task seq, mutex contention |
+
+If the reviewed code touches concurrency patterns in these modules, check if existing loom tests cover the change. If not, suggest adding a loom test.
 
 ### Type Coercion
 - Find all `as` casts — can they truncate or overflow?
@@ -110,6 +153,39 @@ Switch to attacker mindset:
    - Component crashes between step 1 and step 2 of a multi-step operation
 
 3. **Generate test suggestions**: Write 3-5 concrete test cases (as Rust code snippets) that target the most likely failure modes discovered above.
+
+## Phase 5: Automated Verification (L1 + L2)
+
+If the reviewed code touches any of these, run automated tests:
+
+| Code changed | Run command | What it verifies |
+|-------------|-------------|------------------|
+| Concurrency (Mutex, RwLock, atomics, Arc) | `just test-loom` | 21 loom tests across 5 modules |
+| Business logic, data structures, parsing | `just test-proptest` | Property-based invariant tests |
+| Both or unclear | `just test-logic` | Runs proptest + loom together |
+
+Report the test results in the findings section. If a loom or proptest test fails, escalate to **Critical**.
+
+If the change introduces a NEW concurrency pattern not covered by existing loom tests, add a **[Suggested Test]** with a loom test template:
+
+```rust
+#[test]
+fn loom_new_pattern_name() {
+    loom::model(|| {
+        // Setup shared state using loom::sync types
+        let shared = Arc::new(Mutex::new(initial_state));
+
+        // Spawn threads to exercise the pattern
+        let t1 = loom::thread::spawn(move || { /* ... */ });
+
+        // Join and verify invariants
+        t1.join().unwrap();
+        // assert!(...)
+    });
+}
+```
+
+New loom tests go in `core/src/<module>/loom_concurrency.rs`, gated with `#[cfg(all(test, feature = "loom"))]` in the module's `mod.rs`.
 
 ## Report Format
 
@@ -172,3 +248,6 @@ These are project-specific invariants to always check:
 5. **Memory Namespace Isolation**: Facts in namespace A must never leak to namespace B queries
 6. **Approval Flow Integrity**: exec approval cannot be bypassed by crafted tool names
 7. **Gateway Auth State Machine**: Connection must authenticate before any RPC call succeeds
+8. **Sync Primitives Import Rule**: Use `crate::sync_primitives` for `Arc`, `Mutex`, `RwLock`, and atomics — never `std::sync` directly (except documented exceptions: static atomics, OnceLock, external API interop)
+9. **Lock Hierarchy Compliance**: Acquire locks in Level 0→1→2→3 order; reverse acquisition is a deadlock risk
+10. **TOCTOU Prevention**: Check-then-act on shared state must happen within the same lock scope (see gateway/execution_engine TOCTOU fix as reference)
