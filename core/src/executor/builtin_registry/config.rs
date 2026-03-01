@@ -5,6 +5,7 @@ use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use crate::agents::sub_agents::SubAgentDispatcher;
+use crate::config::{Config, ConfigPatcher};
 use crate::dispatcher::ToolRegistry as DispatcherToolRegistry;
 use crate::generation::GenerationProviderRegistry;
 #[cfg(feature = "gateway")]
@@ -21,6 +22,10 @@ pub struct BuiltinToolConfig {
     pub dispatcher_registry: Option<Arc<RwLock<DispatcherToolRegistry>>>,
     /// Sub-agent dispatcher for delegation (smart tool discovery)
     pub sub_agent_dispatcher: Option<Arc<RwLock<SubAgentDispatcher>>>,
+    /// Shared config handle for ConfigReadTool
+    pub config: Option<Arc<RwLock<Config>>>,
+    /// ConfigPatcher for ConfigUpdateTool
+    pub config_patcher: Option<Arc<ConfigPatcher>>,
     /// Gateway context for sessions tools (sessions_list, sessions_send)
     /// Requires the "gateway" feature to be enabled.
     #[cfg(feature = "gateway")]
