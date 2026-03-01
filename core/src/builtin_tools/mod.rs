@@ -56,6 +56,7 @@ pub mod mcp_prompt;
 pub mod desktop;
 pub mod pim;
 pub mod browser;
+pub mod config_read;
 pub mod soul_update;
 pub mod vision;
 
@@ -86,6 +87,7 @@ pub use mcp_prompt::{McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, Pro
 pub use desktop::{DesktopArgs, DesktopOutput, DesktopTool};
 pub use pim::{PimArgs, PimOutput, PimTool};
 pub use browser::{BrowserAction, BrowserArgs, BrowserOutput, BrowserTool};
+pub use config_read::{ConfigReadArgs, ConfigReadOutput, ConfigReadTool};
 pub use soul_update::{SoulField, SoulOperation, SoulUpdateArgs, SoulUpdateOutput, SoulUpdateTool};
 pub use vision::{VisionAction, VisionArgs, VisionOutput, VisionTool};
 
