@@ -250,6 +250,9 @@ pub async fn handle_stats(
             json!({
                 "totalMemories": stats.total_memories,
                 "totalFacts": stats.total_facts,
+                "validFacts": stats.valid_facts,
+                "totalGraphNodes": stats.total_graph_nodes,
+                "totalGraphEdges": stats.total_graph_edges,
             }),
         ),
         Err(e) => JsonRpcResponse::error(

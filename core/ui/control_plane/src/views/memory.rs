@@ -140,18 +140,24 @@ pub fn Memory() -> impl IntoView {
                     </span>
                  </Card>
                  <Card class="bg-success-subtle border-success/10 p-6 flex flex-col items-start".to_string()>
-                    <span class="text-[10px] font-bold text-success uppercase tracking-widest mb-1.5">"Vector Size"</span>
+                    <span class="text-[10px] font-bold text-success uppercase tracking-widest mb-1.5">"Raw Memories"</span>
                     <span class="text-3xl font-bold font-mono">
                         {move || {
                             stats.get()
-                                .map(|s| format!("{:.1} MB", s.total_size as f64 / 1_048_576.0))
+                                .map(|s| s.total_memories.to_string())
                                 .unwrap_or_else(|| "—".to_string())
                         }}
                     </span>
                  </Card>
                  <Card class="bg-primary-subtle border-primary/10 p-6 flex flex-col items-start".to_string()>
-                    <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1.5">"Active Sources"</span>
-                    <span class="text-3xl font-bold font-mono">"—"</span>
+                    <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1.5">"Graph Nodes"</span>
+                    <span class="text-3xl font-bold font-mono">
+                        {move || {
+                            stats.get()
+                                .map(|s| s.total_graph_nodes.to_string())
+                                .unwrap_or_else(|| "—".to_string())
+                        }}
+                    </span>
                  </Card>
             </div>
 
@@ -199,10 +205,11 @@ pub fn Memory() -> impl IntoView {
                                         key=|fact| fact.id.clone()
                                         children=move |fact| {
                                             let created_at = fact.created_at.clone().unwrap_or_else(|| "Unknown".to_string());
+                                            let source = fact.source.clone().unwrap_or_else(|| "Memory".to_string());
                                             view! {
                                                 <MemoryRow
                                                     content=fact.content
-                                                    source="Memory".to_string()
+                                                    source=source
                                                     date=created_at
                                                 />
                                             }
