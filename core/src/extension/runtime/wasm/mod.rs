@@ -78,7 +78,7 @@ impl WasmRuntime {
     /// Load a WASM plugin
     #[cfg(feature = "plugin-wasm")]
     pub fn load_plugin(&mut self, manifest: &PluginManifest) -> Result<(), ExtensionError> {
-        let wasm_path = manifest.entry_path();
+        let wasm_path = manifest.entry_path()?;
 
         if !wasm_path.exists() {
             return Err(ExtensionError::Runtime(format!(

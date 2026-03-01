@@ -60,7 +60,7 @@ impl NodeJsRuntime {
         &mut self,
         manifest: &PluginManifest,
     ) -> Result<PluginRegistrationParams, ExtensionError> {
-        let entry_path = manifest.entry_path();
+        let entry_path = manifest.entry_path()?;
 
         if !entry_path.exists() {
             return Err(ExtensionError::Runtime(format!(
