@@ -340,13 +340,9 @@ pub struct CollectorStats {
     pub total_artifacts: usize,
 }
 
-/// Helper function to truncate output for preview
+/// Helper function to truncate output for preview (Unicode-safe)
 pub fn truncate_for_preview(output: &str) -> String {
-    if output.len() <= OUTPUT_PREVIEW_MAX_LEN {
-        output.to_string()
-    } else {
-        format!("{}...", &output[..OUTPUT_PREVIEW_MAX_LEN])
-    }
+    crate::utils::text_format::truncate_text(output, OUTPUT_PREVIEW_MAX_LEN)
 }
 
 #[cfg(test)]
@@ -535,6 +531,19 @@ mod tests {
         let long = "a".repeat(300);
         let preview = truncate_for_preview(&long);
         assert!(preview.len() < 210);
+        assert!(preview.ends_with("..."));
+    }
+
+    #[tokio::test]
+    async fn test_truncate_for_preview_multibyte() {
+        // CJK characters should not panic
+        let cjk = "你好".repeat(200);
+        let preview = truncate_for_preview(&cjk);
+        assert!(preview.ends_with("..."));
+
+        // Emoji should not panic
+        let emoji = "🎉".repeat(300);
+        let preview = truncate_for_preview(&emoji);
         assert!(preview.ends_with("..."));
     }
 

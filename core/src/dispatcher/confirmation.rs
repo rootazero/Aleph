@@ -442,13 +442,9 @@ fn format_parameters(params: &serde_json::Value) -> String {
     }
 }
 
-/// Truncate string with ellipsis
+/// Truncate string with ellipsis (Unicode-safe)
 fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len - 3])
-    }
+    crate::utils::text_format::truncate_text(s, max_len)
 }
 
 #[cfg(test)]
@@ -688,7 +684,16 @@ mod tests {
     #[test]
     fn test_truncate() {
         assert_eq!(truncate("short", 10), "short");
-        assert_eq!(truncate("this is a long text", 10), "this is...");
+        assert_eq!(truncate("this is a long text", 10), "this is a ...");
+    }
+
+    #[test]
+    fn test_truncate_multibyte() {
+        // CJK characters should not panic
+        let cjk = "你好世界这是一个很长的文本";
+        let result = truncate(cjk, 5);
+        assert!(result.ends_with("..."));
+        assert_eq!(result.chars().count(), 8); // 5 chars + "..."
     }
 
     #[test]
