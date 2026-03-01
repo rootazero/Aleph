@@ -32,14 +32,16 @@ impl PermissionConfig {
                     .iter()
                     .map(|(pattern, action)| PermissionRule::new(permission, pattern, *action))
                     .collect();
-                // Sort deterministically: Deny first, then Ask, then Allow;
-                // within same action, sort by pattern for stable ordering
+                // Sort deterministically: Allow first, then Ask, then Deny.
+                // The evaluator uses "last match wins" (reverse iteration),
+                // so Deny must come LAST to have highest priority.
+                // Within same action, sort by pattern for stable ordering.
                 rules.sort_by(|a, b| {
                     fn action_priority(a: &PermissionAction) -> u8 {
                         match a {
-                            PermissionAction::Deny => 0,
+                            PermissionAction::Allow => 0,
                             PermissionAction::Ask => 1,
-                            PermissionAction::Allow => 2,
+                            PermissionAction::Deny => 2,
                         }
                     }
                     action_priority(&a.action)
