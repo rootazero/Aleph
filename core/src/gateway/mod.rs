@@ -206,3 +206,6 @@ pub use workspace::{
 mod proptest_protocol;
 #[cfg(all(test, feature = "gateway"))]
 mod proptest_channel;
+
+#[cfg(all(test, loom))]
+mod loom_concurrency;
