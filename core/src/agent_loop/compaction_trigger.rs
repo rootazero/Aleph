@@ -1,6 +1,6 @@
 //! Compaction trigger for SessionCompactor integration
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::event::{
     AlephEvent, EventBus, LoopState as EventLoopState, StopReason, TokenUsage, ToolCallResult,

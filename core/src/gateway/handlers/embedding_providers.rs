@@ -19,7 +19,7 @@ use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::memory::embedding_provider::RemoteEmbeddingProvider;
 use serde::Deserialize;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 /// Serialize a provider config to JSON and inject `is_active` based on the active provider id.

@@ -10,7 +10,7 @@ use crate::error::AlephError;
 use crate::memory::EmbeddingProvider;
 use super::config::ToolRetrievalConfig;
 use super::retrieval::{HydratedTool, ToolRetrieval};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Configuration for the hydration pipeline
 #[derive(Debug, Clone)]

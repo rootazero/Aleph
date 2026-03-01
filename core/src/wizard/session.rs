@@ -4,7 +4,7 @@
 //! the flow implementation and the client.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 
 use async_trait::async_trait;
 use serde_json::Value;

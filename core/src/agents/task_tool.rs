@@ -1,6 +1,6 @@
 //! TaskTool for calling sub-agents.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde_json::{json, Value};
 use tokio::sync::oneshot;

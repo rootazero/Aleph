@@ -4,8 +4,8 @@
 use crate::event::bus::EventBus;
 use crate::event::types::{AlephEvent, EventType};
 use async_trait::async_trait;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{AtomicBool, Ordering};
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace};
 
@@ -247,7 +247,7 @@ impl Default for EventHandlerRegistry {
 mod tests {
     use super::*;
     use crate::event::types::{InputEvent, StopReason};
-    use std::sync::atomic::AtomicUsize;
+    use crate::sync_primitives::AtomicUsize;
 
     /// Test handler that counts events
     struct CountingHandler {

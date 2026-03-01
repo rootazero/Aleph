@@ -92,7 +92,7 @@ use crate::discovery::{DiscoveryConfig, DiscoveryManager};
 use hooks::{HookContext, HookExecutor, HookResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 

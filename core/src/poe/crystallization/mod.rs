@@ -42,7 +42,7 @@ pub mod experience;
 pub mod experience_store;
 pub mod pattern_extractor;
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 
 use tokio::sync::mpsc;

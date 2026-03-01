@@ -2,7 +2,7 @@
 //!
 //! Analyzes execution metrics and generates solidification suggestions.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 
 use crate::error::{AlephError, Result};

@@ -8,7 +8,7 @@ use crate::dispatcher::model_router::{
     RoutingError, TaskIntent,
 };
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::sync_primitives::{AtomicU64, Ordering};
 
 // ============================================================================
 // Routing Configuration

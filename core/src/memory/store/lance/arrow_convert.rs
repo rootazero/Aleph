@@ -4,7 +4,7 @@
 //! for the four LanceDB tables: `facts`, `graph_nodes`, `graph_edges`, and
 //! `memories`.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use arrow_array::builder::{FixedSizeListBuilder, Float32Builder, ListBuilder, StringBuilder};
 use arrow_array::{

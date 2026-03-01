@@ -53,7 +53,7 @@
 use super::strategy::{CapabilityHealth, CapabilityStrategy, CompositeCapabilityExecutor};
 use crate::error::Result;
 use crate::payload::{AgentPayload, Capability};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 

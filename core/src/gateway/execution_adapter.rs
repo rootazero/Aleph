@@ -4,7 +4,7 @@
 //! implementations. This allows `InboundMessageRouter` to work with either the full
 //! `ExecutionEngine<P, R>` or the `SimpleExecutionEngine` without requiring generics.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 

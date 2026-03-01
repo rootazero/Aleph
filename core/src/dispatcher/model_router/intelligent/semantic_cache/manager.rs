@@ -2,7 +2,7 @@
 //!
 //! Main entry point for semantic caching operations.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{Duration, SystemTime};
 
 use super::embedder::{BridgeEmbedder, TextEmbedder};

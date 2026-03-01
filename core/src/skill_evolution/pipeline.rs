@@ -6,7 +6,7 @@
 //! 3. Filters suggestions by confidence threshold
 //! 4. Returns actionable suggestions for user approval
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use tracing::{debug, info, warn};
 

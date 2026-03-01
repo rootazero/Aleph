@@ -1178,8 +1178,8 @@ use serde_json::json;
 
     #[tokio::test]
     async fn test_generate_llm_summary_with_callback() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use crate::sync_primitives::Arc;
+        use crate::sync_primitives::{AtomicBool, Ordering};
 
         let compactor = SessionCompactor::new();
         let session = create_test_session();

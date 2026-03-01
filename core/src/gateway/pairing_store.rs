@@ -9,7 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 

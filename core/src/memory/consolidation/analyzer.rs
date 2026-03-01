@@ -6,7 +6,7 @@ use crate::memory::context::{FactType, MemoryFact};
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::providers::AiProvider;
 use crate::Result;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::profile::{ConsolidatedFact, ProfileCategory, UserProfile};
 

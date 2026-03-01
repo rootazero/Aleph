@@ -106,8 +106,8 @@ pub trait McpTransport: Send + Sync + std::any::Any {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use crate::sync_primitives::{AtomicBool, AtomicUsize, Ordering};
+    use crate::sync_primitives::Arc;
     use tokio::sync::Mutex;
 
     /// Mock transport for testing the trait contract

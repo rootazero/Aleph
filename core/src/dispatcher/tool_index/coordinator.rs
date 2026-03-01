@@ -14,7 +14,7 @@ use crate::memory::context::{
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::skills::{SkillRegistryEvent, SkillsRegistry};
 use super::inference::SemanticPurposeInferrer;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::broadcast;
 
 /// Metadata for a tool to be indexed

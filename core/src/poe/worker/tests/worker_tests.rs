@@ -160,7 +160,7 @@ fn test_worker_executor_creation_with_gate() {
     // Compilation test: verifies ExecSecurityGate wiring compiles correctly
     use crate::exec::ExecApprovalManager;
     use crate::executor::{ExecSecurityGate, SingleStepExecutor, BuiltinToolRegistry};
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     let tool_registry = Arc::new(BuiltinToolRegistry::new());
     let approval_manager = Arc::new(ExecApprovalManager::new());

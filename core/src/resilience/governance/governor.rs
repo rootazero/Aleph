@@ -7,8 +7,8 @@ use crate::error::AlephError;
 use super::super::types::Lane;
 use crate::resilience::database::StateDatabase;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{AtomicU64, Ordering};
+use crate::sync_primitives::Arc;
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, info, warn};
 

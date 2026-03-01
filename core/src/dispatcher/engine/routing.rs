@@ -1,7 +1,7 @@
 //! Model routing methods for AgentEngine
 
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use crate::sync_primitives::Ordering;
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 

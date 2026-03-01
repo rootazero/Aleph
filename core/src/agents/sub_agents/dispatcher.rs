@@ -4,7 +4,7 @@
 //! characteristics and available sub-agents.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};

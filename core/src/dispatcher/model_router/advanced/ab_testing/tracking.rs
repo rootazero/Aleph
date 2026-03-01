@@ -9,7 +9,7 @@
 use super::types::{ExperimentId, TrackedMetric, VariantId};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::sync::RwLock;
+use crate::sync_primitives::RwLock;
 use std::time::SystemTime;
 
 // ============================================================================

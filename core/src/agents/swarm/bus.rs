@@ -3,7 +3,7 @@
 //! Pub/Sub event bus for horizontal agent communication.
 //! Supports tiered event delivery with zero-blocking latency.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, info};
 

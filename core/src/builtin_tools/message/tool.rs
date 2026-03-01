@@ -3,7 +3,7 @@
 //! The agent-facing tool that dispatches message operations to channel adapters.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 
 use async_trait::async_trait;
 use tracing::{debug, warn};

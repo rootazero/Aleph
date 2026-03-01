@@ -5,7 +5,7 @@
 //! or as a multi-step task (using DAG scheduling).
 
 use serde::Deserialize;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{debug, info};
 
 use crate::config::GenerationConfig;

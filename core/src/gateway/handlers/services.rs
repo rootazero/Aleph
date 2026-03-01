@@ -322,7 +322,7 @@ mod tests {
     use super::*;
     use crate::extension::ExtensionManager;
     use crate::gateway::handlers::plugins::init_extension_manager;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     #[test]
     fn test_start_params() {

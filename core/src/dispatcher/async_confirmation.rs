@@ -49,7 +49,7 @@
 use crate::dispatcher::{RoutingLayer, UnifiedTool};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 

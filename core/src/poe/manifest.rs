@@ -24,7 +24,7 @@
 //! ).await?;
 //! ```
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::agents::thinking::ThinkLevel;
 use crate::error::Result;

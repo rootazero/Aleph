@@ -6,7 +6,7 @@
 use crate::error::AlephError;
 use crate::poe::EnvironmentContext;
 use crate::memory::store::MemoryBackend;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 
 /// Telemetry data captured during agent loop execution

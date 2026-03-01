@@ -6,7 +6,7 @@
 use super::types::{AnchorScope, AnchorSource, BehavioralAnchor};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, Result};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Storage manager for behavioral anchors
 ///

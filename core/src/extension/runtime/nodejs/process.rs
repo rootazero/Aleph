@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::sync_primitives::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};

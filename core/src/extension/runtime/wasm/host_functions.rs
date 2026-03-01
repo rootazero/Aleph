@@ -7,7 +7,7 @@
 //! - secret_exists(name) -> "true"/"false" — check secret availability
 
 #[cfg(feature = "plugin-wasm")]
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 #[cfg(feature = "plugin-wasm")]
 use extism::host_fn;

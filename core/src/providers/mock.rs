@@ -245,7 +245,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_provider_in_arc() {
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
 
         let provider: Arc<dyn AiProvider> = Arc::new(MockProvider::new("test"));
 

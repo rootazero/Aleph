@@ -4,7 +4,7 @@
 //! This agent is delegated to when the main agent needs to find and understand
 //! complex multi-step workflows defined as Skills.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use serde_json::json;

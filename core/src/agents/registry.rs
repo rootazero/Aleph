@@ -1,7 +1,7 @@
 //! Agent registry for managing agent definitions.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use crate::sync_primitives::RwLock;
 
 use crate::agents::types::{AgentDef, AgentMode};
 

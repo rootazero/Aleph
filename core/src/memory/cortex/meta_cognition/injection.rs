@@ -11,7 +11,7 @@ use crate::error::AlephError;
 use lru::LruCache;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 
 /// Extracts relevant tags from user intent
 ///

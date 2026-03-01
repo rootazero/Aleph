@@ -1,6 +1,6 @@
 //! Progress monitor implementation
 
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use tracing::{debug, info};
 
 use super::{ProgressEvent, ProgressSubscriber, TaskMonitor};
@@ -151,7 +151,7 @@ mod tests {
     use super::*;
     use crate::dispatcher::agent_types::{FileOp, TaskType};
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::sync_primitives::{AtomicUsize, Ordering};
 
     fn create_task(id: &str) -> Task {
         Task::new(

@@ -2,7 +2,7 @@ use crate::engine::{AtomicAction, AtomicExecutor, ReflexLayer};
 use crate::error::AlephError;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::future::Future;
 use tokio::sync::RwLock;
 

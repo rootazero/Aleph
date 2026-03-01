@@ -3,7 +3,7 @@
 
 use crate::event::global_bus::GlobalBus;
 use crate::event::types::{AlephEvent, EventType, TimestampedEvent};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, trace, warn};
 
@@ -342,7 +342,7 @@ mod tests {
     use super::*;
     use crate::event::filter::EventFilter;
     use crate::event::types::{InputEvent, StopReason};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::sync_primitives::{AtomicUsize, Ordering};
 
     #[tokio::test]
     async fn test_publish_and_subscribe() {

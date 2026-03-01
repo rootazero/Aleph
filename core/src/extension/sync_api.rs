@@ -22,7 +22,7 @@ use super::{
 use crate::extension::hooks::{HookContext, HookResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::RwLock;
 

@@ -7,7 +7,7 @@
 //! that clients can list, parameterize, and use in conversations.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

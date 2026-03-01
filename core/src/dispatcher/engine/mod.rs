@@ -29,8 +29,8 @@ mod tests {
     use crate::dispatcher::planner::TaskPlanner;
     use crate::error::Result;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use crate::sync_primitives::{AtomicUsize, Ordering};
+    use crate::sync_primitives::Arc;
 
     fn create_test_graph() -> TaskGraph {
         let mut graph = TaskGraph::new("test_graph", "Test Graph");

@@ -4,7 +4,7 @@ use crate::daemon::{
 };
 use crate::daemon::perception::watchers::{FSEventWatcher, ProcessWatcher, SystemStateWatcher, TimeWatcher};
 use clap::{Parser, Subcommand};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{error, info};
 
 #[derive(Debug, Parser)]

@@ -1,6 +1,6 @@
 //! BaselineApi - Lazy calculation of baseline metrics with TTL caching
 
-use std::sync::{Arc, Mutex};
+use crate::sync_primitives::{Arc, Mutex};
 use std::collections::HashMap;
 use chrono::{DateTime, Utc, Duration};
 use crate::daemon::worldmodel::WorldModel;

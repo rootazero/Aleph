@@ -37,7 +37,7 @@ use super::execution_decider::{
 };
 use crate::intent::types::TaskCategory;
 use crate::command::CommandParser;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Routing result from IntentRouter
 #[derive(Debug, Clone)]

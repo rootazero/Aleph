@@ -41,7 +41,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use tracing::{debug, info, warn};
 
 use crate::config::ProviderConfig;

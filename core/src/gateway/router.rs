@@ -4,7 +4,7 @@
 //! channel, or peer information.
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 // Re-export new routing types for backward compatibility.

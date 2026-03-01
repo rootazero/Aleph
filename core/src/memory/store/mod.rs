@@ -570,7 +570,7 @@ pub trait MemoryEventStore: Send + Sync {
 // MemoryBackend type alias
 // ---------------------------------------------------------------------------
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Unified memory backend — provides MemoryStore + GraphStore + SessionStore.
 ///

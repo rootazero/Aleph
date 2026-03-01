@@ -30,7 +30,7 @@
 //! let result = compiler.approve_and_compile("request-id").await?;
 //! ```
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use tracing::{debug, info, warn};
 

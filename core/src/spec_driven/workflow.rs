@@ -7,7 +7,7 @@
 //! 4. Run tests and evaluate
 //! 5. Iterate or finalize
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use tracing::{error, info};
 

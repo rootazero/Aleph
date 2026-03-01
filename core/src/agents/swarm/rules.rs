@@ -3,7 +3,7 @@
 //! Pattern-matching based aggregation for 90% of high-frequency events.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use super::aggregator::SlidingWindow;

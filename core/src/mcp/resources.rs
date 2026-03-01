@@ -8,7 +8,7 @@
 //! other content type.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::error::Result;
 use crate::mcp::client::McpClient;

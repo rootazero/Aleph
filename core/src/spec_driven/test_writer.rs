@@ -2,7 +2,7 @@
 //!
 //! Uses LLM to create comprehensive test cases including edge cases.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::Deserialize;
 use tracing::{debug, info};

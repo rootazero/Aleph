@@ -7,7 +7,7 @@ use crate::dispatcher::agent_types::{Task, TaskResult, TaskType};
 use crate::memory::store::MemoryBackend;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 

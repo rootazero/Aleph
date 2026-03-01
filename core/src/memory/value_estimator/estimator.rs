@@ -1,6 +1,6 @@
 //! Value estimation for memory importance scoring
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::error::Result;
 use crate::memory::context::MemoryEntry;

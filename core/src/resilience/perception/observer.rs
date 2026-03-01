@@ -7,7 +7,7 @@ use crate::error::AlephError;
 use crate::resilience::AgentEvent;
 use crate::resilience::database::StateDatabase;
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};

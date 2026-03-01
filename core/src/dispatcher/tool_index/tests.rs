@@ -15,7 +15,7 @@ mod tests {
     use crate::memory::context::{FactType, MemoryFact};
     use crate::memory::store::MemoryBackend;
     use crate::memory::store::lance::LanceMemoryBackend;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     /// Create a test database using a temp directory for isolation
     async fn setup_test_db() -> (MemoryBackend, tempfile::TempDir) {

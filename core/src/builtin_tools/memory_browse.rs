@@ -370,7 +370,7 @@ impl AlephTool for MemoryBrowseTool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     use crate::memory::store::lance::LanceMemoryBackend;
     use crate::memory::store::MemoryBackend;

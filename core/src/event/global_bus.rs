@@ -35,8 +35,9 @@ use crate::event::types::AlephEvent;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
+use crate::sync_primitives::{AtomicU64, Ordering};
+use crate::sync_primitives::Arc;
+use std::sync::Weak;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, trace};
 
@@ -420,7 +421,7 @@ mod tests {
     use super::*;
     use crate::event::types::{InputEvent, StopReason};
     use crate::event::EventType;
-    use std::sync::atomic::AtomicUsize;
+    use crate::sync_primitives::AtomicUsize;
 
     fn make_input_event() -> AlephEvent {
         AlephEvent::InputReceived(InputEvent {

@@ -26,7 +26,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};

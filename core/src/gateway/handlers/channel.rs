@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::debug;
 
 use crate::gateway::channel::{ChannelId, ChannelInfo, ChannelStatus, OutboundMessage};

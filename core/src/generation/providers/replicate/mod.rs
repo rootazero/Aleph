@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn test_provider_as_trait_object() {
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
 
         let provider: Arc<dyn GenerationProvider> =
             Arc::new(ReplicateProvider::builder("r8_test").build());

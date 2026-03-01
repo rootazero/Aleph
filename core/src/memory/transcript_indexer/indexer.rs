@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::config::TranscriptIndexerConfig;
 

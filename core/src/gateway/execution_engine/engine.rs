@@ -4,8 +4,8 @@
 //! to the actual agent loop infrastructure using Thinker, Executor, and tools.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicU64};
-use std::sync::Arc;
+use crate::sync_primitives::{AtomicU32, AtomicU64};
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::{mpsc, watch, RwLock};

@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::payload::{AgentPayload, Capability};
 use crate::skills::SkillsRegistry;
 use async_trait::async_trait;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{debug, info, warn};
 
 /// Skills capability strategy

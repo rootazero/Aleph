@@ -7,7 +7,7 @@
 //! - Audit logging
 //! - Resource counting
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use crate::sync_primitives::{AtomicU32, Ordering};
 
 use crate::extension::runtime::wasm::capabilities::*;
 use crate::extension::runtime::wasm::limits::WasmResourceLimits;

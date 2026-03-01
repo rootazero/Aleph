@@ -4,7 +4,7 @@
 //! allowing MCP servers to call the host's LLM.
 
 use std::pin::Pin;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use futures::Stream;
 use serde_json::Value;
