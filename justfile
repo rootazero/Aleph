@@ -25,23 +25,32 @@ default:
 dev:
     cargo run --bin {{server_bin}} --features control-plane
 
+# Run server with Panel + native desktop (debug)
+dev-desktop:
+    cargo run --bin {{server_bin}} --features control-plane,desktop
+
 # Run server without Panel UI (debug)
-dev-no-panel:
+dev-headless:
     cargo run --bin {{server_bin}}
 
 # ─── Full Builds ───
 
-# Full build: WASM → Server → macOS App (release)
+# Full build: WASM → Server (with desktop) → macOS App (release)
 build: server macos
 
-# Build server binary with Panel (release)
+# Build server with Panel + native desktop (release)
 server: wasm
-    cargo build --bin {{server_bin}} --features control-plane --release
-    @echo "✓ Server: {{release_dir}}/{{server_bin}}"
+    cargo build --bin {{server_bin}} --features control-plane,desktop --release
+    @echo "✓ Server: {{release_dir}}/{{server_bin}} (panel + desktop)"
 
-# Build server binary with Panel (debug, faster compile)
+# Build server with Panel only, no native desktop (release)
+server-light: wasm
+    cargo build --bin {{server_bin}} --features control-plane --release
+    @echo "✓ Server: {{release_dir}}/{{server_bin}} (panel only, IPC desktop)"
+
+# Build server (debug, faster compile)
 server-debug: wasm
-    cargo build --bin {{server_bin}} --features control-plane
+    cargo build --bin {{server_bin}} --features control-plane,desktop
     @echo "✓ Server (debug): {{debug_dir}}/{{server_bin}}"
 
 # Build macOS native app (release)
@@ -103,6 +112,59 @@ xcode:
         build
     @echo "✓ Xcode: {{macos_app}}"
 
+# ─── Testing ───
+
+# Quick check: core compiles
+check:
+    cargo check -p alephcore
+
+# Quick check: core + desktop compiles
+check-desktop:
+    cargo check -p alephcore --features desktop-native
+
+# Run core tests
+test:
+    cargo test -p alephcore --lib
+
+# Run desktop crate tests
+test-desktop:
+    cargo test -p aleph-desktop --lib
+
+# Run desktop integration tests (core with native feature)
+test-desktop-integration:
+    cargo test -p alephcore --lib builtin_tools::desktop --features desktop-native
+
+# Run all desktop-related tests
+test-desktop-all: test-desktop test-desktop-integration
+
+# Run proptest with high coverage (1024 cases per test)
+test-proptest:
+    PROPTEST_CASES=1024 cargo test -p alephcore --lib
+
+# Run loom concurrency tests
+test-loom:
+    LOOM_MAX_PREEMPTIONS=3 cargo test -p alephcore --features loom --lib loom
+
+# Run full logic review suite (proptest + loom)
+test-logic: test-proptest test-loom
+
+# Run all tests (core + desktop + proptest)
+test-all: test test-desktop-all test-proptest
+
+# ─── Lint ───
+
+# Clippy on core (default features)
+clippy:
+    cargo clippy -p alephcore -- -D warnings
+
+# Clippy on core + desktop
+clippy-desktop:
+    cargo clippy -p aleph-desktop -- -D warnings
+    cargo clippy -p alephcore --features desktop-native -- -D warnings
+
+# Clippy everything
+clippy-all: clippy clippy-desktop
+
 # ─── Utilities ───
 
 # Clean all build artifacts
@@ -112,25 +174,6 @@ clean:
     rm -rf {{macos_dir}}/build
     rm -rf {{macos_resources}}/{{server_bin}}
     @echo "✓ Cleaned"
-
-# Quick workspace compile check
-check:
-    cargo check --workspace
-
-# Run all tests
-test:
-    cargo test --workspace
-
-# Run proptest with high coverage (1024 cases per test)
-test-proptest:
-    PROPTEST_CASES=1024 cargo test --workspace --lib
-
-# Run loom concurrency tests
-test-loom:
-    LOOM_MAX_PREEMPTIONS=3 cargo test --features loom --lib
-
-# Run full logic review suite (proptest + loom)
-test-logic: test-proptest test-loom
 
 # Verify build dependencies are installed
 deps:
