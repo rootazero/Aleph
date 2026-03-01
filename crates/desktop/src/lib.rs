@@ -197,16 +197,24 @@ impl DesktopCapability for NativeDesktop {
         ))
     }
 
-    async fn screenshot(&self, _region: Option<ScreenRegion>) -> Result<Screenshot> {
-        Err(DesktopError::NotImplemented(
-            "screenshot() not yet implemented".into(),
-        ))
+    async fn screenshot(&self, region: Option<ScreenRegion>) -> Result<Screenshot> {
+        tokio::task::spawn_blocking(move || perception::take_screenshot(region.as_ref()))
+            .await
+            .map_err(|e| DesktopError::ScreenCapture(format!("Task join error: {e}")))?
     }
 
-    async fn ocr(&self, _image_png: Option<&[u8]>) -> Result<OcrResult> {
-        Err(DesktopError::NotImplemented(
-            "ocr() not yet implemented".into(),
-        ))
+    async fn ocr(&self, image_png: Option<&[u8]>) -> Result<OcrResult> {
+        let png_bytes = match image_png {
+            Some(bytes) => bytes.to_vec(),
+            None => {
+                tokio::task::spawn_blocking(perception::capture_screen_png)
+                    .await
+                    .map_err(|e| DesktopError::OcrFailed(format!("Task join error: {e}")))??
+            }
+        };
+        tokio::task::spawn_blocking(move || perception::perform_ocr(&png_bytes))
+            .await
+            .map_err(|e| DesktopError::OcrFailed(format!("Task join error: {e}")))?
     }
 
     async fn click(&self, _x: f64, _y: f64, _button: MouseButton) -> Result<()> {
@@ -270,10 +278,8 @@ mod tests {
             Err(DesktopError::NotImplemented(_))
         ));
 
-        assert!(matches!(
-            desktop.screenshot(None).await,
-            Err(DesktopError::NotImplemented(_))
-        ));
+        // screenshot() is now implemented — it returns Ok or ScreenCapture error.
+        // See perception::tests for detailed validation.
 
         assert!(matches!(
             desktop.click(0.0, 0.0, MouseButton::Left).await,
@@ -310,9 +316,42 @@ mod tests {
             Err(DesktopError::NotImplemented(_))
         ));
 
-        assert!(matches!(
-            desktop.ocr(None).await,
-            Err(DesktopError::NotImplemented(_))
-        ));
+        // ocr() is now implemented — on non-Windows it returns NotImplemented
+        // (from perform_ocr) or ScreenCapture (if no display when capturing).
+        // See perception::tests for detailed validation.
+    }
+
+    /// Verify that screenshot() via NativeDesktop returns correct types.
+    #[tokio::test]
+    async fn screenshot_returns_correct_types() {
+        let desktop = NativeDesktop::new();
+        let result = desktop.screenshot(None).await;
+        match result {
+            Ok(screenshot) => {
+                assert!(!screenshot.image_base64.is_empty());
+                assert!(screenshot.width > 0);
+                assert!(screenshot.height > 0);
+                assert_eq!(screenshot.format, "png");
+            }
+            Err(DesktopError::ScreenCapture(_)) => {
+                // No display (CI) — acceptable.
+            }
+            Err(other) => {
+                panic!("Expected Ok or ScreenCapture error, got: {other:?}");
+            }
+        }
+    }
+
+    /// Verify that ocr() with provided image bytes works on non-Windows.
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn ocr_with_bytes_returns_not_implemented() {
+        let desktop = NativeDesktop::new();
+        let dummy_png = b"fake png data";
+        let result = desktop.ocr(Some(dummy_png)).await;
+        assert!(
+            matches!(result, Err(DesktopError::NotImplemented(_))),
+            "Expected NotImplemented on non-Windows, got: {result:?}"
+        );
     }
 }
