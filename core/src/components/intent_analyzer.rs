@@ -358,17 +358,17 @@ fn split_by_keyword_case_insensitive(text: &str, keyword: &str) -> Vec<String> {
 
     for (idx, _) in text_lower.match_indices(&keyword_lower) {
         if idx > start {
-            let segment = text[start..idx].trim();
+            let segment = text_lower[start..idx].trim();
             if !segment.is_empty() {
                 result.push(segment.to_string());
             }
         }
-        start = idx + keyword.len();
+        start = idx + keyword_lower.len();
     }
 
     // Add remaining text
-    if start < text.len() {
-        let segment = text[start..].trim();
+    if start < text_lower.len() {
+        let segment = text_lower[start..].trim();
         if !segment.is_empty() {
             result.push(segment.to_string());
         }

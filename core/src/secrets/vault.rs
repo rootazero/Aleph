@@ -59,6 +59,14 @@ impl SecretVault {
         std::fs::write(&tmp_path, &bytes)?;
         std::fs::rename(&tmp_path, &self.path)?;
 
+        // Restrict vault file permissions on Unix (owner-only read/write)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            let _ = std::fs::set_permissions(&self.path, perms);
+        }
+
         debug!(path = %self.path.display(), entries = self.data.entries.len(), "Vault saved");
         Ok(())
     }

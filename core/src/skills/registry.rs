@@ -468,14 +468,23 @@ impl SkillsRegistry {
         let file = file_name.unwrap_or("SKILL.md");
         let file_path = meta.location.join(file);
 
-        if !file_path.exists() {
+        // Canonicalize to resolve .. and symlinks, then verify containment
+        let canonical = file_path.canonicalize()
+            .map_err(|e| AlephError::config(format!(
+                "File '{}' not found in skill '{}': {}", file, id, e
+            )))?;
+        let canonical_base = meta.location.canonicalize()
+            .map_err(|e| AlephError::config(format!(
+                "Skill directory error: {}", e
+            )))?;
+
+        if !canonical.starts_with(&canonical_base) {
             return Err(AlephError::config(format!(
-                "File '{}' not found in skill '{}'",
-                file, id
+                "Path traversal denied: '{}' is outside skill directory", file
             )));
         }
 
-        std::fs::read_to_string(&file_path)
+        std::fs::read_to_string(&canonical)
             .map_err(|e| AlephError::config(format!("Failed to read skill file: {}", e)))
     }
 

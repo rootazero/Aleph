@@ -46,7 +46,13 @@ impl HistoryApi {
 
         // Create new runtime for sync call (MVP only)
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    log::error!("Failed to create tokio runtime: {}", e);
+                    return EventCollection::empty();
+                }
+            };
             let api = HistoryApi::new(worldmodel);
             rt.block_on(api.last_async(&duration_str))
         })

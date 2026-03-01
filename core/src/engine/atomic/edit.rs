@@ -274,7 +274,8 @@ impl EditOps for EditOpsHandler {
             if content != new_content {
                 let count = match pattern {
                     SearchPattern::Regex { pattern: regex_str } => {
-                        let regex = Regex::new(regex_str).unwrap();
+                        let regex = Regex::new(regex_str)
+                            .map_err(|e| AlephError::tool(format!("Invalid regex pattern: {}", e)))?;
                         regex.find_iter(&content).count()
                     }
                     SearchPattern::Fuzzy { text, .. } => {

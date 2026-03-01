@@ -75,7 +75,9 @@ impl IpcServer {
                         PARSE_ERROR,
                         format!("Parse error: {}", e),
                     );
-                    serde_json::to_string(&error).unwrap()
+                    serde_json::to_string(&error).unwrap_or_else(|e| {
+                        format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}},"id":null}}"#, e)
+                    })
                 }
             };
 
@@ -100,7 +102,9 @@ impl IpcServer {
                     METHOD_NOT_FOUND,
                     format!("Method not found: {}", request.method),
                 );
-                serde_json::to_string(&error).unwrap()
+                serde_json::to_string(&error).unwrap_or_else(|e| {
+                        format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}},"id":null}}"#, e)
+                    })
             }
         };
 
@@ -115,17 +119,23 @@ impl IpcServer {
         });
 
         let response = JsonRpcResponse::new(id, result);
-        serde_json::to_string(&response).unwrap()
+        serde_json::to_string(&response).unwrap_or_else(|e| {
+                format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}},"id":null}}"#, e)
+            })
     }
 
     async fn handle_ping(id: Value) -> String {
         let response = JsonRpcResponse::new(id, serde_json::json!({"pong": true}));
-        serde_json::to_string(&response).unwrap()
+        serde_json::to_string(&response).unwrap_or_else(|e| {
+                format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}},"id":null}}"#, e)
+            })
     }
 
     async fn handle_shutdown(id: Value) -> String {
         // TODO: Implement graceful shutdown
         let response = JsonRpcResponse::new(id, serde_json::json!({"shutting_down": true}));
-        serde_json::to_string(&response).unwrap()
+        serde_json::to_string(&response).unwrap_or_else(|e| {
+                format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}},"id":null}}"#, e)
+            })
     }
 }

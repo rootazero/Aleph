@@ -14,27 +14,28 @@ use crate::cron::CronResult;
 /// Returns true if the chain leads back to `start_id`.
 pub fn detect_cycle_sync(conn: &Connection, start_id: &str, new_target: &str) -> CronResult<bool> {
     let mut visited = HashSet::new();
-    let mut current = Some(new_target.to_string());
+    let mut stack = vec![new_target.to_string()];
 
-    while let Some(id) = current {
+    while let Some(id) = stack.pop() {
         if id == start_id {
             return Ok(true);
         }
         if !visited.insert(id.clone()) {
-            break;
+            continue;
         }
 
         let mut stmt = conn.prepare(
             "SELECT next_job_id_on_success, next_job_id_on_failure FROM cron_jobs WHERE id = ?1",
         )?;
 
-        current = stmt
-            .query_row(params![id], |row| {
-                let on_success: Option<String> = row.get(0)?;
-                let on_failure: Option<String> = row.get(1)?;
-                Ok(on_success.or(on_failure))
-            })
-            .unwrap_or(None);
+        if let Ok((on_success, on_failure)) = stmt.query_row(params![id], |row| {
+            let s: Option<String> = row.get(0)?;
+            let f: Option<String> = row.get(1)?;
+            Ok((s, f))
+        }) {
+            if let Some(s) = on_success { stack.push(s); }
+            if let Some(f) = on_failure { stack.push(f); }
+        }
     }
 
     Ok(false)

@@ -119,7 +119,7 @@ impl RuleLearner {
 
         // Train the classifier
         if let Some(action_class) = Self::action_to_class(&action) {
-            self.classifier.write().unwrap().train(&features, action_class);
+            self.classifier.write().unwrap_or_else(|e| e.into_inner()).train(&features, action_class);
         }
 
         self.records
@@ -138,7 +138,7 @@ impl RuleLearner {
                 features: Some(features),
             });
 
-        self.stats.write().unwrap().total_observations += 1;
+        self.stats.write().unwrap_or_else(|e| e.into_inner()).total_observations += 1;
 
         debug!(
             input = %input,
@@ -174,7 +174,7 @@ impl RuleLearner {
                 features: Some(features),
             });
 
-        self.stats.write().unwrap().total_observations += 1;
+        self.stats.write().unwrap_or_else(|e| e.into_inner()).total_observations += 1;
 
         debug!(
             input = %input,
@@ -206,7 +206,7 @@ impl RuleLearner {
             }
         }
 
-        self.stats.write().unwrap().rules_generated += rules.len();
+        self.stats.write().unwrap_or_else(|e| e.into_inner()).rules_generated += rules.len();
 
         rules
     }
@@ -253,7 +253,7 @@ impl RuleLearner {
 
     /// Get learning statistics
     pub fn stats(&self) -> LearnerStats {
-        self.stats.read().unwrap().clone()
+        self.stats.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Clear all learned patterns
@@ -272,7 +272,7 @@ impl RuleLearner {
     /// Returns the predicted action class and confidence score.
     pub fn predict(&self, input: &str) -> Option<(ActionClass, f64)> {
         let features = self.feature_extractor.extract(input);
-        self.classifier.read().unwrap().predict(&features)
+        self.classifier.read().unwrap_or_else(|e| e.into_inner()).predict(&features)
     }
 
     /// Convert AtomicAction to ActionClass for classifier training

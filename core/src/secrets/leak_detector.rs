@@ -70,29 +70,44 @@ impl LeakDetector {
 
     /// Scan outbound content for known secret patterns.
     pub fn scan_outbound(&self, content: &str) -> LeakDecision {
+        let mut redacted = content.to_string();
+        let mut found_labels = Vec::new();
+
         for (label, pattern) in LEAK_PATTERNS.iter() {
-            if pattern.is_match(content) {
-                let redacted = pattern.replace_all(content, "***LEAKED_REDACTED***");
-                return LeakDecision::Block {
-                    reason: format!("Outbound leak detected: {}", label),
-                    redacted_content: redacted.to_string(),
-                };
+            if pattern.is_match(&redacted) {
+                found_labels.push(*label);
+                redacted = pattern.replace_all(&redacted, "***LEAKED_REDACTED***").to_string();
             }
         }
-        LeakDecision::Allow
+
+        if found_labels.is_empty() {
+            LeakDecision::Allow
+        } else {
+            LeakDecision::Block {
+                reason: format!("Outbound leak detected: {}", found_labels.join(", ")),
+                redacted_content: redacted,
+            }
+        }
     }
 
     /// Scan inbound content for echoed secret values.
     pub fn scan_inbound(&self, content: &str) -> LeakDecision {
-        // Check known patterns first
+        // Check known patterns first (redact ALL matching patterns)
+        let mut redacted = content.to_string();
+        let mut found_labels = Vec::new();
+
         for (label, pattern) in LEAK_PATTERNS.iter() {
-            if pattern.is_match(content) {
-                let redacted = pattern.replace_all(content, "***LEAKED_REDACTED***");
-                return LeakDecision::Block {
-                    reason: format!("Inbound leak detected: {}", label),
-                    redacted_content: redacted.to_string(),
-                };
+            if pattern.is_match(&redacted) {
+                found_labels.push(*label);
+                redacted = pattern.replace_all(&redacted, "***LEAKED_REDACTED***").to_string();
             }
+        }
+
+        if !found_labels.is_empty() {
+            return LeakDecision::Block {
+                reason: format!("Inbound leak detected: {}", found_labels.join(", ")),
+                redacted_content: redacted,
+            };
         }
 
         // Check exact injected value matches
