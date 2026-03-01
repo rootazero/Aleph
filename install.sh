@@ -1,10 +1,12 @@
 #!/bin/bash
-# One-line installer: curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/scripts/install.sh | bash
+# One-line installer: curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash
+# With version:       curl -fsSL ... | bash -s -- v0.1.0
 set -euo pipefail
 
 REPO="rootazero/Aleph"
 INSTALL_DIR="/usr/local/bin"
 BINARY_NAME="aleph-server"
+VERSION="${1:-latest}"
 
 # Detect platform
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -24,9 +26,14 @@ ASSET_NAME="${BINARY_NAME}-${PLATFORM}-${ARCH}"
 echo "Detected: $PLATFORM/$ARCH"
 
 # Download from GitHub Releases
-LATEST_URL="https://api.github.com/repos/$REPO/releases/latest"
-echo "Fetching latest release..."
-DOWNLOAD_URL=$(curl -fsSL "$LATEST_URL" | grep "browser_download_url.*$ASSET_NAME\"" | head -1 | cut -d'"' -f4)
+if [ "$VERSION" = "latest" ]; then
+    RELEASE_URL="https://api.github.com/repos/$REPO/releases/latest"
+    echo "Fetching latest release..."
+else
+    RELEASE_URL="https://api.github.com/repos/$REPO/releases/tags/$VERSION"
+    echo "Fetching release $VERSION..."
+fi
+DOWNLOAD_URL=$(curl -fsSL "$RELEASE_URL" | grep "browser_download_url.*$ASSET_NAME\"" | head -1 | cut -d'"' -f4)
 
 if [ -z "$DOWNLOAD_URL" ]; then
     echo "ERROR: No binary found for $ASSET_NAME"
