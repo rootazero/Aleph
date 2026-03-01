@@ -115,8 +115,11 @@ impl SkillTemplate {
 
             resolved
         } else if path_str.starts_with('/') {
-            // Absolute path
-            PathBuf::from(path_str)
+            // Absolute paths are not allowed — they bypass base_dir containment
+            return Err(ExtensionError::file_reference(
+                path_str,
+                "Absolute paths are not allowed in file references; use relative paths (./path) instead",
+            ));
         } else {
             // Treat as relative
             let resolved = self.base_dir.join(path_str);
@@ -129,17 +132,27 @@ impl SkillTemplate {
 
     /// Validate that a path doesn't escape the base directory (for relative paths)
     fn validate_path_security(&self, resolved: &Path) -> ExtensionResult<()> {
-        // Canonicalize paths for comparison
-        // Note: This will fail if the file doesn't exist, which is fine
-        // because we'll get a different error when trying to read it
-
-        // For now, just check that the path doesn't contain obvious traversal
+        // Check for obvious traversal patterns
         let path_str = resolved.to_string_lossy();
         if path_str.contains("..") {
             return Err(ExtensionError::file_reference(
                 resolved,
                 "Path traversal (..) not allowed in relative file references",
             ));
+        }
+
+        // If the file exists, canonicalize and verify containment within base_dir
+        if resolved.exists() {
+            if let (Ok(canonical_path), Ok(canonical_base)) =
+                (resolved.canonicalize(), self.base_dir.canonicalize())
+            {
+                if !canonical_path.starts_with(&canonical_base) {
+                    return Err(ExtensionError::file_reference(
+                        resolved,
+                        "Resolved path escapes the base directory",
+                    ));
+                }
+            }
         }
 
         Ok(())
@@ -191,7 +204,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_file_reference_absolute() {
+    async fn test_file_reference_absolute_blocked() {
         let temp = TempDir::new().unwrap();
         let file_path = temp.path().join("test.txt");
         std::fs::write(&file_path, "Test content").unwrap();
@@ -201,8 +214,11 @@ mod tests {
             PathBuf::from("/other"),
         );
 
-        let result = template.render("").await.unwrap();
-        assert_eq!(result, "Content: Test content");
+        // Absolute paths must be rejected
+        let result = template.render("").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ExtensionError::FileReference { .. }));
     }
 
     #[tokio::test]
