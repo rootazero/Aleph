@@ -214,10 +214,8 @@ impl ConfigPatcher {
             });
         }
 
-        // 10. Check conflict (mtime)
-        if let Err(e) = self.check_conflict().await {
-            warnings.push(format!("Conflict check warning: {}", e));
-        }
+        // 10. Check conflict (mtime) — hard error if file was modified externally
+        self.check_conflict().await?;
 
         // 11. Route secrets to vault
         if !request.secret_fields.is_empty() {
@@ -236,7 +234,7 @@ impl ConfigPatcher {
         {
             let mut config = self.config.write().await;
             *config = new_config;
-            config.save_to_file(&self.config_path)?;
+            config.save_incremental(&[&top_section])?;
         }
 
         // 14. Update mtime
