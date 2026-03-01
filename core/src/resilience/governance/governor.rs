@@ -90,7 +90,7 @@ pub struct ResourceGovernor {
     subagent_lane: LaneResources,
 
     /// Token usage per session
-    session_tokens: RwLock<HashMap<String, AtomicU64>>,
+    session_tokens: RwLock<HashMap<String, u64>>,
 }
 
 impl ResourceGovernor {
@@ -222,18 +222,13 @@ impl ResourceGovernor {
     /// Track token usage for a session
     pub async fn record_tokens(&self, session_id: &str, tokens: u64) -> Result<bool, AlephError> {
         let mut session_tokens = self.session_tokens.write().await;
+        let counter = session_tokens.entry(session_id.to_string()).or_insert(0);
+        *counter += tokens;
 
-        let counter = session_tokens
-            .entry(session_id.to_string())
-            .or_insert_with(|| AtomicU64::new(0));
-
-        let new_total = counter.fetch_add(tokens, Ordering::SeqCst) + tokens;
-
-        // Check if budget exceeded
-        if new_total > self.config.token_budget_per_session {
+        if *counter > self.config.token_budget_per_session {
             warn!(
                 session_id = %session_id,
-                tokens_used = new_total,
+                tokens_used = *counter,
                 budget = self.config.token_budget_per_session,
                 "Token budget exceeded"
             );
@@ -246,10 +241,7 @@ impl ResourceGovernor {
     /// Get token usage for a session
     pub async fn get_token_usage(&self, session_id: &str) -> u64 {
         let session_tokens = self.session_tokens.read().await;
-        session_tokens
-            .get(session_id)
-            .map(|c| c.load(Ordering::SeqCst))
-            .unwrap_or(0)
+        session_tokens.get(session_id).copied().unwrap_or(0)
     }
 
     /// Reset token tracking for a session
