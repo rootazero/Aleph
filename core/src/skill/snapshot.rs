@@ -51,7 +51,11 @@ impl SkillSnapshot {
         let mut ineligible: HashMap<SkillId, Vec<IneligibilityReason>> = HashMap::new();
         let mut model_visible: Vec<&SkillManifest> = Vec::new();
 
-        for (id, manifest) in registry.iter() {
+        // Collect and sort by skill ID for deterministic ordering
+        let mut entries: Vec<_> = registry.iter().collect();
+        entries.sort_by_key(|(id, _)| id.as_str().to_string());
+
+        for (id, manifest) in entries {
             match eligibility.evaluate(manifest) {
                 EligibilityResult::Eligible => {
                     eligible.push(id.clone());

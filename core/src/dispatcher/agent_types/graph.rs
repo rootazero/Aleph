@@ -310,12 +310,13 @@ impl TaskGraph {
             adj.get_mut(edge.from.as_str()).unwrap().push(&edge.to);
         }
 
-        // Start with nodes having zero in-degree
+        // Start with nodes having zero in-degree (sorted for deterministic ordering)
         let mut queue: Vec<&str> = in_degree
             .iter()
             .filter(|(_, &deg)| deg == 0)
             .map(|(&id, _)| id)
             .collect();
+        queue.sort();
 
         let mut result: Vec<&Task> = Vec::new();
 
