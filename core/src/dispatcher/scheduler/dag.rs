@@ -171,11 +171,26 @@ impl DagScheduler {
         true
     }
 
-    /// Check if a task should be blocked due to failed dependencies
+    /// Check if a task should be blocked due to failed dependencies (transitive)
+    ///
+    /// Walks the full ancestor chain via BFS to detect any failed dependency,
+    /// not just direct predecessors.
     fn has_failed_dependency(&self, task: &Task, graph: &TaskGraph) -> bool {
-        let predecessors = graph.get_predecessors(&task.id);
+        let mut visited = HashSet::new();
+        self.has_failed_ancestor(&task.id, graph, &mut visited)
+    }
 
-        for pred_id in predecessors {
+    /// Recursively check ancestors for failed status
+    fn has_failed_ancestor(
+        &self,
+        id: &str,
+        graph: &TaskGraph,
+        visited: &mut HashSet<String>,
+    ) -> bool {
+        if !visited.insert(id.to_string()) {
+            return false;
+        }
+        for pred_id in graph.get_predecessors(id) {
             if self.failed.contains(pred_id) {
                 return true;
             }
@@ -184,8 +199,10 @@ impl DagScheduler {
                     return true;
                 }
             }
+            if self.has_failed_ancestor(pred_id, graph, visited) {
+                return true;
+            }
         }
-
         false
     }
 
@@ -193,6 +210,26 @@ impl DagScheduler {
     pub fn mark_running(&mut self, task_id: &str) {
         self.running.insert(task_id.to_string());
         debug!("Task '{}' marked as running", task_id);
+    }
+
+    /// Mark a task as completed, syncing both scheduler state and task graph
+    pub fn sync_mark_completed(&mut self, task_id: &str, graph: &mut TaskGraph, result: TaskResult) {
+        self.running.remove(task_id);
+        self.completed.insert(task_id.to_string());
+        if let Some(task) = graph.get_task_mut(task_id) {
+            task.status = TaskStatus::completed(result);
+        }
+        info!("Task '{}' completed (synced)", task_id);
+    }
+
+    /// Mark a task as failed, syncing both scheduler state and task graph
+    pub fn sync_mark_failed(&mut self, task_id: &str, error: &str, graph: &mut TaskGraph) {
+        self.running.remove(task_id);
+        self.failed.insert(task_id.to_string());
+        if let Some(task) = graph.get_task_mut(task_id) {
+            task.status = TaskStatus::failed(error);
+        }
+        info!("Task '{}' failed (synced): {}", task_id, error);
     }
 
     /// Get the number of currently running tasks
@@ -454,16 +491,10 @@ impl DagScheduler {
                         // Record output in context
                         context.record_output_with_name(&task_id, &task_name, output.clone());
 
-                        // Update task status
-                        if let Some(task) = graph.get_task_mut(&task_id) {
-                            task.status = TaskStatus::completed(
-                                TaskResult::with_string(output.get_summary())
-                                    .with_summary(output.get_summary())
-                            );
-                        }
-
-                        // Mark completed in scheduler
-                        sched.mark_completed(&task_id);
+                        // Atomically sync scheduler + graph status
+                        let task_result = TaskResult::with_string(output.get_summary())
+                            .with_summary(output.get_summary());
+                        sched.sync_mark_completed(&task_id, &mut graph, task_result);
                         result.completed_tasks.push(task_id.clone());
 
                         // Notify callback
@@ -476,13 +507,8 @@ impl DagScheduler {
                     Err(e) => {
                         let error_msg = e.to_string();
 
-                        // Update task status
-                        if let Some(task) = graph.get_task_mut(&task_id) {
-                            task.status = TaskStatus::failed(&error_msg);
-                        }
-
-                        // Mark failed in scheduler
-                        sched.mark_failed(&task_id, &error_msg);
+                        // Atomically sync scheduler + graph status
+                        sched.sync_mark_failed(&task_id, &error_msg, &mut graph);
                         result.failed_tasks.push(task_id.clone());
 
                         // Notify callback
@@ -709,6 +735,36 @@ mod tests {
         // 'b' should not be ready because 'a' failed
         let ready = scheduler.next_ready(&graph);
         assert!(ready.is_empty());
+    }
+
+    #[test]
+    fn test_scheduler_transitive_failed_dependency() {
+        let mut scheduler = DagScheduler::new();
+        let mut graph = TaskGraph::new("test", "Transitive Failed Dependency");
+
+        // a -> b -> c : if 'a' fails, 'c' should also be blocked
+        graph.add_task(create_task("a"));
+        graph.add_task(create_task("b"));
+        graph.add_task(create_task("c"));
+        graph.add_dependency("a", "b");
+        graph.add_dependency("b", "c");
+
+        // Fail 'a'
+        scheduler.mark_running("a");
+        scheduler.mark_failed("a", "Root failure");
+        graph.get_task_mut("a").unwrap().status = TaskStatus::failed("Root failure");
+
+        // 'b' should not be ready (direct failed dep)
+        let ready = scheduler.next_ready(&graph);
+        assert!(ready.is_empty(), "b should be blocked by failed a");
+
+        // Even if we somehow mark 'b' as completed, 'c' should still be
+        // blocked because 'a' (transitive ancestor) failed
+        scheduler.mark_completed("b");
+        graph.get_task_mut("b").unwrap().status = TaskStatus::completed(TaskResult::default());
+
+        let ready = scheduler.next_ready(&graph);
+        assert!(ready.is_empty(), "c should be blocked by transitively failed a");
     }
 
     #[test]
