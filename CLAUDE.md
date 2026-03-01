@@ -241,6 +241,8 @@ aleph/
 │       ├── routing/                # Session Key 路由 (6 variants)
 │       ├── config/                 # 配置系统 + 热重载
 │       └── lib.rs                  # 60+ public modules
+├── crates/
+│   └── desktop/                    # aleph-desktop crate (DesktopCapability native impl)
 ├── apps/
 │   ├── cli/                        # Rust CLI 客户端
 │   ├── desktop/                    # Tauri Bridge - Linux/Windows (aleph-bridge)
@@ -295,6 +297,9 @@ cargo run --bin aleph-server
 # 启动 Server (含 Control Plane UI)
 cargo run --bin aleph-server --features control-plane
 
+# 启动 Server (含原生桌面能力 + UI)
+cargo run --bin aleph-server --features desktop,control-plane
+
 # Tauri App
 cd apps/desktop && pnpm install && pnpm tauri dev
 
@@ -311,7 +316,9 @@ cd apps/desktop && cargo tauri build
 快速参考：
 - 不含 UI：`cargo run --bin aleph-server`
 - 含 UI：`cargo run --bin aleph-server --features control-plane`
-- Release：`cargo build --bin aleph-server --features control-plane --release`
+- 含原生桌面：`cargo run --bin aleph-server --features desktop`
+- 全功能：`cargo run --bin aleph-server --features desktop,control-plane`
+- Release：`cargo build --bin aleph-server --features desktop,control-plane --release`
 
 ---
 
@@ -327,6 +334,8 @@ cron = ["cron", "gateway"]
 browser = ["chromiumoxide", "gateway"]
 cli = ["inquire"]
 plugin-wasm = ["extism"]
+desktop-native = ["aleph-desktop"]  # In-process desktop capabilities (xcap/enigo)
+desktop = ["desktop-native"]        # Server-friendly alias
 ```
 
 ### Environment
