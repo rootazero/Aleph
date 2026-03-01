@@ -22,14 +22,9 @@ pub fn extract_command_name(pattern: &str) -> String {
         .collect()
 }
 
-/// Truncate description to max length, adding ellipsis
+/// Truncate description to max length, adding ellipsis (Unicode-safe)
 pub fn truncate_description(s: &str, max_len: usize) -> String {
-    let s = s.trim();
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len - 3])
-    }
+    crate::utils::text_format::truncate_text(s.trim(), max_len)
 }
 
 #[cfg(test)]
@@ -53,7 +48,21 @@ mod tests {
                 "This is a very long description that should be truncated",
                 20
             ),
-            "This is a very lo..."
+            "This is a very long ..."
         );
+    }
+
+    #[test]
+    fn test_truncate_description_multibyte() {
+        // CJK characters should not panic
+        let cjk = "你好世界这是一个很长的描述需要被截断";
+        let result = truncate_description(cjk, 5);
+        assert!(result.ends_with("..."));
+        assert_eq!(result.chars().count(), 8); // 5 chars + "..."
+
+        // Emoji should not panic
+        let emoji = "🎉🎊🎈🎁🎂🎄🎃🎇🎆🎍";
+        let result = truncate_description(emoji, 3);
+        assert!(result.ends_with("..."));
     }
 }

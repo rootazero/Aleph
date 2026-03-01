@@ -207,12 +207,8 @@ impl ExecutionContextInfo {
 
         let summary = parts.join(" | ");
 
-        // Truncate if too long
-        if summary.len() > max_len {
-            format!("{}...", &summary[..max_len - 3])
-        } else {
-            summary
-        }
+        // Truncate if too long (Unicode-safe)
+        crate::utils::text_format::truncate_text(&summary, max_len)
     }
 
     /// Create a prompt-ready context string
@@ -625,7 +621,17 @@ mod tests {
             .with_history_summary("A very long history summary that goes on and on...");
 
         let summary = ctx.build_summary(Some(30));
-        assert_eq!(summary.len(), 30);
+        // truncate_text keeps 30 chars then adds "..."
+        assert!(summary.chars().count() <= 33);
+        assert!(summary.ends_with("..."));
+    }
+
+    #[test]
+    fn test_execution_context_info_build_summary_multibyte() {
+        let ctx = ExecutionContextInfo::new()
+            .with_history_summary("你好世界这是一个非常长的历史摘要需要被截断处理");
+
+        let summary = ctx.build_summary(Some(10));
         assert!(summary.ends_with("..."));
     }
 

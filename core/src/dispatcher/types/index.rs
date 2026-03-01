@@ -259,16 +259,9 @@ impl ToolIndex {
 // Helper Functions
 // =============================================================================
 
-/// Truncate a string to max length, adding ellipsis if needed
+/// Truncate a string to max length, adding ellipsis if needed (Unicode-safe)
 pub fn truncate_string(s: &str, max_len: usize) -> String {
-    let s = s.trim();
-    if s.len() <= max_len {
-        s.to_string()
-    } else if max_len > 3 {
-        format!("{}...", &s[..max_len - 3])
-    } else {
-        s[..max_len].to_string()
-    }
+    crate::utils::text_format::truncate_text(s.trim(), max_len)
 }
 
 // =============================================================================
@@ -394,15 +387,29 @@ mod tests {
 
     #[test]
     fn test_truncate_string_long() {
-        assert_eq!(truncate_string("Hello World", 8), "Hello...");
+        assert_eq!(truncate_string("Hello World", 8), "Hello Wo...");
         assert_eq!(
             truncate_string("This is a very long string", 10),
-            "This is..."
+            "This is a ..."
         );
     }
 
     #[test]
     fn test_truncate_string_exact() {
         assert_eq!(truncate_string("Hello", 5), "Hello");
+    }
+
+    #[test]
+    fn test_truncate_string_multibyte() {
+        // CJK characters should not panic
+        let cjk = "你好世界这是很长的字符串";
+        let result = truncate_string(cjk, 5);
+        assert!(result.ends_with("..."));
+        assert_eq!(result.chars().count(), 8); // 5 chars + "..."
+
+        // Emoji should not panic
+        let emoji = "🎉🎊🎈🎁🎂🎄🎃";
+        let result = truncate_string(emoji, 3);
+        assert!(result.ends_with("..."));
     }
 }
