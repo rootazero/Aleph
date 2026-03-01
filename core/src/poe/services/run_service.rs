@@ -6,7 +6,7 @@ use chrono::Utc;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};

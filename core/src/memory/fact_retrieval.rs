@@ -7,7 +7,7 @@ use crate::error::AlephError;
 use crate::memory::context::{MemoryEntry, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::EmbeddingProvider;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use crate::memory::store::types::{MemoryFilter, SearchFilter};
 use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
 
@@ -271,7 +271,7 @@ mod tests {
     use super::*;
     use crate::memory::context::FactType;
     use crate::memory::store::lance::LanceMemoryBackend;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use tempfile::tempdir;
 
     async fn create_test_retrieval() -> (FactRetrieval, MemoryBackend) {

@@ -27,7 +27,7 @@ use crate::generation::error::{GenerationError, GenerationResult};
 use crate::generation::types::GenerationType;
 use crate::generation::GenerationProvider;
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Registry for managing generation providers
 ///

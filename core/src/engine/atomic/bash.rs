@@ -3,7 +3,7 @@
 //! Implements shell command execution with timeout and security checks
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use async_trait::async_trait;
 use tokio::process::Command;

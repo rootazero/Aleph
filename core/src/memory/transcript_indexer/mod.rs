@@ -19,7 +19,7 @@ mod tests {
     use crate::memory::EmbeddingProvider;
     use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
     use crate::memory::store::{LanceMemoryBackend, MemoryBackend};
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use tempfile::tempdir;
 
     fn create_test_db(temp_dir: &std::path::Path) -> MemoryBackend {

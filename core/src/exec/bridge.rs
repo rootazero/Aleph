@@ -6,7 +6,7 @@
 //! - Tracking sent approval messages
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use crate::gateway::channel::{ConversationId, InlineButton, InlineKeyboard, MessageId};

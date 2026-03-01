@@ -50,7 +50,7 @@ pub mod streaming;
 pub mod tool_filter;
 pub mod user_profile;
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 pub use cache::{
     AnthropicCacheStrategy, CacheContext, CacheControl, CacheStrategy, CacheableContentBlock,
@@ -408,7 +408,7 @@ impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
 mod tests {
     use super::*;
     use crate::agent_loop::RequestContext;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     // Mock provider for testing
     struct MockProvider {

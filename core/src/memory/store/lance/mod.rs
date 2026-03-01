@@ -4,7 +4,7 @@
 //! using LanceDB as the underlying vector database engine.
 
 use std::path::Path;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use lancedb::connection::Connection;
 use lancedb::Table;

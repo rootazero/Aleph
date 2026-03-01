@@ -9,7 +9,7 @@
 //! - Auto-shuts down after receiving a callback or timeout (5 minutes)
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use tokio::net::TcpListener;

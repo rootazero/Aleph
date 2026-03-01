@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, RESOURCE_NOT_FOUND};
 use super::parse_params;

@@ -5,7 +5,7 @@ use super::error::QuestionError;
 use crate::event::question::{Answer, QuestionReply, QuestionRequest};
 use crate::event::{AlephEvent, EventBus};
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tokio::sync::{oneshot, RwLock};
 use tracing::{info, warn};

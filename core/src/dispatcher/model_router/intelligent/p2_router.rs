@@ -52,7 +52,7 @@
 //! }
 //! ```
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::prompt_analyzer::{
     Domain, Language, PromptAnalyzer, PromptAnalyzerConfig, PromptFeatures, ReasoningLevel,

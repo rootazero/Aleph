@@ -6,8 +6,8 @@
 use crate::error::AlephError;
 use crate::resilience::AgentEvent;
 use crate::resilience::database::StateDatabase;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{AtomicU64, Ordering};
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;

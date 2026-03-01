@@ -13,7 +13,7 @@
 //!
 //! ```rust,ignore
 //! use alephcore::extension::{PluginHttpHandler, PluginLoader};
-//! use std::sync::Arc;
+//! use crate::sync_primitives::Arc;
 //! use tokio::sync::RwLock;
 //!
 //! let loader = Arc::new(RwLock::new(PluginLoader::new()));
@@ -36,7 +36,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use super::error::{ExtensionError, ExtensionResult};

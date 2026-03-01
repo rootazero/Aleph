@@ -4,7 +4,7 @@
 
 use crate::config::types::memory::EmbeddingProviderConfig;
 use crate::error::AlephError;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 /// Abstract embedding provider

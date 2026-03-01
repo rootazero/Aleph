@@ -32,7 +32,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::process::{Child, Command};

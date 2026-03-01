@@ -29,8 +29,8 @@ mod tests {
     use crate::dispatcher::model_router::resilience::failover::FailoverChain;
     use crate::dispatcher::model_router::resilience::retry::RetryPolicy;
     use crate::dispatcher::model_router::{CallOutcome, TaskIntent};
-    use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Arc;
+    use crate::sync_primitives::{AtomicU32, Ordering};
+    use crate::sync_primitives::Arc;
     use std::time::Duration;
 
     #[test]

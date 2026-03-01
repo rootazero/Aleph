@@ -12,7 +12,7 @@
 //! [`Channel`]: crate::gateway::channel::Channel
 //! [`Transport`]: crate::gateway::transport::Transport
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use base64::Engine as _;
 use chrono::{DateTime, TimeZone, Utc};

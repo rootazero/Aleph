@@ -11,7 +11,7 @@ use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;

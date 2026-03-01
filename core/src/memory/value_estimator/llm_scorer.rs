@@ -1,7 +1,7 @@
 //! LLM-based importance scoring with performance monitoring
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;

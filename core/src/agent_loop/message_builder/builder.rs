@@ -1,6 +1,6 @@
 //! MessageBuilder implementation
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::agent_loop::overflow::OverflowDetector;
 use crate::agent_loop::ContextProvider;

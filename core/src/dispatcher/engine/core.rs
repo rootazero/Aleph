@@ -1,7 +1,7 @@
 //! Core AgentEngine implementation
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{AtomicBool, Ordering};
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};

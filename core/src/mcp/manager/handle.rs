@@ -8,7 +8,7 @@
 //! - Aggregating tools, resources, and prompts across all servers
 //! - Subscribing to manager events
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
 

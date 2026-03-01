@@ -163,6 +163,9 @@ pub use tool_index::{
     ToolMeta, ToolRetrieval, ToolRetrievalConfig,
 };
 
+#[cfg(all(test, feature = "loom"))]
+mod loom_concurrency;
+
 #[cfg(test)]
 mod tests {
     use super::*;

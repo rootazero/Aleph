@@ -4,7 +4,7 @@
 //! Uses HMAC-SHA256 challenge-response authentication.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use hmac::{Hmac, Mac};
 use rand::RngCore;

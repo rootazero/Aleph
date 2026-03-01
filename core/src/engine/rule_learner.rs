@@ -39,7 +39,7 @@ use dashmap::DashMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use tracing::{debug, info};
 
 /// Minimum number of successful executions before generating a rule

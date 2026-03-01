@@ -58,7 +58,6 @@ jobs:
       - name: Run loom tests
         run: cargo test --features loom --lib
         env:
-          RUSTFLAGS: "--cfg loom"
           LOOM_MAX_PREEMPTIONS: 3
         timeout-minutes: 30
 

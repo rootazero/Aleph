@@ -3,7 +3,8 @@
 /// This module provides runtime control over the global log level.
 /// It uses an atomic variable to track the current level and allows
 /// dynamic modification without restarting the application.
-use std::sync::atomic::{AtomicU8, Ordering};
+use crate::sync_primitives::Ordering;
+use std::sync::atomic::AtomicU8;
 use std::sync::Once;
 use tracing::Level;
 

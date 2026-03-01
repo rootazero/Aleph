@@ -4,7 +4,7 @@
 //! and enforcing a maximum recursion depth limit.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use crate::error::{AlephError, Result};
 

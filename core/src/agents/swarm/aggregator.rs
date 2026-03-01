@@ -4,7 +4,7 @@
 //! Transforms low-level events into high-level situational awareness.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};

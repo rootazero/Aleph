@@ -4,7 +4,7 @@ use crate::daemon::{
 };
 use async_trait::async_trait;
 use chrono::Utc;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::watch;
 use tokio::time::{interval, Duration};
 use tracing::{debug, info};

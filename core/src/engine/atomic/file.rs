@@ -3,7 +3,7 @@
 //! Implements file I/O operations: Read, Write, Move
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use tracing::debug;
 use crate::error::Result;

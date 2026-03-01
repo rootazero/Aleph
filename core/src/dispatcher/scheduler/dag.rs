@@ -1,7 +1,7 @@
 //! DAG-based task scheduler
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};

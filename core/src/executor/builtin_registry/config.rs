@@ -1,6 +1,6 @@
 //! Configuration types for the builtin tool registry
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use tokio::sync::RwLock;
 

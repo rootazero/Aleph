@@ -10,7 +10,7 @@ use crate::error::AlephError;
 use crate::resilience::{SessionStatus, SubagentSession};
 use crate::resilience::database::StateDatabase;
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 

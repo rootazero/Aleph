@@ -1,7 +1,7 @@
 //! Lightweight, deterministic step evaluator.
 //! No LLM calls — all checks must complete in <10ms.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::agent_loop::state::{LoopState, LoopStep};
 use crate::poe::budget::PoeBudget;

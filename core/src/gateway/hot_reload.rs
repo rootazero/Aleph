@@ -4,7 +4,7 @@
 //! Supports atomic validation and rollback on failure.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use notify::{EventKind, RecursiveMode, Watcher};

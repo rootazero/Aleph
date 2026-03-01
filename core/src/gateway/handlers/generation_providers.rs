@@ -10,7 +10,7 @@ use crate::generation::GenerationType;
 use crate::secrets::types::EntryMetadata;
 use crate::secrets::{resolve_master_key, SecretVault};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 // =============================================================================

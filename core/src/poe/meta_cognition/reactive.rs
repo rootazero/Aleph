@@ -11,7 +11,7 @@ use crate::memory::store::MemoryBackend;
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use uuid::Uuid;
 
 /// Signals that trigger reactive reflection

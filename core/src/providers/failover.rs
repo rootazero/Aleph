@@ -61,8 +61,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{AtomicU64, Ordering};
+use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 

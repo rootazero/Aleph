@@ -3,7 +3,7 @@
 //! Forwards approval requests to configured chat channels (Telegram, Discord, etc.)
 //! and handles approval responses from users.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};

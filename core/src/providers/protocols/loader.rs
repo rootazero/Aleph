@@ -41,7 +41,7 @@ use crate::providers::protocols::{ConfigurableProtocol, ProtocolDefinition, Prot
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tracing::{error, info};
 

@@ -45,7 +45,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};

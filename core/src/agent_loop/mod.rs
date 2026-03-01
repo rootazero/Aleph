@@ -83,6 +83,8 @@ pub mod callback_cli;
 mod proptest_decision;
 #[cfg(test)]
 mod proptest_state;
+#[cfg(all(test, feature = "loom"))]
+mod loom_concurrency;
 
 // Re-export public types
 pub use answer::UserAnswer;

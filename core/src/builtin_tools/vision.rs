@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::error::Result;
 use crate::tools::AlephTool;

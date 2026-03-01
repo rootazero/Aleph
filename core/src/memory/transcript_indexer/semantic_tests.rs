@@ -1,6 +1,6 @@
 //! Integration tests for semantic chunking
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tempfile::tempdir;
 
 use crate::memory::{EmbeddingProvider, SemanticChunkConfig, SemanticChunker};

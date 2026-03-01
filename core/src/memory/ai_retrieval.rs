@@ -22,7 +22,7 @@ use crate::memory::context::MemoryEntry;
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 

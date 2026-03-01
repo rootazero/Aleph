@@ -4,8 +4,8 @@
 //! Implements the `LoopCallback` trait and translates loop events to WebSocket events.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{AtomicU64, Ordering};
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;

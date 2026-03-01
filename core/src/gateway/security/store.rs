@@ -6,7 +6,7 @@
 
 use rusqlite::{params, Connection, Result as SqliteResult};
 use std::path::Path;
-use std::sync::Mutex;
+use crate::sync_primitives::Mutex;
 use tracing::{debug, info};
 
 /// Schema version for migrations

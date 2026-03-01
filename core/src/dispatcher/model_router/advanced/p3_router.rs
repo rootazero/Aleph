@@ -62,7 +62,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 
 use super::ab_testing::{ABTestingEngine, ExperimentOutcome, TrackedMetric, VariantAssignment};

@@ -6,8 +6,8 @@
 //! - Background schedule interval
 
 use crate::config::CompressionPolicy;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
+use crate::sync_primitives::{AtomicU32, Ordering};
+use crate::sync_primitives::Mutex;
 use std::time::{Duration, Instant};
 
 /// Compression trigger conditions

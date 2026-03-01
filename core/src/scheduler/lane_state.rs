@@ -4,7 +4,7 @@
 //! calculation based on wait time.
 
 use std::collections::{HashSet, VecDeque};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{RwLock, Semaphore, SemaphorePermit};
 
 /// A queued run with metadata

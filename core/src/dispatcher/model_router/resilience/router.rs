@@ -30,7 +30,7 @@ use crate::dispatcher::model_router::{
 };
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{broadcast, RwLock};
 
 // =============================================================================

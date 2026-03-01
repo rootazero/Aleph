@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn test_pii_scrubbing_integration() {
         // This test captures log output and verifies PII scrubbing works end-to-end
-        use std::sync::{Arc, Mutex};
+        use crate::sync_primitives::{Arc, Mutex};
 
         // Create a custom writer to capture output
         #[derive(Clone)]
@@ -277,7 +277,7 @@ mod tests {
 
         // Verify output has PII scrubbed
         let output = captured.lock().unwrap();
-        assert!(output.contains("[EMAIL]"), "Output: {}", output);
-        assert!(!output.contains("john@example.com"), "Output: {}", output);
+        assert!(output.contains("[EMAIL]"), "Output: {}", &*output);
+        assert!(!output.contains("john@example.com"), "Output: {}", &*output);
     }
 }

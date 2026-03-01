@@ -16,7 +16,7 @@
 //! - `get_builtin_tool_names()` - Get list of all tool names
 //! - `is_builtin_tool()` - Check if a name is a builtin tool
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::builtin_tools::{
     BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool,

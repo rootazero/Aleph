@@ -11,7 +11,7 @@ use crate::poe::crystallization::experience::Experience;
 use crate::memory::store::MemoryBackend;
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use uuid::Uuid;
 
 /// Configuration for critic scanning behavior

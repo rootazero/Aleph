@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use crate::error::AlephError;

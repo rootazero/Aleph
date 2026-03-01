@@ -100,7 +100,7 @@ pub use config::{handle_get_full_config, handle_patch_config};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND};
 use crate::config::Config;

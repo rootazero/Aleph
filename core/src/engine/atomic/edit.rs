@@ -3,7 +3,7 @@
 //! Implements text editing and replacement operations
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use regex::Regex;
 use tracing::debug;

@@ -13,7 +13,7 @@ mod integration_tests {
     };
     use crate::exec::sandbox::executor::{FallbackPolicy, SandboxManager};
     use crate::exec::sandbox::platforms::macos::MacOSSandbox;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     #[tokio::test]
     #[cfg(target_os = "macos")]

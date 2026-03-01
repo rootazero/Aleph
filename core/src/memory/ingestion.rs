@@ -10,7 +10,7 @@ use crate::memory::EmbeddingProvider;
 use crate::memory::store::{MemoryBackend, SessionStore};
 use crate::memory::noise_filter::NoiseFilter;
 use crate::utils::pii::scrub_pii;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{debug, info};
 use uuid::Uuid;
 

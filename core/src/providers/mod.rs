@@ -98,7 +98,7 @@ pub use protocols::OpenAiProtocol;
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::error::AlephError;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Create a mock provider for testing
 ///
@@ -427,7 +427,7 @@ pub trait AiProvider: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     // Simple test implementation to verify trait can be used as trait object
     struct TestProvider;

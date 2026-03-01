@@ -1,6 +1,6 @@
 //! Execution session types
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

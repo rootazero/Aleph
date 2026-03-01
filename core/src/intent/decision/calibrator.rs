@@ -29,7 +29,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 

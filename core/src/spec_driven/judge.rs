@@ -3,7 +3,7 @@
 //! Uses LLM with extended thinking to provide quality scores and feedback.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::Deserialize;
 use tracing::{debug, info, warn};

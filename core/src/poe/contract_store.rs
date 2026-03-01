@@ -9,7 +9,7 @@
 //! - **Thread-safe**: Uses `RwLock` for concurrent access
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use crate::poe::contract::PendingContract;

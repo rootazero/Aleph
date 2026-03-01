@@ -10,7 +10,7 @@ use crate::memory::store::{LanceMemoryBackend, MemoryBackend};
 use crate::memory::EmbeddingProvider;
 use rusqlite::Connection;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use tempfile::TempDir;
 use uuid::Uuid;
 

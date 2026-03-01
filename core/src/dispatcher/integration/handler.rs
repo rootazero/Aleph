@@ -6,7 +6,7 @@ use crate::dispatcher::{
 };
 use crate::error::Result;
 use crate::event_handler::InternalEventHandler;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{info, warn};
 
 use super::{DispatcherConfig, DispatcherResult};

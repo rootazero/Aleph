@@ -8,7 +8,7 @@
 //! The migration is idempotent: running it twice will skip already-migrated
 //! facts (checked via `get_memory_event_latest_seq`).
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::error::AlephError;
 use crate::memory::context::MemoryFact;

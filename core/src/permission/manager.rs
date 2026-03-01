@@ -8,7 +8,7 @@ use crate::event::permission::{PermissionReply, PermissionRequest};
 use crate::event::{AlephEvent, EventBus};
 use crate::extension::PermissionAction;
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tokio::sync::{oneshot, RwLock};
 use tracing::{debug, info, warn};

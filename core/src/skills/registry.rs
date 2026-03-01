@@ -25,7 +25,7 @@ use crate::utils::paths::get_all_skills_dirs;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::RwLock;
+use crate::sync_primitives::RwLock;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 

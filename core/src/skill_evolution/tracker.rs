@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
+use crate::sync_primitives::{Arc, Mutex, RwLock};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use tracing::{debug, info};

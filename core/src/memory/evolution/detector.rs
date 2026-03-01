@@ -1,6 +1,6 @@
 //! Contradiction detection using LLM and similarity search
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::memory::context::MemoryFact;
 use crate::memory::namespace::NamespaceScope;

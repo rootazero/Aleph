@@ -7,7 +7,7 @@ use rusqlite::{Connection, params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use crate::sync_primitives::{Arc, Mutex};
 use tracing::{debug, info};
 
 use super::router::SessionKey;

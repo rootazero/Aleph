@@ -5,7 +5,7 @@
 //! - secret.approvals.pending — List pending approval requests
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};

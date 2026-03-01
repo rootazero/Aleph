@@ -33,7 +33,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use crate::sync_primitives::{Arc, Mutex};
 use thiserror::Error;
 use tracing::{debug, info};
 

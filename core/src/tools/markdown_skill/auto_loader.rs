@@ -4,7 +4,7 @@
 //! detects solidification patterns.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{info, warn};
 
 use crate::error::Result;

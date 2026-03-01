@@ -2,7 +2,7 @@
 //!
 //! Provides callback-based subscription to streaming events.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::mpsc;
 
 use super::events::StreamEvent;
@@ -226,7 +226,7 @@ impl Default for StreamSubscriberBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::sync_primitives::{AtomicUsize, Ordering};
 
     #[tokio::test]
     async fn test_callback_invocation() {

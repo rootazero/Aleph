@@ -439,7 +439,7 @@ mod tests {
     #[tokio::test]
     async fn test_stdio_as_trait_object() {
         use crate::mcp::transport::McpTransport;
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
 
         let transport: Arc<dyn McpTransport> = Arc::new(
             StdioTransport::spawn("dyn-test", "cat", &[], &HashMap::new(), None)

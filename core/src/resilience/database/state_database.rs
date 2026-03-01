@@ -6,7 +6,7 @@ use super::migration;
 use rusqlite::{params, Connection, OptionalExtension};
 use sqlite_vec::sqlite3_vec_init;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use crate::sync_primitives::{Arc, Mutex};
 
 /// Default embedding dimension for vector search
 pub const DEFAULT_EMBEDDING_DIM: u32 = 1024;

@@ -12,8 +12,8 @@ mod tests {
     use crate::event::filter::EventFilter;
     use crate::event::global_bus::GlobalBus;
     use crate::event::types::{AlephEvent, EventType, InputEvent, StopReason, TokenUsage, ToolCallResult};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use crate::sync_primitives::{AtomicUsize, Ordering};
+    use crate::sync_primitives::Arc;
 
     // =========================================================================
     // GlobalBus + Multiple EventBus Integration Tests

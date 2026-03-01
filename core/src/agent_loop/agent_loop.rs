@@ -1,6 +1,6 @@
 //! Agent Loop implementation - Main execution controller
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::watch;
 
 use aleph_protocol::IdentityContext;
