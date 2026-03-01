@@ -155,16 +155,21 @@ impl LoopCallback for PoeLoopCallback {
             }
         }
 
-        // Log the step
-        let mut step_id = self.step_counter.write().await;
-        let log_entry = StepLog::new(
-            *step_id,
-            action.action_type(),
-            result.summary(),
-            0, // Duration tracked elsewhere
-        );
+        // Log the step (acquire locks sequentially, not nested)
+        let (current_step, log_entry) = {
+            let mut step_id = self.step_counter.write().await;
+            let current = *step_id;
+            *step_id += 1;
+            let entry = StepLog::new(
+                current,
+                action.action_type(),
+                result.summary(),
+                0, // Duration tracked elsewhere
+            );
+            (current, entry)
+        };
+        // step_counter lock released before acquiring execution_log lock
         self.execution_log.write().await.push(log_entry);
-        *step_id += 1;
     }
 
     async fn on_confirmation_required(&self, _tool_name: &str, _arguments: &Value) -> bool {

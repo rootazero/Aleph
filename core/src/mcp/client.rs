@@ -219,37 +219,45 @@ impl McpClient {
 
     /// List all available tools from external servers
     pub async fn list_tools(&self) -> Vec<McpTool> {
-        let mut tools = Vec::new();
+        // Clone Arc refs under lock, then release lock before awaiting network I/O
+        let connections: Vec<_> = {
+            let servers = self.external_servers.read().await;
+            servers.values().cloned().collect()
+        };
 
-        let servers = self.external_servers.read().await;
-        for connection in servers.values() {
+        let mut tools = Vec::new();
+        for connection in &connections {
             tools.extend(connection.list_tools().await);
         }
-
         tools
     }
 
     /// List all available resources from external servers
     pub async fn list_resources(&self) -> Vec<crate::mcp::types::McpResource> {
-        let mut resources = Vec::new();
+        // Clone Arc refs under lock, then release lock before awaiting network I/O
+        let connections: Vec<_> = {
+            let servers = self.external_servers.read().await;
+            servers.values().cloned().collect()
+        };
 
-        let servers = self.external_servers.read().await;
-        for connection in servers.values() {
+        let mut resources = Vec::new();
+        for connection in &connections {
             resources.extend(connection.list_resources().await);
         }
-
         resources
     }
 
     /// List all available prompts from external servers
     pub async fn list_prompts(&self) -> Vec<crate::mcp::prompts::McpPrompt> {
-        let mut prompts = Vec::new();
+        let connections: Vec<_> = {
+            let servers = self.external_servers.read().await;
+            servers.values().cloned().collect()
+        };
 
-        let servers = self.external_servers.read().await;
-        for connection in servers.values() {
+        let mut prompts = Vec::new();
+        for connection in &connections {
             prompts.extend(connection.list_prompts().await);
         }
-
         prompts
     }
 

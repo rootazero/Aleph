@@ -480,20 +480,21 @@ impl DagScheduler {
 
             // Process results as they complete (streaming, not batched)
             while let Some((task_id, task_name, exec_result)) = futs.next().await {
-                let mut sched = scheduler.lock().await;
-
                 match exec_result {
                     Ok(output) => {
                         // Record output in context
                         context.record_output_with_name(&task_id, &task_name, output.clone());
 
-                        // Atomically sync scheduler + graph status
-                        let task_result = TaskResult::with_string(output.get_summary())
-                            .with_summary(output.get_summary());
-                        sched.sync_mark_completed(&task_id, &mut graph, task_result);
+                        // Atomically sync scheduler + graph status (lock scoped)
+                        {
+                            let mut sched = scheduler.lock().await;
+                            let task_result = TaskResult::with_string(output.get_summary())
+                                .with_summary(output.get_summary());
+                            sched.sync_mark_completed(&task_id, &mut graph, task_result);
+                        }
                         result.completed_tasks.push(task_id.clone());
 
-                        // Notify callback
+                        // Notify callback (lock released)
                         callback
                             .on_task_complete(&task_id, &context.get_output(&task_id).map(|o| o.get_summary()).unwrap_or_default())
                             .await;
@@ -503,11 +504,14 @@ impl DagScheduler {
                     Err(e) => {
                         let error_msg = e.to_string();
 
-                        // Atomically sync scheduler + graph status
-                        sched.sync_mark_failed(&task_id, &error_msg, &mut graph);
+                        // Atomically sync scheduler + graph status (lock scoped)
+                        {
+                            let mut sched = scheduler.lock().await;
+                            sched.sync_mark_failed(&task_id, &error_msg, &mut graph);
+                        }
                         result.failed_tasks.push(task_id.clone());
 
-                        // Notify callback
+                        // Notify callback (lock released)
                         callback.on_task_failed(&task_id, &error_msg).await;
 
                         warn!("Task '{}' failed: {}", task_id, error_msg);
