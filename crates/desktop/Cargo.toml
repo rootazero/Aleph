@@ -27,7 +27,7 @@ base64 = { workspace = true }
 
 # Screen capture (xcap 0.8 requires image 0.25)
 xcap = "0.8"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { workspace = true }
 
 # Input automation
 enigo = { version = "0.3", features = ["serde"] }

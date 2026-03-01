@@ -110,9 +110,9 @@ handlebars = "5.1"
 # For JSON path extraction (configurable protocols)
 jsonpath-rust = "0.5"
 # For image dimension parsing (still used in AI provider integration)
-image = { version = "0.24", default-features = false, features = ["png", "jpeg", "gif"] }
+image = { workspace = true }
 # For Base64 encoding of images (still used in AI provider integration)
-base64 = "0.21"
+base64 = { workspace = true }
 # Chrome DevTools Protocol client (browser automation)
 chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"] }
 # For async trait methods

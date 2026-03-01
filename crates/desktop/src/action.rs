@@ -13,15 +13,43 @@ use tracing::info;
 use crate::error::{DesktopError, Result};
 use crate::{MouseButton, WindowInfo};
 
+// ── Coordinate validation ────────────────────────────────────────
+
+/// Validate an `f64` coordinate for safe conversion to `i32`.
+///
+/// Rejects NaN, Infinity, and values outside the `i32` representable range.
+fn validate_coordinate(value: f64, name: &str) -> Result<i32> {
+    if value.is_nan() {
+        return Err(DesktopError::InputFailed(format!(
+            "Coordinate '{name}' is NaN"
+        )));
+    }
+    if value.is_infinite() {
+        return Err(DesktopError::InputFailed(format!(
+            "Coordinate '{name}' is infinite"
+        )));
+    }
+    if value < f64::from(i32::MIN) || value > f64::from(i32::MAX) {
+        return Err(DesktopError::InputFailed(format!(
+            "Coordinate '{name}' value {value} is outside i32 range"
+        )));
+    }
+    Ok(value as i32)
+}
+
 // ── Input actions (enigo-based, cross-platform) ──────────────────
 
 /// Move the mouse to (x, y) and click the specified button.
 ///
 /// # Errors
 ///
-/// - [`DesktopError::InputFailed`] if enigo cannot be created or the
-///   mouse/click operation fails.
+/// - [`DesktopError::InputFailed`] if coordinates are invalid (NaN, Infinity,
+///   out of i32 range), enigo cannot be created, or the mouse/click operation
+///   fails.
 pub fn click(x: f64, y: f64, button: MouseButton) -> Result<()> {
+    let ix = validate_coordinate(x, "x")?;
+    let iy = validate_coordinate(y, "y")?;
+
     let enigo_button = match button {
         MouseButton::Left => Button::Left,
         MouseButton::Right => Button::Right,
@@ -32,7 +60,7 @@ pub fn click(x: f64, y: f64, button: MouseButton) -> Result<()> {
         .map_err(|e| DesktopError::InputFailed(format!("Failed to create Enigo instance: {e}")))?;
 
     enigo
-        .move_mouse(x as i32, y as i32, Coordinate::Abs)
+        .move_mouse(ix, iy, Coordinate::Abs)
         .map_err(|e| DesktopError::InputFailed(format!("Failed to move mouse: {e}")))?;
 
     enigo
@@ -414,8 +442,8 @@ pub fn parse_modifier(name: &str) -> Result<Key> {
 ///
 /// - [`DesktopError::InputFailed`] if the name is not a recognized key.
 pub fn parse_key(name: &str) -> Result<Key> {
-    // Single character keys
-    if name.len() == 1 {
+    // Single character keys (use char count, not byte length, for Unicode safety)
+    if name.chars().count() == 1 {
         let ch = name.chars().next().unwrap();
         return Ok(Key::Unicode(ch));
     }
@@ -584,5 +612,63 @@ mod tests {
             matches!(err, DesktopError::InputFailed(_)),
             "Expected InputFailed for empty key, got: {err:?}"
         );
+    }
+
+    // ── coordinate validation ────────────────────────────────
+
+    #[test]
+    fn test_validate_coordinate_normal() {
+        assert_eq!(validate_coordinate(100.0, "x").unwrap(), 100);
+        assert_eq!(validate_coordinate(-50.5, "y").unwrap(), -50);
+        assert_eq!(validate_coordinate(0.0, "x").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_validate_coordinate_nan() {
+        let err = validate_coordinate(f64::NAN, "x").unwrap_err();
+        assert!(matches!(err, DesktopError::InputFailed(_)));
+        let msg = format!("{err}");
+        assert!(msg.contains("NaN"), "Error should mention NaN: {msg}");
+    }
+
+    #[test]
+    fn test_validate_coordinate_infinity() {
+        let err = validate_coordinate(f64::INFINITY, "x").unwrap_err();
+        assert!(matches!(err, DesktopError::InputFailed(_)));
+        let msg = format!("{err}");
+        assert!(msg.contains("infinite"), "Error should mention infinite: {msg}");
+
+        let err = validate_coordinate(f64::NEG_INFINITY, "y").unwrap_err();
+        assert!(matches!(err, DesktopError::InputFailed(_)));
+    }
+
+    #[test]
+    fn test_validate_coordinate_out_of_range() {
+        let err = validate_coordinate(3e10, "x").unwrap_err();
+        assert!(matches!(err, DesktopError::InputFailed(_)));
+        let msg = format!("{err}");
+        assert!(msg.contains("outside i32 range"), "Error should mention range: {msg}");
+    }
+
+    #[test]
+    fn test_validate_coordinate_boundary() {
+        // i32::MAX = 2_147_483_647, i32::MIN = -2_147_483_648
+        assert_eq!(validate_coordinate(f64::from(i32::MAX), "x").unwrap(), i32::MAX);
+        assert_eq!(validate_coordinate(f64::from(i32::MIN), "y").unwrap(), i32::MIN);
+    }
+
+    // ── parse_key Unicode ────────────────────────────────────
+
+    #[test]
+    fn test_parse_key_multibyte_unicode_not_single_char() {
+        // A Chinese character is 3 bytes in UTF-8 but 1 char — should map to Unicode key.
+        assert_eq!(parse_key("\u{4e2d}").unwrap(), Key::Unicode('\u{4e2d}'));
+    }
+
+    #[test]
+    fn test_parse_key_multibyte_string_rejected() {
+        // Two Chinese characters — should NOT be treated as single char.
+        let err = parse_key("\u{4e2d}\u{6587}").unwrap_err();
+        assert!(matches!(err, DesktopError::InputFailed(_)));
     }
 }
