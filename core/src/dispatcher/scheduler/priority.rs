@@ -189,6 +189,17 @@ impl PriorityScheduler {
         // Update effective priorities if boosting is enabled
         if self.config.enable_priority_boosting {
             self.update_effective_priorities();
+
+            // Sort each tier queue by effective_priority descending
+            for queue in &mut self.queues {
+                let mut tasks: Vec<String> = queue.drain(..).collect();
+                tasks.sort_by(|a, b| {
+                    let pa = self.metadata.get(a).map(|m| m.effective_priority).unwrap_or(0.0);
+                    let pb = self.metadata.get(b).map(|m| m.effective_priority).unwrap_or(0.0);
+                    pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                queue.extend(tasks);
+            }
         }
 
         // Check queues in priority order (User -> Financial -> Background)
