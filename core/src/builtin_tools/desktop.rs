@@ -143,6 +143,8 @@ pub struct DesktopOutput {
 pub struct DesktopTool {
     client: DesktopBridgeClient,
     approval_policy: Option<Arc<dyn ApprovalPolicy>>,
+    #[cfg(feature = "desktop-native")]
+    native: Option<Arc<dyn aleph_desktop::DesktopCapability>>,
 }
 
 impl DesktopTool {
@@ -150,7 +152,22 @@ impl DesktopTool {
         Self {
             client: DesktopBridgeClient::new(),
             approval_policy: None,
+            #[cfg(feature = "desktop-native")]
+            native: None,
         }
+    }
+
+    /// Attach a native desktop capability for in-process execution.
+    ///
+    /// When set, supported actions (screenshot, ocr, click, type_text,
+    /// key_combo, scroll, window_list, focus_window, launch_app) use the
+    /// native in-process path instead of IPC to the Desktop Bridge.
+    /// Unsupported actions (canvas_*, snapshot, PIM, etc.) fall through
+    /// to the IPC bridge automatically.
+    #[cfg(feature = "desktop-native")]
+    pub fn with_native(mut self, native: Arc<dyn aleph_desktop::DesktopCapability>) -> Self {
+        self.native = Some(native);
+        self
     }
 
     /// Attach an approval policy to gate sensitive actions.
@@ -216,6 +233,280 @@ impl DesktopTool {
 impl Default for DesktopTool {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── Native in-process execution path ───────────────────────────────
+#[cfg(feature = "desktop-native")]
+impl DesktopTool {
+    /// Execute a desktop action via the native in-process path.
+    ///
+    /// Returns `Ok(Some(output))` if the action was handled natively,
+    /// or `Ok(None)` to signal that the caller should fall through to IPC.
+    async fn call_native(
+        &self,
+        native: &Arc<dyn aleph_desktop::DesktopCapability>,
+        args: &DesktopArgs,
+    ) -> Result<Option<DesktopOutput>> {
+        match args.action.as_str() {
+            "screenshot" => {
+                let region = args.region.as_ref().map(|r| aleph_desktop::ScreenRegion {
+                    x: r.x as u32,
+                    y: r.y as u32,
+                    width: r.width as u32,
+                    height: r.height as u32,
+                });
+                match native.screenshot(region).await {
+                    Ok(s) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({
+                            "image_base64": s.image_base64,
+                            "width": s.width,
+                            "height": s.height,
+                            "format": s.format,
+                        })),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Native desktop error: {e}")),
+                    })),
+                }
+            }
+            "ocr" => {
+                // If image_base64 is provided, decode it to raw bytes for the native API.
+                // Otherwise pass None to capture a fresh screenshot.
+                let png_bytes = match &args.image_base64 {
+                    Some(b64) => {
+                        use base64::Engine;
+                        match base64::engine::general_purpose::STANDARD.decode(b64) {
+                            Ok(bytes) => Some(bytes),
+                            Err(e) => {
+                                return Ok(Some(DesktopOutput {
+                                    success: false,
+                                    data: None,
+                                    message: Some(format!("Invalid base64 image: {e}")),
+                                }));
+                            }
+                        }
+                    }
+                    None => None,
+                };
+                let result = native
+                    .ocr(png_bytes.as_deref())
+                    .await;
+                match result {
+                    Ok(ocr) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({
+                            "text": ocr.full_text,
+                            "lines": ocr.lines.iter().map(|l| {
+                                serde_json::json!({
+                                    "text": l.text,
+                                    "bounding_box": l.bounding_box.as_ref().map(|b| {
+                                        serde_json::json!({"x": b.x, "y": b.y, "w": b.w, "h": b.h})
+                                    }),
+                                    "confidence": l.confidence,
+                                })
+                            }).collect::<Vec<_>>(),
+                        })),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Native desktop error: {e}")),
+                    })),
+                }
+            }
+            "click" => {
+                // Native click requires x/y coordinates (ref-based targeting
+                // is only available via the IPC bridge which has snapshot context).
+                if args.ref_id.is_some() {
+                    return Ok(None); // Fall through to IPC for ref-based clicks
+                }
+                let x = match args.x {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let y = match args.y {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let button = match args.button.as_ref().unwrap_or(&MouseButton::Left) {
+                    MouseButton::Left => aleph_desktop::MouseButton::Left,
+                    MouseButton::Right => aleph_desktop::MouseButton::Right,
+                    MouseButton::Middle => aleph_desktop::MouseButton::Middle,
+                };
+                match native.click(x, y, button).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"clicked": true, "x": x, "y": y})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Native desktop error: {e}")),
+                    })),
+                }
+            }
+            "type_text" => {
+                // If ref_id is provided, fall through to IPC (needs snapshot context to focus)
+                if args.ref_id.is_some() {
+                    return Ok(None);
+                }
+                let text = args.text.as_deref().unwrap_or("");
+                match native.type_text(text).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"typed": true, "chars": text.chars().count()})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Native desktop error: {e}")),
+                    })),
+                }
+            }
+            "key_combo" => {
+                let keys = args.keys.as_deref().unwrap_or(&[]);
+                if keys.is_empty() {
+                    return Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some("key_combo requires 'keys' array".to_string()),
+                    }));
+                }
+                // Last element is the main key, everything before is modifiers
+                let (modifiers, main_key) = keys.split_at(keys.len() - 1);
+                let modifiers: Vec<String> = modifiers.to_vec();
+                let key = &main_key[0];
+                match native.key_combo(&modifiers, key).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"combo": keys})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Native desktop error: {e}")),
+                    })),
+                }
+            }
+            "scroll" => {
+                // Native scroll requires x/y coordinates
+                if args.ref_id.is_some() {
+                    return Ok(None); // Fall through to IPC for ref-based scrolling
+                }
+                // Convert delta_x/delta_y to direction + amount for native API
+                let delta_y = args.delta_y.unwrap_or(0.0);
+                let delta_x = args.delta_x.unwrap_or(0.0);
+                // Pick the dominant axis
+                let (direction, amount) = if delta_y.abs() >= delta_x.abs() {
+                    if delta_y < 0.0 {
+                        ("up", (-delta_y) as i32)
+                    } else {
+                        ("down", delta_y as i32)
+                    }
+                } else if delta_x < 0.0 {
+                    ("left", (-delta_x) as i32)
+                } else {
+                    ("right", delta_x as i32)
+                };
+                match native.scroll(direction, amount).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({
+                            "scrolled": true,
+                            "direction": direction,
+                            "amount": amount,
+                        })),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Native desktop error: {e}")),
+                    })),
+                }
+            }
+            "window_list" => {
+                match native.window_list().await {
+                    Ok(windows) => {
+                        let data: Vec<serde_json::Value> = windows
+                            .iter()
+                            .map(|w| {
+                                serde_json::json!({
+                                    "id": w.id,
+                                    "title": w.title,
+                                    "owner": w.owner,
+                                    "pid": w.pid,
+                                })
+                            })
+                            .collect();
+                        Ok(Some(DesktopOutput {
+                            success: true,
+                            data: Some(serde_json::json!({"windows": data})),
+                            message: None,
+                        }))
+                    }
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Native desktop error: {e}")),
+                    })),
+                }
+            }
+            "focus_window" => {
+                let window_id = match args.window_id {
+                    Some(id) => id as u64,
+                    None => {
+                        return Ok(Some(DesktopOutput {
+                            success: false,
+                            data: None,
+                            message: Some(
+                                "focus_window requires 'window_id' (get it from window_list)"
+                                    .to_string(),
+                            ),
+                        }));
+                    }
+                };
+                match native.focus_window(window_id).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"focused": true, "window_id": window_id})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Native desktop error: {e}")),
+                    })),
+                }
+            }
+            "launch_app" => {
+                let bundle_id = args.bundle_id.as_deref().unwrap_or("");
+                match native.launch_app(bundle_id).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"launched": true, "bundle_id": bundle_id})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Native desktop error: {e}")),
+                    })),
+                }
+            }
+            // Actions not supported natively: snapshot, ax_tree, double_click, drag, hover,
+            // paste, canvas_*, PIM_*, etc. — fall through to IPC.
+            _ => Ok(None),
+        }
     }
 }
 
@@ -334,6 +625,16 @@ Examples:
         if let Some((action_type, target)) = approval_check {
             if let Some(out) = self.check_approval(action_type, &target).await {
                 return Ok(out);
+            }
+        }
+
+        // When a native desktop capability is available, try the in-process path
+        // first. If the action is not supported natively (call_native returns
+        // Ok(None)), fall through to the IPC bridge below.
+        #[cfg(feature = "desktop-native")]
+        if let Some(ref native) = self.native {
+            if let Some(output) = self.call_native(native, &args).await? {
+                return Ok(output);
             }
         }
 
