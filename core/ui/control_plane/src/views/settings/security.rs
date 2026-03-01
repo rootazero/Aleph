@@ -20,7 +20,7 @@ pub fn SecurityView() -> impl IntoView {
     let devices = create_rw_signal(Vec::<DeviceInfo>::new());
     let search_config = RwSignal::new(SearchConfig {
         enabled: false,
-        default_provider: "tavily".to_string(),
+        default_provider: String::new(),
         max_results: 5,
         timeout_seconds: 10,
         pii_enabled: false,
@@ -28,6 +28,7 @@ pub fn SecurityView() -> impl IntoView {
         pii_scrub_phone: true,
         pii_scrub_ssn: true,
         pii_scrub_credit_card: true,
+        backends: Vec::new(),
     });
     let loading = create_rw_signal(true);
     let saving = create_rw_signal(false);

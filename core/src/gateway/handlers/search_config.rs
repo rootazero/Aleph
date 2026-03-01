@@ -11,6 +11,17 @@ use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchBackendDto {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchConfigDto {
     pub enabled: bool,
     pub default_provider: String,
@@ -21,6 +32,8 @@ pub struct SearchConfigDto {
     pub pii_scrub_phone: bool,
     pub pii_scrub_ssn: bool,
     pub pii_scrub_credit_card: bool,
+    #[serde(default)]
+    pub backends: Vec<SearchBackendDto>,
 }
 
 /// Get search configuration
@@ -32,6 +45,16 @@ pub async fn handle_get(
 
     if let Some(search) = &cfg.search {
         let pii = search.pii.as_ref();
+        let backends: Vec<SearchBackendDto> = search
+            .backends
+            .iter()
+            .map(|(name, backend)| SearchBackendDto {
+                name: name.clone(),
+                api_key: backend.api_key.clone(),
+                base_url: backend.base_url.clone(),
+                engine_id: backend.engine_id.clone(),
+            })
+            .collect();
         let dto = SearchConfigDto {
             enabled: search.enabled,
             default_provider: search.default_provider.clone(),
@@ -42,13 +65,14 @@ pub async fn handle_get(
             pii_scrub_phone: pii.map(|p| p.scrub_phone).unwrap_or(true),
             pii_scrub_ssn: pii.map(|p| p.scrub_ssn).unwrap_or(true),
             pii_scrub_credit_card: pii.map(|p| p.scrub_credit_card).unwrap_or(true),
+            backends,
         };
         JsonRpcResponse::success(request.id, serde_json::to_value(dto).unwrap())
     } else {
-        // Return default values
+        // Return default values — no provider active by default
         let dto = SearchConfigDto {
             enabled: false,
-            default_provider: "tavily".to_string(),
+            default_provider: String::new(),
             max_results: 5,
             timeout_seconds: 10,
             pii_enabled: false,
@@ -56,6 +80,7 @@ pub async fn handle_get(
             pii_scrub_phone: true,
             pii_scrub_ssn: true,
             pii_scrub_credit_card: true,
+            backends: Vec::new(),
         };
         JsonRpcResponse::success(request.id, serde_json::to_value(dto).unwrap())
     }
@@ -110,11 +135,40 @@ pub async fn handle_update(
     {
         let mut cfg = config.write().await;
 
+        // Create search config if it doesn't exist
+        if cfg.search.is_none() {
+            cfg.search = Some(crate::config::types::SearchConfigInternal {
+                enabled: false,
+                default_provider: String::new(),
+                fallback_providers: None,
+                max_results: 5,
+                timeout_seconds: 10,
+                backends: std::collections::HashMap::new(),
+                pii: Some(crate::config::types::PIIConfig::default()),
+            });
+        }
+
         if let Some(search) = &mut cfg.search {
             search.enabled = dto.enabled;
             search.default_provider = dto.default_provider.clone();
             search.max_results = dto.max_results as usize;
             search.timeout_seconds = dto.timeout_seconds;
+
+            // Update backend configs
+            for backend_dto in &dto.backends {
+                let entry = search
+                    .backends
+                    .entry(backend_dto.name.clone())
+                    .or_insert_with(|| crate::config::types::SearchBackendConfig {
+                        provider_type: backend_dto.name.clone(),
+                        api_key: None,
+                        base_url: None,
+                        engine_id: None,
+                    });
+                entry.api_key = backend_dto.api_key.clone();
+                entry.base_url = backend_dto.base_url.clone();
+                entry.engine_id = backend_dto.engine_id.clone();
+            }
 
             // Update PII config
             if search.pii.is_none() {

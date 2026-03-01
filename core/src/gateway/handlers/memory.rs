@@ -112,9 +112,9 @@ pub async fn handle_search(
         ..Default::default()
     };
 
-    // Search with empty embedding returns recent memories filtered by context
+    // Without a query embedding, fall back to recent memories
     match db
-        .search_memories(&[], &filter, params.limit as usize)
+        .get_recent_memories(&filter, params.limit as usize)
         .await
     {
         Ok(memories) => {

@@ -79,6 +79,10 @@ pub fn MemoryView() -> impl IntoView {
                                 <BasicSettings config=config />
                                 <AIRetrievalSettings config=config />
                                 <CompressionSettings config=config />
+                                <FactDecaySettings config=config />
+                                <GraphDecaySettings config=config />
+                                <DreamingSettings config=config />
+                                <StorageBackupSettings config=config />
 
                                 <div class="pt-4 border-t border-border">
                                     <button
@@ -125,35 +129,11 @@ fn BasicSettings(
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Embedding Model"</label>
-                    <input
-                        type="text"
-                        prop:value=move || config.get().map(|c| c.embedding_model).unwrap_or_default()
-                        on:input=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                cfg.embedding_model = event_target_value(&ev);
-                                config.set(Some(cfg));
-                            }
-                        }
-                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                    />
-                </div>
-
-                <div>
                     <label class="block text-sm font-medium mb-1">"Vector Database"</label>
-                    <select
-                        prop:value=move || config.get().map(|c| c.vector_db).unwrap_or_default()
-                        on:change=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                cfg.vector_db = event_target_value(&ev);
-                                config.set(Some(cfg));
-                            }
-                        }
-                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                    >
-                        <option value="sqlite-vec">"sqlite-vec"</option>
-                        <option value="lancedb">"lancedb"</option>
-                    </select>
+                    <div class="w-full px-3 py-2 border border-border rounded bg-surface-sunken text-text-secondary">
+                        "LanceDB"
+                    </div>
+                    <p class="text-xs text-text-tertiary mt-1">"LanceDB is the only supported vector database backend"</p>
                 </div>
 
                 <div class="grid grid-cols-2 gap-4">
@@ -447,6 +427,355 @@ fn CompressionSettings(
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
+                </div>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn FactDecaySettings(
+    config: RwSignal<Option<MemoryConfig>>,
+) -> impl IntoView {
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <h2 class="text-lg font-semibold mb-2">"Fact Decay Policy"</h2>
+            <p class="text-sm text-text-tertiary mb-4">
+                "Control how memory facts age and get pruned over time"
+            </p>
+
+            <div class="space-y-4">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-1">"Half-Life (days)"</label>
+                        <input
+                            type="number"
+                            step="1"
+                            min="1"
+                            prop:value=move || config.get().map(|c| c.memory_decay.half_life_days).unwrap_or(30.0)
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.memory_decay.half_life_days = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                        <p class="text-xs text-text-tertiary mt-1">"Days until fact strength halves without access"</p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-1">"Access Boost"</label>
+                        <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max="1"
+                            prop:value=move || config.get().map(|c| c.memory_decay.access_boost).unwrap_or(0.2)
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.memory_decay.access_boost = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                        <p class="text-xs text-text-tertiary mt-1">"Strength boost when a fact is accessed"</p>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">"Min Strength Before Pruning (0.0-1.0)"</label>
+                    <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="1"
+                        prop:value=move || config.get().map(|c| c.memory_decay.min_strength).unwrap_or(0.1)
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                if let Ok(val) = event_target_value(&ev).parse() {
+                                    cfg.memory_decay.min_strength = val;
+                                    config.set(Some(cfg));
+                                }
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">"Facts below this strength will be pruned"</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">"Protected Fact Types"</label>
+                    <input
+                        type="text"
+                        prop:value=move || config.get().map(|c| c.memory_decay.protected_types.join(", ")).unwrap_or_default()
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.memory_decay.protected_types = event_target_value(&ev)
+                                    .split(',')
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">"Comma-separated types that never decay (e.g. personal)"</p>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn GraphDecaySettings(
+    config: RwSignal<Option<MemoryConfig>>,
+) -> impl IntoView {
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <h2 class="text-lg font-semibold mb-2">"Knowledge Graph Decay"</h2>
+            <p class="text-sm text-text-tertiary mb-4">
+                "Control how graph nodes and edges decay over time"
+            </p>
+
+            <div class="space-y-4">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-1">"Node Decay Per Day"</label>
+                        <input
+                            type="number"
+                            step="0.001"
+                            min="0"
+                            max="1"
+                            prop:value=move || config.get().map(|c| c.graph_decay.node_decay_per_day).unwrap_or(0.02)
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.graph_decay.node_decay_per_day = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-1">"Edge Decay Per Day"</label>
+                        <input
+                            type="number"
+                            step="0.001"
+                            min="0"
+                            max="1"
+                            prop:value=move || config.get().map(|c| c.graph_decay.edge_decay_per_day).unwrap_or(0.03)
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.graph_decay.edge_decay_per_day = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">"Min Score Before Pruning"</label>
+                    <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="1"
+                        prop:value=move || config.get().map(|c| c.graph_decay.min_score).unwrap_or(0.1)
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                if let Ok(val) = event_target_value(&ev).parse() {
+                                    cfg.graph_decay.min_score = val;
+                                    config.set(Some(cfg));
+                                }
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">"Nodes/edges below this score will be pruned"</p>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn DreamingSettings(
+    config: RwSignal<Option<MemoryConfig>>,
+) -> impl IntoView {
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <h2 class="text-lg font-semibold mb-2">"DreamDaemon"</h2>
+            <p class="text-sm text-text-tertiary mb-4">
+                "Background process that consolidates and compresses memory facts"
+            </p>
+
+            <div class="space-y-4">
+                <div class="flex items-center">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || config.get().map(|c| c.dreaming.enabled).unwrap_or(true)
+                        on:change=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.dreaming.enabled = event_target_checked(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="mr-2"
+                    />
+                    <label class="font-medium">"Enable DreamDaemon"</label>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">"Idle Threshold (seconds)"</label>
+                    <input
+                        type="number"
+                        prop:value=move || config.get().map(|c| c.dreaming.idle_threshold_seconds).unwrap_or(900)
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                if let Ok(val) = event_target_value(&ev).parse() {
+                                    cfg.dreaming.idle_threshold_seconds = val;
+                                    config.set(Some(cfg));
+                                }
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">"Seconds of inactivity before dreaming starts"</p>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-1">"Window Start (HH:MM)"</label>
+                        <input
+                            type="text"
+                            prop:value=move || config.get().map(|c| c.dreaming.window_start_local).unwrap_or_else(|| "02:00".to_string())
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    cfg.dreaming.window_start_local = event_target_value(&ev);
+                                    config.set(Some(cfg));
+                                }
+                            }
+                            placeholder="02:00"
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-1">"Window End (HH:MM)"</label>
+                        <input
+                            type="text"
+                            prop:value=move || config.get().map(|c| c.dreaming.window_end_local).unwrap_or_else(|| "05:00".to_string())
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    cfg.dreaming.window_end_local = event_target_value(&ev);
+                                    config.set(Some(cfg));
+                                }
+                            }
+                            placeholder="05:00"
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                    </div>
+                </div>
+                <p class="text-xs text-text-tertiary">"Local time window when dreaming is allowed to run"</p>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">"Max Duration (seconds)"</label>
+                    <input
+                        type="number"
+                        prop:value=move || config.get().map(|c| c.dreaming.max_duration_seconds).unwrap_or(600)
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                if let Ok(val) = event_target_value(&ev).parse() {
+                                    cfg.dreaming.max_duration_seconds = val;
+                                    config.set(Some(cfg));
+                                }
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">"Maximum time per dreaming session"</p>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn StorageBackupSettings(
+    config: RwSignal<Option<MemoryConfig>>,
+) -> impl IntoView {
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <h2 class="text-lg font-semibold mb-2">"Storage & Backup"</h2>
+
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium mb-1">"Dedup Similarity Threshold (0.0-1.0)"</label>
+                    <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="1"
+                        prop:value=move || config.get().map(|c| c.dedup_similarity_threshold).unwrap_or(0.95)
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                if let Ok(val) = event_target_value(&ev).parse() {
+                                    cfg.dedup_similarity_threshold = val;
+                                    config.set(Some(cfg));
+                                }
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">"Memories above this similarity are considered duplicates"</p>
+                </div>
+
+                <div class="flex items-center">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || config.get().map(|c| c.backup_enabled).unwrap_or(true)
+                        on:change=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.backup_enabled = event_target_checked(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="mr-2"
+                    />
+                    <label class="font-medium">"Enable Automatic JSONL Backup"</label>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">"Max Backup Files"</label>
+                    <input
+                        type="number"
+                        min="1"
+                        prop:value=move || config.get().map(|c| c.backup_max_files).unwrap_or(7)
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                if let Ok(val) = event_target_value(&ev).parse() {
+                                    cfg.backup_max_files = val;
+                                    config.set(Some(cfg));
+                                }
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">"Maximum number of backup files to retain"</p>
                 </div>
             </div>
         </div>

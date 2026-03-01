@@ -840,6 +840,24 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         println!("Desktop capabilities: IPC bridge (external)");
     }
 
+    // Initialize memory backend (LanceDB)
+    let memory_db: Arc<alephcore::memory::store::LanceMemoryBackend> = {
+        let data_dir = alephcore::utils::paths::get_data_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"));
+        match alephcore::memory::store::LanceMemoryBackend::open_or_create(&data_dir).await {
+            Ok(backend) => {
+                if !args.daemon {
+                    println!("Memory backend initialized (LanceDB)");
+                }
+                Arc::new(backend)
+            }
+            Err(e) => {
+                eprintln!("Error: Failed to initialize memory backend: {}", e);
+                std::process::exit(1);
+            }
+        }
+    };
+
     let event_bus = server.event_bus().clone();
     let router = Arc::new(AgentRouter::new());
 
@@ -877,6 +895,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     register_config_handlers(&mut server, app_config, config_patcher, event_bus.clone(), auth_bundle.device_store.clone());
 
     register_session_handlers(&mut server, &session_manager, args.daemon);
+    register_memory_handlers(&mut server, &memory_db, args.daemon);
 
     let channel_registry = initialize_channels(&mut server, args.daemon).await;
     initialize_inbound_router(channel_registry, router, args.daemon).await;
