@@ -9,6 +9,7 @@ use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
+use crate::config::patcher::set_nested_value;
 use crate::config::{build_ui_hints, generate_config_schema_json, Config, ConfigUiHints};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::hot_reload::ConfigWatcher;
@@ -430,9 +431,75 @@ pub async fn handle_patch_config(
         );
     }
 
-    // TODO: Apply patch to config
-    // For now, just validate we can acquire the lock
-    let _config_write = config.write().await;
+    // Collect top-level sections touched (for incremental save)
+    let touched_sections: Vec<String> = patch
+        .keys()
+        .filter_map(|k| k.split('.').next().map(|s| s.to_string()))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    // Apply patch under write lock
+    {
+        let mut config_write = config.write().await;
+
+        // Serialize current config to JSON
+        let mut config_json = match serde_json::to_value(&*config_write) {
+            Ok(v) => v,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    req.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to serialize config: {}", e),
+                );
+            }
+        };
+
+        // Apply each dot-path key via set_nested_value
+        for (path, value) in &patch {
+            if let Err(e) = set_nested_value(&mut config_json, path, value) {
+                return JsonRpcResponse::error(
+                    req.id,
+                    INVALID_PARAMS,
+                    format!("Failed to apply patch at '{}': {}", path, e),
+                );
+            }
+        }
+
+        // Deserialize back to Config
+        let new_config: Config = match serde_json::from_value(config_json) {
+            Ok(c) => c,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    req.id,
+                    INVALID_PARAMS,
+                    format!("Patched config is invalid: {}", e),
+                );
+            }
+        };
+
+        // Run structural validation
+        if let Err(e) = new_config.validate() {
+            return JsonRpcResponse::error(
+                req.id,
+                INVALID_PARAMS,
+                format!("Config validation failed: {}", e),
+            );
+        }
+
+        // Replace in-memory config
+        *config_write = new_config;
+
+        // Save touched sections to disk
+        let section_refs: Vec<&str> = touched_sections.iter().map(|s| s.as_str()).collect();
+        if let Err(e) = config_write.save_incremental(&section_refs) {
+            return JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                format!("Failed to save config: {}", e),
+            );
+        }
+    }
 
     // Broadcast ConfigChanged event
     let timestamp = std::time::SystemTime::now()
@@ -440,8 +507,14 @@ pub async fn handle_patch_config(
         .unwrap_or_default()
         .as_millis() as i64;
 
+    let section = if touched_sections.len() == 1 {
+        Some(touched_sections[0].clone())
+    } else {
+        None
+    };
+
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
-        section: None,
+        section,
         value: json!(patch),
         timestamp,
     });
