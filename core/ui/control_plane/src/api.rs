@@ -11,44 +11,62 @@ use crate::context::DashboardState;
 // Memory API
 // ============================================================================
 
+/// Memory entry returned by the backend search endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryFact {
     pub id: String,
+    /// Combined display content (mapped from user_input + ai_output)
     pub content: String,
-    pub metadata: Option<Value>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
     pub created_at: Option<String>,
 }
 
+/// Backend memory search result entry (matches handler MemoryEntry)
+#[derive(Debug, Clone, Deserialize)]
+struct BackendMemoryEntry {
+    id: String,
+    #[serde(default)]
+    app_bundle_id: String,
+    #[serde(default)]
+    window_title: String,
+    #[serde(default)]
+    user_input: String,
+    #[serde(default)]
+    ai_output: String,
+    #[serde(default)]
+    timestamp: i64,
+    #[serde(default)]
+    similarity_score: Option<f32>,
+}
+
+/// Backend search response wrapper
+#[derive(Debug, Clone, Deserialize)]
+struct BackendSearchResponse {
+    #[serde(default)]
+    memories: Vec<BackendMemoryEntry>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MemoryStats {
+    #[serde(default)]
     pub total_facts: u64,
-    pub total_size: u64,
+    #[serde(default)]
+    pub total_memories: u64,
+    #[serde(default)]
+    pub valid_facts: u64,
+    #[serde(default)]
+    pub total_graph_nodes: u64,
+    #[serde(default)]
+    pub total_graph_edges: u64,
 }
 
 pub struct MemoryApi;
 
 impl MemoryApi {
-    /// Store a new fact in memory
-    pub async fn store(
-        state: &DashboardState,
-        content: String,
-        metadata: Option<Value>,
-    ) -> Result<String, String> {
-        let params = serde_json::json!({
-            "content": content,
-            "metadata": metadata,
-        });
-
-        let result = state.rpc_call("memory.store", params).await?;
-
-        // Extract fact_id from result
-        result.get("fact_id")
-            .and_then(|id| id.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| "Invalid response: missing fact_id".to_string())
-    }
-
-    /// Search for facts
+    /// Search for memories
     pub async fn search(
         state: &DashboardState,
         query: String,
@@ -61,18 +79,52 @@ impl MemoryApi {
 
         let result = state.rpc_call("memory.search", params).await?;
 
-        // Parse results
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse search results: {}", e))
+        // Backend returns {"memories": [MemoryEntry...]}
+        let response: BackendSearchResponse = serde_json::from_value(result)
+            .map_err(|e| format!("Failed to parse search results: {}", e))?;
+
+        // Map backend entries to UI MemoryFact
+        let facts = response.memories.into_iter().map(|entry| {
+            // Combine user_input and ai_output for display
+            let content = if !entry.user_input.is_empty() && !entry.ai_output.is_empty() {
+                format!("Q: {}\nA: {}", entry.user_input, entry.ai_output)
+            } else if !entry.user_input.is_empty() {
+                entry.user_input
+            } else {
+                entry.ai_output
+            };
+
+            // Format timestamp
+            let created_at = if entry.timestamp > 0 {
+                Some(format_timestamp_secs(entry.timestamp))
+            } else {
+                None
+            };
+
+            let source = if !entry.app_bundle_id.is_empty() {
+                Some(entry.app_bundle_id)
+            } else {
+                None
+            };
+
+            MemoryFact {
+                id: entry.id,
+                content,
+                source,
+                created_at,
+            }
+        }).collect();
+
+        Ok(facts)
     }
 
-    /// Delete a fact
+    /// Delete a memory
     pub async fn delete(
         state: &DashboardState,
-        fact_id: String,
+        memory_id: String,
     ) -> Result<(), String> {
         let params = serde_json::json!({
-            "fact_id": fact_id,
+            "id": memory_id,
         });
 
         state.rpc_call("memory.delete", params).await?;
@@ -86,6 +138,18 @@ impl MemoryApi {
         serde_json::from_value(result)
             .map_err(|e| format!("Failed to parse stats: {}", e))
     }
+}
+
+/// Format unix timestamp (seconds) to human-readable date string
+fn format_timestamp_secs(ts: i64) -> String {
+    // Simple date formatting for WASM (no chrono needed for basic display)
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64((ts * 1000) as f64));
+    let year = date.get_full_year();
+    let month = date.get_month() + 1; // 0-indexed
+    let day = date.get_date();
+    let hour = date.get_hours();
+    let min = date.get_minutes();
+    format!("{:04}-{:02}-{:02} {:02}:{:02}", year, month, day, hour, min)
 }
 
 // ============================================================================
