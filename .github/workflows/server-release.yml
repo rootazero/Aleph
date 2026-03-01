@@ -22,6 +22,9 @@ jobs:
         with:
           workspaces: core
 
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Run tests
         run: cargo test -p alephcore --lib
 
@@ -63,6 +66,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
+
+      - name: Install protoc (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install protoc (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install protobuf
+
+      - name: Install protoc (Windows)
+        if: matrix.os == 'windows-latest'
+        run: choco install protoc -y
 
       # ── WASM Panel UI build ──
 
