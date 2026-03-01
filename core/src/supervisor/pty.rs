@@ -99,13 +99,14 @@ impl ClaudeSupervisor {
 
         self.master = Some(pair.master);
         self.writer = Some(writer);
-        self.child = Some(child);
+        // Move child into the reader thread so it can retrieve the actual exit code
         self.running.store(true, Ordering::SeqCst);
 
         // Create event channel
         let (tx, rx) = mpsc::unbounded_channel();
         let running = self.running.clone();
         let masker = self.masker.clone();
+        let mut child = child;
 
         // Spawn reader thread
         std::thread::spawn(move || {
@@ -128,7 +129,12 @@ impl ClaudeSupervisor {
                 }
             }
             running.store(false, Ordering::SeqCst);
-            let _ = tx.send(SupervisorEvent::Exited(0));
+            // Retrieve the actual exit code from the child process
+            let exit_code = match child.wait() {
+                Ok(status) => status.exit_code() as i32,
+                Err(_) => -1,
+            };
+            let _ = tx.send(SupervisorEvent::Exited(exit_code));
         });
 
         Ok(rx)

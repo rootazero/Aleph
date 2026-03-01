@@ -116,12 +116,18 @@ impl SessionStore for LanceMemoryBackend {
         filter: &MemoryFilter,
         limit: usize,
     ) -> Result<Vec<MemoryEntry>, AlephError> {
+        let column = match embedding.len() {
+            0..=768 => "vec_768",
+            769..=1024 => "vec_1024",
+            _ => "vec_1536",
+        };
+
         let mut query = self
             .memories_table
             .query()
             .nearest_to(embedding)
             .map_err(super::lance_err)?
-            .column("vec_768")
+            .column(column)
             .limit(limit);
 
         if let Some(f) = filter.to_lance_filter() {

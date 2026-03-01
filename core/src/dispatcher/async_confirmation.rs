@@ -321,7 +321,7 @@ impl PendingConfirmationStore {
     ///
     /// Returns false if store is full
     pub fn insert(&self, confirmation: PendingConfirmation) -> bool {
-        let mut confirmations = self.confirmations.write().unwrap();
+        let mut confirmations = self.confirmations.write().unwrap_or_else(|e| e.into_inner());
 
         // Cleanup expired confirmations first
         confirmations.retain(|_, c| !c.is_expired());
@@ -337,19 +337,19 @@ impl PendingConfirmationStore {
 
     /// Get a pending confirmation by ID
     pub fn get(&self, id: &str) -> Option<PendingConfirmation> {
-        let confirmations = self.confirmations.read().unwrap();
+        let confirmations = self.confirmations.read().unwrap_or_else(|e| e.into_inner());
         confirmations.get(id).cloned()
     }
 
     /// Remove and return a pending confirmation by ID
     pub fn remove(&self, id: &str) -> Option<PendingConfirmation> {
-        let mut confirmations = self.confirmations.write().unwrap();
+        let mut confirmations = self.confirmations.write().unwrap_or_else(|e| e.into_inner());
         confirmations.remove(id)
     }
 
     /// Check if a confirmation exists and is not expired
     pub fn is_valid(&self, id: &str) -> bool {
-        let confirmations = self.confirmations.read().unwrap();
+        let confirmations = self.confirmations.read().unwrap_or_else(|e| e.into_inner());
         confirmations
             .get(id)
             .map(|c| !c.is_expired())
@@ -358,7 +358,7 @@ impl PendingConfirmationStore {
 
     /// Get the number of pending confirmations
     pub fn count(&self) -> usize {
-        let confirmations = self.confirmations.read().unwrap();
+        let confirmations = self.confirmations.read().unwrap_or_else(|e| e.into_inner());
         confirmations.len()
     }
 
@@ -377,7 +377,7 @@ impl PendingConfirmationStore {
     ///
     /// Returns a list of confirmation IDs that were expired and removed.
     pub fn cleanup_expired_with_ids(&self) -> Vec<String> {
-        let mut confirmations = self.confirmations.write().unwrap();
+        let mut confirmations = self.confirmations.write().unwrap_or_else(|e| e.into_inner());
         let expired_ids: Vec<String> = confirmations
             .iter()
             .filter(|(_, c)| c.is_expired())
@@ -389,7 +389,7 @@ impl PendingConfirmationStore {
 
     /// Clear all pending confirmations
     pub fn clear(&self) {
-        let mut confirmations = self.confirmations.write().unwrap();
+        let mut confirmations = self.confirmations.write().unwrap_or_else(|e| e.into_inner());
         confirmations.clear();
     }
 

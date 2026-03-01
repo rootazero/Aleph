@@ -44,7 +44,12 @@ fn matches_entry(entry: &AllowlistEntry, resolution: &CommandResolution) -> bool
             || resolution
                 .resolved_path
                 .as_ref()
-                .map(|p| glob_match(pattern, &p.to_string_lossy()))
+                .map(|p| {
+                    let filename = p.file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    glob_match(pattern, &filename)
+                })
                 .unwrap_or(false);
     }
 

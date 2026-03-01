@@ -21,26 +21,26 @@ impl ProgressMonitor {
 
     /// Subscribe to progress events
     pub fn subscribe(&self, subscriber: Arc<dyn ProgressSubscriber>) {
-        let mut subs = self.subscribers.write().unwrap();
+        let mut subs = self.subscribers.write().unwrap_or_else(|e| e.into_inner());
         subs.push(subscriber);
         debug!("New subscriber added, total: {}", subs.len());
     }
 
     /// Unsubscribe all subscribers
     pub fn clear_subscribers(&self) {
-        let mut subs = self.subscribers.write().unwrap();
+        let mut subs = self.subscribers.write().unwrap_or_else(|e| e.into_inner());
         subs.clear();
         debug!("All subscribers cleared");
     }
 
     /// Get the number of subscribers
     pub fn subscriber_count(&self) -> usize {
-        self.subscribers.read().unwrap().len()
+        self.subscribers.read().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     /// Broadcast an event to all subscribers
     fn broadcast(&self, event: ProgressEvent) {
-        let subs = self.subscribers.read().unwrap();
+        let subs = self.subscribers.read().unwrap_or_else(|e| e.into_inner());
         for sub in subs.iter() {
             sub.on_event(event.clone());
         }

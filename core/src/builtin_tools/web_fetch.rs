@@ -241,7 +241,7 @@ impl WebFetchTool {
 
     /// Truncate content to maximum length
     fn truncate_content(&self, content: String) -> String {
-        if content.len() <= self.max_content_length {
+        if content.chars().count() <= self.max_content_length {
             content
         } else {
             // Truncate at character boundary

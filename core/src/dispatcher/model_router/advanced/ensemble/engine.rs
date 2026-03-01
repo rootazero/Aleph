@@ -376,7 +376,7 @@ impl EnsembleEngine {
             .max_by(|a, b| {
                 let score_a = scorer.score(a.response.as_ref().unwrap(), prompt);
                 let score_b = scorer.score(b.response.as_ref().unwrap(), prompt);
-                score_a.partial_cmp(&score_b).unwrap()
+                score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
             })
             .unwrap();
 

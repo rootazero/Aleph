@@ -141,7 +141,7 @@ impl ToolTruncator {
     ///
     /// * `output` - The output string to check
     pub fn should_truncate(&self, output: &str) -> bool {
-        output.len() > self.max_chars
+        output.chars().count() > self.max_chars
     }
 
     /// Truncate the output if necessary and generate a summary

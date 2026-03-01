@@ -17,6 +17,11 @@ mod tests {
     fn test_daemon_module_exists() {
         // This test ensures the daemon module is properly declared
         let config = DaemonConfig::default();
-        assert_eq!(config.socket_path, "~/.aleph/daemon.sock");
+        // After tilde expansion fix, socket_path uses actual home directory
+        assert!(
+            config.socket_path.ends_with(".aleph/daemon.sock"),
+            "socket_path should end with .aleph/daemon.sock, got: {}",
+            config.socket_path
+        );
     }
 }

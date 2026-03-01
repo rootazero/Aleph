@@ -272,7 +272,7 @@ impl InboundMessageRouter {
             "Handling message from {}:{} - {}",
             channel_id,
             msg.sender_id.as_str(),
-            &msg.text[..msg.text.len().min(50)]
+            msg.text.chars().take(50).collect::<String>()
         );
 
         // Resolve agent ID using unified routing (async)
@@ -338,7 +338,7 @@ impl InboundMessageRouter {
                 info!(
                     "Would execute agent for session {} with input: {} (execution not configured)",
                     ctx.session_key.to_key_string(),
-                    &ctx.message.text[..ctx.message.text.len().min(100)]
+                    ctx.message.text.chars().take(100).collect::<String>()
                 );
                 return Ok(());
             }

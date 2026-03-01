@@ -162,6 +162,20 @@ struct StringVisitor {
 }
 
 impl Visit for StringVisitor {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if !self.message.is_empty() {
+            self.message.push_str(", ");
+        }
+
+        if field.name() == "message" {
+            self.message.push_str(value);
+        } else {
+            self.message.push_str(field.name());
+            self.message.push('=');
+            self.message.push_str(value);
+        }
+    }
+
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         use std::fmt::Write;
 

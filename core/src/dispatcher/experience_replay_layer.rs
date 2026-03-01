@@ -124,7 +124,7 @@ impl ExperienceReplayLayer {
         mut candidates: Vec<(Experience, f64)>,
     ) -> Result<ExperienceWithScore> {
         // Sort by similarity score (highest first)
-        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Take the best match
         let (experience, similarity) = candidates
@@ -234,13 +234,13 @@ impl ExperienceReplayLayer {
 
     /// Extract value after a keyword
     fn extract_after_keyword(&self, text: &str, keyword: &str) -> Result<Option<String>> {
-        if let Some(pos) = text.to_lowercase().find(&keyword.to_lowercase()) {
-            let after = &text[pos + keyword.len()..];
-            // Extract until next space or end
-            let value = after
-                .split_whitespace()
-                .next()
-                .map(|s| s.to_string());
+        let lower_text = text.to_lowercase();
+        let lower_keyword = keyword.to_lowercase();
+        if let Some(pos) = lower_text.find(&lower_keyword) {
+            // Find the correct char boundary in original text
+            let char_offset = text[..pos].chars().count() + keyword.chars().count();
+            let after: String = text.chars().skip(char_offset).collect();
+            let value = after.split_whitespace().next().map(|s| s.to_string());
             Ok(value)
         } else {
             Ok(None)

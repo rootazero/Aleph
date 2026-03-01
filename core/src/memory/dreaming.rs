@@ -430,8 +430,10 @@ impl DreamDaemon {
 
         // Apply fact decay — always update LanceDB directly,
         // and optionally emit StrengthDecayed events for audit.
-        let decay_factor = self.memory_decay.half_life_days;
+        let half_life_days = self.memory_decay.half_life_days;
         let min_strength = self.memory_decay.min_strength;
+
+        let now_ts = now_timestamp();
 
         if let Some(handler) = &self.command_handler {
             // Pre-compute per-fact decay data so we can emit events.
@@ -439,7 +441,11 @@ impl DreamDaemon {
             let decay_tuples: Vec<(String, f32, f32)> = valid_facts
                 .iter()
                 .filter_map(|fact| {
-                    let new_conf = fact.confidence * decay_factor;
+                    // Ebbinghaus exponential decay: exp(-t * ln(2) / half_life)
+                    let last_access = fact.last_accessed_at.unwrap_or(fact.updated_at);
+                    let days_since_access = (now_ts - last_access) as f64 / 86400.0;
+                    let decay = (-(days_since_access) * (2.0_f64.ln()) / half_life_days as f64).exp() as f32;
+                    let new_conf = fact.confidence * decay;
                     // Only record facts that actually change.
                     if (new_conf - fact.confidence).abs() > f32::EPSILON {
                         Some((fact.id.clone(), fact.confidence, new_conf))
@@ -454,20 +460,20 @@ impl DreamDaemon {
                 let _ = handler
                     .apply_decay(ApplyDecayCommand {
                         fact_ids_with_strength: decay_tuples,
-                        decay_factor,
+                        decay_factor: half_life_days,
                         correlation_id: None,
                     })
                     .await?;
             }
 
             // Still apply the actual LanceDB update.
-            let decayed_count = self.database.apply_fact_decay(decay_factor, min_strength).await?;
+            let decayed_count = self.database.apply_fact_decay(half_life_days, min_strength).await?;
             report.memory_decay = MemoryDecayReport {
                 updated_facts: decayed_count as u64,
                 pruned_facts: 0,
             };
         } else {
-            let decayed_count = self.database.apply_fact_decay(decay_factor, min_strength).await?;
+            let decayed_count = self.database.apply_fact_decay(half_life_days, min_strength).await?;
             report.memory_decay = MemoryDecayReport {
                 updated_facts: decayed_count as u64,
                 pruned_facts: 0,

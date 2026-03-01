@@ -461,7 +461,7 @@ impl MemoryStore for LanceMemoryBackend {
 
     async fn apply_fact_decay(
         &self,
-        decay_factor: f32,
+        half_life_days: f32,
         min_score: f32,
     ) -> Result<usize, AlephError> {
         // Fetch all valid facts.
@@ -474,10 +474,13 @@ impl MemoryStore for LanceMemoryBackend {
             .as_secs() as i64;
 
         for fact in &facts {
-            // Read the current decay_score from the stored fact.
-            // Since MemoryFact doesn't track decay_score directly, we
-            // compute a new effective score: confidence * decay_factor.
-            let new_confidence = fact.confidence * decay_factor;
+            // Compute days since last access (or creation if never accessed).
+            let last_access = fact.last_accessed_at.unwrap_or(fact.updated_at);
+            let days_since_access = (now - last_access) as f64 / 86400.0;
+
+            // Ebbinghaus exponential decay: exp(-t * ln(2) / half_life)
+            let decay = (-(days_since_access) * (2.0_f64.ln()) / half_life_days as f64).exp() as f32;
+            let new_confidence = fact.confidence * decay;
 
             if new_confidence < min_score {
                 // Invalidate the fact due to decay.

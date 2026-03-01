@@ -342,7 +342,7 @@ impl<W: Worker> PoeManager<W> {
             // Emit: operation attempted
             self.emit_event(&task.manifest.task_id, PoeEvent::OperationAttempted {
                 task_id: task.manifest.task_id.clone(),
-                attempt: budget.current_attempt + 1,
+                attempt: budget.current_attempt.saturating_add(1),
                 tokens_used: output.tokens_consumed,
             });
 

@@ -53,11 +53,11 @@ impl WaitTimeTracker {
         let map = self.enqueued_at.read().await;
 
         if let Some((_lane, enqueued_at)) = map.get(run_id) {
-            let wait_ms = (current_time - enqueued_at) as u64;
+            let wait_ms = (current_time - enqueued_at).max(0) as u64;
 
             if wait_ms > threshold_ms {
                 // Calculate boost: +boost_per_30s per 30 seconds over threshold
-                let boost = ((wait_ms - threshold_ms) / 30_000) as i8 * boost_per_30s;
+                let boost = (((wait_ms - threshold_ms) / 30_000).min(127) as i8).saturating_mul(boost_per_30s);
                 boost.min(10)
             } else {
                 0
@@ -80,7 +80,7 @@ impl WaitTimeTracker {
         let map = self.enqueued_at.read().await;
 
         if let Some((_lane, enqueued_at)) = map.get(run_id) {
-            (current_time - enqueued_at) as u64
+            (current_time - enqueued_at).max(0) as u64
         } else {
             0
         }
@@ -94,7 +94,7 @@ impl WaitTimeTracker {
 
         map.iter()
             .map(|(run_id, (lane, enqueued_at))| {
-                let wait_ms = (current_time - enqueued_at) as u64;
+                let wait_ms = (current_time - enqueued_at).max(0) as u64;
                 (run_id.clone(), *lane, wait_ms)
             })
             .collect()
