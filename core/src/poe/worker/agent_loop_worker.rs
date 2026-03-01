@@ -121,13 +121,13 @@ where
                 total_tokens,
             } => {
                 let mut out = WorkerOutput::completed(summary);
-                out.tokens_consumed = total_tokens as u32;
-                out.steps_taken = steps as u32;
+                out.tokens_consumed = total_tokens.min(u32::MAX as usize) as u32;
+                out.steps_taken = steps.min(u32::MAX as usize) as u32;
                 out
             }
             LoopResult::Failed { reason, steps } => {
                 let mut out = WorkerOutput::failed(reason);
-                out.steps_taken = steps as u32;
+                out.steps_taken = steps.min(u32::MAX as usize) as u32;
                 out
             }
             LoopResult::GuardTriggered(violation) => {
