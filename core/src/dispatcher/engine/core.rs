@@ -403,6 +403,15 @@ impl AgentEngine {
             self.monitor.update_graph_progress(&graph);
         }
 
+        // Mark remaining tasks as Cancelled if execution was cancelled
+        if self.cancelled.load(Ordering::SeqCst) {
+            for task in &mut graph.tasks {
+                if task.is_pending() || task.is_running() {
+                    task.status = TaskStatus::Cancelled;
+                }
+            }
+        }
+
         // Build summary
         let counts = graph.count_by_status();
         let summary = ExecutionSummary {
@@ -426,7 +435,10 @@ impl AgentEngine {
                 .collect(),
         };
 
-        *self.state.write().await = ExecutionState::Completed;
+        // Don't overwrite Cancelled state with Completed
+        if !self.cancelled.load(Ordering::SeqCst) {
+            *self.state.write().await = ExecutionState::Completed;
+        }
         self.monitor.on_graph_complete(&graph);
 
         info!(
