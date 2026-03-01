@@ -9,15 +9,58 @@ use std::path::{Path, PathBuf};
 /// Characters that indicate unsafe command constructs
 const DISALLOWED_CHARS: &[char] = &['`', '\n', '\r'];
 
+/// Check for subshell substitution patterns outside of quoted strings.
+/// Detects `$(...)` which can be used to inject arbitrary commands.
+fn contains_unquoted_subshell(command: &str) -> bool {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    let mut prev = '\0';
+
+    for ch in command.chars() {
+        if escaped {
+            escaped = false;
+            prev = ch;
+            continue;
+        }
+
+        match ch {
+            '\\' if !in_single => {
+                escaped = true;
+                prev = ch;
+                continue;
+            }
+            '\'' if !in_double => {
+                in_single = !in_single;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+            }
+            '(' if prev == '$' && !in_single => {
+                // $( found outside single quotes — subshell substitution
+                return true;
+            }
+            _ => {}
+        }
+        prev = ch;
+    }
+    false
+}
+
 /// Analyze a shell command
 pub fn analyze_shell_command(
     command: &str,
     cwd: Option<&Path>,
     env: Option<&HashMap<String, String>>,
 ) -> CommandAnalysis {
-    // Check for disallowed characters
+    // Check for disallowed characters (backticks, newlines)
     if command.chars().any(|c| DISALLOWED_CHARS.contains(&c)) {
         return CommandAnalysis::error("command contains disallowed characters");
+    }
+
+    // Check for $() subshell substitution
+    if contains_unquoted_subshell(command) {
+        return CommandAnalysis::error("subshell substitution $() is not allowed");
     }
 
     // Split by chain operators (&&, ||, ;)
@@ -381,5 +424,56 @@ mod tests {
         let analysis = analyze_shell_command("cd /tmp && ls | grep foo; echo done", None, None);
         assert!(analysis.ok);
         assert_eq!(analysis.chains.as_ref().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_analyze_subshell_dollar_paren_blocked() {
+        let analysis = analyze_shell_command("echo $(whoami)", None, None);
+        assert!(!analysis.ok);
+        assert!(analysis.reason.as_deref().unwrap().contains("subshell"));
+    }
+
+    #[test]
+    fn test_analyze_nested_subshell_blocked() {
+        let analysis = analyze_shell_command("echo $(cat $(pwd)/file)", None, None);
+        assert!(!analysis.ok);
+    }
+
+    #[test]
+    fn test_analyze_subshell_in_single_quotes_allowed() {
+        // Single-quoted strings are literal — $() inside them is safe
+        let analysis = analyze_shell_command("echo '$(whoami)'", None, None);
+        assert!(analysis.ok);
+    }
+
+    #[test]
+    fn test_analyze_subshell_in_double_quotes_blocked() {
+        // Double-quoted $() is still evaluated by shell
+        let analysis = analyze_shell_command(r#"echo "$(whoami)""#, None, None);
+        assert!(!analysis.ok);
+    }
+
+    #[test]
+    fn test_analyze_dollar_var_allowed() {
+        // Plain $VAR is not a subshell substitution
+        let analysis = analyze_shell_command("echo $HOME", None, None);
+        assert!(analysis.ok);
+    }
+
+    #[test]
+    fn test_analyze_dollar_brace_allowed() {
+        // ${VAR} is variable expansion, not subshell
+        let analysis = analyze_shell_command("echo ${HOME}", None, None);
+        assert!(analysis.ok);
+    }
+
+    #[test]
+    fn test_contains_unquoted_subshell() {
+        assert!(contains_unquoted_subshell("$(whoami)"));
+        assert!(contains_unquoted_subshell("echo $(id)"));
+        assert!(!contains_unquoted_subshell("echo '$(safe)'"));
+        assert!(contains_unquoted_subshell(r#"echo "$(unsafe)""#));
+        assert!(!contains_unquoted_subshell("echo $HOME"));
+        assert!(!contains_unquoted_subshell("echo ${HOME}"));
     }
 }

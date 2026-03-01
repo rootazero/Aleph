@@ -40,6 +40,17 @@ impl BashOpsHandler {
 #[async_trait]
 impl BashOps for BashOpsHandler {
     async fn execute(&self, command: &str, cwd: Option<&str>) -> Result<AtomicResult> {
+        // Security gate: validate command through exec parser before execution
+        let analysis = crate::exec::parser::analyze_shell_command(command, None, None);
+        if !analysis.ok {
+            let reason = analysis.reason.unwrap_or_else(|| "command rejected by security check".to_string());
+            return Ok(AtomicResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("Security: {}", reason)),
+            });
+        }
+
         let work_dir = if let Some(cwd) = cwd {
             PathBuf::from(cwd)
         } else {

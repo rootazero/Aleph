@@ -132,10 +132,28 @@ impl IpcServer {
     }
 
     async fn handle_shutdown(id: Value) -> String {
-        // TODO: Implement graceful shutdown
+        // Send response first, then initiate shutdown
         let response = JsonRpcResponse::new(id, serde_json::json!({"shutting_down": true}));
-        serde_json::to_string(&response).unwrap_or_else(|e| {
+        let reply = serde_json::to_string(&response).unwrap_or_else(|e| {
                 format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}},"id":null}}"#, e)
-            })
+            });
+
+        // Schedule graceful shutdown after response is sent.
+        // Use a short delay to allow the response to be flushed to the client.
+        tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            tracing::info!("Initiating graceful daemon shutdown via IPC");
+            // Send SIGTERM to self for graceful shutdown via the signal handler
+            #[cfg(unix)]
+            {
+                unsafe { libc::kill(libc::getpid(), libc::SIGTERM); }
+            }
+            #[cfg(not(unix))]
+            {
+                std::process::exit(0);
+            }
+        });
+
+        reply
     }
 }

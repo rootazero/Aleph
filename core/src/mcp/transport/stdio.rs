@@ -164,38 +164,81 @@ impl StdioTransport {
         // Put stdin back - we're done writing
         child.stdin = Some(stdin);
 
-        // Read response with timeout
+        // Read response with timeout, skipping any server notifications.
+        // Per JSON-RPC 2.0, servers may send notifications (no "id" field)
+        // interleaved with responses. We read lines until we find one whose
+        // "id" matches our request, or until timeout/EOF.
         let mut reader = BufReader::new(stdout);
-        let mut response_line = String::new();
+        let read_result = timeout(self.timeout, async {
+            let mut line = String::new();
+            loop {
+                line.clear();
+                let bytes_read = reader.read_line(&mut line).await?;
+                if bytes_read == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        format!("MCP server '{}' closed connection", self.server_name),
+                    ));
+                }
 
-        let read_result = timeout(self.timeout, reader.read_line(&mut response_line)).await;
+                let trimmed = line.trim();
+                // Quick check: does this line contain an "id" field?
+                // Parse as generic JSON to inspect.
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    if let Some(id_val) = value.get("id") {
+                        // Has "id" — this is a response. Check if it matches our request.
+                        if let Some(id_num) = id_val.as_u64() {
+                            if id_num == request_id {
+                                // Parse as proper response
+                                let response: JsonRpcResponse =
+                                    serde_json::from_value(value).map_err(|e| {
+                                        std::io::Error::new(
+                                            std::io::ErrorKind::InvalidData,
+                                            format!("Failed to parse response: {} (raw: {})", e, trimmed),
+                                        )
+                                    })?;
+                                return Ok(response);
+                            }
+                        }
+                        // Response with different id — log warning and continue
+                        tracing::warn!(
+                            server = %self.server_name,
+                            expected_id = request_id,
+                            received_id = %id_val,
+                            "Received response with unexpected id, skipping"
+                        );
+                    } else {
+                        // No "id" field — this is a server notification, skip it
+                        let method = value.get("method").and_then(|m| m.as_str()).unwrap_or("unknown");
+                        tracing::debug!(
+                            server = %self.server_name,
+                            notification_method = method,
+                            "Skipping server notification while waiting for response"
+                        );
+                    }
+                } else {
+                    // Not valid JSON — log and skip
+                    tracing::warn!(
+                        server = %self.server_name,
+                        "Received non-JSON line from server, skipping: {}",
+                        trimmed
+                    );
+                }
+            }
+        })
+        .await;
 
         // Put stdout back
         child.stdout = Some(reader.into_inner());
 
         match read_result {
-            Ok(Ok(0)) => Err(AlephError::IoError(format!(
-                "MCP server '{}' closed connection",
-                self.server_name
-            ))),
-            Ok(Ok(_)) => {
-                let response: JsonRpcResponse = serde_json::from_str(response_line.trim())
-                    .map_err(|e| {
-                        AlephError::IoError(format!(
-                            "Failed to parse response from '{}': {} (raw: {})",
-                            self.server_name,
-                            e,
-                            response_line.trim()
-                        ))
-                    })?;
-
+            Ok(Ok(response)) => {
                 tracing::debug!(
                     server = %self.server_name,
                     id = response.id,
                     success = response.is_success(),
                     "Received JSON-RPC response"
                 );
-
                 Ok(response)
             }
             Ok(Err(e)) => Err(AlephError::IoError(format!(

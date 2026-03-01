@@ -26,6 +26,7 @@ fn arb_loop_step(step_id: usize) -> impl Strategy<Value = LoopStep> {
                 summary: "done".to_string(),
             },
             structured: None,
+            tokens_used: None,
         },
         action: Action::Completion {
             summary: "done".to_string(),
@@ -51,6 +52,7 @@ fn arb_loop_steps(max_len: usize) -> impl Strategy<Value = Vec<LoopStep>> {
                         summary: "done".to_string(),
                     },
                     structured: None,
+                    tokens_used: None,
                 },
                 action: Action::Completion {
                     summary: "done".to_string(),

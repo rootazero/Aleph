@@ -180,6 +180,7 @@ mod tests {
                     summary: "done".into(),
                 },
                 structured: None,
+                tokens_used: None,
             },
             action: Action::Completion {
                 summary: "done".into(),

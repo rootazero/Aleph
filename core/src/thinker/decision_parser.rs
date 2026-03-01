@@ -46,6 +46,7 @@ impl DecisionParser {
                 reasoning: Some("Protocol token response".to_string()),
                 decision,
                 structured: None,
+                tokens_used: None,
             });
         }
 
@@ -99,6 +100,7 @@ impl DecisionParser {
             reasoning: llm_response.reasoning,
             decision,
             structured,
+            tokens_used: None,
         })
     }
 
@@ -139,6 +141,7 @@ impl DecisionParser {
                     reason: "Could not parse response into valid action".to_string(),
                 },
                 structured,
+                tokens_used: None,
             })
         }
     }
@@ -238,7 +241,7 @@ impl DecisionParser {
         };
 
         let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
-        Some(Thinking { reasoning, decision, structured })
+        Some(Thinking { reasoning, decision, structured, tokens_used: None })
     }
 
     /// Extract JSON from response (handles markdown code blocks)
@@ -490,6 +493,7 @@ impl DecisionParser {
                         arguments: Value::Object(serde_json::Map::new()),
                     },
                     structured,
+                    tokens_used: None,
                 });
             }
         }
@@ -523,6 +527,7 @@ impl DecisionParser {
                         summary: response.to_string(),
                     },
                     structured,
+                    tokens_used: None,
                 });
             }
         }
