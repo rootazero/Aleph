@@ -13,6 +13,23 @@ use tokio::sync::Semaphore;
 use super::{LaneConfig, LaneState, RecursionTracker, WaitTimeTracker};
 use crate::agents::sub_agents::Lane;
 
+/// RAII guard for scheduled run permits.
+///
+/// Holds references to both the global and lane semaphores.
+/// On drop, automatically releases one permit to each semaphore.
+/// This ensures permits are returned even if the task panics.
+pub struct ScheduleGuard {
+    global_semaphore: Arc<Semaphore>,
+    lane_semaphore: Arc<Semaphore>,
+}
+
+impl Drop for ScheduleGuard {
+    fn drop(&mut self) {
+        self.global_semaphore.add_permits(1);
+        self.lane_semaphore.add_permits(1);
+    }
+}
+
 /// Main scheduling engine for multi-lane coordination
 pub struct LaneScheduler {
     /// Per-lane state (queue + semaphore)
@@ -72,7 +89,7 @@ impl LaneScheduler {
     /// 2. Iterates lanes by priority (highest first), with anti-starvation boosts applied
     /// 3. For each lane, checks lane capacity
     /// 4. Dequeues a run if both have capacity
-    pub async fn try_schedule_next(&self) -> Option<(String, Lane)> {
+    pub async fn try_schedule_next(&self) -> Option<(String, Lane, ScheduleGuard)> {
         // Check if we have global capacity
         if self.global_semaphore.available_permits() == 0 {
             return None;
@@ -117,12 +134,17 @@ impl LaneScheduler {
                         // Remove from wait tracker (no longer waiting)
                         self.wait_tracker.remove(&run_id).await;
 
-                        // Mark as running and forget the permits (they'll be released on complete)
+                        // Mark as running; permits are held by the ScheduleGuard
                         state.mark_running(run_id.clone()).await;
                         std::mem::forget(global_permit);
                         std::mem::forget(lane_permit);
 
-                        return Some((run_id, lane));
+                        let guard = ScheduleGuard {
+                            global_semaphore: Arc::clone(&self.global_semaphore),
+                            lane_semaphore: Arc::clone(state.semaphore()),
+                        };
+
+                        return Some((run_id, lane, guard));
                     }
                 }
             }
@@ -131,14 +153,22 @@ impl LaneScheduler {
         None
     }
 
-    /// Mark a run as completed (releases permits)
-    pub async fn on_run_complete(&self, run_id: &str, lane: Lane) {
+    /// Mark a run as completed.
+    ///
+    /// If a `ScheduleGuard` is provided, it is consumed and permits are released
+    /// via RAII drop. If `None`, permits are released manually (for cleanup paths
+    /// where no guard was acquired, e.g., recursion tracking cleanup).
+    pub async fn on_run_complete(&self, run_id: &str, lane: Lane, guard: Option<ScheduleGuard>) {
         if let Some(state) = self.lanes.get(&lane) {
             state.complete(run_id).await;
-            // Release permits by adding them back
-            self.global_semaphore.add_permits(1);
-            state.semaphore().add_permits(1);
+            // If no guard, manually release permits (cleanup path)
+            if guard.is_none() {
+                self.global_semaphore.add_permits(1);
+                state.semaphore().add_permits(1);
+            }
         }
+        // Guard drops here if Some, releasing both permits via RAII
+        drop(guard);
         // Also remove from wait tracker in case it's still there
         self.wait_tracker.remove(run_id).await;
         // Remove from recursion tracking
@@ -288,7 +318,7 @@ mod tests {
 
         let scheduled = scheduler.try_schedule_next().await;
         assert!(scheduled.is_some());
-        let (run_id, lane) = scheduled.unwrap();
+        let (run_id, lane, _guard) = scheduled.unwrap();
         assert_eq!(run_id, "run-1");
         assert_eq!(lane, Lane::Main);
 
@@ -391,11 +421,12 @@ mod tests {
         scheduler.enqueue("run-1".to_string(), Lane::Main).await;
         let scheduled = scheduler.try_schedule_next().await;
         assert!(scheduled.is_some());
+        let (_run_id, _lane, guard) = scheduled.unwrap();
 
         let stats_before = scheduler.stats().await;
         assert_eq!(stats_before.total_running, 1);
 
-        scheduler.on_run_complete("run-1", Lane::Main).await;
+        scheduler.on_run_complete("run-1", Lane::Main, Some(guard)).await;
 
         let stats_after = scheduler.stats().await;
         assert_eq!(stats_after.total_running, 0);
@@ -415,8 +446,8 @@ mod tests {
         assert_eq!(stats.total_running, 0);
         assert_eq!(stats.global_available_permits, 16);
 
-        // Schedule one
-        scheduler.try_schedule_next().await;
+        // Schedule one (keep guard alive to hold permit)
+        let _guard = scheduler.try_schedule_next().await;
 
         let stats = scheduler.stats().await;
         assert_eq!(stats.total_queued, 2);
@@ -443,8 +474,8 @@ mod tests {
             .await;
         assert!(wait_time < 1000); // Should be very small (just enqueued)
 
-        // Schedule the run
-        scheduler.try_schedule_next().await;
+        // Schedule the run (keep guard alive to hold permit)
+        let _guard = scheduler.try_schedule_next().await;
 
         // After scheduling, should be removed from tracker
         let wait_time_after = scheduler
@@ -522,8 +553,9 @@ mod tests {
         assert!(wait_time < 1000);
 
         // Schedule and complete
-        scheduler.try_schedule_next().await;
-        scheduler.on_run_complete("run-1", Lane::Main).await;
+        let scheduled = scheduler.try_schedule_next().await;
+        let guard = scheduled.map(|(_, _, g)| g);
+        scheduler.on_run_complete("run-1", Lane::Main, guard).await;
 
         // Should be removed from tracker
         let wait_time_after = scheduler
@@ -594,8 +626,8 @@ mod tests {
         scheduler.record_spawn("parent", "child").await;
         assert_eq!(scheduler.get_recursion_depth("child").await, 1);
 
-        // Complete the child run
-        scheduler.on_run_complete("child", Lane::Main).await;
+        // Complete the child run (no guard — only recursion tracking cleanup)
+        scheduler.on_run_complete("child", Lane::Main, None).await;
 
         // Should be removed from recursion tracking
         assert_eq!(scheduler.get_recursion_depth("child").await, 0);

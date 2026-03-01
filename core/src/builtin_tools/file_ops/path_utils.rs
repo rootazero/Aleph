@@ -73,8 +73,12 @@ pub fn check_and_resolve_path(path: &Path, denied_paths: &[String]) -> Result<Pa
             result = result.replace("$USER", &user);
         }
 
-        // Expand other common environment variables
-        for (key, value) in std::env::vars() {
+        // Expand other common environment variables.
+        // Sort by key length (longest first) to prevent shorter names
+        // matching as prefixes of longer ones (e.g., $HOME before $HOMEDIR).
+        let mut env_vars: Vec<(String, String)> = std::env::vars().collect();
+        env_vars.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        for (key, value) in env_vars {
             let pattern = format!("${}", key);
             if result.contains(&pattern) {
                 result = result.replace(&pattern, &value);
