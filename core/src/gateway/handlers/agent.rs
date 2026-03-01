@@ -235,7 +235,7 @@ async fn execute_agent_run(
     for (i, chunk) in chunks.iter().enumerate() {
         let is_final = i == chunks.len() - 1;
         emitter
-            .emit_response_chunk(&run_id, &chunk, i as u32, is_final)
+            .emit_response_chunk(&run_id, chunk, i as u32, is_final)
             .await;
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     }
