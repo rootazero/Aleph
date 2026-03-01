@@ -163,8 +163,8 @@ impl SessionKey {
     ) -> Self {
         Self::Task {
             agent_id: normalize_agent_id(&agent_id.into()),
-            task_type: task_type.into(),
-            task_id: task_id.into(),
+            task_type: normalize_agent_id(&task_type.into()),
+            task_id: normalize_agent_id(&task_id.into()),
         }
     }
 
