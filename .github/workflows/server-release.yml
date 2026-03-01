@@ -44,7 +44,7 @@ jobs:
             target: aarch64-apple-darwin
             features: control-plane,desktop
             asset: aleph-server-darwin-aarch64
-          - os: macos-latest
+          - os: macos-13
             target: x86_64-apple-darwin
             features: control-plane,desktop
             asset: aleph-server-darwin-x86_64
@@ -58,7 +58,7 @@ jobs:
             asset: aleph-server-linux-aarch64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            features: control-plane,desktop
+            features: control-plane
             asset: aleph-server-windows-x86_64.exe
     runs-on: ${{ matrix.os }}
     steps:
@@ -77,7 +77,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Install protoc (macOS)
-        if: matrix.os == 'macos-latest'
+        if: startsWith(matrix.os, 'macos')
         run: brew install protobuf
 
       - name: Install protoc (Windows)
@@ -135,23 +135,36 @@ jobs:
 
       # ── Linux build dependencies ──
 
-      - name: Install Linux desktop libraries
+      - name: Install Linux system libraries
         if: matrix.os == 'ubuntu-22.04' && matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev \
-            libxcb-xfixes0-dev libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev \
-            libxss-dev libx11-dev
+          sudo apt-get install -y \
+            libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev \
+            libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev libx11-dev \
+            libssl-dev libwayland-dev libgtk-3-dev libsoup-3.0-dev libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev
 
       - name: Install cross-compilation tools
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
+          sudo dpkg --add-architecture arm64
+          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+          echo 'deb [arch=arm64] http://ports.ubuntu.com/ jammy main restricted universe multiverse' | sudo tee /etc/apt/sources.list.d/arm64.list
+          echo 'deb [arch=arm64] http://ports.ubuntu.com/ jammy-updates main restricted universe multiverse' | sudo tee -a /etc/apt/sources.list.d/arm64.list
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu libssl-dev:arm64
           echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
           echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
 
       # ── Server build ──
+
+      - name: Set cross-compile env (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
 
       - name: Build server
         run: cargo build --bin aleph-server --features ${{ matrix.features }} --release --target ${{ matrix.target }}
