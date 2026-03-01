@@ -110,7 +110,7 @@ impl MessageSender {
         debug!("Sending file to {}: {}", to, file_path.display());
 
         let escaped_to = escape_applescript_string(to);
-        let file_path_str = file_path.to_string_lossy();
+        let escaped_path = escape_applescript_string(&file_path.to_string_lossy());
 
         // Build the AppleScript for file sending
         let script = format!(
@@ -122,7 +122,7 @@ impl MessageSender {
                 send theFile to targetBuddy
             end tell
             "#,
-            escaped_to, file_path_str
+            escaped_to, escaped_path
         );
 
         execute_applescript(&script).await?;

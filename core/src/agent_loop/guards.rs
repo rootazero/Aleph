@@ -191,7 +191,11 @@ impl ToolCallRecord {
         if args_str.len() <= max_len {
             args_str
         } else {
-            format!("{}...", &args_str[..max_len])
+            let mut end = max_len;
+            while end > 0 && !args_str.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...", &args_str[..end])
         }
     }
 }

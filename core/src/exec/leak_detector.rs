@@ -172,7 +172,11 @@ impl LeakDetector {
             if let Some(m) = pattern.regex.find(content) {
                 let matched = m.as_str();
                 let truncated = if matched.len() > 20 {
-                    format!("{}...", &matched[..20])
+                    let mut end = 20;
+                    while end > 0 && !matched.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    format!("{}...", &matched[..end])
                 } else {
                     matched.to_string()
                 };

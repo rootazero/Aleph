@@ -271,7 +271,7 @@ impl CortexDreamingService {
         }
 
         // Sort by score (highest first)
-        scored_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        scored_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         info!(
             "Filtered to {} high-value experiences",

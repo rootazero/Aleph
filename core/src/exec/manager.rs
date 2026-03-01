@@ -185,7 +185,7 @@ impl ExecApprovalManager {
 
         // Add to pending
         {
-            let mut pending = self.pending.write().expect("pending lock poisoned");
+            let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
             pending.insert(
                 id.clone(),
                 PendingEntry {
@@ -201,7 +201,7 @@ impl ExecApprovalManager {
 
         // Remove from pending
         {
-            let mut pending = self.pending.write().expect("pending lock poisoned");
+            let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
             pending.remove(&id);
         }
 
@@ -240,7 +240,7 @@ impl ExecApprovalManager {
         decision: ApprovalDecisionType,
         resolved_by: Option<String>,
     ) -> bool {
-        let mut pending = self.pending.write().expect("pending lock poisoned");
+        let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
 
         if let Some(entry) = pending.get_mut(id) {
             // Update record
@@ -249,7 +249,7 @@ impl ExecApprovalManager {
             entry.record.resolved_at_ms = Some(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_millis() as u64,
             );
 
@@ -268,7 +268,7 @@ impl ExecApprovalManager {
 
     /// Get snapshot of a pending approval
     pub fn get_pending(&self, id: &str) -> Option<PendingApproval> {
-        let pending = self.pending.read().expect("pending lock poisoned");
+        let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
         pending.get(id).map(|entry| {
             let now = Instant::now();
             let elapsed = now.duration_since(entry.created_at);
@@ -287,7 +287,7 @@ impl ExecApprovalManager {
 
     /// List all pending approvals
     pub fn list_pending(&self) -> Vec<PendingApproval> {
-        let pending = self.pending.read().expect("pending lock poisoned");
+        let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
 
         pending
@@ -312,7 +312,7 @@ impl ExecApprovalManager {
     pub fn get_config(&self) -> Result<ConfigWithHash, StorageError> {
         // Try cache first
         {
-            let cache = self.config_cache.read().expect("config cache lock poisoned");
+            let cache = self.config_cache.read().unwrap_or_else(|e| e.into_inner());
             if let Some(ref cached) = *cache {
                 return Ok(cached.clone());
             }
@@ -323,7 +323,7 @@ impl ExecApprovalManager {
 
         // Update cache
         {
-            let mut cache = self.config_cache.write().expect("config cache lock poisoned");
+            let mut cache = self.config_cache.write().unwrap_or_else(|e| e.into_inner());
             *cache = Some(loaded.clone());
         }
 
@@ -349,7 +349,7 @@ impl ExecApprovalManager {
 
         // Update cache
         {
-            let mut cache = self.config_cache.write().expect("config cache lock poisoned");
+            let mut cache = self.config_cache.write().unwrap_or_else(|e| e.into_inner());
             *cache = Some(ConfigWithHash {
                 config,
                 hash: new_hash.clone(),
@@ -361,7 +361,7 @@ impl ExecApprovalManager {
 
     /// Invalidate config cache (force reload on next access)
     pub fn invalidate_cache(&self) {
-        let mut cache = self.config_cache.write().expect("config cache lock poisoned");
+        let mut cache = self.config_cache.write().unwrap_or_else(|e| e.into_inner());
         *cache = None;
     }
 
@@ -407,7 +407,7 @@ impl ExecApprovalManager {
 
     /// Clean up expired pending requests
     pub fn cleanup_expired(&self) {
-        let mut pending = self.pending.write().expect("pending lock poisoned");
+        let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
 
         pending.retain(|id, entry| {

@@ -96,7 +96,7 @@ impl WizardSessionManager {
 
         // Store the session first
         {
-            let mut sessions = self.sessions.write().expect("lock poisoned");
+            let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
             sessions.insert(session_id.clone(), session.clone());
         }
 
@@ -110,7 +110,7 @@ impl WizardSessionManager {
     pub async fn next(&self, session_id: &str, answer: Option<Value>) -> Result<WizardNextResult, WizardSessionError> {
         // Get the session (clone Arc, release lock immediately)
         let session = {
-            let sessions = self.sessions.read().expect("lock poisoned");
+            let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
             sessions.get(session_id).cloned()
         };
 
@@ -136,7 +136,7 @@ impl WizardSessionManager {
 
         // Clean up if done
         if result.done {
-            let mut sessions = self.sessions.write().expect("lock poisoned");
+            let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
             sessions.remove(session_id);
         }
 
@@ -147,7 +147,7 @@ impl WizardSessionManager {
     pub async fn answer(&self, session_id: &str, step_id: &str, value: Value) -> Result<(), WizardSessionError> {
         // Get the session (clone Arc, release lock immediately)
         let session = {
-            let sessions = self.sessions.read().expect("lock poisoned");
+            let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
             sessions.get(session_id).cloned()
         };
 
@@ -163,19 +163,19 @@ impl WizardSessionManager {
     /// Removes the session from the manager. When the Arc is dropped,
     /// the session's channels will close, triggering cancellation.
     pub fn cancel(&self, session_id: &str) -> bool {
-        let mut sessions = self.sessions.write().expect("lock poisoned");
+        let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
         sessions.remove(session_id).is_some()
     }
 
     /// Get session status
     pub fn status(&self, session_id: &str) -> Option<WizardStatus> {
-        let sessions = self.sessions.read().expect("lock poisoned");
+        let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
         sessions.get(session_id).map(|s| s.status())
     }
 
     /// Get a session by ID
     pub fn get_session(&self, session_id: &str) -> Option<Arc<WizardSession>> {
-        let sessions = self.sessions.read().expect("lock poisoned");
+        let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
         sessions.get(session_id).cloned()
     }
 }

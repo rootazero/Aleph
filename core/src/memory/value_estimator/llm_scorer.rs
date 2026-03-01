@@ -147,7 +147,7 @@ impl LlmScorer {
 
                 debug!(
                     "LLM scorer cache hit for key: {} (score: {})",
-                    &cache_key[..8],
+                    &cache_key[..cache_key.len().min(8)],
                     cached_score
                 );
                 return Ok(cached_score);
@@ -263,7 +263,7 @@ impl LlmScorer {
             },
         );
 
-        debug!("Cached LLM score for key: {}", &key[..8]);
+        debug!("Cached LLM score for key: {}", &key[..key.len().min(8)]);
     }
 
     /// Build the scoring prompt

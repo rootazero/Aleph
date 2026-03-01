@@ -199,7 +199,7 @@ impl SearchFilter {
 
         if let Some(ref ns) = self.namespace {
             let val = ns.to_namespace_value();
-            clauses.push(format!("namespace = '{}'", val));
+            clauses.push(format!("namespace = '{}'", escape_sql_string(&val)));
         }
 
         if let Some(ref ws) = self.workspace {
@@ -326,16 +326,16 @@ impl MemoryFilter {
         let mut clauses: Vec<String> = Vec::new();
 
         if let Some(ref app_id) = self.app_bundle_id {
-            clauses.push(format!("app_bundle_id = '{}'", app_id));
+            clauses.push(format!("app_bundle_id = '{}'", escape_sql_string(app_id)));
         }
 
         if let Some(ref title) = self.window_title {
-            clauses.push(format!("window_title = '{}'", title));
+            clauses.push(format!("window_title = '{}'", escape_sql_string(title)));
         }
 
         if let Some(ref ns) = self.namespace {
             let val = ns.to_namespace_value();
-            clauses.push(format!("namespace = '{}'", val));
+            clauses.push(format!("namespace = '{}'", escape_sql_string(&val)));
         }
 
         if let Some(ref ws) = self.workspace {

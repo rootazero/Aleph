@@ -154,7 +154,7 @@ impl LaneScheduler {
     pub async fn sweep_anti_starvation(&self) -> usize {
         let current_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as i64;
 
         let threshold_ms = self.config.anti_starvation_threshold_ms;
@@ -434,7 +434,7 @@ mod tests {
         // Wait time should be tracked
         let current_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as i64;
 
         let wait_time = scheduler
@@ -513,7 +513,7 @@ mod tests {
         // Verify it's tracked
         let current_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as i64;
         let wait_time = scheduler
             .wait_tracker

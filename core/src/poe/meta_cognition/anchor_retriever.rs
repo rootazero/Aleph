@@ -36,7 +36,7 @@ impl AnchorRetriever {
         Self {
             anchor_store,
             tag_extractor,
-            cache: LruCache::new(NonZeroUsize::new(cache_size).unwrap()),
+            cache: LruCache::new(NonZeroUsize::new(cache_size.max(1)).unwrap()),
         }
     }
 

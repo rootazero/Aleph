@@ -488,7 +488,7 @@ pub async fn handle_pairing_approve(
         device_name: &device_name,
         device_type: None,
         public_key: &[0u8; 32], // placeholder public key
-        fingerprint: &device_id[..16], // use device_id prefix as fingerprint
+        fingerprint: &device_id[..16.min(device_id.len())], // use device_id prefix as fingerprint
         role: "operator",
         scopes: &["*".to_string()],
     }) {

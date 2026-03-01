@@ -403,7 +403,7 @@ impl AuthProfileManager {
         }
 
         let new_configs = ProfilesConfig::load(&self.config_path)?;
-        let mut configs = self.configs.write().unwrap();
+        let mut configs = self.configs.write().unwrap_or_else(|e| e.into_inner());
         *configs = new_configs;
 
         info!(
@@ -420,8 +420,8 @@ impl AuthProfileManager {
         provider: &str,
         agent_id: &str,
     ) -> ProfileManagerResult<EffectiveProfile> {
-        let configs = self.configs.read().unwrap();
-        let status_map = self.status.read().unwrap();
+        let configs = self.configs.read().unwrap_or_else(|e| e.into_inner());
+        let status_map = self.status.read().unwrap_or_else(|e| e.into_inner());
 
         // Get profiles for this provider sorted by tier
         let profiles = configs.profiles_for_provider(provider);
@@ -524,7 +524,7 @@ impl AuthProfileManager {
         profile_id: &str,
         reason: AuthProfileFailureReason,
     ) -> ProfileManagerResult<()> {
-        let mut status_map = self.status.write().unwrap();
+        let mut status_map = self.status.write().unwrap_or_else(|e| e.into_inner());
         let status = status_map
             .entry(profile_id.to_string())
             .or_default();
@@ -551,7 +551,7 @@ impl AuthProfileManager {
 
     /// Mark a profile as successful (resets failure count)
     pub fn mark_success(&self, profile_id: &str) -> ProfileManagerResult<()> {
-        let mut status_map = self.status.write().unwrap();
+        let mut status_map = self.status.write().unwrap_or_else(|e| e.into_inner());
         let status = status_map
             .entry(profile_id.to_string())
             .or_default();
@@ -575,7 +575,7 @@ impl AuthProfileManager {
         output_tokens: u64,
         cost_usd: f64,
     ) -> ProfileManagerResult<()> {
-        let mut agent_states = self.agent_states.write().unwrap();
+        let mut agent_states = self.agent_states.write().unwrap_or_else(|e| e.into_inner());
 
         // Load or get cached state
         let state = agent_states
@@ -611,8 +611,8 @@ impl AuthProfileManager {
 
     /// List all profiles with their current status
     pub fn list_profiles(&self) -> Vec<ProfileInfo> {
-        let configs = self.configs.read().unwrap();
-        let status_map = self.status.read().unwrap();
+        let configs = self.configs.read().unwrap_or_else(|e| e.into_inner());
+        let status_map = self.status.read().unwrap_or_else(|e| e.into_inner());
 
         configs
             .profiles
@@ -649,7 +649,7 @@ impl AuthProfileManager {
 
     /// Get profile count
     pub fn profile_count(&self) -> usize {
-        self.configs.read().unwrap().profiles.len()
+        self.configs.read().unwrap_or_else(|e| e.into_inner()).profiles.len()
     }
 
     /// Get agent state path
@@ -659,7 +659,7 @@ impl AuthProfileManager {
 
     /// Load agent state (with caching)
     fn load_agent_state(&self, agent_id: &str) -> ProfileManagerResult<AgentState> {
-        let agent_states = self.agent_states.read().unwrap();
+        let agent_states = self.agent_states.read().unwrap_or_else(|e| e.into_inner());
         if let Some(state) = agent_states.get(agent_id) {
             return Ok(state.clone());
         }
@@ -668,7 +668,7 @@ impl AuthProfileManager {
         let path = self.agent_state_path(agent_id);
         let state = AgentState::load(&path)?;
 
-        let mut agent_states = self.agent_states.write().unwrap();
+        let mut agent_states = self.agent_states.write().unwrap_or_else(|e| e.into_inner());
         agent_states.insert(agent_id.to_string(), state.clone());
 
         Ok(state)
@@ -676,7 +676,7 @@ impl AuthProfileManager {
 
     /// Clear cooldown for a profile
     pub fn clear_cooldown(&self, profile_id: &str) -> ProfileManagerResult<()> {
-        let mut status_map = self.status.write().unwrap();
+        let mut status_map = self.status.write().unwrap_or_else(|e| e.into_inner());
         if let Some(status) = status_map.get_mut(profile_id) {
             status.cooldown_until = None;
             status.is_rate_limited = false;
@@ -692,7 +692,7 @@ impl AuthProfileManager {
         profile_id: &str,
         max_budget_usd: Option<f64>,
     ) -> ProfileManagerResult<()> {
-        let mut agent_states = self.agent_states.write().unwrap();
+        let mut agent_states = self.agent_states.write().unwrap_or_else(|e| e.into_inner());
 
         let state = agent_states
             .entry(agent_id.to_string())
@@ -726,7 +726,7 @@ impl AuthProfileManager {
         profile_id: &str,
         disabled: bool,
     ) -> ProfileManagerResult<()> {
-        let mut agent_states = self.agent_states.write().unwrap();
+        let mut agent_states = self.agent_states.write().unwrap_or_else(|e| e.into_inner());
 
         let state = agent_states
             .entry(agent_id.to_string())

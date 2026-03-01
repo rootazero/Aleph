@@ -228,18 +228,23 @@ fn find_common_prefix<'a>(paths: &'a [&'a str]) -> Option<&'a str> {
     }
 
     let first = paths[0];
-    let mut prefix_len = first.len();
+    let mut prefix_byte_len = first.len();
 
     for path in &paths[1..] {
-        prefix_len = first.chars()
-            .zip(path.chars())
+        let common_bytes = first.as_bytes().iter()
+            .zip(path.as_bytes().iter())
             .take_while(|(a, b)| a == b)
-            .count()
-            .min(prefix_len);
+            .count();
+        prefix_byte_len = prefix_byte_len.min(common_bytes);
     }
 
-    // Find last '/' before prefix_len
-    if let Some(pos) = first[..prefix_len].rfind('/') {
+    // Ensure we don't split a multi-byte character
+    while prefix_byte_len > 0 && !first.is_char_boundary(prefix_byte_len) {
+        prefix_byte_len -= 1;
+    }
+
+    // Find last '/' before prefix_byte_len
+    if let Some(pos) = first[..prefix_byte_len].rfind('/') {
         Some(&first[..=pos])
     } else {
         Some("/")
