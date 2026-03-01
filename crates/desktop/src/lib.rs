@@ -16,8 +16,9 @@
 //! ```
 //!
 //! The [`NativeDesktop`] struct implements [`DesktopCapability`] using real
-//! OS APIs. All methods are currently stubs returning `NotImplemented` —
-//! they will be filled in by subsequent tasks.
+//! OS APIs. Perception (screenshot, OCR) and action (click, type, scroll,
+//! key combo, app launch, window management) are implemented; only
+//! `capabilities()` remains a stub.
 
 pub mod action;
 pub mod error;
@@ -163,15 +164,16 @@ pub trait DesktopCapability: Send + Sync {
     async fn launch_app(&self, app_name: &str) -> Result<()>;
 }
 
-// ── NativeDesktop (stub implementation) ─────────────────────────
+// ── NativeDesktop ────────────────────────────────────────────────
 
 /// Native desktop implementation using OS APIs.
 ///
 /// Uses `xcap` for screen capture, `enigo` for input automation, and
 /// platform-specific APIs for OCR and window management.
 ///
-/// Currently all methods return `DesktopError::NotImplemented` — they
-/// will be filled in by subsequent tasks.
+/// Most methods delegate to the `perception` and `action` modules via
+/// `tokio::task::spawn_blocking` since the underlying libraries are
+/// synchronous.
 pub struct NativeDesktop {
     _private: (),
 }
@@ -217,46 +219,51 @@ impl DesktopCapability for NativeDesktop {
             .map_err(|e| DesktopError::OcrFailed(format!("Task join error: {e}")))?
     }
 
-    async fn click(&self, _x: f64, _y: f64, _button: MouseButton) -> Result<()> {
-        Err(DesktopError::NotImplemented(
-            "click() not yet implemented".into(),
-        ))
+    async fn click(&self, x: f64, y: f64, button: MouseButton) -> Result<()> {
+        tokio::task::spawn_blocking(move || action::click(x, y, button))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("Task join error: {e}")))?
     }
 
-    async fn type_text(&self, _text: &str) -> Result<()> {
-        Err(DesktopError::NotImplemented(
-            "type_text() not yet implemented".into(),
-        ))
+    async fn type_text(&self, text: &str) -> Result<()> {
+        let text = text.to_string();
+        tokio::task::spawn_blocking(move || action::type_text(&text))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("Task join error: {e}")))?
     }
 
-    async fn key_combo(&self, _modifiers: &[String], _key: &str) -> Result<()> {
-        Err(DesktopError::NotImplemented(
-            "key_combo() not yet implemented".into(),
-        ))
+    async fn key_combo(&self, modifiers: &[String], key: &str) -> Result<()> {
+        let modifiers = modifiers.to_vec();
+        let key = key.to_string();
+        tokio::task::spawn_blocking(move || action::key_combo(&modifiers, &key))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("Task join error: {e}")))?
     }
 
-    async fn scroll(&self, _direction: &str, _amount: i32) -> Result<()> {
-        Err(DesktopError::NotImplemented(
-            "scroll() not yet implemented".into(),
-        ))
+    async fn scroll(&self, direction: &str, amount: i32) -> Result<()> {
+        let direction = direction.to_string();
+        tokio::task::spawn_blocking(move || action::scroll(&direction, amount))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("Task join error: {e}")))?
     }
 
     async fn window_list(&self) -> Result<Vec<WindowInfo>> {
-        Err(DesktopError::NotImplemented(
-            "window_list() not yet implemented".into(),
-        ))
+        tokio::task::spawn_blocking(action::window_list)
+            .await
+            .map_err(|e| DesktopError::WindowFailed(format!("Task join error: {e}")))?
     }
 
-    async fn focus_window(&self, _window_id: u64) -> Result<()> {
-        Err(DesktopError::NotImplemented(
-            "focus_window() not yet implemented".into(),
-        ))
+    async fn focus_window(&self, window_id: u64) -> Result<()> {
+        tokio::task::spawn_blocking(move || action::focus_window(window_id))
+            .await
+            .map_err(|e| DesktopError::WindowFailed(format!("Task join error: {e}")))?
     }
 
-    async fn launch_app(&self, _app_name: &str) -> Result<()> {
-        Err(DesktopError::NotImplemented(
-            "launch_app() not yet implemented".into(),
-        ))
+    async fn launch_app(&self, app_name: &str) -> Result<()> {
+        let app_name = app_name.to_string();
+        tokio::task::spawn_blocking(move || action::launch_app(&app_name))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("Task join error: {e}")))?
     }
 }
 
@@ -270,55 +277,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stub_methods_return_not_implemented() {
+    async fn remaining_stubs_return_not_implemented() {
         let desktop = NativeDesktop::new();
 
+        // capabilities() is still a stub.
         assert!(matches!(
             desktop.capabilities().await,
             Err(DesktopError::NotImplemented(_))
         ));
 
-        // screenshot() is now implemented — it returns Ok or ScreenCapture error.
-        // See perception::tests for detailed validation.
+        // screenshot() is implemented — see perception::tests.
+        // ocr() is implemented — on non-Windows returns NotImplemented (from perform_ocr).
 
-        assert!(matches!(
-            desktop.click(0.0, 0.0, MouseButton::Left).await,
-            Err(DesktopError::NotImplemented(_))
-        ));
+        // Input actions (click, type_text, key_combo, scroll) are now implemented
+        // via enigo — they attempt real OS calls, so we don't test them in unit
+        // tests (they'd move the mouse / press keys).
 
-        assert!(matches!(
-            desktop.type_text("hello").await,
-            Err(DesktopError::NotImplemented(_))
-        ));
+        // Window management: on macOS, window_list and focus_window return NotImplemented.
+        #[cfg(target_os = "macos")]
+        {
+            assert!(matches!(
+                desktop.window_list().await,
+                Err(DesktopError::NotImplemented(_))
+            ));
 
-        assert!(matches!(
-            desktop.key_combo(&[], "a").await,
-            Err(DesktopError::NotImplemented(_))
-        ));
+            assert!(matches!(
+                desktop.focus_window(1).await,
+                Err(DesktopError::NotImplemented(_))
+            ));
+        }
 
-        assert!(matches!(
-            desktop.scroll("down", 3).await,
-            Err(DesktopError::NotImplemented(_))
-        ));
+        // key_combo with invalid input should return InputFailed, not NotImplemented.
+        let result = desktop.key_combo(&[], "").await;
+        assert!(
+            matches!(result, Err(DesktopError::InputFailed(_))),
+            "Expected InputFailed for empty key, got: {result:?}"
+        );
 
-        assert!(matches!(
-            desktop.window_list().await,
-            Err(DesktopError::NotImplemented(_))
-        ));
-
-        assert!(matches!(
-            desktop.focus_window(1).await,
-            Err(DesktopError::NotImplemented(_))
-        ));
-
-        assert!(matches!(
-            desktop.launch_app("test").await,
-            Err(DesktopError::NotImplemented(_))
-        ));
-
-        // ocr() is now implemented — on non-Windows it returns NotImplemented
-        // (from perform_ocr) or ScreenCapture (if no display when capturing).
-        // See perception::tests for detailed validation.
+        // scroll with invalid direction should return InputFailed.
+        let result = desktop.scroll("diagonal", 3).await;
+        assert!(
+            matches!(result, Err(DesktopError::InputFailed(_))),
+            "Expected InputFailed for invalid direction, got: {result:?}"
+        );
     }
 
     /// Verify that screenshot() via NativeDesktop returns correct types.
