@@ -79,6 +79,11 @@ mod agent_loop;
 #[cfg(feature = "cli")]
 pub mod callback_cli;
 
+#[cfg(test)]
+mod proptest_decision;
+#[cfg(test)]
+mod proptest_state;
+
 // Re-export public types
 pub use answer::UserAnswer;
 pub use builder::AgentLoopBuilder;

@@ -13,3 +13,8 @@ mod task;
 pub use graph::*;
 pub use result::*;
 pub use task::*;
+
+#[cfg(test)]
+mod proptest_graph;
+#[cfg(test)]
+mod proptest_task;
