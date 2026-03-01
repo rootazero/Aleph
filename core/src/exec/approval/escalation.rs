@@ -39,14 +39,20 @@ pub fn check_path_escalation(
             let path = resolve_path_with_symlinks(&PathBuf::from(value));
             let normalized_value = path.to_string_lossy();
 
-            // Check if normalized path is within approved paths
+            // Check if normalized path is within approved paths.
+            // Approved path prefixes are also resolved through symlinks so that
+            // both sides use the same canonical form (e.g. /tmp → /private/tmp on macOS).
             let is_approved = approved_paths.iter().any(|approved| {
-                // Simple glob matching (simplified)
                 if approved.ends_with("/*") {
                     let prefix = approved.trim_end_matches("/*");
-                    normalized_value.starts_with(prefix)
+                    let resolved_prefix = resolve_path_with_symlinks(&PathBuf::from(prefix));
+                    let resolved_prefix_str = resolved_prefix.to_string_lossy();
+                    normalized_value.starts_with(resolved_prefix_str.as_ref())
+                        || normalized_value.starts_with(prefix)
                 } else {
-                    *normalized_value == *approved
+                    let resolved_approved = resolve_path_with_symlinks(&PathBuf::from(approved));
+                    *normalized_value == *resolved_approved.to_string_lossy()
+                        || *normalized_value == *approved
                 }
             });
 
