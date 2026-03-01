@@ -205,12 +205,19 @@ impl ToolQuery {
     /// Get tool by name
     ///
     /// Searches for a tool by its command name (not full ID).
-    /// Returns the first match if multiple tools have the same name.
+    /// When multiple tools match, returns the one with the highest source
+    /// priority (deterministic: breaks ties by lexicographically smallest ID).
     pub async fn get_by_name(&self, name: &str) -> Option<UnifiedTool> {
         let tools = self.tools.read().await;
         tools
             .values()
-            .find(|t| t.name == name || t.id.ends_with(&format!(":{}", name)))
+            .filter(|t| t.name == name || t.id.ends_with(&format!(":{}", name)))
+            .max_by(|a, b| {
+                a.source
+                    .priority()
+                    .cmp(&b.source.priority())
+                    .then_with(|| b.id.cmp(&a.id)) // smaller ID wins on tie
+            })
             .cloned()
     }
 
