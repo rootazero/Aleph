@@ -14,7 +14,7 @@ use crate::dispatcher::model_router::{ModelMatcher, ModelProfile, ModelRouter};
 use crate::dispatcher::monitor::{ProgressMonitor, ProgressSubscriber, TaskMonitor};
 use crate::dispatcher::planner::{GenerationProviders, LlmTaskPlanner, TaskPlanner};
 use crate::dispatcher::scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
-use crate::error::Result;
+use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 
 /// The main Agent engine
@@ -214,6 +214,14 @@ impl AgentEngine {
     /// * `Ok(TaskGraph)` - The planned task graph
     /// * `Err` - If planning fails
     pub async fn plan(&self, request: &str) -> Result<TaskGraph> {
+        let current = *self.state.read().await;
+        if matches!(current, ExecutionState::Executing | ExecutionState::Planning) {
+            return Err(AlephError::Other {
+                message: format!("Cannot plan while in {:?} state", current),
+                suggestion: Some("Wait for the current operation to complete".to_string()),
+            });
+        }
+
         info!("Planning task: {}", request);
         *self.state.write().await = ExecutionState::Planning;
 
@@ -273,6 +281,14 @@ impl AgentEngine {
     /// * `Ok(ExecutionSummary)` - Summary of the execution
     /// * `Err` - If execution fails
     pub async fn execute(&self, mut graph: TaskGraph) -> Result<ExecutionSummary> {
+        let current = *self.state.read().await;
+        if matches!(current, ExecutionState::Executing | ExecutionState::Planning) {
+            return Err(AlephError::Other {
+                message: format!("Cannot execute while in {:?} state", current),
+                suggestion: Some("Wait for the current operation to complete".to_string()),
+            });
+        }
+
         info!(
             "Executing task graph: {} ({})",
             graph.metadata.title, graph.id
