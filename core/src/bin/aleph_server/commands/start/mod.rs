@@ -830,6 +830,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let session_manager = initialize_session_manager(args.daemon).await;
     initialize_extension_manager(args.daemon).await;
 
+    // Log desktop capability mode
+    #[cfg(feature = "desktop-native")]
+    if !args.daemon {
+        println!("Desktop capabilities: in-process (native)");
+    }
+    #[cfg(not(feature = "desktop-native"))]
+    if !args.daemon {
+        println!("Desktop capabilities: IPC bridge (external)");
+    }
+
     let event_bus = server.event_bus().clone();
     let router = Arc::new(AgentRouter::new());
 
