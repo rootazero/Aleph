@@ -699,26 +699,120 @@ impl McpConfigApi {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryConfig {
+    #[serde(default)]
     pub enabled: bool,
-    pub embedding_model: String,
+    #[serde(default)]
     pub max_context_items: u32,
+    #[serde(default = "default_retention_days")]
     pub retention_days: u32,
+    #[serde(default)]
     pub vector_db: String,
+    #[serde(default)]
     pub similarity_threshold: f32,
+    #[serde(default)]
     pub excluded_apps: Vec<String>,
+    #[serde(default)]
     pub ai_retrieval_enabled: bool,
+    #[serde(default)]
     pub ai_retrieval_timeout_ms: u64,
+    #[serde(default)]
     pub ai_retrieval_max_candidates: u32,
+    #[serde(default)]
     pub ai_retrieval_fallback_count: u32,
+    #[serde(default)]
     pub compression_enabled: bool,
+    #[serde(default)]
     pub compression_idle_timeout_seconds: u32,
+    #[serde(default)]
     pub compression_turn_threshold: u32,
+    #[serde(default)]
     pub compression_interval_seconds: u32,
+    #[serde(default)]
     pub compression_batch_size: u32,
+    #[serde(default)]
     pub conflict_similarity_threshold: f32,
+    #[serde(default)]
     pub max_facts_in_context: u32,
+    #[serde(default)]
     pub raw_memory_fallback_count: u32,
+
+    // Dreaming (DreamDaemon)
+    #[serde(default)]
+    pub dreaming: DreamingConfig,
+
+    // Graph Decay
+    #[serde(default)]
+    pub graph_decay: GraphDecayPolicy,
+
+    // Memory Fact Decay
+    #[serde(default)]
+    pub memory_decay: MemoryDecayPolicy,
+
+    // Storage
+    #[serde(default = "default_dedup_threshold")]
+    pub dedup_similarity_threshold: f32,
+
+    // Backup
+    #[serde(default = "default_backup_enabled")]
+    pub backup_enabled: bool,
+    #[serde(default = "default_backup_max_files")]
+    pub backup_max_files: u32,
 }
+
+fn default_retention_days() -> u32 { 90 }
+fn default_dedup_threshold() -> f32 { 0.95 }
+fn default_backup_enabled() -> bool { true }
+fn default_backup_max_files() -> u32 { 7 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DreamingConfig {
+    #[serde(default = "default_dreaming_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_dreaming_idle_threshold")]
+    pub idle_threshold_seconds: u32,
+    #[serde(default = "default_dreaming_window_start")]
+    pub window_start_local: String,
+    #[serde(default = "default_dreaming_window_end")]
+    pub window_end_local: String,
+    #[serde(default = "default_dreaming_max_duration")]
+    pub max_duration_seconds: u32,
+}
+
+fn default_dreaming_enabled() -> bool { true }
+fn default_dreaming_idle_threshold() -> u32 { 900 }
+fn default_dreaming_window_start() -> String { "02:00".to_string() }
+fn default_dreaming_window_end() -> String { "05:00".to_string() }
+fn default_dreaming_max_duration() -> u32 { 600 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GraphDecayPolicy {
+    #[serde(default = "default_graph_node_decay")]
+    pub node_decay_per_day: f32,
+    #[serde(default = "default_graph_edge_decay")]
+    pub edge_decay_per_day: f32,
+    #[serde(default = "default_graph_min_score")]
+    pub min_score: f32,
+}
+
+fn default_graph_node_decay() -> f32 { 0.02 }
+fn default_graph_edge_decay() -> f32 { 0.03 }
+fn default_graph_min_score() -> f32 { 0.1 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemoryDecayPolicy {
+    #[serde(default = "default_memory_half_life")]
+    pub half_life_days: f32,
+    #[serde(default = "default_memory_access_boost")]
+    pub access_boost: f32,
+    #[serde(default = "default_memory_min_strength")]
+    pub min_strength: f32,
+    #[serde(default)]
+    pub protected_types: Vec<String>,
+}
+
+fn default_memory_half_life() -> f32 { 30.0 }
+fn default_memory_access_boost() -> f32 { 0.2 }
+fn default_memory_min_strength() -> f32 { 0.1 }
 
 pub struct MemoryConfigApi;
 
@@ -1109,6 +1203,17 @@ impl GenerationConfigApi {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchBackendEntry {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchConfig {
     pub enabled: bool,
     pub default_provider: String,
@@ -1119,6 +1224,8 @@ pub struct SearchConfig {
     pub pii_scrub_phone: bool,
     pub pii_scrub_ssn: bool,
     pub pii_scrub_credit_card: bool,
+    #[serde(default)]
+    pub backends: Vec<SearchBackendEntry>,
 }
 
 pub struct SearchConfigApi;

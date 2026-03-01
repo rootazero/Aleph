@@ -285,17 +285,9 @@ fn ConfiguredProviders(
 
     view! {
         <div>
-            <div class="flex items-center justify-between mb-3">
-                <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">
-                    "Configured Providers"
-                </h2>
-                <button
-                    on:click=on_add_custom
-                    class="px-3 py-1 bg-surface-raised border border-border hover:border-primary/40 text-text-secondary text-xs rounded-lg transition-colors"
-                >
-                    "+ Custom"
-                </button>
-            </div>
+            <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+                "Configured Providers"
+            </h2>
 
             {move || {
                 if loading.get() {
@@ -382,6 +374,16 @@ fn ConfiguredProviders(
                     }
                 }
             }}
+
+            // Add Custom Provider button
+            <div class="pt-2">
+                <button
+                    on:click=on_add_custom
+                    class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors"
+                >
+                    "+ Add Custom Provider"
+                </button>
+            </div>
         </div>
     }
 }

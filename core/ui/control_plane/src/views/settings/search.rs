@@ -7,7 +7,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::context::DashboardState;
-use crate::api::{SearchConfig, SearchConfigApi};
+use crate::api::{SearchBackendEntry, SearchConfig, SearchConfigApi};
 
 // ============================================================================
 // Preset Definitions
@@ -22,6 +22,7 @@ struct SearchPreset {
     icon_color: &'static str,
     needs_api_key: bool,
     is_self_hosted: bool,
+    needs_engine_id: bool,
 }
 
 const PRESETS: &[SearchPreset] = &[
@@ -34,6 +35,7 @@ const PRESETS: &[SearchPreset] = &[
         icon_color: "#5B5FC7",
         needs_api_key: true,
         is_self_hosted: false,
+        needs_engine_id: false,
     },
     SearchPreset {
         name: "brave",
@@ -44,6 +46,7 @@ const PRESETS: &[SearchPreset] = &[
         icon_color: "#FB542B",
         needs_api_key: true,
         is_self_hosted: false,
+        needs_engine_id: false,
     },
     SearchPreset {
         name: "google",
@@ -54,6 +57,7 @@ const PRESETS: &[SearchPreset] = &[
         icon_color: "#4285F4",
         needs_api_key: true,
         is_self_hosted: false,
+        needs_engine_id: true,
     },
     SearchPreset {
         name: "bing",
@@ -64,6 +68,7 @@ const PRESETS: &[SearchPreset] = &[
         icon_color: "#008373",
         needs_api_key: true,
         is_self_hosted: false,
+        needs_engine_id: false,
     },
     SearchPreset {
         name: "searxng",
@@ -74,6 +79,7 @@ const PRESETS: &[SearchPreset] = &[
         icon_color: "#3050FF",
         needs_api_key: false,
         is_self_hosted: true,
+        needs_engine_id: false,
     },
     SearchPreset {
         name: "exa",
@@ -84,11 +90,17 @@ const PRESETS: &[SearchPreset] = &[
         icon_color: "#000000",
         needs_api_key: true,
         is_self_hosted: false,
+        needs_engine_id: false,
     },
 ];
 
 fn find_preset(name: &str) -> Option<&'static SearchPreset> {
     PRESETS.iter().find(|p| p.name == name)
+}
+
+/// Find backend entry for a provider name from the config's backends list
+fn find_backend<'a>(backends: &'a [SearchBackendEntry], name: &str) -> Option<&'a SearchBackendEntry> {
+    backends.iter().find(|b| b.name == name)
 }
 
 // ============================================================================
@@ -101,7 +113,7 @@ pub fn SearchView() -> impl IntoView {
 
     let config = RwSignal::new(SearchConfig {
         enabled: false,
-        default_provider: "tavily".to_string(),
+        default_provider: String::new(),
         max_results: 5,
         timeout_seconds: 10,
         pii_enabled: false,
@@ -109,16 +121,21 @@ pub fn SearchView() -> impl IntoView {
         pii_scrub_phone: true,
         pii_scrub_ssn: true,
         pii_scrub_credit_card: true,
+        backends: Vec::new(),
     });
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
     let selected = RwSignal::new(Option::<String>::None);
+    let show_add_form = RwSignal::new(false);
 
     // Load config on mount
     spawn_local(async move {
         match SearchConfigApi::get(&state).await {
             Ok(cfg) => {
-                selected.set(Some(cfg.default_provider.clone()));
+                // Only auto-select if there's an active provider
+                if !cfg.default_provider.is_empty() {
+                    selected.set(Some(cfg.default_provider.clone()));
+                }
                 config.set(cfg);
                 error.set(None);
             }
@@ -155,16 +172,45 @@ pub fn SearchView() -> impl IntoView {
                     })}
 
                     // Preset grid
-                    <PresetGrid config=config selected=selected />
+                    <PresetGrid config=config selected=selected show_add_form=show_add_form />
+
+                    // Add Custom Provider button
+                    <div class="pt-2">
+                        <button
+                            on:click=move |_| {
+                                show_add_form.set(true);
+                                selected.set(None);
+                            }
+                            class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors"
+                        >
+                            "+ Add Custom Provider"
+                        </button>
+                    </div>
 
                     // Global search settings
                     <GlobalSettings config=config loading=loading />
                 </div>
             </div>
 
-            // Right panel: Detail
+            // Right panel: Detail or Add form
             <div class="w-7/12 min-w-0 overflow-y-auto">
-                <ProviderDetailPanel config=config selected=selected error=error />
+                {move || {
+                    if show_add_form.get() {
+                        view! {
+                            <AddCustomSearchProviderPanel
+                                config=config
+                                on_added=move || {
+                                    show_add_form.set(false);
+                                }
+                                on_cancel=move || show_add_form.set(false)
+                            />
+                        }.into_any()
+                    } else {
+                        view! {
+                            <ProviderDetailPanel config=config selected=selected error=error />
+                        }.into_any()
+                    }
+                }}
             </div>
         </div>
     }
@@ -178,6 +224,7 @@ pub fn SearchView() -> impl IntoView {
 fn PresetGrid(
     config: RwSignal<SearchConfig>,
     selected: RwSignal<Option<String>>,
+    show_add_form: RwSignal<bool>,
 ) -> impl IntoView {
     view! {
         <div>
@@ -192,10 +239,14 @@ fn PresetGrid(
                     let icon_color = preset.icon_color;
                     let first_char = preset.display_name.chars().next().unwrap_or('?').to_uppercase().to_string();
 
-                    let is_active = move || config.get().default_provider == name;
+                    let is_active = move || {
+                        let dp = config.get().default_provider;
+                        !dp.is_empty() && dp == name
+                    };
 
                     let on_click = move |_| {
                         selected.set(Some(name.to_string()));
+                        show_add_form.set(false);
                     };
 
                     view! {
@@ -270,6 +321,11 @@ fn GlobalSettings(
                     }.into_any()
                 } else {
                     let cfg = config.get();
+                    let provider_display = if cfg.default_provider.is_empty() {
+                        "None".to_string()
+                    } else {
+                        cfg.default_provider.clone()
+                    };
                     view! {
                         <div class="bg-surface-raised rounded-lg border border-border p-4 space-y-3">
                             <div class="flex items-center justify-between">
@@ -293,7 +349,7 @@ fn GlobalSettings(
                                 <span>"\u{00B7}"</span>
                                 <span>"Timeout: " {cfg.timeout_seconds} "s"</span>
                                 <span>"\u{00B7}"</span>
-                                <span>"Provider: " {cfg.default_provider.clone()}</span>
+                                <span>"Provider: " {provider_display}</span>
                             </div>
                         </div>
                     }.into_any()
@@ -320,17 +376,62 @@ fn ProviderDetailPanel(
     let form_max_results = RwSignal::new(5u64);
     let form_timeout = RwSignal::new(10u64);
 
+    // Per-provider backend fields
+    let form_api_key = RwSignal::new(String::new());
+    let form_base_url = RwSignal::new(String::new());
+    let form_engine_id = RwSignal::new(String::new());
+
     let saving = RwSignal::new(false);
     let save_success = RwSignal::new(false);
 
     // Sync form when config or selection changes
     Effect::new(move || {
-        let _ = selected.get(); // track
+        let sel = selected.get();
         let cfg = config.get();
         form_enabled.set(cfg.enabled);
         form_max_results.set(cfg.max_results);
         form_timeout.set(cfg.timeout_seconds);
+
+        // Load per-provider backend fields
+        if let Some(sel_name) = &sel {
+            if let Some(backend) = find_backend(&cfg.backends, sel_name) {
+                form_api_key.set(backend.api_key.clone().unwrap_or_default());
+                form_base_url.set(backend.base_url.clone().unwrap_or_default());
+                form_engine_id.set(backend.engine_id.clone().unwrap_or_default());
+            } else {
+                // No saved backend — use preset default base_url
+                form_api_key.set(String::new());
+                form_base_url.set(
+                    find_preset(sel_name)
+                        .map(|p| p.base_url.to_string())
+                        .unwrap_or_default(),
+                );
+                form_engine_id.set(String::new());
+            }
+        }
     });
+
+    /// Build updated backends list with the current provider's form values merged in
+    fn build_backends(
+        existing: &[SearchBackendEntry],
+        provider_name: &str,
+        api_key: String,
+        base_url: String,
+        engine_id: String,
+    ) -> Vec<SearchBackendEntry> {
+        let mut backends: Vec<SearchBackendEntry> = existing
+            .iter()
+            .filter(|b| b.name != provider_name)
+            .cloned()
+            .collect();
+        backends.push(SearchBackendEntry {
+            name: provider_name.to_string(),
+            api_key: if api_key.is_empty() { None } else { Some(api_key) },
+            base_url: if base_url.is_empty() { None } else { Some(base_url) },
+            engine_id: if engine_id.is_empty() { None } else { Some(engine_id) },
+        });
+        backends
+    }
 
     let on_save = move |_| {
         let sel = selected.get();
@@ -342,10 +443,16 @@ fn ProviderDetailPanel(
         save_success.set(false);
 
         let mut cfg = config.get();
-        cfg.default_provider = provider_name;
         cfg.enabled = form_enabled.get();
         cfg.max_results = form_max_results.get();
         cfg.timeout_seconds = form_timeout.get();
+        cfg.backends = build_backends(
+            &cfg.backends,
+            &provider_name,
+            form_api_key.get(),
+            form_base_url.get(),
+            form_engine_id.get(),
+        );
 
         spawn_local(async move {
             match SearchConfigApi::update(&state, cfg.clone()).await {
@@ -374,7 +481,14 @@ fn ProviderDetailPanel(
         error.set(None);
 
         let mut cfg = config.get();
-        cfg.default_provider = provider_name;
+        cfg.default_provider = provider_name.clone();
+        cfg.backends = build_backends(
+            &cfg.backends,
+            &provider_name,
+            form_api_key.get(),
+            form_base_url.get(),
+            form_engine_id.get(),
+        );
 
         spawn_local(async move {
             match SearchConfigApi::update(&state, cfg.clone()).await {
@@ -412,7 +526,10 @@ fn ProviderDetailPanel(
 
                 let sel_name = sel.unwrap();
                 let preset = find_preset(&sel_name);
-                let is_active = config.get().default_provider == sel_name;
+                let is_active = {
+                    let dp = config.get().default_provider;
+                    !dp.is_empty() && dp == sel_name
+                };
 
                 view! {
                     <div class="flex flex-col h-full">
@@ -460,31 +577,106 @@ fn ProviderDetailPanel(
 
                         // Content
                         <div class="flex-1 overflow-y-auto p-6 space-y-6">
-                            // Provider info
+                            // Provider credentials
                             {if let Some(p) = preset {
+                                let needs_api_key = p.needs_api_key;
+                                let needs_engine_id = p.needs_engine_id;
+                                let placeholder = p.api_key_placeholder;
+                                let default_base_url = p.base_url;
+                                let is_self_hosted = p.is_self_hosted;
+
                                 view! {
-                                    <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
-                                        <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Provider Details"</h3>
-                                        <div class="space-y-2">
-                                            <div class="flex items-center justify-between">
-                                                <span class="text-sm text-text-secondary">"Base URL"</span>
-                                                <span class="text-sm text-text-primary font-mono">{p.base_url}</span>
-                                            </div>
-                                            <div class="flex items-center justify-between">
-                                                <span class="text-sm text-text-secondary">"API Key Required"</span>
-                                                <span class="text-sm text-text-primary">{if p.needs_api_key { "Yes" } else { "No" }}</span>
-                                            </div>
-                                            {if p.is_self_hosted {
+                                    <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
+                                        <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Provider Configuration"</h3>
+
+                                        // API Key
+                                        {if needs_api_key {
+                                            view! {
+                                                <div>
+                                                    <label class="block text-sm font-medium text-text-secondary mb-1">
+                                                        "API Key"
+                                                    </label>
+                                                    <input
+                                                        type="password"
+                                                        prop:value=move || form_api_key.get()
+                                                        on:input=move |ev| form_api_key.set(event_target_value(&ev))
+                                                        placeholder=placeholder
+                                                        class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
+                                                    />
+                                                </div>
+                                            }.into_any()
+                                        } else {
+                                            view! {
+                                                <div class="flex items-center gap-2 text-sm text-text-tertiary">
+                                                    <svg class="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                                    </svg>
+                                                    "No API key required"
+                                                </div>
+                                            }.into_any()
+                                        }}
+
+                                        // Base URL
+                                        <div>
+                                            <label class="block text-sm font-medium text-text-secondary mb-1">
+                                                "Base URL"
+                                            </label>
+                                            <input
+                                                type="text"
+                                                prop:value=move || form_base_url.get()
+                                                on:input=move |ev| form_base_url.set(event_target_value(&ev))
+                                                placeholder=default_base_url
+                                                class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
+                                            />
+                                            {if is_self_hosted {
                                                 view! {
-                                                    <div class="flex items-center justify-between">
-                                                        <span class="text-sm text-text-secondary">"Type"</span>
-                                                        <span class="px-2 py-0.5 bg-info-subtle text-info text-xs font-medium rounded">"Self-hosted"</span>
-                                                    </div>
+                                                    <p class="mt-1 text-xs text-text-tertiary">
+                                                        "URL of your self-hosted instance"
+                                                    </p>
                                                 }.into_any()
                                             } else {
-                                                view! { <span></span> }.into_any()
+                                                view! {
+                                                    <p class="mt-1 text-xs text-text-tertiary">
+                                                        "Default: " {default_base_url}
+                                                    </p>
+                                                }.into_any()
                                             }}
                                         </div>
+
+                                        // Engine ID (Google only)
+                                        {if needs_engine_id {
+                                            view! {
+                                                <div>
+                                                    <label class="block text-sm font-medium text-text-secondary mb-1">
+                                                        "Search Engine ID"
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        prop:value=move || form_engine_id.get()
+                                                        on:input=move |ev| form_engine_id.set(event_target_value(&ev))
+                                                        placeholder="Google Custom Search Engine ID"
+                                                        class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
+                                                    />
+                                                    <p class="mt-1 text-xs text-text-tertiary">
+                                                        "Required for Google Custom Search"
+                                                    </p>
+                                                </div>
+                                            }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }}
+
+                                        // Self-hosted badge
+                                        {if is_self_hosted {
+                                            view! {
+                                                <div class="flex items-center gap-2">
+                                                    <span class="px-2 py-0.5 bg-info-subtle text-info text-xs font-medium rounded">"Self-hosted"</span>
+                                                    <span class="text-xs text-text-tertiary">"Runs on your infrastructure"</span>
+                                                </div>
+                                            }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }}
                                     </div>
                                 }.into_any()
                             } else {
@@ -605,6 +797,153 @@ fn ProviderDetailPanel(
                     </div>
                 }.into_any()
             }}
+        </div>
+    }
+}
+
+// ============================================================================
+// Add Custom Search Provider Panel
+// ============================================================================
+
+#[component]
+fn AddCustomSearchProviderPanel(
+    config: RwSignal<SearchConfig>,
+    on_added: impl Fn() + 'static + Copy,
+    on_cancel: impl Fn() + 'static + Copy,
+) -> impl IntoView {
+    let state = expect_context::<DashboardState>();
+
+    let form_name = RwSignal::new(String::new());
+    let form_api_key = RwSignal::new(String::new());
+    let form_base_url = RwSignal::new(String::new());
+    let form_engine_id = RwSignal::new(String::new());
+    let saving = RwSignal::new(false);
+    let error = RwSignal::new(Option::<String>::None);
+
+    let on_add = move |_| {
+        let name = form_name.get().trim().to_string();
+        if name.is_empty() {
+            error.set(Some("Provider name is required".to_string()));
+            return;
+        }
+
+        saving.set(true);
+        error.set(None);
+
+        let mut cfg = config.get();
+        // Add backend entry
+        cfg.backends.push(SearchBackendEntry {
+            name: name.clone(),
+            api_key: {
+                let v = form_api_key.get();
+                if v.is_empty() { None } else { Some(v) }
+            },
+            base_url: {
+                let v = form_base_url.get();
+                if v.is_empty() { None } else { Some(v) }
+            },
+            engine_id: {
+                let v = form_engine_id.get();
+                if v.is_empty() { None } else { Some(v) }
+            },
+        });
+
+        spawn_local(async move {
+            match SearchConfigApi::update(&state, cfg.clone()).await {
+                Ok(()) => {
+                    config.set(cfg);
+                    on_added();
+                }
+                Err(e) => {
+                    error.set(Some(format!("Failed to add provider: {}", e)));
+                }
+            }
+            saving.set(false);
+        });
+    };
+
+    view! {
+        <div class="flex flex-col h-full">
+            // Header
+            <div class="px-6 py-4 border-b border-border">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-xl font-semibold text-text-primary">"Add Custom Provider"</h2>
+                    <button
+                        on:click=move |_| on_cancel()
+                        class="text-text-tertiary hover:text-text-primary transition-colors"
+                    >
+                        "Cancel"
+                    </button>
+                </div>
+            </div>
+
+            // Form
+            <div class="flex-1 overflow-y-auto p-6 space-y-6">
+                {move || error.get().map(|e| view! {
+                    <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">{e}</div>
+                })}
+
+                <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
+                    <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Provider Details"</h3>
+
+                    // Provider Name
+                    <div>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">"Provider Name"</label>
+                        <input
+                            type="text"
+                            prop:value=move || form_name.get()
+                            on:input=move |ev| form_name.set(event_target_value(&ev))
+                            placeholder="e.g., my-searxng, custom-search"
+                            class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        />
+                    </div>
+
+                    // API Key
+                    <div>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">"API Key"</label>
+                        <input
+                            type="password"
+                            prop:value=move || form_api_key.get()
+                            on:input=move |ev| form_api_key.set(event_target_value(&ev))
+                            placeholder="Optional — leave empty if not required"
+                            class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
+                        />
+                    </div>
+
+                    // Base URL
+                    <div>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">"Base URL"</label>
+                        <input
+                            type="text"
+                            prop:value=move || form_base_url.get()
+                            on:input=move |ev| form_base_url.set(event_target_value(&ev))
+                            placeholder="https://api.example.com/search"
+                            class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
+                        />
+                    </div>
+
+                    // Engine ID
+                    <div>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">"Engine ID"</label>
+                        <input
+                            type="text"
+                            prop:value=move || form_engine_id.get()
+                            on:input=move |ev| form_engine_id.set(event_target_value(&ev))
+                            placeholder="Optional — for providers that require it"
+                            class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
+                        />
+                    </div>
+                </div>
+
+                // Add button
+                <button
+                    on:click=on_add
+                    prop:disabled=move || saving.get() || form_name.get().trim().is_empty()
+                    class="w-full px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+                >
+                    {move || if saving.get() { "Adding..." } else { "Add Provider" }}
+                </button>
+            </div>
         </div>
     }
 }

@@ -14,11 +14,13 @@ use alephcore::gateway::handlers::channel as channel_handlers;
 use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
 use alephcore::gateway::handlers::config as config_handlers;
 use alephcore::gateway::handlers::auth as auth_handlers;
+use alephcore::gateway::handlers::memory as memory_handlers;
 use alephcore::gateway::{
     SessionManager,
     ChannelRegistry,
     ConfigWatcher, ConfigWatcherConfig, ConfigEvent,
 };
+use alephcore::memory::store::MemoryBackend;
 
 use crate::server_init::serve_webchat;
 use crate::cli::Args;
@@ -350,6 +352,33 @@ pub(in crate::commands::start) async fn start_control_plane_server(final_bind: &
         println!("ControlPlane UI:");
         println!("  - URL: http://{}", control_plane_addr);
         println!("  - Embedded: rust-embed (WASM)");
+        println!();
+    }
+}
+
+// ─── register_memory_handlers ────────────────────────────────────────────────
+
+#[cfg(feature = "gateway")]
+pub(in crate::commands::start) fn register_memory_handlers(
+    server: &mut GatewayServer,
+    memory_db: &MemoryBackend,
+    daemon: bool,
+) {
+    register_handler!(server, "memory.search", memory_handlers::handle_search, memory_db);
+    register_handler!(server, "memory.stats", memory_handlers::handle_stats, memory_db);
+    register_handler!(server, "memory.delete", memory_handlers::handle_delete, memory_db);
+    register_handler!(server, "memory.clear", memory_handlers::handle_clear, memory_db);
+    register_handler!(server, "memory.clearFacts", memory_handlers::handle_clear_facts, memory_db);
+    register_handler!(server, "memory.appList", memory_handlers::handle_app_list, memory_db);
+    register_handler!(server, "memory.compress", memory_handlers::handle_compress);
+
+    if !daemon {
+        println!("Memory methods:");
+        println!("  - memory.search     : Search memories");
+        println!("  - memory.stats      : Get memory statistics");
+        println!("  - memory.delete     : Delete a memory");
+        println!("  - memory.clear      : Clear memories");
+        println!("  - memory.compress   : Trigger compression");
         println!();
     }
 }

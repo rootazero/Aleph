@@ -10,6 +10,8 @@ pub fn Home() -> impl IntoView {
     // State for stats
     let memory_stats = RwSignal::new(None::<Option<(u64, u64)>>); // Some(Some((count, size))) = loaded, Some(None) = failed, None = not fetched
     let system_info = RwSignal::new(None::<SystemInfo>);
+    let active_tasks = RwSignal::new(None::<u64>);
+    let gateway_latency_ms = RwSignal::new(None::<u64>);
 
     // Fetch stats when connected
     Effect::new(move || {
@@ -26,10 +28,33 @@ pub fn Home() -> impl IntoView {
                 if let Ok(info) = SystemApi::info(&state_clone).await {
                     system_info.set(Some(info));
                 }
+
+                // Measure gateway latency via health ping
+                let start = js_sys::Date::now();
+                if state_clone.rpc_call("health", serde_json::Value::Null).await.is_ok() {
+                    let elapsed = (js_sys::Date::now() - start) as u64;
+                    gateway_latency_ms.set(Some(elapsed));
+                }
+
+                // Fetch active task count
+                match state_clone.rpc_call("services.list", serde_json::Value::Null).await {
+                    Ok(result) => {
+                        let count = result.get("services")
+                            .and_then(|s| s.as_array())
+                            .map(|arr| arr.iter()
+                                .filter(|s| s.get("status").and_then(|v| v.as_str()) == Some("running"))
+                                .count() as u64)
+                            .unwrap_or(0);
+                        active_tasks.set(Some(count));
+                    }
+                    Err(_) => active_tasks.set(Some(0)),
+                }
             });
         } else {
             memory_stats.set(None);
             system_info.set(None);
+            active_tasks.set(None);
+            gateway_latency_ms.set(None);
         }
     });
 
@@ -64,7 +89,11 @@ pub fn Home() -> impl IntoView {
 
             // Stats Grid
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 pt-8">
-                <StatCard label="Active Tasks" value=Signal::derive(move || "—".to_string()) icon_color="text-primary" icon_bg="bg-primary-subtle">
+                <StatCard label="Active Tasks" value=Signal::derive(move || {
+                    active_tasks.get()
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "—".to_string())
+                }) icon_color="text-primary" icon_bg="bg-primary-subtle">
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                 </StatCard>
                 <StatCard label="CPU Usage" value=Signal::derive(move || {
@@ -87,7 +116,11 @@ pub fn Home() -> impl IntoView {
                     <ellipse cx="12" cy="5" rx="9" ry="3" />
                     <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
                 </StatCard>
-                <StatCard label="Gateway Latency" value=Signal::derive(move || "—".to_string()) icon_color="text-warning" icon_bg="bg-warning-subtle">
+                <StatCard label="Gateway Latency" value=Signal::derive(move || {
+                    gateway_latency_ms.get()
+                        .map(|ms| format!("{} ms", ms))
+                        .unwrap_or_else(|| "—".to_string())
+                }) icon_color="text-warning" icon_bg="bg-warning-subtle">
                     <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
                 </StatCard>
             </div>

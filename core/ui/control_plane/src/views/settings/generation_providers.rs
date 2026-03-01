@@ -16,6 +16,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
     let (providers, set_providers) = create_signal(Vec::<GenerationProviderEntry>::new());
     let (selected_category, set_selected_category) = create_signal(GenerationType::Image);
     let (selected_provider_id, set_selected_provider_id) = create_signal(Option::<String>::None);
+    let (show_add_form, set_show_add_form) = create_signal(false);
     let (is_loading, set_is_loading) = create_signal(true);
     let (error_message, set_error_message) = create_signal(Option::<String>::None);
 
@@ -32,6 +33,15 @@ pub fn GenerationProvidersView() -> impl IntoView {
             }
         }
     });
+
+    // Reload helper
+    let reload = move || {
+        spawn_local(async move {
+            if let Ok(list) = GenerationProvidersApi::list(&state).await {
+                set_providers.set(list);
+            }
+        });
+    };
 
     // Get current category presets
     let current_presets = move || PresetProviders::by_category(selected_category.get());
@@ -100,25 +110,41 @@ pub fn GenerationProvidersView() -> impl IntoView {
                         } else {
                             let presets = current_presets();
                             view! {
-                                <div class="grid grid-cols-1 gap-3 p-6">
-                                    {presets.into_iter().map(|preset| {
-                                        let preset_id = preset.id.clone();
-                                        let configured = is_configured(&preset_id);
-                                        let entry = get_provider_entry(&preset_id);
-                                        let is_selected = selected_provider_id.get() == Some(preset_id.clone());
+                                <div class="p-6 space-y-4">
+                                    <div class="grid grid-cols-1 gap-3">
+                                        {presets.into_iter().map(|preset| {
+                                            let preset_id = preset.id.clone();
+                                            let configured = is_configured(&preset_id);
+                                            let entry = get_provider_entry(&preset_id);
+                                            let is_selected = selected_provider_id.get() == Some(preset_id.clone());
 
-                                        view! {
-                                            <ProviderCard
-                                                preset=preset
-                                                is_configured=configured
-                                                entry=entry
-                                                is_selected=is_selected
-                                                on_click=move |_| {
-                                                    set_selected_provider_id.set(Some(preset_id.clone()));
-                                                }
-                                            />
-                                        }
-                                    }).collect_view()}
+                                            view! {
+                                                <ProviderCard
+                                                    preset=preset
+                                                    is_configured=configured
+                                                    entry=entry
+                                                    is_selected=is_selected
+                                                    on_click=move |_| {
+                                                        set_selected_provider_id.set(Some(preset_id.clone()));
+                                                        set_show_add_form.set(false);
+                                                    }
+                                                />
+                                            }
+                                        }).collect_view()}
+                                    </div>
+
+                                    // Add Custom Provider button
+                                    <div class="pt-2">
+                                        <button
+                                            on:click=move |_| {
+                                                set_show_add_form.set(true);
+                                                set_selected_provider_id.set(None);
+                                            }
+                                            class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors"
+                                        >
+                                            "+ Add Custom Provider"
+                                        </button>
+                                    </div>
                                 </div>
                             }.into_any()
                         }
@@ -134,19 +160,29 @@ pub fn GenerationProvidersView() -> impl IntoView {
                 </div>
             </div>
 
-            // Right panel - Provider details
+            // Right panel - Provider details or Add form
             <div class="w-7/12 min-w-[320px] bg-surface">
-                <ProviderDetailPanel
-                    selected_id=selected_provider_id
-                    providers=providers
-                    on_reload=move || {
-                        spawn_local(async move {
-                            if let Ok(list) = GenerationProvidersApi::list(&state).await {
-                                set_providers.set(list);
-                            }
-                        });
+                {move || {
+                    if show_add_form.get() {
+                        view! {
+                            <AddCustomProviderPanel
+                                on_added=move || {
+                                    set_show_add_form.set(false);
+                                    reload();
+                                }
+                                on_cancel=move || set_show_add_form.set(false)
+                            />
+                        }.into_any()
+                    } else {
+                        view! {
+                            <ProviderDetailPanel
+                                selected_id=selected_provider_id
+                                providers=providers
+                                on_reload=move || reload()
+                            />
+                        }.into_any()
                     }
-                />
+                }}
             </div>
         </div>
     }
@@ -559,6 +595,309 @@ fn DetailField(label: &'static str, value: String) -> impl IntoView {
                 {value}
             </div>
         </div>
+    }
+}
+
+// ============================================================================
+// Add Custom Provider Panel
+// ============================================================================
+
+#[component]
+fn AddCustomProviderPanel(
+    on_added: impl Fn() + 'static + Copy + Send,
+    on_cancel: impl Fn() + 'static + Copy + Send,
+) -> impl IntoView {
+    let state = expect_context::<DashboardState>();
+
+    // Form state
+    let name = RwSignal::new(String::new());
+    let provider_type = RwSignal::new(String::new());
+    let api_key = RwSignal::new(String::new());
+    let base_url = RwSignal::new(String::new());
+    let model = RwSignal::new(String::new());
+    let timeout = RwSignal::new(60u64);
+
+    // Capability checkboxes
+    let cap_image = RwSignal::new(true);
+    let cap_video = RwSignal::new(false);
+    let cap_audio = RwSignal::new(false);
+    let cap_speech = RwSignal::new(false);
+
+    let (adding, set_adding) = create_signal(false);
+    let (testing, set_testing) = create_signal(false);
+    let (add_error, set_add_error) = create_signal(Option::<String>::None);
+    let (test_result, set_test_result) = create_signal(Option::<(bool, String)>::None);
+
+    let build_capabilities = move || {
+        let mut caps = Vec::new();
+        if cap_image.get() { caps.push(GenerationType::Image); }
+        if cap_video.get() { caps.push(GenerationType::Video); }
+        if cap_audio.get() { caps.push(GenerationType::Audio); }
+        if cap_speech.get() { caps.push(GenerationType::Speech); }
+        caps
+    };
+
+    let build_config = move || -> GenerationProviderConfig {
+        GenerationProviderConfig {
+            provider_type: provider_type.get(),
+            api_key: {
+                let key = api_key.get();
+                if key.is_empty() { None } else { Some(key) }
+            },
+            secret_name: None,
+            base_url: {
+                let url = base_url.get();
+                if url.is_empty() { None } else { Some(url) }
+            },
+            model: {
+                let m = model.get();
+                if m.is_empty() { None } else { Some(m) }
+            },
+            enabled: true,
+            color: "#808080".to_string(),
+            capabilities: build_capabilities(),
+            timeout_seconds: timeout.get(),
+        }
+    };
+
+    let handle_test = move |_| {
+        set_testing.set(true);
+        set_test_result.set(None);
+        set_add_error.set(None);
+
+        let config = build_config();
+        let ptype = config.provider_type.clone();
+        let key = config.api_key.clone();
+        let url = config.base_url.clone();
+        let mdl = config.model.clone();
+
+        spawn_local(async move {
+            match GenerationProvidersApi::test_connection(&state, &ptype, key, url, mdl).await {
+                Ok(result) => {
+                    set_testing.set(false);
+                    set_test_result.set(Some((result.success, result.message)));
+                }
+                Err(e) => {
+                    set_testing.set(false);
+                    set_test_result.set(Some((false, e)));
+                }
+            }
+        });
+    };
+
+    let handle_add = move |_| {
+        let n = name.get();
+        if n.is_empty() {
+            set_add_error.set(Some("Provider name is required".to_string()));
+            return;
+        }
+        if provider_type.get().is_empty() {
+            set_add_error.set(Some("Provider type is required".to_string()));
+            return;
+        }
+
+        set_adding.set(true);
+        set_add_error.set(None);
+
+        let config = build_config();
+
+        spawn_local(async move {
+            match GenerationProvidersApi::create(&state, &n, config).await {
+                Ok(_) => {
+                    set_adding.set(false);
+                    on_added();
+                }
+                Err(e) => {
+                    set_adding.set(false);
+                    set_add_error.set(Some(format!("Failed to add: {}", e)));
+                }
+            }
+        });
+    };
+
+    view! {
+        <div class="flex flex-col h-full">
+            // Fixed header
+            <div class="px-6 py-4 border-b border-border">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-xl font-semibold text-text-primary">"Add Custom Provider"</h2>
+                    <button
+                        on:click=move |_| on_cancel()
+                        class="text-text-tertiary hover:text-text-primary transition-colors"
+                    >
+                        "Cancel"
+                    </button>
+                </div>
+            </div>
+
+            // Scrollable content
+            <div class="flex-1 overflow-y-auto p-6 space-y-6">
+
+            // Form fields
+            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
+
+                // Name
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"Provider Name"</label>
+                    <input
+                        type="text"
+                        value=move || name.get()
+                        on:input=move |ev| name.set(event_target_value(&ev))
+                        placeholder="e.g., my-dalle"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                    <p class="mt-1 text-xs text-text-tertiary">"Unique identifier (lowercase, no spaces)"</p>
+                </div>
+
+                // Provider Type
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"Provider Type"</label>
+                    <input
+                        type="text"
+                        value=move || provider_type.get()
+                        on:input=move |ev| provider_type.set(event_target_value(&ev))
+                        placeholder="e.g., openai, replicate, stability"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                </div>
+
+                // API Key
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"API Key"</label>
+                    <input
+                        type="password"
+                        value=move || api_key.get()
+                        on:input=move |ev| api_key.set(event_target_value(&ev))
+                        placeholder="sk-..."
+                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                </div>
+
+                // Base URL
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"Base URL"</label>
+                    <input
+                        type="text"
+                        value=move || base_url.get()
+                        on:input=move |ev| base_url.set(event_target_value(&ev))
+                        placeholder="https://api.example.com/v1"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                </div>
+
+                // Model
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"Model"</label>
+                    <input
+                        type="text"
+                        value=move || model.get()
+                        on:input=move |ev| model.set(event_target_value(&ev))
+                        placeholder="e.g., dall-e-3"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                </div>
+
+                // Timeout
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">
+                        "Timeout: " {move || timeout.get()} "s"
+                    </label>
+                    <input
+                        type="range" min="10" max="300" step="10"
+                        value=move || timeout.get()
+                        on:input=move |ev| {
+                            if let Ok(v) = event_target_value(&ev).parse::<u64>() { timeout.set(v); }
+                        }
+                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
+                    />
+                </div>
+            </div>
+
+            // Capabilities
+            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CAPABILITIES"</h3>
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox"
+                        checked=move || cap_image.get()
+                        on:change=move |ev| cap_image.set(event_target_checked(&ev))
+                        class="w-4 h-4 rounded"
+                    />
+                    <span class="text-sm text-text-primary">"🖼️ Image Generation"</span>
+                </label>
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox"
+                        checked=move || cap_video.get()
+                        on:change=move |ev| cap_video.set(event_target_checked(&ev))
+                        class="w-4 h-4 rounded"
+                    />
+                    <span class="text-sm text-text-primary">"🎬 Video Generation"</span>
+                </label>
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox"
+                        checked=move || cap_audio.get()
+                        on:change=move |ev| cap_audio.set(event_target_checked(&ev))
+                        class="w-4 h-4 rounded"
+                    />
+                    <span class="text-sm text-text-primary">"🎵 Audio Generation"</span>
+                </label>
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox"
+                        checked=move || cap_speech.get()
+                        on:change=move |ev| cap_speech.set(event_target_checked(&ev))
+                        class="w-4 h-4 rounded"
+                    />
+                    <span class="text-sm text-text-primary">"🗣️ Speech Synthesis"</span>
+                </label>
+            </div>
+
+            // Test result
+            {move || {
+                if let Some((success, message)) = test_result.get() {
+                    if success {
+                        view! {
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded">
+                                <p class="text-sm text-success">{message}</p>
+                            </div>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <div class="p-3 bg-danger-subtle border border-danger/20 rounded">
+                                <p class="text-sm text-danger">{message}</p>
+                            </div>
+                        }.into_any()
+                    }
+                } else {
+                    view! { <div></div> }.into_any()
+                }
+            }}
+
+            // Error
+            {move || add_error.get().map(|e| view! {
+                <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">{e}</div>
+            })}
+
+            // Actions
+            <div class="flex flex-row gap-3 pt-2">
+                <button
+                    on:click=handle_test
+                    disabled=move || testing.get()
+                    class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
+                >
+                    {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                </button>
+
+                <button
+                    on:click=handle_add
+                    disabled=move || adding.get()
+                    class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
+                >
+                    {move || if adding.get() { "Adding..." } else { "Add Provider" }}
+                </button>
+            </div>
+
+            </div> // scrollable content
+        </div> // flex wrapper
     }
 }
 

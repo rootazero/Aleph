@@ -136,7 +136,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                             }
                                             class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors"
                                         >
-                                            "+ Add Embedding Provider"
+                                            "+ Add Custom Provider"
                                         </button>
                                     </div>
                                 </div>
@@ -152,7 +152,6 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                     if show_add_form.get() {
                         view! {
                             <AddProviderPanel
-                                presets=presets
                                 on_added=move || {
                                     set_show_add_form.set(false);
                                     reload();
@@ -602,16 +601,14 @@ fn ProviderDetailPanel(
 
 #[component]
 fn AddProviderPanel(
-    presets: ReadSignal<Vec<EmbeddingPresetEntry>>,
     on_added: impl Fn() + 'static + Copy + Send,
     on_cancel: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
-    // Form state
+    // Form state — custom provider only
     let id = RwSignal::new(String::new());
     let name = RwSignal::new(String::new());
-    let preset = RwSignal::new("custom".to_string());
     let api_base = RwSignal::new(String::new());
     let api_key = RwSignal::new(String::new());
     let model_name = RwSignal::new(String::new());
@@ -622,25 +619,12 @@ fn AddProviderPanel(
     let (add_error, set_add_error) = create_signal(Option::<String>::None);
     let (test_result, set_test_result) = create_signal(Option::<(bool, String)>::None);
 
-    // Apply preset values
-    let apply_preset = move |preset_id: String| {
-        preset.set(preset_id.clone());
-        let preset_list = presets.get();
-        if let Some(p) = preset_list.iter().find(|p| p.id == preset_id) {
-            id.set(p.id.clone());
-            name.set(p.name.clone());
-            api_base.set(p.api_base.clone());
-            model_name.set(p.model.clone());
-            dimensions.set(p.dimensions);
-        }
-    };
-
     // Build config from form
     let build_config = move || -> EmbeddingProviderConfig {
         EmbeddingProviderConfig {
             id: id.get(),
             name: name.get(),
-            preset: preset.get(),
+            preset: "custom".to_string(),
             api_base: api_base.get(),
             api_key_env: None,
             api_key: {
@@ -708,7 +692,7 @@ fn AddProviderPanel(
             // Fixed header
             <div class="px-6 py-4 border-b border-border">
                 <div class="flex items-center justify-between">
-                    <h2 class="text-xl font-semibold text-text-primary">"Add Embedding Provider"</h2>
+                    <h2 class="text-xl font-semibold text-text-primary">"Add Custom Provider"</h2>
                     <button
                         on:click=move |_| on_cancel()
                         class="text-text-tertiary hover:text-text-primary transition-colors"
@@ -720,45 +704,6 @@ fn AddProviderPanel(
 
             // Scrollable content
             <div class="flex-1 overflow-y-auto p-6 space-y-6">
-
-            // Preset selector
-            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"PRESET"</h3>
-                <div class="grid grid-cols-1 gap-2">
-                    {move || {
-                        let preset_list = presets.get();
-                        preset_list.into_iter().map(|p| {
-                            let pid = p.id.clone();
-                            let pname = p.name.clone();
-                            let pmodel = p.model.clone();
-                            let apply = apply_preset.clone();
-                            view! {
-                                <button
-                                    on:click=move |_| apply(pid.clone())
-                                    class="p-3 border border-border rounded-lg text-left hover:border-primary hover:bg-primary-subtle transition-colors"
-                                >
-                                    <div class="font-medium text-text-primary text-sm">{pname}</div>
-                                    <div class="text-xs text-text-tertiary mt-1">{pmodel}</div>
-                                </button>
-                            }
-                        }).collect_view()
-                    }}
-                    <button
-                        on:click=move |_| {
-                            preset.set("custom".to_string());
-                            id.set(String::new());
-                            name.set(String::new());
-                            api_base.set(String::new());
-                            model_name.set(String::new());
-                            dimensions.set(1024);
-                        }
-                        class="p-3 border border-border rounded-lg text-left hover:border-primary hover:bg-primary-subtle transition-colors"
-                    >
-                        <div class="font-medium text-text-primary text-sm">"Custom"</div>
-                        <div class="text-xs text-text-tertiary mt-1">"Manual configuration"</div>
-                    </button>
-                </div>
-            </div>
 
             // Form fields
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
