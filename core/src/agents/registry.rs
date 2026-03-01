@@ -35,25 +35,25 @@ impl AgentRegistry {
 
     /// Register an agent definition
     pub fn register(&self, agent: AgentDef) {
-        let mut agents = self.agents.write().unwrap();
+        let mut agents = self.agents.write().unwrap_or_else(|e| e.into_inner());
         agents.insert(agent.id.clone(), agent);
     }
 
     /// Get an agent by ID
     pub fn get(&self, id: &str) -> Option<AgentDef> {
-        let agents = self.agents.read().unwrap();
+        let agents = self.agents.read().unwrap_or_else(|e| e.into_inner());
         agents.get(id).cloned()
     }
 
     /// List all registered agent IDs
     pub fn list_ids(&self) -> Vec<String> {
-        let agents = self.agents.read().unwrap();
+        let agents = self.agents.read().unwrap_or_else(|e| e.into_inner());
         agents.keys().cloned().collect()
     }
 
     /// List all sub-agents (excluding primary)
     pub fn list_subagents(&self) -> Vec<AgentDef> {
-        let agents = self.agents.read().unwrap();
+        let agents = self.agents.read().unwrap_or_else(|e| e.into_inner());
         agents
             .values()
             .filter(|a| a.mode == AgentMode::SubAgent)
@@ -63,7 +63,7 @@ impl AgentRegistry {
 
     /// Remove an agent by ID
     pub fn unregister(&self, id: &str) -> Option<AgentDef> {
-        let mut agents = self.agents.write().unwrap();
+        let mut agents = self.agents.write().unwrap_or_else(|e| e.into_inner());
         agents.remove(id)
     }
 }

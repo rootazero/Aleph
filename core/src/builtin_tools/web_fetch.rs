@@ -97,8 +97,9 @@ impl WebFetchTool {
         use super::{notify_tool_result, notify_tool_start};
 
         // Notify tool start
-        let url_display = if args.url.len() > 50 {
-            format!("{}...", &args.url[..50])
+        let url_display = if args.url.chars().count() > 50 {
+            let truncated: String = args.url.chars().take(50).collect();
+            format!("{}...", truncated)
         } else {
             args.url.clone()
         };

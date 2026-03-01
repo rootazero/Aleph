@@ -205,8 +205,9 @@ impl GatewayEventBus {
     ///
     /// Number of receivers that will receive the event
     pub fn publish(&self, event: String) -> usize {
-        let preview = if event.len() > 100 {
-            format!("{}...", &event[..100])
+        let preview = if event.chars().count() > 100 {
+            let truncated: String = event.chars().take(100).collect();
+            format!("{}...", truncated)
         } else {
             event.clone()
         };

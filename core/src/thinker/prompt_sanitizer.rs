@@ -134,7 +134,11 @@ fn strip_injection_markers(value: &str) -> String {
     while prev != result {
         prev = result.clone();
         for marker in CI_MARKERS {
-            let lower = result.to_lowercase();
+            // Use to_ascii_lowercase() instead of to_lowercase() to preserve byte positions.
+            // to_lowercase() can change byte lengths for some Unicode chars (e.g., Turkish İ → iU+0307),
+            // causing byte offsets in `lower` to differ from `result`, leading to panics.
+            // All CI_MARKERS are ASCII-only, so ASCII-only lowercasing is sufficient.
+            let lower = result.to_ascii_lowercase();
             if let Some(pos) = lower.find(*marker) {
                 result = format!("{}{}", &result[..pos], &result[pos + marker.len()..]);
             }

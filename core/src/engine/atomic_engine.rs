@@ -101,11 +101,13 @@ impl AtomicEngine {
     ) -> Option<AtomicAction> {
         match action {
             AtomicAction::Write { path, .. } => {
-                // If write failed due to missing directory, try creating it
+                // If write failed due to missing directory, try creating it.
+                // Quote path in single quotes to prevent shell injection via crafted filenames.
                 if error.to_string().contains("No such file or directory") {
                     if let Some(parent) = PathBuf::from(path).parent() {
+                        let safe_path = parent.to_string_lossy().replace('\'', "'\\''");
                         return Some(AtomicAction::Bash {
-                            command: format!("mkdir -p {}", parent.display()),
+                            command: format!("mkdir -p '{}'", safe_path),
                             cwd: None,
                         });
                     }
@@ -114,8 +116,9 @@ impl AtomicEngine {
             AtomicAction::Read { path, .. } => {
                 // If read failed due to missing file, suggest checking if it exists
                 if error.to_string().contains("No such file or directory") {
+                    let safe_path = path.replace('\'', "'\\''");
                     return Some(AtomicAction::Bash {
-                        command: format!("test -f {}", path),
+                        command: format!("test -f '{}'", safe_path),
                         cwd: None,
                     });
                 }
@@ -163,7 +166,10 @@ impl AtomicEngine {
 
     /// Learn from successful L3 routing to populate L1 cache
     pub async fn learn_from_success(&self, query: String, action: AtomicAction) {
-        let reflex = self.reflex.read().await;
+        // Use write lock since learn_from_success mutates internal state (exact_cache).
+        // Using read lock would be semantically misleading and fragile if DashMap
+        // were ever replaced with a non-concurrent map.
+        let reflex = self.reflex.write().await;
         reflex.learn_from_success(&query, action);
     }
 

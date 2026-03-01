@@ -121,10 +121,10 @@ impl AuthProfileProviderRegistry {
 
     /// Refresh provider instances from the auth profile store
     pub fn refresh_providers(&self) {
-        let store = self.store.read().unwrap();
+        let store = self.store.read().unwrap_or_else(|e| e.into_inner());
         let profile_ids = store.list_profiles_for_provider(&self.target_provider);
 
-        let mut providers = self.providers.write().unwrap();
+        let mut providers = self.providers.write().unwrap_or_else(|e| e.into_inner());
         providers.clear();
 
         for profile_id in profile_ids {
@@ -190,24 +190,24 @@ impl AuthProfileProviderRegistry {
 
     /// Get the best available profile ID based on ordering
     fn get_best_profile(&self) -> Option<String> {
-        let store = self.store.read().unwrap();
+        let store = self.store.read().unwrap_or_else(|e| e.into_inner());
         let order = resolve_profile_order(&store, &self.target_provider, None, None);
 
         // Find first profile that has a provider
-        let providers = self.providers.read().unwrap();
+        let providers = self.providers.read().unwrap_or_else(|e| e.into_inner());
         order.into_iter().find(|id| providers.contains_key(id))
     }
 
     /// Mark a profile as successfully used
     pub fn mark_success(&self, profile_id: &str) {
-        let mut store = self.store.write().unwrap();
+        let mut store = self.store.write().unwrap_or_else(|e| e.into_inner());
         mark_profile_used(&mut store, profile_id);
         debug!(profile_id = %profile_id, "Marked profile as used");
     }
 
     /// Mark a profile as failed
     pub fn mark_failure(&self, profile_id: &str, reason: AuthProfileFailureReason) {
-        let mut store = self.store.write().unwrap();
+        let mut store = self.store.write().unwrap_or_else(|e| e.into_inner());
         mark_profile_failure(&mut store, profile_id, reason, &self.config.cooldown);
         warn!(
             profile_id = %profile_id,
@@ -218,18 +218,18 @@ impl AuthProfileProviderRegistry {
 
     /// Get the currently active profile ID
     pub fn active_profile_id(&self) -> Option<String> {
-        self.active_profile.read().unwrap().clone()
+        self.active_profile.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Get all available profile IDs
     pub fn available_profiles(&self) -> Vec<String> {
-        let store = self.store.read().unwrap();
+        let store = self.store.read().unwrap_or_else(|e| e.into_inner());
         resolve_profile_order(&store, &self.target_provider, None, None)
     }
 
     /// Get profile count
     pub fn profile_count(&self) -> usize {
-        self.providers.read().unwrap().len()
+        self.providers.read().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     /// Get a reference to the auth profile store
@@ -249,10 +249,10 @@ impl ProviderRegistry for AuthProfileProviderRegistry {
         let profile_id = self.get_best_profile();
 
         if let Some(ref id) = profile_id {
-            let providers = self.providers.read().unwrap();
+            let providers = self.providers.read().unwrap_or_else(|e| e.into_inner());
             if let Some(provider) = providers.get(id) {
                 // Update active profile
-                *self.active_profile.write().unwrap() = Some(id.clone());
+                *self.active_profile.write().unwrap_or_else(|e| e.into_inner()) = Some(id.clone());
                 debug!(profile_id = %id, "Selected provider from auth profile");
                 let result: Arc<dyn AiProvider> = provider.clone();
                 return result;
@@ -260,13 +260,13 @@ impl ProviderRegistry for AuthProfileProviderRegistry {
         }
 
         // Fallback: return first available provider
-        let providers = self.providers.read().unwrap();
+        let providers = self.providers.read().unwrap_or_else(|e| e.into_inner());
         if let Some((id, provider)) = providers.iter().next() {
             warn!(
                 profile_id = %id,
                 "Falling back to first available provider (no healthy profiles)"
             );
-            *self.active_profile.write().unwrap() = Some(id.clone());
+            *self.active_profile.write().unwrap_or_else(|e| e.into_inner()) = Some(id.clone());
             let result: Arc<dyn AiProvider> = provider.clone();
             return result;
         }
@@ -375,7 +375,7 @@ mod tests {
         registry.mark_success("mock:key1");
 
         // Check that lastUsed was updated
-        let store = registry.store.read().unwrap();
+        let store = registry.store.read().unwrap_or_else(|e| e.into_inner());
         let stats = store.get_usage_stats("mock:key1");
         assert!(stats.is_some());
         assert!(stats.unwrap().last_used.is_some());
@@ -395,7 +395,7 @@ mod tests {
         registry.mark_failure("mock:key1", AuthProfileFailureReason::RateLimit);
 
         // Check that cooldown was set
-        let store = registry.store.read().unwrap();
+        let store = registry.store.read().unwrap_or_else(|e| e.into_inner());
         let stats = store.get_usage_stats("mock:key1");
         assert!(stats.is_some());
         assert!(stats.unwrap().cooldown_until.is_some());

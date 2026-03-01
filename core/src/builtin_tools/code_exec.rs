@@ -97,16 +97,22 @@ pub struct CodeExecOutput {
 /// The $HOME variable is properly expanded even if the LLM mistakenly
 /// puts it in single quotes or other contexts where bash wouldn't expand it.
 fn expand_env_vars(code: &str) -> String {
-    let var_pattern = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)").unwrap();
+    use std::sync::LazyLock;
+    static VAR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)").unwrap()
+    });
 
-    var_pattern.replace_all(code, |caps: &regex::Captures| {
+    VAR_PATTERN.replace_all(code, |caps: &regex::Captures| {
         // Try ${VAR} format first, then $VAR format
-        let var_name = caps.get(1).or_else(|| caps.get(2)).unwrap().as_str();
+        let var_name = match caps.get(1).or_else(|| caps.get(2)) {
+            Some(m) => m.as_str(),
+            None => return caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string(),
+        };
 
         // Get environment variable value, or keep original if not found
         match std::env::var(var_name) {
             Ok(value) => value,
-            Err(_) => caps.get(0).unwrap().as_str().to_string(),
+            Err(_) => caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string(),
         }
     }).to_string()
 }

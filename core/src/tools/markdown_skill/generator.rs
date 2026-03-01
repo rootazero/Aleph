@@ -192,7 +192,7 @@ impl MarkdownSkillGenerator {
         // Frontmatter
         result.push_str("---\n");
         result.push_str(&format!("name: {}\n", spec.name));
-        result.push_str(&format!("description: \"{}\"\n", spec.description));
+        result.push_str(&format!("description: \"{}\"\n", escape_yaml_string(&spec.description)));
 
         // Metadata
         result.push_str("metadata:\n");
@@ -202,7 +202,7 @@ impl MarkdownSkillGenerator {
             result.push_str("  requires:\n");
             result.push_str("    bins:\n");
             for bin in &spec.metadata.requires.bins {
-                result.push_str(&format!("      - \"{}\"\n", bin));
+                result.push_str(&format!("      - \"{}\"\n", escape_yaml_string(bin)));
             }
         }
 
@@ -243,7 +243,7 @@ impl MarkdownSkillGenerator {
                         result.push_str(&format!("        type: {}\n", hint_type));
                     }
                     if let Some(desc) = &hint.description {
-                        result.push_str(&format!("        description: \"{}\"\n", desc));
+                        result.push_str(&format!("        description: \"{}\"\n", escape_yaml_string(desc)));
                     }
                     if hint.optional {
                         result.push_str("        optional: true\n");
@@ -254,10 +254,10 @@ impl MarkdownSkillGenerator {
             // Evolution metadata
             if let Some(evolution) = &aleph_meta.evolution {
                 result.push_str("    evolution:\n");
-                result.push_str(&format!("      source: \"{}\"\n", evolution.source));
+                result.push_str(&format!("      source: \"{}\"\n", escape_yaml_string(&evolution.source)));
                 result.push_str(&format!("      confidence_score: {}\n", evolution.confidence_score));
                 if let Some(trace_id) = &evolution.created_from_trace {
-                    result.push_str(&format!("      created_from_trace: \"{}\"\n", trace_id));
+                    result.push_str(&format!("      created_from_trace: \"{}\"\n", escape_yaml_string(trace_id)));
                 }
             }
         }
@@ -327,6 +327,14 @@ impl Default for MarkdownSkillGenerator {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Escape a string for safe YAML embedding in double-quoted context.
+///
+/// Replaces backslashes and double-quotes so the value cannot break
+/// out of a YAML `"..."` literal.
+fn escape_yaml_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Convert a suggestion name to a valid skill name (kebab-case)

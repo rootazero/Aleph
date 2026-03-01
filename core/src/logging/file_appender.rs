@@ -4,15 +4,15 @@
 /// PII scrubbing for privacy protection.
 use crate::utils::paths::get_config_dir;
 use std::path::PathBuf;
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Global initialization guard
 static INIT: Once = Once::new();
 
-/// Guard to keep the non-blocking writer alive
-static mut _GUARD: Option<tracing_appender::non_blocking::WorkerGuard> = None;
+/// Guard to keep the non-blocking writer alive (using OnceLock for sound interior mutability)
+static GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
 /// Initialize logging with file appender and PII scrubbing
 ///
@@ -59,9 +59,7 @@ pub fn init_file_logging_with_retention(
         match setup_logging(retention_days) {
             Ok(guard) => {
                 // Store the guard to keep the non-blocking writer alive
-                unsafe {
-                    _GUARD = Some(guard);
-                }
+                let _ = GUARD.set(guard);
             }
             Err(e) => {
                 result = Err(e);

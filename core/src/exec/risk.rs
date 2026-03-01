@@ -98,7 +98,9 @@ pub static SAFE_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         Regex::new(r"^(cat|head|tail|less|more)(\s+|$)").unwrap(),
         // Text processing (read-only)
         Regex::new(r"^(grep|egrep|fgrep|rg|ag)(\s+|$)").unwrap(),
-        Regex::new(r"^(awk|sed|cut|sort|uniq|wc|tr)(\s+|$)").unwrap(),
+        // Note: awk and sed are excluded from safe patterns because they can modify files
+        // (sed -i, awk with output redirection). Only truly read-only text tools are safe.
+        Regex::new(r"^(cut|sort|uniq|wc|tr)(\s+|$)").unwrap(),
         // Directory navigation
         Regex::new(r"^(pwd|cd|pushd|popd)(\s+|$)").unwrap(),
         // Information commands

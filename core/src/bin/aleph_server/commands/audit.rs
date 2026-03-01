@@ -55,15 +55,17 @@ impl RiskLevel {
 
 /// Get default database path
 fn get_audit_db_path() -> PathBuf {
-    let home = dirs::home_dir().expect("Failed to get home directory");
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
     home.join(".aleph").join("approval_audit.db")
 }
 
 /// Format timestamp as human-readable string
 fn format_timestamp(timestamp: i64) -> String {
     use chrono::{Local, TimeZone};
-    let dt = Local.timestamp_opt(timestamp, 0).unwrap();
-    dt.format("%Y-%m-%d %H:%M:%S").to_string()
+    match Local.timestamp_opt(timestamp, 0) {
+        chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+        _ => "<invalid timestamp>".to_string(),
+    }
 }
 
 /// Handle audit tools command - list all tools with risk scores

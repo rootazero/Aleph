@@ -23,11 +23,14 @@ pub async fn execute_batch_move(
     let dest_canonical = if dest.exists() {
         check_and_resolve_path(dest, denied_paths)?
     } else if create_parents {
+        // Security: check destination path BEFORE creating it, to prevent
+        // writing into denied directories (e.g., ~/.ssh with create_parents=true).
+        let checked_dest = check_and_resolve_path(dest, denied_paths)?;
         // Create destination if needed
-        fs::create_dir_all(dest).map_err(|e| {
+        fs::create_dir_all(&checked_dest).map_err(|e| {
             ToolError::Execution(format!("Failed to create destination: {}", e))
         })?;
-        dest.to_path_buf()
+        checked_dest
     } else {
         return Err(ToolError::InvalidArgs(format!(
             "Destination does not exist: {}",

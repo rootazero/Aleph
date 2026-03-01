@@ -81,7 +81,10 @@ impl IdCardRule {
             sum += digit * weight;
         }
         let expected = CHECK_CODES[(sum % 11) as usize];
-        let last = id.chars().last().unwrap().to_ascii_uppercase();
+        let last = match id.chars().last() {
+            Some(c) => c.to_ascii_uppercase(),
+            None => return false,
+        };
         last == expected
     }
 

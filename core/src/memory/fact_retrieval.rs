@@ -195,7 +195,7 @@ impl FactRetrieval {
             for memory in &result.raw_memories {
                 // Truncate long responses
                 let ai_output: String = memory.ai_output.chars().take(300).collect();
-                let truncated = if memory.ai_output.len() > 300 {
+                let truncated = if memory.ai_output.chars().count() > 300 {
                     format!("{}...", ai_output)
                 } else {
                     ai_output
@@ -227,7 +227,7 @@ impl FactRetrieval {
             context.push_str("## 相关对话历史\n\n");
             for memory in &result.raw_memories {
                 let ai_output: String = memory.ai_output.chars().take(300).collect();
-                let truncated = if memory.ai_output.len() > 300 {
+                let truncated = if memory.ai_output.chars().count() > 300 {
                     format!("{}...", ai_output)
                 } else {
                     ai_output

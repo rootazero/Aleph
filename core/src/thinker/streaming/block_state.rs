@@ -248,12 +248,17 @@ impl ThinkingTagParser {
                     Some(std::mem::take(&mut self.buffer))
                 }
                 BlockState::Thinking => {
-                    self.accumulated_thinking.push_str(&self.buffer);
+                    // Use mem::take to move buffer out, preventing double-emission
+                    // in the subsequent thinking check below.
+                    let taken = std::mem::take(&mut self.buffer);
+                    self.accumulated_thinking.push_str(&taken);
                     None
                 }
             }
         };
 
+        // At this point, if we were in Thinking state, buffer was already taken above.
+        // self.buffer.is_empty() will be true, so no double-emission occurs.
         let thinking = if self.state == BlockState::Thinking && !self.buffer.is_empty() {
             Some(std::mem::take(&mut self.buffer))
         } else {

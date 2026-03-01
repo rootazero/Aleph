@@ -44,7 +44,10 @@ impl LanceMemoryBackend {
     /// All four tables are created if they do not already exist.
     pub async fn open_or_create(data_dir: &Path) -> Result<Self, AlephError> {
         let db_path = data_dir.join("memory.lance");
-        let db = lancedb::connect(db_path.to_str().unwrap())
+        let db_path_str = db_path.to_str().ok_or_else(|| {
+            AlephError::config("LanceDB path contains invalid UTF-8")
+        })?;
+        let db = lancedb::connect(db_path_str)
             .execute()
             .await
             .map_err(|e| AlephError::config(format!("LanceDB connect failed: {}", e)))?;

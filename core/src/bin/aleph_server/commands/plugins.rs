@@ -25,8 +25,9 @@ pub async fn handle_plugins_list() -> Result<(), Box<dyn std::error::Error>> {
             let status = if plugin.enabled { "enabled" } else { "disabled" };
             let description = plugin.description.clone().unwrap_or_default();
             // Truncate description if too long
-            let description = if description.len() > 38 {
-                format!("{}...", &description[..35])
+            let description = if description.chars().count() > 38 {
+                let truncated: String = description.chars().take(35).collect();
+                format!("{}...", truncated)
             } else {
                 description
             };

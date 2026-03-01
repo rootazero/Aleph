@@ -92,7 +92,7 @@ impl EvolutionAutoLoader {
 
         self.generated_skills
             .write()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .push(skill_dir.clone());
 
         // Phase 2: Load skill into ToolServer
@@ -156,7 +156,7 @@ impl EvolutionAutoLoader {
 
     /// Get the list of generated skill directories
     pub fn get_generated_skills(&self) -> Vec<PathBuf> {
-        self.generated_skills.read().unwrap().clone()
+        self.generated_skills.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Clear the generated skills tracking list

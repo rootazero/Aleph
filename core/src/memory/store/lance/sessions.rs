@@ -180,8 +180,9 @@ impl SessionStore for LanceMemoryBackend {
     }
 
     async fn delete_memory(&self, id: &str) -> Result<(), AlephError> {
+        use crate::memory::store::types::escape_sql_string;
         self.memories_table
-            .delete(&format!("id = '{}'", id))
+            .delete(&format!("id = '{}'", escape_sql_string(id)))
             .await
             .map_err(super::lance_err)?;
         Ok(())
@@ -209,10 +210,11 @@ impl SessionStore for LanceMemoryBackend {
         namespace: &NamespaceScope,
         workspace: &str,
     ) -> Result<Vec<MemoryEntry>, AlephError> {
+        use crate::memory::store::types::escape_sql_string;
         let ns_value = namespace.to_namespace_value();
         let filter = format!(
             "timestamp >= {} AND namespace = '{}' AND workspace = '{}'",
-            since_timestamp, ns_value, workspace
+            since_timestamp, escape_sql_string(&ns_value), escape_sql_string(workspace)
         );
 
         let mut entries =
@@ -246,12 +248,13 @@ impl SessionStore for LanceMemoryBackend {
         app_filter: Option<&str>,
         window_filter: Option<&str>,
     ) -> Result<u64, AlephError> {
+        use crate::memory::store::types::escape_sql_string;
         let filter = match (app_filter, window_filter) {
             (Some(app), Some(win)) => {
-                format!("app_bundle_id = '{}' AND window_title = '{}'", app, win)
+                format!("app_bundle_id = '{}' AND window_title = '{}'", escape_sql_string(app), escape_sql_string(win))
             }
-            (Some(app), None) => format!("app_bundle_id = '{}'", app),
-            (None, Some(win)) => format!("window_title = '{}'", win),
+            (Some(app), None) => format!("app_bundle_id = '{}'", escape_sql_string(app)),
+            (None, Some(win)) => format!("window_title = '{}'", escape_sql_string(win)),
             (None, None) => "true".to_string(),
         };
 

@@ -40,13 +40,13 @@ impl SecurityStore {
 
     /// Get current schema version
     fn get_schema_version(&self) -> SqliteResult<i32> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row("PRAGMA user_version", [], |row| row.get(0))
     }
 
     /// Set schema version
     fn set_schema_version(&self, version: i32) -> SqliteResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(&format!("PRAGMA user_version = {}", version), [])?;
         Ok(())
     }
@@ -62,7 +62,7 @@ impl SecurityStore {
                 "Migrating security schema"
             );
 
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
             // Enable foreign key constraints
             conn.execute("PRAGMA foreign_keys = ON", [])?;
@@ -94,7 +94,7 @@ impl SecurityStore {
 
     /// Insert or update a device
     pub fn upsert_device(&self, data: &DeviceUpsertData<'_>) -> SqliteResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
         let scopes_json = serde_json::to_string(data.scopes).unwrap_or_else(|e| {
             tracing::warn!("Failed to serialize device scopes: {}", e);
@@ -118,7 +118,7 @@ impl SecurityStore {
 
     /// Get device by ID
     pub fn get_device(&self, device_id: &str) -> SqliteResult<Option<DeviceRow>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT device_id, device_name, device_type, public_key, fingerprint, role, scopes,
                     created_at, approved_at, last_seen_at, revoked_at
@@ -136,7 +136,7 @@ impl SecurityStore {
 
     /// Get device by fingerprint
     pub fn get_device_by_fingerprint(&self, fingerprint: &str) -> SqliteResult<Option<DeviceRow>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT device_id, device_name, device_type, public_key, fingerprint, role, scopes,
                     created_at, approved_at, last_seen_at, revoked_at
@@ -154,7 +154,7 @@ impl SecurityStore {
 
     /// Check if device is approved (not revoked)
     pub fn is_device_approved(&self, device_id: &str) -> SqliteResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM devices WHERE device_id = ?1 AND revoked_at IS NULL",
             params![device_id],
@@ -165,7 +165,7 @@ impl SecurityStore {
 
     /// List all active devices
     pub fn list_devices(&self) -> SqliteResult<Vec<DeviceRow>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT device_id, device_name, device_type, public_key, fingerprint, role, scopes,
                     created_at, approved_at, last_seen_at, revoked_at
@@ -182,7 +182,7 @@ impl SecurityStore {
 
     /// Update device last_seen_at
     pub fn touch_device(&self, device_id: &str) -> SqliteResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
         conn.execute(
             "UPDATE devices SET last_seen_at = ?1 WHERE device_id = ?2",
@@ -193,7 +193,7 @@ impl SecurityStore {
 
     /// Revoke a device
     pub fn revoke_device(&self, device_id: &str) -> SqliteResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
         let rows = conn.execute(
             "UPDATE devices SET revoked_at = ?1 WHERE device_id = ?2 AND revoked_at IS NULL",
@@ -214,7 +214,7 @@ impl SecurityStore {
         scopes: &[String],
         expires_at: i64,
     ) -> SqliteResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
         let scopes_json = serde_json::to_string(scopes).unwrap_or_else(|e| {
             tracing::warn!("Failed to serialize token scopes: {}", e);
@@ -231,7 +231,7 @@ impl SecurityStore {
 
     /// Get token by hash
     pub fn get_token_by_hash(&self, token_hash: &str) -> SqliteResult<Option<TokenRow>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
 
         let mut stmt = conn.prepare(
@@ -252,7 +252,7 @@ impl SecurityStore {
 
     /// Update token last_used_at
     pub fn touch_token(&self, token_id: &str) -> SqliteResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
         conn.execute(
             "UPDATE tokens SET last_used_at = ?1 WHERE token_id = ?2",
@@ -263,7 +263,7 @@ impl SecurityStore {
 
     /// Revoke a token
     pub fn revoke_token(&self, token_id: &str) -> SqliteResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
         let rows = conn.execute(
             "UPDATE tokens SET revoked_at = ?1 WHERE token_id = ?2 AND revoked_at IS NULL",
@@ -274,7 +274,7 @@ impl SecurityStore {
 
     /// Revoke all tokens for a device
     pub fn revoke_device_tokens(&self, device_id: &str) -> SqliteResult<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
         let rows = conn.execute(
             "UPDATE tokens SET revoked_at = ?1 WHERE device_id = ?2 AND revoked_at IS NULL",
@@ -285,7 +285,7 @@ impl SecurityStore {
 
     /// Delete expired tokens
     pub fn delete_expired_tokens(&self) -> SqliteResult<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
         let rows = conn.execute(
             "DELETE FROM tokens WHERE expires_at < ?1 OR revoked_at IS NOT NULL",
@@ -298,7 +298,7 @@ impl SecurityStore {
 
     /// Insert a pairing request
     pub fn insert_pairing_request(&self, data: &PairingRequestData<'_>) -> SqliteResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
 
         conn.execute(
@@ -317,7 +317,7 @@ impl SecurityStore {
 
     /// Get pairing request by code
     pub fn get_pairing_request(&self, code: &str) -> SqliteResult<Option<PairingRequestRow>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
 
         let mut stmt = conn.prepare(
@@ -338,14 +338,14 @@ impl SecurityStore {
 
     /// Delete a pairing request
     pub fn delete_pairing_request(&self, code: &str) -> SqliteResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let rows = conn.execute("DELETE FROM pairing_requests WHERE code = ?1", params![code])?;
         Ok(rows > 0)
     }
 
     /// List pending pairing requests
     pub fn list_pairing_requests(&self) -> SqliteResult<Vec<PairingRequestRow>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
 
         let mut stmt = conn.prepare(
@@ -366,7 +366,7 @@ impl SecurityStore {
 
     /// Count pending pairing requests
     pub fn count_pairing_requests(&self) -> SqliteResult<usize> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM pairing_requests WHERE expires_at > ?1",
@@ -378,7 +378,7 @@ impl SecurityStore {
 
     /// Delete expired pairing requests
     pub fn delete_expired_pairing_requests(&self) -> SqliteResult<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
         let rows = conn.execute("DELETE FROM pairing_requests WHERE expires_at < ?1", params![now])?;
         Ok(rows as u64)
@@ -388,7 +388,7 @@ impl SecurityStore {
 
     /// Approve a channel sender
     pub fn approve_sender(&self, channel: &str, sender_id: &str) -> SqliteResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
 
         conn.execute(
@@ -403,7 +403,7 @@ impl SecurityStore {
 
     /// Check if sender is approved
     pub fn is_sender_approved(&self, channel: &str, sender_id: &str) -> SqliteResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM approved_senders WHERE channel = ?1 AND sender_id = ?2 AND revoked_at IS NULL",
             params![channel, sender_id],
@@ -414,7 +414,7 @@ impl SecurityStore {
 
     /// Revoke a sender
     pub fn revoke_sender(&self, channel: &str, sender_id: &str) -> SqliteResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
         let rows = conn.execute(
             "UPDATE approved_senders SET revoked_at = ?1 WHERE channel = ?2 AND sender_id = ?3 AND revoked_at IS NULL",
@@ -425,7 +425,7 @@ impl SecurityStore {
 
     /// List approved senders for a channel
     pub fn list_senders(&self, channel: &str) -> SqliteResult<Vec<(String, i64)>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT sender_id, approved_at FROM approved_senders WHERE channel = ?1 AND revoked_at IS NULL",
         )?;

@@ -34,6 +34,8 @@ pub struct ClaudeSupervisor {
     config: SupervisorConfig,
     master: Option<Box<dyn MasterPty + Send>>,
     writer: Option<Box<dyn Write + Send>>,
+    #[allow(dead_code)]
+    child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     running: Arc<AtomicBool>,
     masker: SecretMasker,
 }
@@ -45,6 +47,7 @@ impl ClaudeSupervisor {
             config,
             master: None,
             writer: None,
+            child: None,
             running: Arc::new(AtomicBool::new(false)),
             masker: SecretMasker::new(),
         }
@@ -78,8 +81,8 @@ impl ClaudeSupervisor {
             cmd.arg(arg);
         }
 
-        // Spawn process
-        let _child = pair
+        // Spawn process (keep child handle alive to prevent premature termination)
+        let child = pair
             .slave
             .spawn_command(cmd)
             .map_err(|e| SupervisorError::SpawnFailed(e.to_string()))?;
@@ -96,6 +99,7 @@ impl ClaudeSupervisor {
 
         self.master = Some(pair.master);
         self.writer = Some(writer);
+        self.child = Some(child);
         self.running.store(true, Ordering::SeqCst);
 
         // Create event channel

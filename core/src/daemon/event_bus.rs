@@ -24,8 +24,9 @@ impl DaemonEventBus {
 
     /// Send an event to all subscribers
     ///
-    /// # Errors
-    /// Returns `DaemonError::EventBus` if no receivers are active
+    /// Returns Ok(()) even when there are no receivers (this is normal during
+    /// startup before subscribers have registered). Only returns Err for
+    /// actual send failures.
     pub fn send(&self, event: DaemonEvent) -> Result<()> {
         match self.sender.send(event.clone()) {
             Ok(receiver_count) => {
@@ -33,10 +34,11 @@ impl DaemonEventBus {
                 Ok(())
             }
             Err(_) => {
+                // No active receivers is not an error — it's expected during startup
+                // before subscribers register. Treating it as an error would kill the
+                // WorldModel event loop permanently.
                 warn!("No active receivers for event: {:?}", event);
-                Err(DaemonError::EventBus(
-                    "No active receivers".to_string(),
-                ))
+                Ok(())
             }
         }
     }
@@ -86,9 +88,9 @@ mod tests {
             timestamp: Utc::now(),
         });
 
+        // send() returns Ok even with no receivers (graceful handling during startup)
         let result = bus.send(event);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), DaemonError::EventBus(_)));
+        assert!(result.is_ok());
     }
 
     #[test]

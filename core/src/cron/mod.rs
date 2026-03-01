@@ -248,8 +248,13 @@ impl CronService {
 
         for (col, col_type) in &job_columns {
             let sql = format!("ALTER TABLE cron_jobs ADD COLUMN {} {}", col, col_type);
-            // Ignore "duplicate column name" errors
-            let _ = conn.execute_batch(&sql);
+            // Only suppress "duplicate column name" errors; propagate real failures
+            if let Err(e) = conn.execute_batch(&sql) {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column name") {
+                    return Err(e);
+                }
+            }
         }
 
         let run_columns = [
@@ -261,7 +266,12 @@ impl CronService {
 
         for (col, col_type) in &run_columns {
             let sql = format!("ALTER TABLE cron_runs ADD COLUMN {} {}", col, col_type);
-            let _ = conn.execute_batch(&sql);
+            if let Err(e) = conn.execute_batch(&sql) {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column name") {
+                    return Err(e);
+                }
+            }
         }
 
         // Create new indexes (IF NOT EXISTS handles idempotency)
@@ -751,11 +761,13 @@ impl CronService {
                     params![now_ms, failures, next_run, job_id],
                 )?;
             } else {
-                // Max retries exceeded: compute normal next_run and trigger failure chain
+                // Max retries exceeded: disable the job and trigger failure chain.
+                // Keep consecutive_failures at current value (not reset to 0) to prevent
+                // infinite retry cycles where the counter resets after exhausting retries.
                 let next_run = scheduler::compute_next_run_at(job, now);
                 conn.execute(
-                    "UPDATE cron_jobs SET running_at = NULL, last_run_at = ?1, consecutive_failures = 0, next_run_at = ?2 WHERE id = ?3",
-                    params![now_ms, next_run, job_id],
+                    "UPDATE cron_jobs SET running_at = NULL, last_run_at = ?1, consecutive_failures = ?2, next_run_at = ?3, enabled = 0 WHERE id = ?4",
+                    params![now_ms, failures, next_run, job_id],
                 )?;
 
                 if let Some(ref next_id) = job.next_job_id_on_failure {

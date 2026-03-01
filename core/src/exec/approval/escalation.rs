@@ -9,16 +9,19 @@ pub fn check_path_escalation(
 ) -> Option<EscalationTrigger> {
     for (key, value) in params {
         if key.contains("path") || key.contains("file") || key.contains("dir") {
-            let path = PathBuf::from(value);
+            // Normalize path to resolve ".." traversal before comparing against approved paths.
+            // This prevents bypasses like "/tmp/../etc/passwd" matching "/tmp/*".
+            let path = normalize_path_components(&PathBuf::from(value));
+            let normalized_value = path.to_string_lossy();
 
-            // Check if path is within approved paths
+            // Check if normalized path is within approved paths
             let is_approved = approved_paths.iter().any(|approved| {
                 // Simple glob matching (simplified)
                 if approved.ends_with("/*") {
                     let prefix = approved.trim_end_matches("/*");
-                    value.starts_with(prefix)
+                    normalized_value.starts_with(prefix)
                 } else {
-                    value == approved
+                    *normalized_value == *approved
                 }
             });
 
@@ -42,6 +45,28 @@ pub fn check_path_escalation(
     }
 
     None
+}
+
+/// Normalize path by resolving ".." components without filesystem access.
+/// This prevents path traversal attacks (e.g., "/tmp/../etc/passwd" → "/etc/passwd").
+fn normalize_path_components(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                // Pop the last component (if possible)
+                normalized.pop();
+            }
+            Component::CurDir => {
+                // Skip "." components
+            }
+            _ => {
+                normalized.push(component);
+            }
+        }
+    }
+    normalized
 }
 
 /// Check if path is in sensitive directory

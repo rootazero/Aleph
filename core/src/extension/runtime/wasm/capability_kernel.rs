@@ -103,7 +103,12 @@ impl WasmCapabilityKernel {
             ));
         }
         let _msg = if msg.len() > self.limits.max_log_message_bytes {
-            &msg[..self.limits.max_log_message_bytes]
+            // Find a valid char boundary at or before the byte limit
+            let mut end = self.limits.max_log_message_bytes;
+            while end > 0 && !msg.is_char_boundary(end) {
+                end -= 1;
+            }
+            &msg[..end]
         } else {
             msg
         };
