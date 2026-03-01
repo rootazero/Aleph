@@ -19,8 +19,8 @@
 use crate::sync_primitives::Arc;
 
 use crate::builtin_tools::{
-    BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool,
-    ReadSkillTool, SearchTool, WebFetchTool, YouTubeTool,
+    BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, FileOpsTool,
+    ImageGenerateTool, PdfGenerateTool, ReadSkillTool, SearchTool, WebFetchTool, YouTubeTool,
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::tools::AlephToolDyn;
@@ -100,6 +100,16 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Control the macOS desktop: screenshots, OCR, UI automation, keyboard/mouse, app launch, canvas overlays",
         requires_config: false,
     },
+    BuiltinToolDefinition {
+        name: "config_read",
+        description: "Read current Aleph configuration with sensitive fields masked",
+        requires_config: true, // Requires config Arc<RwLock<Config>>
+    },
+    BuiltinToolDefinition {
+        name: "config_update",
+        description: "Update Aleph configuration with schema validation and secret vault integration",
+        requires_config: true, // Requires ConfigPatcher
+    },
     #[cfg(feature = "gateway")]
     BuiltinToolDefinition {
         name: "sessions_list",
@@ -156,6 +166,23 @@ pub fn create_tool_boxed(
         "read_skill" => Some(Box::new(ReadSkillTool::default())),
         "list_skills" => Some(Box::new(SkillListTool::default())),
         "desktop" => Some(Box::new(DesktopTool::new())),
+        // Config tools require runtime context (config handle / patcher)
+        "config_read" => {
+            if let Some(cfg) = config {
+                if let Some(ref config_handle) = cfg.config {
+                    return Some(Box::new(ConfigReadTool::new(Arc::clone(config_handle))));
+                }
+            }
+            None
+        }
+        "config_update" => {
+            if let Some(cfg) = config {
+                if let Some(ref patcher) = cfg.config_patcher {
+                    return Some(Box::new(ConfigUpdateTool::new(Arc::clone(patcher))));
+                }
+            }
+            None
+        }
         // Sessions tools require gateway_context and caller_agent_id at runtime,
         // so they cannot be created via create_tool_boxed. They are created
         // dynamically in BuiltinToolRegistry::execute_tool().

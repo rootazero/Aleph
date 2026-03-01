@@ -67,11 +67,13 @@ pub struct CoworkConfigToml {
     /// Require user confirmation before executing task graphs
     /// (Legacy field, ignored - confirmation is always required)
     #[serde(default = "default_require_confirmation", skip_serializing)]
+    #[schemars(skip)]
     pub require_confirmation: bool,
 
     /// Maximum number of tasks to run in parallel
     /// (Legacy field, ignored - uses hardcoded value for stability)
     #[serde(default = "default_max_parallelism", skip_serializing)]
+    #[schemars(skip)]
     pub max_parallelism: usize,
 
     /// AI provider to use for task planning (LLM decomposition)
