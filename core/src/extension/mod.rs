@@ -234,16 +234,22 @@ impl ExtensionManager {
 
         // Slow path: acquire write lock and load
         // Double-check after acquiring write lock to avoid race
-        let state = self.cache_state.write().await;
+        let mut state = self.cache_state.write().await;
         if state.loaded {
             return Ok(());
         }
 
-        // Release lock before loading (load_all will acquire its own locks)
+        // Mark as loaded BEFORE releasing the lock to prevent concurrent calls
+        // from also entering load_all (TOCTOU race fix).
+        state.loaded = true;
         drop(state);
 
-        // Load all extensions
-        self.load_all().await?;
+        // Load all extensions. If this fails, reset the loaded flag.
+        if let Err(e) = self.load_all().await {
+            let mut state = self.cache_state.write().await;
+            state.loaded = false;
+            return Err(e);
+        }
 
         Ok(())
     }

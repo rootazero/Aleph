@@ -23,7 +23,7 @@ pub fn handle_devices_list() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", "-".repeat(90));
         for device in devices {
             let device_type = device.device_type.unwrap_or_else(|| "-".to_string());
-            let approved_at = &device.approved_at[..19]; // Truncate to "2026-01-28T12:00:00"
+            let approved_at = device.approved_at.get(..19).unwrap_or(&device.approved_at);
             println!(
                 "{:<36} {:<20} {:<10} {:<20}",
                 device.device_id, device.device_name, device_type, approved_at

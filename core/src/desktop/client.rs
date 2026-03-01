@@ -36,7 +36,7 @@ impl DesktopBridgeClient {
     /// 1. `~/.aleph/run/desktop-bridge.sock` (managed by BridgeSupervisor)
     /// 2. `~/.aleph/bridge.sock` (standalone bridge)
     pub fn new() -> Self {
-        let home = dirs::home_dir().expect("cannot resolve home directory");
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
         let managed = home.join(".aleph").join("run").join("desktop-bridge.sock");
         let standalone = home.join(".aleph").join("bridge.sock");
 

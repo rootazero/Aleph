@@ -27,10 +27,27 @@ impl PermissionConfig {
             Self::Simple(action) => {
                 vec![PermissionRule::new(permission, "*", *action)]
             }
-            Self::Patterned(patterns) => patterns
-                .iter()
-                .map(|(pattern, action)| PermissionRule::new(permission, pattern, *action))
-                .collect(),
+            Self::Patterned(patterns) => {
+                let mut rules: Vec<_> = patterns
+                    .iter()
+                    .map(|(pattern, action)| PermissionRule::new(permission, pattern, *action))
+                    .collect();
+                // Sort deterministically: Deny first, then Ask, then Allow;
+                // within same action, sort by pattern for stable ordering
+                rules.sort_by(|a, b| {
+                    fn action_priority(a: &PermissionAction) -> u8 {
+                        match a {
+                            PermissionAction::Deny => 0,
+                            PermissionAction::Ask => 1,
+                            PermissionAction::Allow => 2,
+                        }
+                    }
+                    action_priority(&a.action)
+                        .cmp(&action_priority(&b.action))
+                        .then_with(|| a.pattern.cmp(&b.pattern))
+                });
+                rules
+            }
         }
     }
 }

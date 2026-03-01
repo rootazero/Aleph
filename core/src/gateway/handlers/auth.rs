@@ -248,9 +248,19 @@ pub async fn handle_connect(
         if let Some((token, signature)) = token_str.split_once(':') {
             match ctx.token_manager.validate_token(token, signature) {
                 Ok(validation) => {
-                    let device_id = params
-                        .device_id
-                        .unwrap_or_else(|| validation.device_id.clone());
+                    // Security: If client provides a device_id, it must match the token's
+                    // device_id to prevent identity spoofing (using a valid token from
+                    // device-A to impersonate device-B).
+                    if let Some(ref claimed_id) = params.device_id {
+                        if claimed_id != &validation.device_id {
+                            return JsonRpcResponse::error(
+                                request.id,
+                                -32001,
+                                "device_id mismatch: token was issued for a different device",
+                            );
+                        }
+                    }
+                    let device_id = validation.device_id.clone();
 
                     // Update last seen time if device is in store
                     let _ = ctx.device_store.update_last_seen(&device_id);

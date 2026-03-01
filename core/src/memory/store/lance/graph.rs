@@ -11,6 +11,7 @@ use lancedb::query::{ExecutableQuery, QueryBase, Select};
 
 use crate::config::types::memory::GraphDecayPolicy;
 use crate::error::AlephError;
+use crate::memory::store::types::escape_sql_string;
 use crate::memory::store::{DecayStats, GraphEdge, GraphNode, GraphStore, ResolvedEntity};
 
 use super::arrow_convert::{
@@ -109,7 +110,7 @@ impl GraphStore for LanceMemoryBackend {
         let existing = self.get_node(&node.id, workspace).await?;
         if existing.is_some() {
             self.nodes_table
-                .delete(&format!("id = '{}'", node.id))
+                .delete(&format!("id = '{}'", escape_sql_string(&node.id)))
                 .await
                 .map_err(super::lance_err)?;
         }
@@ -119,18 +120,18 @@ impl GraphStore for LanceMemoryBackend {
     }
 
     async fn get_node(&self, id: &str, workspace: &str) -> Result<Option<GraphNode>, AlephError> {
-        let filter = format!("id = '{}' AND workspace = '{}'", id, workspace);
+        let filter = format!("id = '{}' AND workspace = '{}'", escape_sql_string(id), escape_sql_string(workspace));
         let nodes = scan_nodes(&self.nodes_table, Some(&filter), Some(1)).await?;
         Ok(nodes.into_iter().next())
     }
 
     async fn upsert_edge(&self, edge: &GraphEdge, workspace: &str) -> Result<(), AlephError> {
         // Delete existing edge with same ID if present, then insert.
-        let filter = format!("id = '{}' AND workspace = '{}'", edge.id, workspace);
+        let filter = format!("id = '{}' AND workspace = '{}'", escape_sql_string(&edge.id), escape_sql_string(workspace));
         let existing = scan_edges(&self.edges_table, Some(&filter), Some(1)).await?;
         if !existing.is_empty() {
             self.edges_table
-                .delete(&format!("id = '{}'", edge.id))
+                .delete(&format!("id = '{}'", escape_sql_string(&edge.id)))
                 .await
                 .map_err(super::lance_err)?;
         }
@@ -146,7 +147,7 @@ impl GraphStore for LanceMemoryBackend {
         workspace: &str,
     ) -> Result<Vec<ResolvedEntity>, AlephError> {
         // Try exact match on the name column (FTS index may not exist in tests).
-        let filter = format!("name = '{}' AND workspace = '{}'", query, workspace);
+        let filter = format!("name = '{}' AND workspace = '{}'", escape_sql_string(query), escape_sql_string(workspace));
         let candidates = scan_nodes(&self.nodes_table, Some(&filter), None).await?;
 
         if candidates.is_empty() {
@@ -192,9 +193,11 @@ impl GraphStore for LanceMemoryBackend {
         context_key: Option<&str>,
         workspace: &str,
     ) -> Result<Vec<GraphEdge>, AlephError> {
-        let base_filter = format!("(from_id = '{}' OR to_id = '{}') AND workspace = '{}'", node_id, node_id, workspace);
+        let nid_safe = escape_sql_string(node_id);
+        let ws_safe = escape_sql_string(workspace);
+        let base_filter = format!("(from_id = '{}' OR to_id = '{}') AND workspace = '{}'", nid_safe, nid_safe, ws_safe);
         let filter = if let Some(ctx) = context_key {
-            format!("({}) AND context_key = '{}'", base_filter, ctx)
+            format!("({}) AND context_key = '{}'", base_filter, escape_sql_string(ctx))
         } else {
             base_filter
         };
@@ -208,9 +211,12 @@ impl GraphStore for LanceMemoryBackend {
         context_key: &str,
         workspace: &str,
     ) -> Result<usize, AlephError> {
+        let nid_safe = escape_sql_string(node_id);
+        let ctx_safe = escape_sql_string(context_key);
+        let ws_safe = escape_sql_string(workspace);
         let filter = format!(
             "(from_id = '{}' OR to_id = '{}') AND context_key = '{}' AND workspace = '{}'",
-            node_id, node_id, context_key, workspace
+            nid_safe, nid_safe, ctx_safe, ws_safe
         );
         let edges = scan_edges(&self.edges_table, Some(&filter), None).await?;
         Ok(edges.len())
@@ -219,14 +225,14 @@ impl GraphStore for LanceMemoryBackend {
     async fn apply_decay(&self, policy: &GraphDecayPolicy, workspace: &str) -> Result<DecayStats, AlephError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         let seconds_per_day: f64 = 86400.0;
         let mut stats = DecayStats::default();
 
         // --- Decay nodes ---
-        let ws_filter = format!("workspace = '{}'", workspace);
+        let ws_filter = format!("workspace = '{}'", escape_sql_string(workspace));
         let all_nodes = scan_nodes(&self.nodes_table, Some(&ws_filter), None).await?;
         let mut nodes_to_prune: Vec<String> = Vec::new();
         let mut nodes_to_update: Vec<GraphNode> = Vec::new();
@@ -250,7 +256,7 @@ impl GraphStore for LanceMemoryBackend {
         // Delete pruned nodes
         for id in &nodes_to_prune {
             self.nodes_table
-                .delete(&format!("id = '{}'", id))
+                .delete(&format!("id = '{}'", escape_sql_string(id)))
                 .await
                 .map_err(super::lance_err)?;
         }
@@ -258,7 +264,7 @@ impl GraphStore for LanceMemoryBackend {
         // Update decayed nodes (delete + re-insert)
         for node in &nodes_to_update {
             self.nodes_table
-                .delete(&format!("id = '{}'", node.id))
+                .delete(&format!("id = '{}'", escape_sql_string(&node.id)))
                 .await
                 .map_err(super::lance_err)?;
             let batch = graph_nodes_to_record_batch(std::slice::from_ref(node))?;
@@ -289,7 +295,7 @@ impl GraphStore for LanceMemoryBackend {
         // Delete pruned edges
         for id in &edges_to_prune {
             self.edges_table
-                .delete(&format!("id = '{}'", id))
+                .delete(&format!("id = '{}'", escape_sql_string(id)))
                 .await
                 .map_err(super::lance_err)?;
         }
@@ -297,7 +303,7 @@ impl GraphStore for LanceMemoryBackend {
         // Update decayed edges (delete + re-insert)
         for edge in &edges_to_update {
             self.edges_table
-                .delete(&format!("id = '{}'", edge.id))
+                .delete(&format!("id = '{}'", escape_sql_string(&edge.id)))
                 .await
                 .map_err(super::lance_err)?;
             let batch = graph_edges_to_record_batch(std::slice::from_ref(edge))?;
@@ -491,7 +497,7 @@ mod tests {
         // Create a recent node (should survive)
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         let mut recent_node = make_test_node("gn-recent", "RecentEntity", "concept");
         recent_node.decay_score = 1.0;

@@ -265,11 +265,11 @@ impl WorldModel {
                     language
                 );
 
+                // Acquire state lock first, then context lock (consistent ordering
+                // with periodic_inference to prevent deadlock).
+                let mut state = self.state.write().await;
                 let mut context = self.context.write().await;
                 context.dominant_language = Some(language.clone());
-
-                // If currently in Programming activity, update language field
-                let mut state = self.state.write().await;
                 if let ActivityType::Programming {
                     language: ref mut lang,
                     ..

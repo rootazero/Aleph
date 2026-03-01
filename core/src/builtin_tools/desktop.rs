@@ -291,7 +291,44 @@ Examples:
                 ActionType::DesktopLaunchApp,
                 args.bundle_id.clone().unwrap_or_default(),
             )),
-            _ => None,
+            // All other mutating actions require approval through DesktopClick as catch-all.
+            // Read-only actions (screenshot, ocr, ax_tree, window_list, focus_window, canvas_*)
+            // are listed explicitly below to skip approval.
+            "double_click" => Some((
+                ActionType::DesktopClick,
+                format!(
+                    "double_click({},{})",
+                    args.x.unwrap_or(0.0),
+                    args.y.unwrap_or(0.0)
+                ),
+            )),
+            "drag" => Some((
+                ActionType::DesktopClick,
+                "drag operation".to_string(),
+            )),
+            "hover" => Some((
+                ActionType::DesktopClick,
+                format!(
+                    "hover({},{})",
+                    args.x.unwrap_or(0.0),
+                    args.y.unwrap_or(0.0)
+                ),
+            )),
+            "scroll" => Some((
+                ActionType::DesktopClick,
+                "scroll operation".to_string(),
+            )),
+            "paste" => Some((
+                ActionType::DesktopType,
+                args.text.clone().unwrap_or_default(),
+            )),
+            // Read-only actions skip approval
+            "screenshot" | "ocr" | "ax_tree" | "window_list" | "focus_window" => None,
+            // Unknown actions default to requiring approval for safety
+            _ => Some((
+                ActionType::DesktopClick,
+                format!("unknown action: {}", args.action),
+            )),
         };
 
         if let Some((action_type, target)) = approval_check {

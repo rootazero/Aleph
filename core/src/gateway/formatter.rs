@@ -346,16 +346,31 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
             break;
         }
 
-        // Try to find the best split point within max_len.
-        let candidate = &remaining[..max_len];
+        // Find the nearest char boundary at or before max_len to avoid
+        // splitting in the middle of a multi-byte UTF-8 character.
+        let mut safe_max = max_len;
+        while safe_max > 0 && !remaining.is_char_boundary(safe_max) {
+            safe_max -= 1;
+        }
+        if safe_max == 0 {
+            // Degenerate case: entire prefix is a single huge codepoint.
+            // Advance to the next boundary to make progress.
+            safe_max = remaining.len().min(max_len + 3);
+            while safe_max < remaining.len() && !remaining.is_char_boundary(safe_max) {
+                safe_max += 1;
+            }
+        }
+
+        // Try to find the best split point within safe_max.
+        let candidate = &remaining[..safe_max];
 
         let mut split_pos = find_split_point(candidate);
 
         // Character-level fallback: if find_split_point returned 0 (no viable
-        // boundary found), force a hard split at max_len to guarantee forward
+        // boundary found), force a hard split at safe_max to guarantee forward
         // progress and the max_len contract.
         if split_pos == 0 {
-            split_pos = max_len;
+            split_pos = safe_max;
         }
 
         let (chunk, rest) = remaining.split_at(split_pos);

@@ -152,7 +152,8 @@ impl Persistence {
         successes: usize,
         failures: usize,
     ) -> SqliteResult<()> {
-        let action_json = serde_json::to_string(action).unwrap();
+        let action_json = serde_json::to_string(action)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let confidence = if count > 0 {
             successes as f64 / count as f64
         } else {
@@ -191,7 +192,8 @@ impl Persistence {
         let patterns = stmt
             .query_map([], |row| {
                 let action_json: String = row.get(1)?;
-                let action: AtomicAction = serde_json::from_str(&action_json).unwrap();
+                let action: AtomicAction = serde_json::from_str(&action_json)
+                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(e)))?;
 
                 Ok(LearnedPattern {
                     pattern: row.get(0)?,
@@ -215,7 +217,8 @@ impl Persistence {
     ///
     /// * `classifier` - The Naive Bayes classifier
     pub async fn save_classifier(&self, classifier: &NaiveBayesClassifier) -> SqliteResult<()> {
-        let state_json = serde_json::to_string(classifier).unwrap();
+        let state_json = serde_json::to_string(classifier)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let total_samples = classifier.sample_count();
         let now = chrono::Utc::now().timestamp();
 
@@ -242,7 +245,8 @@ impl Persistence {
 
         let result = stmt.query_row([], |row| {
             let state_json: String = row.get(0)?;
-            let classifier: NaiveBayesClassifier = serde_json::from_str(&state_json).unwrap();
+            let classifier: NaiveBayesClassifier = serde_json::from_str(&state_json)
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
             Ok(classifier)
         });
 

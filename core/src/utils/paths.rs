@@ -361,6 +361,19 @@ pub fn get_projects_dir() -> Result<PathBuf> {
 ///
 /// The directory is created if it doesn't exist.
 pub fn get_project_dir(project_id: &str) -> Result<PathBuf> {
+    // Validate project_id to prevent path traversal attacks.
+    // Reject any ID containing path separators or ".." components.
+    if project_id.contains('/')
+        || project_id.contains('\\')
+        || project_id.contains("..")
+        || project_id.is_empty()
+    {
+        return Err(AlephError::config(format!(
+            "Invalid project ID '{}': must not contain path separators or '..'",
+            project_id
+        )));
+    }
+
     let project_dir = get_projects_dir()?.join(project_id);
 
     if !project_dir.exists() {

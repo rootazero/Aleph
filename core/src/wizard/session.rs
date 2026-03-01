@@ -101,22 +101,22 @@ impl WizardSession {
                     match result {
                         Ok(()) => {
                             debug!(id = %id, "Wizard flow completed");
-                            *status.write().unwrap() = WizardStatus::Done;
+                            *status.write().unwrap_or_else(|e| e.into_inner()) = WizardStatus::Done;
                         }
                         Err(WizardSessionError::Cancelled) => {
                             debug!(id = %id, "Wizard flow cancelled");
-                            *status.write().unwrap() = WizardStatus::Cancelled;
+                            *status.write().unwrap_or_else(|e| e.into_inner()) = WizardStatus::Cancelled;
                         }
                         Err(e) => {
                             error!(id = %id, error = %e, "Wizard flow error");
-                            *status.write().unwrap() = WizardStatus::Error;
-                            *error.write().unwrap() = Some(e.to_string());
+                            *status.write().unwrap_or_else(|e| e.into_inner()) = WizardStatus::Error;
+                            *error.write().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
                         }
                     }
                 }
                 _ = cancel_rx => {
                     debug!(id = %id, "Wizard flow cancelled via signal");
-                    *status.write().unwrap() = WizardStatus::Cancelled;
+                    *status.write().unwrap_or_else(|e| e.into_inner()) = WizardStatus::Cancelled;
                 }
             }
         });
@@ -131,7 +131,7 @@ impl WizardSession {
 
     /// Get the current status
     pub fn status(&self) -> WizardStatus {
-        *self.status.read().unwrap()
+        *self.status.read().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Get the next step (blocks until a step is available or done)
@@ -143,7 +143,7 @@ impl WizardSession {
                 WizardStatus::Done => WizardNextResult::done(),
                 WizardStatus::Cancelled => WizardNextResult::cancelled(),
                 WizardStatus::Error => {
-                    let error = self.error.read().unwrap().clone();
+                    let error = self.error.read().unwrap_or_else(|e| e.into_inner()).clone();
                     WizardNextResult::error(error.unwrap_or_else(|| "Unknown error".to_string()))
                 }
                 _ => WizardNextResult::done(),
@@ -155,7 +155,7 @@ impl WizardSession {
         match rx.recv().await {
             Some(step) => {
                 // Store current step
-                *self.current_step.write().unwrap() = Some(step.clone());
+                *self.current_step.write().unwrap_or_else(|e| e.into_inner()) = Some(step.clone());
                 WizardNextResult::step(step)
             }
             None => {
@@ -165,7 +165,7 @@ impl WizardSession {
                     WizardStatus::Done => WizardNextResult::done(),
                     WizardStatus::Cancelled => WizardNextResult::cancelled(),
                     WizardStatus::Error => {
-                        let error = self.error.read().unwrap().clone();
+                        let error = self.error.read().unwrap_or_else(|e| e.into_inner()).clone();
                         WizardNextResult::error(error.unwrap_or_else(|| "Unknown error".to_string()))
                     }
                     _ => WizardNextResult::done(),
@@ -178,7 +178,7 @@ impl WizardSession {
     pub async fn answer(&self, step_id: &str, value: Value) -> Result<(), WizardSessionError> {
         // Verify step ID matches current
         {
-            let current = self.current_step.read().unwrap();
+            let current = self.current_step.read().unwrap_or_else(|e| e.into_inner());
             if let Some(ref step) = *current {
                 if step.id != step_id {
                     return Err(WizardSessionError::InvalidAnswer(format!(
@@ -193,7 +193,7 @@ impl WizardSession {
 
         // Find and resolve the pending answer
         let sender = {
-            let mut answers = self.answers.write().unwrap();
+            let mut answers = self.answers.write().unwrap_or_else(|e| e.into_inner());
             answers.remove(step_id).map(|p| p.sender)
         };
 
@@ -212,7 +212,7 @@ impl WizardSession {
         if let Some(tx) = self.cancel_tx.take() {
             let _ = tx.send(());
         }
-        *self.status.write().unwrap() = WizardStatus::Cancelled;
+        *self.status.write().unwrap_or_else(|e| e.into_inner()) = WizardStatus::Cancelled;
     }
 
     /// Check if the session is done

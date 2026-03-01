@@ -286,13 +286,13 @@ impl UnifiedTestRunner {
 
             if is_semantic {
                 // Skip semantic tests for now - they need LlmJudge
+                // Do NOT count as passed since no actual validation occurred
                 details.push(TestDetail {
                     name: scenario.name.clone(),
-                    passed: true,
+                    passed: false,
                     error: Some("Semantic validation skipped (requires LlmJudge)".to_string()),
                     duration_ms: scenario_start.elapsed().as_millis() as u64,
                 });
-                passed += 1;
             } else {
                 details.push(TestDetail {
                     name: scenario.name.clone(),

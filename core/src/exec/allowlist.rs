@@ -35,6 +35,11 @@ fn matches_entry(entry: &AllowlistEntry, resolution: &CommandResolution) -> bool
 
     // Glob pattern with * in middle (e.g., "git-*")
     if pattern.contains('*') {
+        // Reject executable names containing path separators to prevent traversal
+        // (e.g., "git-../../malicious" should not match "git-*")
+        if resolution.executable_name.contains('/') || resolution.executable_name.contains('\\') {
+            return false;
+        }
         return glob_match(pattern, &resolution.executable_name)
             || resolution
                 .resolved_path

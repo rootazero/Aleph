@@ -93,7 +93,7 @@ pub async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error
         device_name: &device_name,
         device_type: None,
         public_key: &[0u8; 32], // placeholder public key
-        fingerprint: &device_id[..16], // use device_id prefix as fingerprint
+        fingerprint: &device_id[..device_id.len().min(16)], // use device_id prefix as fingerprint
         role: "operator",
         scopes: &["*".to_string()],
     })?;

@@ -237,12 +237,17 @@ Provide a concise summary that allows continuing the task:"#,
     }
 }
 
-/// Truncate string to max length
+/// Truncate string to max length (UTF-8 safe)
 fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    if s.chars().count() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len])
+        let end_byte = s
+            .char_indices()
+            .nth(max_len)
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
+        format!("{}...", &s[..end_byte])
     }
 }
 

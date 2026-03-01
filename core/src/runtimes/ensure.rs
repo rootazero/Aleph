@@ -50,7 +50,14 @@ pub async fn ensure_capability(
     let probe_result = probe::probe(capability);
 
     if probe_result.found {
-        let bin_path = probe_result.bin_path.clone().unwrap();
+        let bin_path = match probe_result.bin_path.clone() {
+            Some(path) => path,
+            None => {
+                return Err(AlephError::other(
+                    format!("Capability {} found but no binary path reported", capability),
+                ));
+            }
+        };
         if let Some(ref warning) = probe_result.version_warning {
             warn!("{}", warning);
         }

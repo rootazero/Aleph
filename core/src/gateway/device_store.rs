@@ -67,7 +67,7 @@ impl DeviceStore {
 
     /// Initialize the database schema
     fn init_schema(&self) -> SqliteResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "CREATE TABLE IF NOT EXISTS approved_devices (
                 device_id TEXT PRIMARY KEY,
@@ -92,7 +92,7 @@ impl DeviceStore {
 
     /// Approve a new device
     pub fn approve_device(&self, device: &ApprovedDevice) -> SqliteResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let permissions_json = serde_json::to_string(&device.permissions).unwrap_or_default();
 
         conn.execute(
@@ -119,7 +119,7 @@ impl DeviceStore {
 
     /// Check if a device is approved
     pub fn is_approved(&self, device_id: &str) -> bool {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM approved_devices WHERE device_id = ?1",
@@ -132,7 +132,7 @@ impl DeviceStore {
 
     /// Get an approved device by ID
     pub fn get_device(&self, device_id: &str) -> Option<ApprovedDevice> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT device_id, device_name, device_type, approved_at, last_seen_at, permissions
              FROM approved_devices WHERE device_id = ?1",
@@ -157,7 +157,7 @@ impl DeviceStore {
 
     /// List all approved devices
     pub fn list_devices(&self) -> Vec<ApprovedDevice> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
             "SELECT device_id, device_name, device_type, approved_at, last_seen_at, permissions
              FROM approved_devices ORDER BY approved_at DESC",
@@ -190,7 +190,7 @@ impl DeviceStore {
 
     /// Update the last_seen_at timestamp for a device
     pub fn update_last_seen(&self, device_id: &str) -> SqliteResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE approved_devices SET last_seen_at = ?1 WHERE device_id = ?2",
@@ -201,7 +201,7 @@ impl DeviceStore {
 
     /// Revoke a device's approval
     pub fn revoke_device(&self, device_id: &str) -> SqliteResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let rows = conn.execute(
             "DELETE FROM approved_devices WHERE device_id = ?1",
             params![device_id],
@@ -214,7 +214,7 @@ impl DeviceStore {
 
     /// Get the count of approved devices
     pub fn device_count(&self) -> usize {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row("SELECT COUNT(*) FROM approved_devices", [], |row| {
             row.get::<_, i64>(0)
         })
@@ -223,7 +223,7 @@ impl DeviceStore {
 
     /// Update device permissions
     pub fn update_permissions(&self, device_id: &str, permissions: &[String]) -> SqliteResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let permissions_json = serde_json::to_string(permissions).unwrap_or_default();
         let rows = conn.execute(
             "UPDATE approved_devices SET permissions = ?1 WHERE device_id = ?2",

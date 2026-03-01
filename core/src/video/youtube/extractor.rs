@@ -40,7 +40,7 @@ impl YouTubeExtractor {
             .default_headers(headers)
             .timeout(Duration::from_secs(15))
             .build()
-            .expect("Failed to create HTTP client");
+            .unwrap_or_default();
 
         Self { client, config }
     }

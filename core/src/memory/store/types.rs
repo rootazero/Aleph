@@ -8,6 +8,26 @@ use crate::memory::namespace::NamespaceScope;
 use crate::memory::workspace::WorkspaceFilter;
 
 // ---------------------------------------------------------------------------
+// SQL String Escaping — prevent injection in LanceDB/DataFusion filter strings
+// ---------------------------------------------------------------------------
+
+/// Escape a string value for safe interpolation into a DataFusion SQL filter.
+///
+/// Replaces single quotes with doubled single quotes (`'` → `''`), which is
+/// the standard SQL escaping mechanism. This prevents injection attacks when
+/// building filter expressions like `column = '{value}'`.
+///
+/// # Examples
+/// ```rust,ignore
+/// let safe = escape_sql_string("O'Brien");
+/// assert_eq!(safe, "O''Brien");
+/// format!("name = '{}'", safe); // "name = 'O''Brien'"
+/// ```
+pub fn escape_sql_string(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+// ---------------------------------------------------------------------------
 // SearchFilter — filter for memory fact searches
 // ---------------------------------------------------------------------------
 
@@ -155,12 +175,14 @@ impl SearchFilter {
     /// This generates an OR-clause that retrieves facts visible from the
     /// given scope stack. Overrides individual `scope` / `persona_id` filters.
     pub fn with_scope_stack(mut self, persona_id: Option<&str>, workspace: &str) -> Self {
+        let ws_safe = escape_sql_string(workspace);
         let mut parts = vec![
             "scope = 'global'".to_string(),
-            format!("(scope = 'workspace' AND workspace = '{workspace}')"),
+            format!("(scope = 'workspace' AND workspace = '{ws_safe}')"),
         ];
         if let Some(pid) = persona_id {
-            parts.push(format!("(scope = 'persona' AND persona_id = '{pid}')"));
+            let pid_safe = escape_sql_string(pid);
+            parts.push(format!("(scope = 'persona' AND persona_id = '{pid_safe}')"));
         }
         self.scope_stack_clause = Some(format!("({})", parts.join(" OR ")));
         self
@@ -205,7 +227,7 @@ impl SearchFilter {
 
         if let Some(ref prefix) = self.path_prefix {
             // DataFusion supports the `starts_with` function.
-            clauses.push(format!("starts_with(path, '{}')", prefix));
+            clauses.push(format!("starts_with(path, '{}')", escape_sql_string(prefix)));
         }
 
         if let Some(min_conf) = self.min_confidence {
@@ -228,7 +250,7 @@ impl SearchFilter {
                 clauses.push(format!("scope = '{}'", scope.as_str()));
             }
             if let Some(ref persona_id) = self.persona_id {
-                clauses.push(format!("persona_id = '{persona_id}'"));
+                clauses.push(format!("persona_id = '{}'", escape_sql_string(persona_id)));
             }
         }
 

@@ -229,9 +229,8 @@ impl ConstraintValidator {
         if let Some(prefix) = pattern_str.strip_suffix("/**") {
             // Recursive match
             path_str.starts_with(prefix)
-        } else if pattern_str.ends_with("/*") {
+        } else if let Some(prefix) = pattern_str.strip_suffix('*') {
             // Single-level match
-            let prefix = &pattern_str[..pattern_str.len() - 1];
             if let Some(rest) = path_str.strip_prefix(prefix) {
                 !rest.is_empty() && !rest.contains('/')
             } else {

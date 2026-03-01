@@ -17,7 +17,7 @@ use crate::error::AlephError;
 use crate::memory::audit::AuditEntry;
 use crate::memory::context::{FactStats, FactType, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
-use crate::memory::store::types::{ScoredFact, SearchFilter};
+use crate::memory::store::types::{escape_sql_string, ScoredFact, SearchFilter};
 #[allow(deprecated)]
 use crate::memory::store::{AuditStore, HybridSearchParams, MemoryStore, PathEntry};
 
@@ -127,7 +127,7 @@ impl MemoryStore for LanceMemoryBackend {
     }
 
     async fn get_fact(&self, id: &str) -> Result<Option<MemoryFact>, AlephError> {
-        let filter = format!("id = '{}'", id);
+        let filter = format!("id = '{}'", escape_sql_string(id));
         let facts = scan_facts(&self.facts_table, Some(&filter), Some(1)).await?;
         Ok(facts.into_iter().next())
     }
@@ -140,7 +140,7 @@ impl MemoryStore for LanceMemoryBackend {
 
     async fn delete_fact(&self, id: &str) -> Result<(), AlephError> {
         self.facts_table
-            .delete(&format!("id = '{}'", id))
+            .delete(&format!("id = '{}'", escape_sql_string(id)))
             .await
             .map_err(super::lance_err)?;
         Ok(())
@@ -281,12 +281,15 @@ impl MemoryStore for LanceMemoryBackend {
         workspace: &str,
     ) -> Result<Vec<PathEntry>, AlephError> {
         let ns_value = ns.to_namespace_value();
+        let pp_safe = escape_sql_string(parent_path);
+        let ws_safe = escape_sql_string(workspace);
         let filter = if matches!(ns, NamespaceScope::Owner) {
-            format!("parent_path = '{}' AND workspace = '{}'", parent_path, workspace)
+            format!("parent_path = '{}' AND workspace = '{}'", pp_safe, ws_safe)
         } else {
+            let ns_safe = escape_sql_string(&ns_value);
             format!(
                 "parent_path = '{}' AND namespace = '{}' AND workspace = '{}'",
-                parent_path, ns_value, workspace
+                pp_safe, ns_safe, ws_safe
             )
         };
 
@@ -319,10 +322,13 @@ impl MemoryStore for LanceMemoryBackend {
         workspace: &str,
     ) -> Result<Option<MemoryFact>, AlephError> {
         let ns_value = ns.to_namespace_value();
+        let path_safe = escape_sql_string(path);
+        let ws_safe = escape_sql_string(workspace);
         let filter = if matches!(ns, NamespaceScope::Owner) {
-            format!("path = '{}' AND workspace = '{}'", path, workspace)
+            format!("path = '{}' AND workspace = '{}'", path_safe, ws_safe)
         } else {
-            format!("path = '{}' AND namespace = '{}' AND workspace = '{}'", path, ns_value, workspace)
+            let ns_safe = escape_sql_string(&ns_value);
+            format!("path = '{}' AND namespace = '{}' AND workspace = '{}'", path_safe, ns_safe, ws_safe)
         };
 
         let facts = scan_facts(&self.facts_table, Some(&filter), Some(1)).await?;
@@ -339,7 +345,7 @@ impl MemoryStore for LanceMemoryBackend {
             return Ok(Vec::new());
         }
 
-        let prefix_clause = format!("starts_with(path, '{}')", path_prefix);
+        let prefix_clause = format!("starts_with(path, '{}')", escape_sql_string(path_prefix));
         let scoped_filter = match filter.to_lance_filter() {
             Some(existing) => format!("{} AND {}", existing, prefix_clause),
             None => prefix_clause,
@@ -368,14 +374,16 @@ impl MemoryStore for LanceMemoryBackend {
         limit: usize,
     ) -> Result<Vec<MemoryFact>, AlephError> {
         let ns_value = ns.to_namespace_value();
+        let ws_safe = escape_sql_string(workspace);
         let filter = if matches!(ns, NamespaceScope::Owner) {
-            format!("fact_type = '{}' AND workspace = '{}'", fact_type.as_str(), workspace)
+            format!("fact_type = '{}' AND workspace = '{}'", fact_type.as_str(), ws_safe)
         } else {
+            let ns_safe = escape_sql_string(&ns_value);
             format!(
                 "fact_type = '{}' AND namespace = '{}' AND workspace = '{}'",
                 fact_type.as_str(),
-                ns_value,
-                workspace
+                ns_safe,
+                ws_safe
             )
         };
 
@@ -406,7 +414,7 @@ impl MemoryStore for LanceMemoryBackend {
         fact.invalidation_reason = Some(reason.to_string());
         fact.updated_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         self.update_fact(&fact).await
@@ -423,7 +431,7 @@ impl MemoryStore for LanceMemoryBackend {
         fact.content = new_content.to_string();
         fact.updated_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         self.update_fact(&fact).await
@@ -462,7 +470,7 @@ impl MemoryStore for LanceMemoryBackend {
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         for fact in &facts {

@@ -401,7 +401,9 @@ pub fn normalize_agent_id(id: &str) -> String {
     if result.is_empty() {
         DEFAULT_AGENT_ID.to_string()
     } else if result.len() > 64 {
-        result[..64].to_string()
+        // Safe: all chars are ASCII after the filter above, so byte[64] is always a char boundary.
+        // Using chars().take() for defensive correctness against future filter changes.
+        result.chars().take(64).collect()
     } else {
         result
     }

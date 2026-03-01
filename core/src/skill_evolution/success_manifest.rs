@@ -281,13 +281,11 @@ impl SuccessManifest {
             .iter()
             .any(|pattern| {
                 // Simple glob matching (can be enhanced with glob crate)
-                if pattern.ends_with("/**") {
+                if let Some(prefix) = pattern.strip_suffix("/**") {
                     // Recursive match: /data/** matches /data/file.txt and /data/subdir/file.txt
-                    let prefix = &pattern[..pattern.len() - 3];
                     path_str.starts_with(prefix) && (path_str.len() > prefix.len())
-                } else if pattern.ends_with("/*") {
+                } else if let Some(prefix) = pattern.strip_suffix('*') {
                     // Single-level match: /tmp/* matches /tmp/file.txt but not /tmp/subdir/file.txt
-                    let prefix = &pattern[..pattern.len() - 1]; // Keep the trailing /
                     if let Some(rest) = path_str.strip_prefix(prefix) {
                         // Check that there's no additional '/' in the rest
                         !rest.is_empty() && !rest.contains('/')
@@ -309,13 +307,11 @@ impl SuccessManifest {
             .read_paths
             .iter()
             .any(|pattern| {
-                if pattern.ends_with("/**") {
+                if let Some(prefix) = pattern.strip_suffix("/**") {
                     // Recursive match
-                    let prefix = &pattern[..pattern.len() - 3];
                     path_str.starts_with(prefix) && (path_str.len() > prefix.len())
-                } else if pattern.ends_with("/*") {
+                } else if let Some(prefix) = pattern.strip_suffix('*') {
                     // Single-level match
-                    let prefix = &pattern[..pattern.len() - 1]; // Keep the trailing /
                     if let Some(rest) = path_str.strip_prefix(prefix) {
                         !rest.is_empty() && !rest.contains('/')
                     } else {

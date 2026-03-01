@@ -294,7 +294,7 @@ impl WorkspaceManager {
 
     /// Load profiles from config
     pub fn load_profiles(&self, profiles: HashMap<String, ProfileConfig>) {
-        let mut cache = self.profiles.lock().unwrap();
+        let mut cache = self.profiles.lock().unwrap_or_else(|e| e.into_inner());
         *cache = profiles;
 
         // Ensure default profile exists
@@ -305,13 +305,13 @@ impl WorkspaceManager {
 
     /// Get a profile by name
     pub fn get_profile(&self, name: &str) -> Option<ProfileConfig> {
-        let cache = self.profiles.lock().unwrap();
+        let cache = self.profiles.lock().unwrap_or_else(|e| e.into_inner());
         cache.get(name).cloned()
     }
 
     /// List all available profiles
     pub fn list_profiles(&self) -> Vec<String> {
-        let cache = self.profiles.lock().unwrap();
+        let cache = self.profiles.lock().unwrap_or_else(|e| e.into_inner());
         cache.keys().cloned().collect()
     }
 

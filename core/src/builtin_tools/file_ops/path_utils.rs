@@ -114,13 +114,28 @@ pub fn check_and_resolve_path(path: &Path, denied_paths: &[String]) -> Result<Pa
 
     info!(expanded = %expanded.display(), exists = expanded.exists(), "check_path: expanded path");
 
-    // Canonicalize if exists, otherwise use as-is for new files
+    // Canonicalize if exists; for non-existent files, manually normalize to resolve ".."
+    // components. This prevents path traversal bypasses (e.g., "/allowed/../secret/file").
     let canonical = if expanded.exists() {
         expanded
             .canonicalize()
             .map_err(|e| ToolError::Execution(format!("Failed to resolve path: {}", e)))?
     } else {
-        expanded
+        // Normalize path components without filesystem access
+        use std::path::Component;
+        let mut normalized = PathBuf::new();
+        for component in expanded.components() {
+            match component {
+                Component::ParentDir => {
+                    normalized.pop();
+                }
+                Component::CurDir => {}
+                _ => {
+                    normalized.push(component);
+                }
+            }
+        }
+        normalized
     };
 
     info!(canonical = %canonical.display(), "check_path: canonical path");
