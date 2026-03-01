@@ -290,12 +290,15 @@ impl RollbackManager {
     ///
     /// Vector of `RollbackResult` for each entry
     pub async fn rollback_all(&self) -> Vec<RollbackResult> {
-        let mut entries = self.pending_entries.write().await;
-        let mut results = Vec::new();
+        // Drain entries under lock, then process without holding the lock
+        let mut drained: Vec<_> = {
+            let mut entries = self.pending_entries.write().await;
+            entries.drain(..).rev().collect()
+        };
 
-        // Process in reverse order (LIFO)
-        while let Some(entry) = entries.pop() {
-            let result = self.execute_rollback(&entry).await;
+        let mut results = Vec::new();
+        for entry in &drained {
+            let result = self.execute_rollback(entry).await;
             results.push(result);
         }
 
@@ -308,9 +311,12 @@ impl RollbackManager {
     ///
     /// `Some(RollbackResult)` if there was an entry to rollback, `None` otherwise
     pub async fn rollback_last(&self) -> Option<RollbackResult> {
-        let mut entries = self.pending_entries.write().await;
+        let entry = {
+            let mut entries = self.pending_entries.write().await;
+            entries.pop()
+        };
 
-        if let Some(entry) = entries.pop() {
+        if let Some(entry) = entry {
             Some(self.execute_rollback(&entry).await)
         } else {
             None
