@@ -191,7 +191,7 @@ impl StateDatabase {
                        started_at, completed_at, metadata_json
                 FROM agent_tasks
                 WHERE status IN ('running', 'interrupted')
-                ORDER BY risk_level ASC, created_at ASC
+                ORDER BY CASE risk_level WHEN 'low' THEN 0 WHEN 'high' THEN 1 ELSE 2 END ASC, created_at ASC
                 "#,
             )
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;

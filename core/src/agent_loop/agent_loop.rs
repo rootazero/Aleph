@@ -444,7 +444,7 @@ where
                     .await
                 {
                     Ok(compressed) => {
-                        let until = state.steps.len() - self.config.compression.recent_window_size;
+                        let until = state.steps.len().saturating_sub(self.config.compression.recent_window_size);
                         state.apply_compression(compressed.summary, until);
                     }
                     Err(e) => {
@@ -605,43 +605,39 @@ where
                     guard.record_tool_call(tool_name, arguments);
 
                     // Check for doom loop (exact same tool + arguments repeated)
-                    if let Some(GuardViolation::DoomLoop {
-                        tool_name: doom_tool,
-                        repeat_count,
-                        ..
-                    }) = guard.check(&state)
+                    if let Some(violation @ GuardViolation::DoomLoop { .. }) = guard.check(&state)
                     {
-                        // Only handle DoomLoop here, let other guards be checked at loop start
-                        if matches!(
-                            guard.check(&state),
-                            Some(GuardViolation::DoomLoop { .. })
-                        ) {
-                            // Ask user if they want to continue
-                            let should_continue = callback
-                                .on_doom_loop_detected(&doom_tool, arguments, repeat_count)
-                                .await;
+                        // Extract fields from the violation for callback use
+                        let (doom_tool, repeat_count) = match &violation {
+                            GuardViolation::DoomLoop { tool_name: t, repeat_count: r, .. } => (t.clone(), *r),
+                            _ => unreachable!(),
+                        };
 
-                            if should_continue {
-                                // User wants to continue - reset detection and proceed
-                                guard.reset_doom_loop_detection();
-                            } else {
-                                // User doesn't want to continue - trigger guard
-                                let violation = GuardViolation::DoomLoop {
-                                    tool_name: doom_tool,
-                                    repeat_count,
-                                    arguments_preview: serde_json::to_string(arguments)
-                                        .unwrap_or_default()
-                                        .chars()
-                                        .take(100)
-                                        .collect(),
-                                };
-                                callback.on_guard_triggered(&violation).await;
-                                // ===== COMPACTION TRIGGER: Session End (Doom Loop) =====
-                                self.compaction_trigger
-                                    .emit_loop_stop(StopReason::DoomLoopDetected)
-                                    .await;
-                                return LoopResult::GuardTriggered(violation);
-                            }
+                        // Ask user if they want to continue
+                        let should_continue = callback
+                            .on_doom_loop_detected(&doom_tool, arguments, repeat_count)
+                            .await;
+
+                        if should_continue {
+                            // User wants to continue - reset detection and proceed
+                            guard.reset_doom_loop_detection();
+                        } else {
+                            // User doesn't want to continue - trigger guard
+                            let final_violation = GuardViolation::DoomLoop {
+                                tool_name: doom_tool,
+                                repeat_count,
+                                arguments_preview: serde_json::to_string(arguments)
+                                    .unwrap_or_default()
+                                    .chars()
+                                    .take(100)
+                                    .collect(),
+                            };
+                            callback.on_guard_triggered(&final_violation).await;
+                            // ===== COMPACTION TRIGGER: Session End (Doom Loop) =====
+                            self.compaction_trigger
+                                .emit_loop_stop(StopReason::DoomLoopDetected)
+                                .await;
+                            return LoopResult::GuardTriggered(final_violation);
                         }
                     }
 

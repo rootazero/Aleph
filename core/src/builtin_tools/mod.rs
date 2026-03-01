@@ -145,13 +145,12 @@ static TOOL_PROGRESS_CALLBACK: Lazy<Mutex<Option<Arc<dyn ToolProgressCallback>>>
 /// set_tool_progress_handler(None); // Clear after done
 /// ```
 pub fn set_tool_progress_handler(handler: Option<Arc<dyn ToolProgressCallback>>) {
-    if let Ok(mut callback) = TOOL_PROGRESS_CALLBACK.lock() {
-        *callback = handler;
-        debug!(
-            has_handler = callback.is_some(),
-            "Tool progress handler updated"
-        );
-    }
+    let mut callback = TOOL_PROGRESS_CALLBACK.lock().unwrap_or_else(|e| e.into_inner());
+    *callback = handler;
+    debug!(
+        has_handler = callback.is_some(),
+        "Tool progress handler updated"
+    );
 }
 
 /// Notify that a tool has started execution
@@ -159,10 +158,9 @@ pub fn set_tool_progress_handler(handler: Option<Arc<dyn ToolProgressCallback>>)
 /// Called by tool implementations at the start of their `call` method.
 /// If no handler is set, this is a no-op.
 pub fn notify_tool_start(tool_name: &str, args_summary: &str) {
-    if let Ok(callback) = TOOL_PROGRESS_CALLBACK.lock() {
-        if let Some(ref handler) = *callback {
-            handler.on_tool_start(tool_name, args_summary);
-        }
+    let callback = TOOL_PROGRESS_CALLBACK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(ref handler) = *callback {
+        handler.on_tool_start(tool_name, args_summary);
     }
 }
 
@@ -171,9 +169,8 @@ pub fn notify_tool_start(tool_name: &str, args_summary: &str) {
 /// Called by tool implementations at the end of their `call` method.
 /// If no handler is set, this is a no-op.
 pub fn notify_tool_result(tool_name: &str, result_summary: &str, success: bool) {
-    if let Ok(callback) = TOOL_PROGRESS_CALLBACK.lock() {
-        if let Some(ref handler) = *callback {
-            handler.on_tool_result(tool_name, result_summary, success);
-        }
+    let callback = TOOL_PROGRESS_CALLBACK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(ref handler) = *callback {
+        handler.on_tool_result(tool_name, result_summary, success);
     }
 }

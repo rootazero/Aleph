@@ -116,7 +116,10 @@ impl NodeProcess {
     fn write_embedded_script(content: &str, plugin_id: &str) -> Result<PathBuf, ExtensionError> {
         let temp_dir = std::env::temp_dir();
         let unique_id = Uuid::new_v4();
-        let file_name = format!("aleph-plugin-host-{}-{}.js", plugin_id, unique_id);
+        let safe_id: String = plugin_id.chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        let file_name = format!("aleph-plugin-host-{}-{}.js", safe_id, unique_id);
         let temp_path = temp_dir.join(file_name);
 
         fs::write(&temp_path, content)

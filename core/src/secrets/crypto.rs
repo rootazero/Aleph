@@ -92,13 +92,22 @@ impl SecretsCrypto {
         nonce_bytes: &[u8; 12],
         salt: &[u8; 32],
     ) -> Result<String, SecretError> {
-        let key = self.derive_key(salt)?;
-        let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| SecretError::DecryptionFailed)?;
+        let mut key = self.derive_key(salt)?;
+        let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| {
+            key.fill(0);
+            SecretError::DecryptionFailed
+        })?;
 
         let nonce = Nonce::from_slice(nonce_bytes);
         let plaintext = cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|_| SecretError::DecryptionFailed)?;
+            .map_err(|_| {
+                key.fill(0);
+                SecretError::DecryptionFailed
+            })?;
+
+        // Zeroize derived key on stack
+        key.fill(0);
 
         String::from_utf8(plaintext).map_err(|_| SecretError::DecryptionFailed)
     }

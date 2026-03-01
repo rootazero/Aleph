@@ -83,8 +83,8 @@ impl LazyDecayEngine {
 
             // Calculate current strength
             let strength = MemoryStrength {
-                access_count: 0, // TODO: track in fact
-                last_accessed: fact.updated_at,
+                access_count: fact.access_count,
+                last_accessed: fact.last_accessed_at.unwrap_or(fact.updated_at),
                 creation_time: fact.created_at,
             };
 

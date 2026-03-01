@@ -110,7 +110,7 @@ pub async fn handle_connect(
     // Check for guest invitation token FIRST (before require_auth bypass)
     // Guest invitations should work regardless of require_auth setting
     if let Some(invitation_token) = &params.invitation_token {
-        debug!("Processing guest invitation token: {}", invitation_token);
+        debug!("Processing guest invitation token: {}...", invitation_token.get(..8).unwrap_or("***"));
         match ctx.invitation_manager.activate_invitation(invitation_token) {
             Ok(guest_token) => {
                 debug!("Guest invitation activated successfully for guest_id: {}", guest_token.guest_id);
@@ -199,12 +199,13 @@ pub async fn handle_connect(
 
         // Register device in SecurityStore first (required for FK constraint on tokens)
         let device_name = params.device_name.as_deref().unwrap_or("Auto-Device");
+        let device_fingerprint: String = device_id.chars().take(16).collect();
         if let Err(e) = ctx.security_store.upsert_device(&DeviceUpsertData {
             device_id: &device_id,
             device_name,
             device_type: None,
             public_key: &[0u8; 32], // Placeholder public key
-            fingerprint: &device_id[..16.min(device_id.len())], // Use prefix as fingerprint
+            fingerprint: &device_fingerprint, // Use prefix as fingerprint
             role: DeviceRole::Operator.as_str(),
             scopes: &["*".to_string()],
         }) {
@@ -483,12 +484,13 @@ pub async fn handle_pairing_approve(
     }
 
     // Register device in SecurityStore for token FK constraint
+    let device_fingerprint: String = device_id.chars().take(16).collect();
     if let Err(e) = ctx.security_store.upsert_device(&DeviceUpsertData {
         device_id: &device_id,
         device_name: &device_name,
         device_type: None,
         public_key: &[0u8; 32], // placeholder public key
-        fingerprint: &device_id[..16.min(device_id.len())], // use device_id prefix as fingerprint
+        fingerprint: &device_fingerprint, // use device_id prefix as fingerprint
         role: "operator",
         scopes: &["*".to_string()],
     }) {

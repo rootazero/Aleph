@@ -36,9 +36,8 @@ pub fn try_repair(incomplete: &str) -> Option<String> {
         repaired = stripped.to_string();
     }
 
-    // Step 2: Count unclosed brackets and quotes
-    let mut brace_count: i32 = 0;
-    let mut bracket_count: i32 = 0;
+    // Step 2: Track nesting order with a stack and detect unclosed strings
+    let mut stack = Vec::new();
     let mut in_string = false;
     let mut escape_next = false;
 
@@ -60,10 +59,9 @@ pub fn try_repair(incomplete: &str) -> Option<String> {
 
         if !in_string {
             match ch {
-                '{' => brace_count += 1,
-                '}' => brace_count -= 1,
-                '[' => bracket_count += 1,
-                ']' => bracket_count -= 1,
+                '{' => stack.push('}'),
+                '[' => stack.push(']'),
+                '}' | ']' => { stack.pop(); },
                 _ => {}
             }
         }
@@ -74,13 +72,9 @@ pub fn try_repair(incomplete: &str) -> Option<String> {
         repaired.push('"');
     }
 
-    // Step 4: Close unclosed brackets (] before })
-    for _ in 0..bracket_count {
-        repaired.push(']');
-    }
-
-    for _ in 0..brace_count {
-        repaired.push('}');
+    // Step 4: Close unclosed brackets/braces in reverse nesting order
+    while let Some(closer) = stack.pop() {
+        repaired.push(closer);
     }
 
     // Step 5: Validate result

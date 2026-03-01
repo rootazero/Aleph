@@ -217,7 +217,7 @@ async fn execute_agent_run(
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     emitter
-        .emit_reasoning(&run_id, &format!("Processing input: {}", &input[..input.len().min(50)]), false)
+        .emit_reasoning(&run_id, &format!("Processing input: {}", input.chars().take(50).collect::<String>()), false)
         .await;
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -226,16 +226,16 @@ async fn execute_agent_run(
     // Simulate response
     let response = format!("Echo: {}", input);
     let chunk_size = 50;
-    let chunks: Vec<&str> = response
-        .as_bytes()
+    let response_chars: Vec<char> = response.chars().collect();
+    let chunks: Vec<String> = response_chars
         .chunks(chunk_size)
-        .map(|c| std::str::from_utf8(c).unwrap_or(""))
+        .map(|c| c.iter().collect::<String>())
         .collect();
 
     for (i, chunk) in chunks.iter().enumerate() {
         let is_final = i == chunks.len() - 1;
         emitter
-            .emit_response_chunk(&run_id, chunk, i as u32, is_final)
+            .emit_response_chunk(&run_id, &chunk, i as u32, is_final)
             .await;
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     }
@@ -438,8 +438,9 @@ pub async fn handle_generate_title(request: JsonRpcRequest) -> JsonRpcResponse {
 
     // Generate a simple title from user input
     // TODO: Use AI to generate a better title
-    let title = if params.user_input.len() > 50 {
-        format!("{}...", &params.user_input[..47])
+    let title = if params.user_input.chars().count() > 50 {
+        let truncated: String = params.user_input.chars().take(47).collect();
+        format!("{}...", truncated)
     } else {
         params.user_input.clone()
     };

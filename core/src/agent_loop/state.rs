@@ -67,7 +67,7 @@ impl LoopState {
 
     /// Check if compression is needed
     pub fn needs_compression(&self, threshold: usize) -> bool {
-        let uncompressed_steps = self.steps.len() - self.compressed_until_step;
+        let uncompressed_steps = self.steps.len().saturating_sub(self.compressed_until_step);
         uncompressed_steps > threshold
     }
 

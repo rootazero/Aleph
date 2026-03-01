@@ -239,30 +239,20 @@ impl ThinkingTagParser {
 
     /// Finalize parsing, returning any remaining buffered content
     pub fn finalize(&mut self) -> (Option<String>, Option<String>) {
-        let content = if self.buffer.is_empty() {
-            None
+        let (content, thinking) = if self.buffer.is_empty() {
+            (None, None)
         } else {
             match self.state {
                 BlockState::Content | BlockState::InlineCode | BlockState::FencedCode => {
                     self.accumulated_content.push_str(&self.buffer);
-                    Some(std::mem::take(&mut self.buffer))
+                    (Some(std::mem::take(&mut self.buffer)), None)
                 }
                 BlockState::Thinking => {
-                    // Use mem::take to move buffer out, preventing double-emission
-                    // in the subsequent thinking check below.
                     let taken = std::mem::take(&mut self.buffer);
                     self.accumulated_thinking.push_str(&taken);
-                    None
+                    (None, Some(taken))
                 }
             }
-        };
-
-        // At this point, if we were in Thinking state, buffer was already taken above.
-        // self.buffer.is_empty() will be true, so no double-emission occurs.
-        let thinking = if self.state == BlockState::Thinking && !self.buffer.is_empty() {
-            Some(std::mem::take(&mut self.buffer))
-        } else {
-            None
         };
 
         self.reset();
