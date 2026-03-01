@@ -141,8 +141,8 @@ mod tests {
     use super::*;
     use crate::poe::events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind};
     use crate::poe::event_bus::PoeEventBus;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use crate::sync_primitives::{AtomicUsize, Ordering};
+    use crate::sync_primitives::Arc;
 
     struct CountingHandler {
         count: Arc<AtomicUsize>,

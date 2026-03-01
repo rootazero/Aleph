@@ -19,7 +19,7 @@ use crate::memory::EmbeddingProvider;
 use crate::memory::vfs::L1Generator;
 use crate::providers::AiProvider;
 use std::collections::HashSet;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use tokio::time::interval;

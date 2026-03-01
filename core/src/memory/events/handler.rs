@@ -6,7 +6,7 @@
 //!
 //! Projection to LanceDB happens downstream.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use uuid::Uuid;
 
 use crate::error::AlephError;

@@ -1,6 +1,6 @@
 use crate::daemon::{DaemonError, Result};
 use sysinfo::{System, RefreshKind, CpuRefreshKind};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 

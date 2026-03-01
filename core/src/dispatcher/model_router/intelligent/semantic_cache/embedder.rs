@@ -3,7 +3,7 @@
 //! Contains the TextEmbedder trait and BridgeEmbedder adapter that bridges
 //! the memory module's EmbeddingProvider to the semantic cache's TextEmbedder.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use crate::memory::EmbeddingProvider;
 
 // =============================================================================

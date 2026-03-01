@@ -5,7 +5,7 @@
 
 use crate::error::AlephError;
 use crate::resilience::database::StateDatabase;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 

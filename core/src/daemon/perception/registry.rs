@@ -1,6 +1,6 @@
 use crate::daemon::{perception::{Watcher, WatcherControl}, DaemonEventBus, DaemonError, Result};
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{error, info};

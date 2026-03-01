@@ -3,7 +3,7 @@
 use crate::config::types::memory::{EmbeddingProviderConfig, EmbeddingSettings};
 use crate::error::AlephError;
 use crate::memory::embedding_provider::{create_provider, EmbeddingProvider, RemoteEmbeddingProvider};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 

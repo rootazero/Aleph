@@ -6,7 +6,7 @@ use crate::providers::protocols::{AnthropicProtocol, GeminiProtocol, OpenAiProto
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 
 /// Global protocol registry instance
 pub static PROTOCOL_REGISTRY: Lazy<ProtocolRegistry> = Lazy::new(ProtocolRegistry::new);

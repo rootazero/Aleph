@@ -5,7 +5,7 @@
 
 use super::metrics::{CallRecord, MultiWindowMetrics, UserFeedback, WindowConfig};
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, RwLock};
 

@@ -10,7 +10,7 @@ use crate::runtimes::ledger::{
 };
 use crate::runtimes::probe;
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 use tracing::{info, warn};

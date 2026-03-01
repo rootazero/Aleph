@@ -6,7 +6,7 @@
 
 use crate::error::AlephError;
 use crate::memory::EmbeddingProvider;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::types::BehavioralAnchor;
 

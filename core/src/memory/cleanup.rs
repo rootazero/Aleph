@@ -2,7 +2,7 @@
 ///
 /// This module provides functionality to automatically delete old memories
 /// based on the configured retention policy.
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tokio::time::interval;
 

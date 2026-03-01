@@ -15,7 +15,7 @@
 //!     .build();
 //! ```
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::agent_loop::{LoopConfig, ThinkerTrait, ActionExecutor, CompressorTrait};
 use crate::agent_loop::{ContextProvider, MessageBuilder, MessageBuilderConfig};

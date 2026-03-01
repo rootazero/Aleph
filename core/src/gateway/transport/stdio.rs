@@ -40,8 +40,8 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;

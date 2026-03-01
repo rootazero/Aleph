@@ -6,7 +6,7 @@
 //! Invitations are one-time use only and tracked in-memory using DashMap.
 
 use dashmap::DashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use thiserror::Error;
 use uuid::Uuid;
 

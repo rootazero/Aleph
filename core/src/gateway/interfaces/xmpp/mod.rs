@@ -40,7 +40,7 @@ use crate::gateway::channel::{
     SendResult,
 };
 use async_trait::async_trait;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{mpsc, watch, RwLock};
 
 /// XMPP channel implementation using raw TCP (RFC 6120/6121 + XEP-0045 MUC).

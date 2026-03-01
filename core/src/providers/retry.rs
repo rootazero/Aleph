@@ -304,8 +304,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Arc;
+    use crate::sync_primitives::{AtomicU32, Ordering};
+    use crate::sync_primitives::Arc;
 
     #[test]
     fn test_is_retryable() {

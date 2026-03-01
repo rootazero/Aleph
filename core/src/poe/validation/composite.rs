@@ -20,7 +20,7 @@ use crate::error::Result;
 use crate::poe::types::{RuleResult, SoftRuleResult, SuccessManifest, Verdict, WorkerOutput};
 use crate::poe::validation::{HardValidator, SemanticValidator};
 use crate::providers::AiProvider;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Composite validator that orchestrates hard and semantic validation.
 ///

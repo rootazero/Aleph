@@ -1,6 +1,6 @@
 //! Core IntentClassifier implementation.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::l1_regex::match_regex;
 use super::l2_keywords::{

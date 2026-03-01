@@ -30,7 +30,7 @@ use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
 

@@ -4,7 +4,7 @@
 //! Primarily used by the Gateway to initialize the ExecutionEngine.
 
 use std::env;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::info;
 
 use crate::config::ProviderConfig;

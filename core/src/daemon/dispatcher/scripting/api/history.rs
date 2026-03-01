@@ -4,7 +4,7 @@ use crate::daemon::worldmodel::WorldModel;
 use crate::daemon::dispatcher::scripting::helpers::parse_duration;
 use super::event_collection::EventCollection;
 use super::baseline::BaselineApi;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use chrono::Utc;
 
 #[derive(Clone)]

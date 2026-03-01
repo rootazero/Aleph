@@ -4,7 +4,8 @@ use crate::error::{AlephError, Result};
 use crate::runtimes::ensure::ensure_capability;
 use crate::runtimes::ledger::CapabilityLedger;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use crate::sync_primitives::Arc;
+use std::sync::OnceLock;
 use tokio::sync::RwLock;
 use tracing::debug;
 

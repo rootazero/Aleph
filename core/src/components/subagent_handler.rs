@@ -4,7 +4,7 @@
 //! for synchronous result collection and tool call aggregation.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -462,7 +462,7 @@ mod tests {
     use super::*;
     use crate::agents::sub_agents::CoordinatorConfig;
     use crate::event::EventBus;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     fn create_test_registry() -> Arc<AgentRegistry> {
         Arc::new(AgentRegistry::with_builtins())

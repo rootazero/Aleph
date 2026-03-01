@@ -8,7 +8,7 @@ use super::types::{
 };
 use crate::dispatcher::model_router::CallRecord;
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 /// Central budget management

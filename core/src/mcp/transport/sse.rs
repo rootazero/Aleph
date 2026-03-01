@@ -8,7 +8,7 @@
 //! notifications to clients (e.g., tools/listChanged, resources/updated).
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;

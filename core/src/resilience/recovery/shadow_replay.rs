@@ -9,7 +9,7 @@ use crate::error::AlephError;
 use crate::resilience::{TaskTrace, TraceRole};
 use crate::resilience::database::StateDatabase;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Result of Shadow Replay operation
 #[derive(Debug, Clone)]

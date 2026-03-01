@@ -18,8 +18,8 @@
 //!    f. Otherwise -> retry with failure feedback
 //! 3. If loop exits -> return BudgetExhausted
 
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{AtomicU32, Ordering};
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 
 use crate::error::Result;
@@ -598,7 +598,7 @@ mod tests {
     use crate::poe::worker::MockWorker;
     use crate::providers::MockProvider;
     use std::path::PathBuf;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     fn create_test_manager(
         mock_worker: MockWorker,

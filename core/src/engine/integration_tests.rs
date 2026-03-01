@@ -6,7 +6,7 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod integration_tests {
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use std::time::Instant;
     use tempfile::TempDir;
 

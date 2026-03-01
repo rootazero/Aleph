@@ -12,7 +12,7 @@ use crate::providers::AiProvider;
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::debug;
 
 /// Generic HTTP-based AI provider

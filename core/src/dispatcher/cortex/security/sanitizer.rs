@@ -4,7 +4,7 @@
 //! pipelines. Rules are applied in priority order to detect and handle
 //! potentially malicious input.
 
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 
 /// Trust level assigned to the input source
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

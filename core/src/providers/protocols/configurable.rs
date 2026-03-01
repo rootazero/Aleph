@@ -11,7 +11,7 @@ use crate::providers::protocols::{
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use reqwest::Client;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::debug;
 
 /// Protocol adapter configured from YAML definition

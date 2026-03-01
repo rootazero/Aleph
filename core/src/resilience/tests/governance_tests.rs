@@ -8,7 +8,7 @@
 
 use crate::resilience::*;
 use crate::resilience::database::StateDatabase;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tempfile::TempDir;
 
 /// Test helper to create a temporary database

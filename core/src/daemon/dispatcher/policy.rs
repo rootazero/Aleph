@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use crate::daemon::events::DerivedEvent;
 use crate::daemon::worldmodel::state::EnhancedContext;
 use crate::daemon::worldmodel::WorldModel;

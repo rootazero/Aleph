@@ -39,7 +39,7 @@ use crate::gateway::channel::{
     SendResult,
 };
 use async_trait::async_trait;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{mpsc, watch, RwLock};
 
 /// Nostr channel implementation using NIP-01 WebSocket relay protocol.

@@ -6,7 +6,7 @@
 use crate::error::AlephError;
 use crate::resilience::{AgentTask, RiskLevel, TaskStatus};
 use crate::resilience::database::StateDatabase;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{info, warn};
 
 use super::shadow_replay::ShadowReplayEngine;

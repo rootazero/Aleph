@@ -9,7 +9,7 @@
 //! ```rust,no_run
 //! use alephcore::skill_evolution::sandboxed_executor::SandboxedToolExecutor;
 //! use alephcore::skill_evolution::tool_generator::GeneratedToolDefinition;
-//! use std::sync::Arc;
+//! use crate::sync_primitives::Arc;
 //! use std::path::PathBuf;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,7 +51,7 @@
 //! - **Runtime**: SandboxedToolExecutor validates and enforces constraints
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::constraint_validator::ConstraintValidator;
 use super::sandbox_integration::resolve_tool_capabilities;

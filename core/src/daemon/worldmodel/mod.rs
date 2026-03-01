@@ -26,7 +26,7 @@ use crate::daemon::{DaemonEvent, DaemonEventBus, ProcessEventType, RawEvent, Res
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::Duration;
 

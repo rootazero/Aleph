@@ -3,7 +3,7 @@
 //! Implements layered context delivery strategy based on event priority.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 

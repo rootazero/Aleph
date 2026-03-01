@@ -45,7 +45,7 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use subtle::ConstantTimeEq;
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};

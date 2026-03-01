@@ -10,7 +10,7 @@
 //! This module provides a notification router that converts these MCP
 //! notifications into Aleph events for the rest of the system to handle.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::mcp::jsonrpc::JsonRpcNotification;
 use crate::mcp::transport::NotificationCallback;
@@ -244,7 +244,7 @@ impl Default for McpNotificationRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::sync_primitives::{AtomicUsize, Ordering};
 
     #[test]
     fn test_mcp_event_tools_changed() {

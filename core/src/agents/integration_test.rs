@@ -1,6 +1,6 @@
 //! Integration tests for the sub-agent system.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::agents::{AgentRegistry, TaskTool};
 use crate::components::SubAgentHandler;

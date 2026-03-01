@@ -1,7 +1,7 @@
 //! Executor registry implementation
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{debug, warn};
 
 use super::{ExecutionContext, TaskExecutor};

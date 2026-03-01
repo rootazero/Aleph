@@ -464,7 +464,7 @@ mod tests {
     // These tests verify the database-dependent functionality
 
     use crate::memory::store::lance::LanceMemoryBackend;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     async fn create_test_db() -> MemoryBackend {
         let temp_dir = tempfile::tempdir().unwrap();

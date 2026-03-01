@@ -9,7 +9,7 @@ use super::types::BehavioralAnchor;
 use crate::error::AlephError;
 use lru::LruCache;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 
 /// Retrieves relevant behavioral anchors for a given intent
 ///

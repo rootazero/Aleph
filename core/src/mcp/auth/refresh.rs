@@ -3,7 +3,7 @@
 //! Automatically refreshes OAuth tokens before they expire for SSE connections.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use tokio::sync::RwLock;

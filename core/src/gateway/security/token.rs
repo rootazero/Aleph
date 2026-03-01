@@ -5,7 +5,7 @@
 //! Tokens are signed with HMAC-SHA256 and stored in SQLite.
 //! The original token value is never stored - only the hash.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use thiserror::Error;
 use uuid::Uuid;
 

@@ -516,7 +516,7 @@ pub fn create_mock_generation_provider() -> std::sync::Arc<dyn GenerationProvide
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     // === Trait object tests ===
 

@@ -6,7 +6,7 @@
 //! Inspired by OpenCode's tool/truncation.ts.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::sync_primitives::{AtomicU64, Ordering};
 
 use crate::error::Result;
 use crate::utils::paths;

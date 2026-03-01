@@ -4,7 +4,7 @@
 //! of one of the four LanceDB tables used by the memory subsystem:
 //! `facts`, `graph_nodes`, `graph_edges`, and `memories`.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use arrow_schema::{DataType, Field, Schema};
 

@@ -15,7 +15,7 @@ use crate::memory::workspace::WorkspaceFilter;
 use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter};
 use crate::providers::AiProvider;
 use std::collections::HashSet;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// L1 Overview generator
 ///
@@ -204,7 +204,7 @@ Format:
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     use crate::memory::store::lance::LanceMemoryBackend;
     use crate::memory::MemoryFact;

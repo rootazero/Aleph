@@ -6,7 +6,7 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::info;
 
 use crate::error::AlephError;

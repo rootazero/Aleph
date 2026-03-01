@@ -44,7 +44,7 @@ pub mod turn_protector;
 #[cfg(test)]
 mod tests_integration;
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 pub use context_stats::{CompressionFocus, ContextStats, UsageBreakdown, WarningLevel};
 pub use smart_compactor::{CompactionResult, SmartCompactor};

@@ -11,7 +11,7 @@ use crate::memory::cortex::{
 use crate::memory::EmbeddingProvider;
 use crate::memory::store::MemoryBackend;
 use crate::memory::value_estimator::cortex::CortexValueEstimator;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
 

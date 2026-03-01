@@ -41,7 +41,7 @@ use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use tracing::{debug, info};
 
 use super::AtomicAction;

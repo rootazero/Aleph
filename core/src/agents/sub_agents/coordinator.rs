@@ -4,7 +4,7 @@
 //! Inspired by OpenCode's session-based synchronous execution model.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};

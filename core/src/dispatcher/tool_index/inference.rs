@@ -5,7 +5,7 @@
 //! - L1: Rule-based template using name, category, description (fallback)
 //! - L2: Async LLM enhancement (eventual consistency, background optimization)
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use crate::providers::AiProvider;
 
 /// Result of semantic purpose inference

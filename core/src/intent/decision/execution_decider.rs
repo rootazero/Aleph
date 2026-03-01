@@ -43,7 +43,8 @@ use crate::dispatcher::ToolSourceType;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
+use crate::sync_primitives::Arc;
+use std::sync::LazyLock;
 
 // =============================================================================
 // Core Types

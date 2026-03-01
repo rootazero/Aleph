@@ -40,7 +40,7 @@ use crate::gateway::channel::{
     ChannelResult, ChannelStatus, ConversationId, InboundMessage, OutboundMessage, SendResult,
 };
 use async_trait::async_trait;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{mpsc, watch, RwLock};
 
 /// Email channel implementation using IMAP + SMTP.

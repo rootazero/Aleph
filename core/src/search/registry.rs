@@ -4,7 +4,7 @@ use crate::search::{ProviderTestResult, SearchOptions, SearchProvider, SearchRes
 ///
 /// This module manages multiple search providers and routes requests
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use crate::sync_primitives::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Registry for managing multiple search providers

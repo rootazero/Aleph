@@ -5,7 +5,7 @@ use crate::daemon::dispatcher::policy::Policy;
 use crate::daemon::worldmodel::WorldModel;
 use crate::daemon::error::{DaemonError, Result};
 use std::path::Path;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::fs;
 
 /// Load YAML policies from file

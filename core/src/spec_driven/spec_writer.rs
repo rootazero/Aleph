@@ -3,7 +3,7 @@
 //! Uses LLM to transform user requirements into structured specifications
 //! with acceptance criteria and implementation notes.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::Deserialize;
 use tracing::{debug, info};

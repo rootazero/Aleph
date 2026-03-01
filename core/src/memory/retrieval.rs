@@ -10,7 +10,7 @@ use crate::memory::graph::GraphStore;
 use crate::memory::EmbeddingProvider;
 use crate::memory::store::types::MemoryFilter;
 use crate::memory::store::{MemoryBackend, SessionStore};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{debug, info, warn};
 
 /// Memory retrieval service for searching past interactions

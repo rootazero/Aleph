@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn test_pii_scrubbing_integration() {
         // This test captures log output and verifies PII scrubbing works end-to-end
-        use std::sync::{Arc, Mutex};
+        use crate::sync_primitives::{Arc, Mutex};
 
         // Create a custom writer to capture output
         #[derive(Clone)]

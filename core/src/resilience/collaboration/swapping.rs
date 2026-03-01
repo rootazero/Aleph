@@ -9,7 +9,7 @@ use crate::resilience::{SessionStatus, SubagentSession};
 use crate::resilience::database::StateDatabase;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 

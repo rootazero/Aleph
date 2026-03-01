@@ -12,7 +12,7 @@ mod state;
 mod types;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use crate::config::RoutingRuleConfig;

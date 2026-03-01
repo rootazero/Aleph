@@ -3,7 +3,7 @@
 //! A tool that allows the main agent to delegate tasks to specialized sub-agents.
 //! This implements the rig-core Tool trait for integration with the agent loop.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

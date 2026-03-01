@@ -210,7 +210,7 @@ impl ConflictDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use crate::memory::context::FactType;
     use tempfile::tempdir;
 

@@ -4,7 +4,7 @@
 //! to active runs (human-in-the-loop support).
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};

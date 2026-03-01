@@ -6,7 +6,7 @@
 use super::types::{EnsembleConfig, ModelExecutionResult, TokenUsage};
 use crate::dispatcher::model_router::ModelProfile;
 use std::future::Future;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 

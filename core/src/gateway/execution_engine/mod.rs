@@ -18,7 +18,7 @@ pub use engine::ExecutionEngine;
 pub use simple::SimpleExecutionEngine;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use crate::sync_primitives::{AtomicU32, AtomicU64, Ordering};
 
 use tokio::sync::mpsc;
 

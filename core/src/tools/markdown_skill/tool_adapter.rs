@@ -4,8 +4,8 @@
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use crate::sync_primitives::Arc;
+use crate::sync_primitives::AtomicBool;
 use tracing::warn;
 
 use crate::dispatcher::{ToolCategory, ToolDefinition};

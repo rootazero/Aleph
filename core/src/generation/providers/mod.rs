@@ -58,7 +58,7 @@ pub use t8star_veo::{T8StarVeoProvider, T8StarVeoProviderBuilder};
 
 use crate::config::GenerationProviderConfig;
 use crate::generation::{GenerationError, GenerationProvider, GenerationResult};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Create a generation provider from configuration
 ///

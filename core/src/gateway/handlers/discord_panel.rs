@@ -16,7 +16,7 @@
 //! | `discord.update_allowlists` | Update guild/channel allowlists      |
 
 use serde_json::{json, Value};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{debug, info};
 
 use crate::gateway::channel::{ChannelId, ChannelStatus};

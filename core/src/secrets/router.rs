@@ -6,7 +6,7 @@
 //! *High* sensitivity secrets always bypass the cache.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;

@@ -3,7 +3,7 @@
 //! Listens for `OutcomeRecorded` events and updates pattern-level
 //! success metrics in the poe_trust_scores SQLite table.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tracing::{debug, warn};
 
 use crate::poe::events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind};

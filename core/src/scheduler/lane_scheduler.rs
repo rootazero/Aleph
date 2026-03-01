@@ -7,7 +7,7 @@
 //! - Statistics tracking
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::Semaphore;
 
 use super::{LaneConfig, LaneState, RecursionTracker, WaitTimeTracker};

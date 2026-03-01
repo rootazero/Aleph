@@ -5,7 +5,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use once_cell::sync::OnceCell;
 use serde_json::json;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::handlers::parse_params;

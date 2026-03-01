@@ -3,7 +3,7 @@
 //! Requires the Aleph Desktop Bridge to be connected. When the bridge is absent,
 //! all operations return a friendly message instead of an error.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

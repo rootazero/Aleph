@@ -20,7 +20,7 @@ pub use policy::{
 use crate::daemon::{DaemonEvent, DaemonEventBus, Result};
 use crate::daemon::worldmodel::{PendingAction, WorldModel};
 use chrono::{Duration, Utc};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 /// Dispatcher - Main orchestrator for proactive actions
