@@ -3,6 +3,7 @@
 //! This module defines the unified `PluginManifest` type that can be parsed
 //! from either `package.json` (Node.js plugins) or `aleph.plugin.json` (WASM plugins).
 
+use crate::extension::error::ExtensionError;
 use crate::extension::types::PluginKind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -326,12 +327,40 @@ impl PluginManifest {
     }
 
     /// Get the absolute path to the entry point
-    pub fn entry_path(&self) -> PathBuf {
-        if self.entry.is_absolute() {
+    ///
+    /// Returns an error if the entry path contains traversal components
+    /// or escapes the root directory.
+    pub fn entry_path(&self) -> Result<PathBuf, ExtensionError> {
+        // Check for path traversal in the entry itself
+        let entry_str = self.entry.to_string_lossy();
+        if entry_str.contains("..") {
+            return Err(ExtensionError::Runtime(format!(
+                "Path traversal (..) not allowed in plugin entry: {}",
+                entry_str
+            )));
+        }
+
+        let resolved = if self.entry.is_absolute() {
             self.entry.clone()
         } else {
             self.root_dir.join(&self.entry)
+        };
+
+        // If the resolved path exists, verify it doesn't escape root_dir via symlinks
+        if resolved.exists() && !self.root_dir.as_os_str().is_empty() {
+            if let (Ok(canonical_entry), Ok(canonical_root)) =
+                (resolved.canonicalize(), self.root_dir.canonicalize())
+            {
+                if !canonical_entry.starts_with(&canonical_root) {
+                    return Err(ExtensionError::Runtime(format!(
+                        "Plugin entry path escapes root directory: {:?} is not within {:?}",
+                        canonical_entry, canonical_root
+                    )));
+                }
+            }
         }
+
+        Ok(resolved)
     }
 
     /// Check if this manifest has configuration schema
@@ -432,7 +461,7 @@ mod tests {
         .with_root_dir(PathBuf::from("/plugins/my-plugin"));
 
         assert_eq!(
-            manifest.entry_path(),
+            manifest.entry_path().unwrap(),
             PathBuf::from("/plugins/my-plugin/dist/index.js")
         );
     }
@@ -449,9 +478,22 @@ mod tests {
 
         // Absolute entry path should be returned as-is
         assert_eq!(
-            manifest.entry_path(),
+            manifest.entry_path().unwrap(),
             PathBuf::from("/absolute/path/index.js")
         );
+    }
+
+    #[test]
+    fn test_plugin_manifest_entry_path_traversal_blocked() {
+        let manifest = PluginManifest::new(
+            "evil-plugin".to_string(),
+            "Evil Plugin".to_string(),
+            PluginKind::NodeJs,
+            PathBuf::from("../../etc/passwd"),
+        )
+        .with_root_dir(PathBuf::from("/plugins/evil-plugin"));
+
+        assert!(manifest.entry_path().is_err());
     }
 
     #[test]

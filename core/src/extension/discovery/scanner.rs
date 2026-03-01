@@ -84,7 +84,7 @@ fn scan_plugin_dir(
     if let Ok(manifest) = parse_manifest_from_dir_sync(dir) {
         return Ok(Some(PluginCandidate {
             id: manifest.id.clone(),
-            source: manifest.entry_path(),
+            source: manifest.entry_path()?,
             root_dir: dir.to_path_buf(),
             origin,
             kind: manifest.kind,
