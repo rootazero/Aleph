@@ -84,6 +84,9 @@ pub struct FeatureExtractor {
 
     /// Command patterns
     command_regex: Regex,
+
+    /// Quoted string patterns
+    pattern_regex: Regex,
 }
 
 impl FeatureExtractor {
@@ -94,6 +97,7 @@ impl FeatureExtractor {
             stop_words: Self::default_stop_words(),
             file_extension_regex: Regex::new(r"\b\w+\.(rs|toml|md|txt|json|yaml|yml|js|ts|py|go|java|c|cpp|h|hpp)\b").unwrap(),
             command_regex: Regex::new(r"\b(git|cargo|npm|python|node|bash|sh|ls|cd|pwd|cat|grep|find|mv|cp|rm|mkdir)\b").unwrap(),
+            pattern_regex: Regex::new(r#"['"]([^'"]+)['"]"#).unwrap(),
         }
     }
 
@@ -190,8 +194,7 @@ impl FeatureExtractor {
         }
 
         // Extract patterns (quoted strings)
-        let pattern_regex = Regex::new(r#"['"]([^'"]+)['"]"#).unwrap();
-        for cap in pattern_regex.captures_iter(input) {
+        for cap in self.pattern_regex.captures_iter(input) {
             if let Some(pattern) = cap.get(1) {
                 entities.push(Entity::Pattern(pattern.as_str().to_string()));
             }

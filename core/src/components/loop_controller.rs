@@ -4,6 +4,7 @@
 //! Publishes: LoopContinue, LoopStop, ToolCallRequested
 
 use async_trait::async_trait;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::sync::RwLock;
 
 use crate::components::types::{ExecutionSession, ToolCallRecord};
@@ -72,6 +73,10 @@ pub struct LoopController {
     config: LoopConfig,
     /// Current plan being executed
     current_plan: RwLock<Option<TaskPlan>>,
+    /// Internal iteration counter (incremented on each ToolCallCompleted)
+    iteration_count: AtomicU32,
+    /// Recent tool calls for doom loop detection
+    recent_calls: RwLock<Vec<ToolCallRecord>>,
 }
 
 impl Default for LoopController {
@@ -86,6 +91,8 @@ impl LoopController {
         Self {
             config: LoopConfig::default(),
             current_plan: RwLock::new(None),
+            iteration_count: AtomicU32::new(0),
+            recent_calls: RwLock::new(Vec::new()),
         }
     }
 
@@ -94,6 +101,8 @@ impl LoopController {
         Self {
             config,
             current_plan: RwLock::new(None),
+            iteration_count: AtomicU32::new(0),
+            recent_calls: RwLock::new(Vec::new()),
         }
     }
 
@@ -339,9 +348,28 @@ impl EventHandler for LoopController {
                     }
                 }
 
-                // Build a mock session for guard checking
-                // In real implementation, this would come from ComponentContext
-                let session = ExecutionSession::default();
+                // Track iteration count and recent calls internally
+                let iteration = self.iteration_count.fetch_add(1, Ordering::SeqCst) + 1;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                {
+                    let mut calls = self.recent_calls.write().await;
+                    calls.push(ToolCallRecord {
+                        tool: result.tool.clone(),
+                        input: result.input.clone(),
+                        timestamp: now,
+                    });
+                    // Keep only recent calls within doom loop window
+                    let cutoff = now - self.config.doom_loop_window_secs as i64;
+                    calls.retain(|c| c.timestamp >= cutoff);
+                }
+
+                let recent = self.recent_calls.read().await;
+                let mut session = ExecutionSession::default();
+                session.iteration_count = iteration;
+                session.recent_calls = recent.clone();
 
                 // Check guards
                 if let Some(stop_reason) = self.check_guards(&session, ctx) {
