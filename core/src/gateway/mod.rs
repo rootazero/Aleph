@@ -200,3 +200,9 @@ pub use workspace::{
     Workspace, WorkspaceManager, WorkspaceManagerConfig, WorkspaceError,
     CacheState, UserActiveWorkspace,
 };
+
+// Property-based tests (require gateway feature for protocol/channel types)
+#[cfg(all(test, feature = "gateway"))]
+mod proptest_protocol;
+#[cfg(all(test, feature = "gateway"))]
+mod proptest_channel;

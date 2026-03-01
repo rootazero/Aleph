@@ -121,6 +121,17 @@ check:
 test:
     cargo test --workspace
 
+# Run proptest with high coverage (1024 cases per test)
+test-proptest:
+    PROPTEST_CASES=1024 cargo test --workspace --lib
+
+# Run loom concurrency tests
+test-loom:
+    RUSTFLAGS="--cfg loom" LOOM_MAX_PREEMPTIONS=3 cargo test --features loom --lib
+
+# Run full logic review suite (proptest + loom)
+test-logic: test-proptest test-loom
+
 # Verify build dependencies are installed
 deps:
     #!/usr/bin/env bash

@@ -57,6 +57,8 @@ pub mod workspace_store;
 
 #[cfg(test)]
 mod integration_tests;
+#[cfg(test)]
+mod proptest_enums;
 
 // Re-export commonly used types
 pub use adaptive_retrieval::{AdaptiveRetrievalConfig, AdaptiveRetrievalGate, RetrievalDecision};
