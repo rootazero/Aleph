@@ -138,9 +138,10 @@ impl ProtocolAdapter for ConfigurableProtocol {
                 "Building custom protocol request"
             );
 
-            // Build template context
+            // Build template context (per-request overrides applied after config)
             let context = TemplateContext::new()
                 .with_config(config)
+                .with_payload_overrides(payload)
                 .with_input(payload.input)
                 .with_system_prompt(payload.system_prompt.unwrap_or(""))
                 .build();

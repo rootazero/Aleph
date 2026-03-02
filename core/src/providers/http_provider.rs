@@ -72,6 +72,8 @@ impl HttpProvider {
                             attachments: payload.attachments,
                             think_level: payload.think_level,
                             force_standard_mode: payload.force_standard_mode,
+                            temperature: payload.temperature,
+                            max_tokens: payload.max_tokens,
                         }
                     } else {
                         payload

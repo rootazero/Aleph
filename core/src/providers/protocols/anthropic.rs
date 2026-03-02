@@ -201,7 +201,9 @@ impl ProtocolAdapter for AnthropicProtocol {
         let endpoint = Self::build_endpoint(config);
         let messages = Self::build_messages(payload, config);
 
-        let max_tokens = config.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+        // Per-request overrides provider config
+        let max_tokens = payload.max_tokens.or(config.max_tokens).unwrap_or(DEFAULT_MAX_TOKENS);
+        let temperature = payload.temperature.or(config.temperature);
 
         // Build thinking config if enabled
         let thinking = payload
@@ -218,7 +220,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             messages,
             max_tokens,
             system: payload.system_prompt.map(|s| vec![SystemBlock::text(s)]),
-            temperature: config.temperature,
+            temperature,
             stream: if is_streaming { Some(true) } else { None },
             thinking,
         };
