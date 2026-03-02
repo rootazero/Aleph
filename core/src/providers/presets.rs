@@ -94,6 +94,34 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
+    // Zhipu GLM — Chinese AI research lab
+    m.insert(
+        "zhipu",
+        ProviderPreset {
+            base_url: "https://open.bigmodel.cn/api/paas/v4",
+            protocol: "openai",
+            color: "#3b5998",
+        },
+    );
+    m.insert(
+        "glm",
+        ProviderPreset {
+            base_url: "https://open.bigmodel.cn/api/paas/v4",
+            protocol: "openai",
+            color: "#3b5998",
+        },
+    );
+
+    // MiniMax — Chinese multimodal AI
+    m.insert(
+        "minimax",
+        ProviderPreset {
+            base_url: "https://api.minimax.io/v1",
+            protocol: "openai",
+            color: "#e84393",
+        },
+    );
+
     // T8Star
     m.insert(
         "t8star",
@@ -253,6 +281,9 @@ mod tests {
         assert!(PRESETS.contains_key("moonshot"));
         assert!(PRESETS.contains_key("doubao"));
         assert!(PRESETS.contains_key("siliconflow"));
+        assert!(PRESETS.contains_key("zhipu"));
+        assert!(PRESETS.contains_key("glm"));
+        assert!(PRESETS.contains_key("minimax"));
         assert!(PRESETS.contains_key("openai"));
 
         // Native protocols
