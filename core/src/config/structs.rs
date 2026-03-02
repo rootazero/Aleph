@@ -101,6 +101,10 @@ pub struct Config {
     /// Top-level secrets subsystem settings
     #[serde(default)]
     pub secrets_config: SecretsConfig,
+    /// Presets override loaded from ~/.aleph/presets.toml
+    /// Not serialized to config.toml — lives in its own file
+    #[serde(skip)]
+    pub presets_override: crate::config::presets_override::PresetsOverride,
 }
 
 // =============================================================================
@@ -191,6 +195,7 @@ impl Default for Config {
             secret_providers: HashMap::new(),
             secrets: HashMap::new(),
             secrets_config: SecretsConfig::default(),
+            presets_override: crate::config::presets_override::PresetsOverride::default(),
         }
     }
 }
