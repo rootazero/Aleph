@@ -19,6 +19,8 @@ pub struct SearchBackendDto {
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_id: Option<String>,
+    #[serde(default)]
+    pub verified: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +55,7 @@ pub async fn handle_get(
                 api_key: backend.api_key.clone(),
                 base_url: backend.base_url.clone(),
                 engine_id: backend.engine_id.clone(),
+                verified: backend.verified,
             })
             .collect();
         let dto = SearchConfigDto {
@@ -164,10 +167,12 @@ pub async fn handle_update(
                         api_key: None,
                         base_url: None,
                         engine_id: None,
+                        verified: false,
                     });
                 entry.api_key = backend_dto.api_key.clone();
                 entry.base_url = backend_dto.base_url.clone();
                 entry.engine_id = backend_dto.engine_id.clone();
+                entry.verified = false; // Config change resets verified
             }
 
             // Update PII config
@@ -201,4 +206,202 @@ pub async fn handle_update(
     let _ = event_bus.publish_json(&event);
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
+}
+
+// ============================================================================
+// Test Connection
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchTestResult {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Test a search backend connection
+pub async fn handle_test(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+) -> JsonRpcResponse {
+    #[derive(Deserialize)]
+    struct Params {
+        /// Backend name (used to persist verified=true on success)
+        name: String,
+        #[serde(default)]
+        api_key: Option<String>,
+        #[serde(default)]
+        base_url: Option<String>,
+        #[serde(default)]
+        engine_id: Option<String>,
+    }
+
+    let params: Params = match super::parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    // Determine provider type from config or fallback to name
+    let provider_type = {
+        let cfg = config.read().await;
+        cfg.search
+            .as_ref()
+            .and_then(|s| s.backends.get(&params.name))
+            .map(|b| b.provider_type.clone())
+            .unwrap_or_else(|| params.name.clone())
+    };
+
+    // Create a temporary search provider and test it
+    use crate::search::providers::*;
+    use crate::search::{SearchOptions, SearchProvider};
+
+    let test_result: SearchTestResult = match provider_type.as_str() {
+        "tavily" => {
+            let Some(ref api_key) = params.api_key else {
+                return JsonRpcResponse::success(
+                    request.id,
+                    serde_json::to_value(SearchTestResult {
+                        success: false,
+                        message: "API key is required for Tavily".to_string(),
+                    }).unwrap(),
+                );
+            };
+            match TavilyProvider::new(api_key.clone()) {
+                Ok(provider) => {
+                    let opts = SearchOptions { max_results: 1, ..Default::default() };
+                    match provider.search("test", &opts).await {
+                        Ok(_) => SearchTestResult { success: true, message: "Connection successful".to_string() },
+                        Err(e) => SearchTestResult { success: false, message: format!("Search failed: {}", e) },
+                    }
+                }
+                Err(e) => SearchTestResult { success: false, message: format!("Failed to create provider: {}", e) },
+            }
+        }
+        "brave" => {
+            let Some(ref api_key) = params.api_key else {
+                return JsonRpcResponse::success(
+                    request.id,
+                    serde_json::to_value(SearchTestResult {
+                        success: false,
+                        message: "API key is required for Brave".to_string(),
+                    }).unwrap(),
+                );
+            };
+            match BraveProvider::new(api_key.clone()) {
+                Ok(provider) => {
+                    let opts = SearchOptions { max_results: 1, ..Default::default() };
+                    match provider.search("test", &opts).await {
+                        Ok(_) => SearchTestResult { success: true, message: "Connection successful".to_string() },
+                        Err(e) => SearchTestResult { success: false, message: format!("Search failed: {}", e) },
+                    }
+                }
+                Err(e) => SearchTestResult { success: false, message: format!("Failed to create provider: {}", e) },
+            }
+        }
+        "searxng" => {
+            let base_url = params.base_url.unwrap_or_else(|| "http://localhost:8888".to_string());
+            match SearxngProvider::new(base_url) {
+                Ok(provider) => {
+                    let opts = SearchOptions { max_results: 1, ..Default::default() };
+                    match provider.search("test", &opts).await {
+                        Ok(_) => SearchTestResult { success: true, message: "Connection successful".to_string() },
+                        Err(e) => SearchTestResult { success: false, message: format!("Search failed: {}", e) },
+                    }
+                }
+                Err(e) => SearchTestResult { success: false, message: format!("Failed to create provider: {}", e) },
+            }
+        }
+        "google" => {
+            let Some(ref api_key) = params.api_key else {
+                return JsonRpcResponse::success(
+                    request.id,
+                    serde_json::to_value(SearchTestResult {
+                        success: false,
+                        message: "API key is required for Google".to_string(),
+                    }).unwrap(),
+                );
+            };
+            let Some(ref engine_id) = params.engine_id else {
+                return JsonRpcResponse::success(
+                    request.id,
+                    serde_json::to_value(SearchTestResult {
+                        success: false,
+                        message: "Engine ID (cx) is required for Google CSE".to_string(),
+                    }).unwrap(),
+                );
+            };
+            match GoogleProvider::new(api_key.clone(), engine_id.clone()) {
+                Ok(provider) => {
+                    let opts = SearchOptions { max_results: 1, ..Default::default() };
+                    match provider.search("test", &opts).await {
+                        Ok(_) => SearchTestResult { success: true, message: "Connection successful".to_string() },
+                        Err(e) => SearchTestResult { success: false, message: format!("Search failed: {}", e) },
+                    }
+                }
+                Err(e) => SearchTestResult { success: false, message: format!("Failed to create provider: {}", e) },
+            }
+        }
+        "bing" => {
+            let Some(ref api_key) = params.api_key else {
+                return JsonRpcResponse::success(
+                    request.id,
+                    serde_json::to_value(SearchTestResult {
+                        success: false,
+                        message: "API key is required for Bing".to_string(),
+                    }).unwrap(),
+                );
+            };
+            match BingProvider::new(api_key.clone()) {
+                Ok(provider) => {
+                    let opts = SearchOptions { max_results: 1, ..Default::default() };
+                    match provider.search("test", &opts).await {
+                        Ok(_) => SearchTestResult { success: true, message: "Connection successful".to_string() },
+                        Err(e) => SearchTestResult { success: false, message: format!("Search failed: {}", e) },
+                    }
+                }
+                Err(e) => SearchTestResult { success: false, message: format!("Failed to create provider: {}", e) },
+            }
+        }
+        "exa" => {
+            let Some(ref api_key) = params.api_key else {
+                return JsonRpcResponse::success(
+                    request.id,
+                    serde_json::to_value(SearchTestResult {
+                        success: false,
+                        message: "API key is required for Exa".to_string(),
+                    }).unwrap(),
+                );
+            };
+            match ExaProvider::new(api_key.clone()) {
+                Ok(provider) => {
+                    let opts = SearchOptions { max_results: 1, ..Default::default() };
+                    match provider.search("test", &opts).await {
+                        Ok(_) => SearchTestResult { success: true, message: "Connection successful".to_string() },
+                        Err(e) => SearchTestResult { success: false, message: format!("Search failed: {}", e) },
+                    }
+                }
+                Err(e) => SearchTestResult { success: false, message: format!("Failed to create provider: {}", e) },
+            }
+        }
+        _ => {
+            SearchTestResult {
+                success: false,
+                message: format!("Unknown provider type: {}", provider_type),
+            }
+        }
+    };
+
+    // Persist verified=true on success
+    if test_result.success {
+        let mut cfg = config.write().await;
+        if let Some(search) = &mut cfg.search {
+            if let Some(backend) = search.backends.get_mut(&params.name) {
+                backend.verified = true;
+                if let Err(e) = cfg.save() {
+                    tracing::error!(error = %e, "Failed to save config after search test");
+                }
+            }
+        }
+    }
+
+    JsonRpcResponse::success(request.id, serde_json::to_value(test_result).unwrap())
 }

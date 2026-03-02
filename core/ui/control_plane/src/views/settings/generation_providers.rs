@@ -230,6 +230,8 @@ fn ProviderCard(
         }
     };
 
+    let is_verified = entry.as_ref().map_or(false, |e| e.config.verified);
+
     view! {
         <div
             class=move || {
@@ -256,23 +258,32 @@ fn ProviderCard(
                     if is_configured {
                         if is_default() {
                             view! {
-                                <span class="px-2 py-1 text-xs font-medium bg-primary-subtle text-primary rounded">
-                                    "Default"
+                                <div class="flex gap-1">
+                                    <span class="px-2 py-1 text-xs font-medium bg-primary-subtle text-primary rounded">
+                                        "Default"
+                                    </span>
+                                    {if is_verified {
+                                        view! {
+                                            <span class="px-2 py-1 text-xs font-medium bg-success-subtle text-success rounded">
+                                                "Active"
+                                            </span>
+                                        }.into_view()
+                                    } else {
+                                        view! { <span></span> }.into_view()
+                                    }}
+                                </div>
+                            }.into_view()
+                        } else if is_verified {
+                            view! {
+                                <span class="px-2 py-1 text-xs font-medium bg-success-subtle text-success rounded">
+                                    "Active"
                                 </span>
                             }.into_view()
                         } else {
-                            view! {
-                                <span class="px-2 py-1 text-xs font-medium bg-success-subtle text-success rounded">
-                                    "Configured"
-                                </span>
-                            }.into_view()
+                            view! { <span></span> }.into_view()
                         }
                     } else {
-                        view! {
-                            <span class="px-2 py-1 text-xs font-medium bg-surface-raised text-text-tertiary rounded">
-                                "Not configured"
-                            </span>
-                        }.into_view()
+                        view! { <span></span> }.into_view()
                     }
                 }}
             </div>

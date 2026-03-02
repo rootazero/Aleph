@@ -79,6 +79,10 @@ pub struct GenerationProviderConfig {
     /// Model aliases (friendly name -> actual model ID)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub models: HashMap<String, String>,
+
+    /// Whether this provider has been verified via a successful test connection
+    #[serde(default)]
+    pub verified: bool,
 }
 
 fn default_enabled() -> bool {
@@ -107,6 +111,7 @@ impl Default for GenerationProviderConfig {
             timeout_seconds: default_timeout_seconds(),
             defaults: GenerationDefaults::default(),
             models: HashMap::new(),
+            verified: false,
         }
     }
 }

@@ -23,6 +23,7 @@ use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 /// Serialize a provider config to JSON and inject `is_active` based on the active provider id.
+/// The `verified` field is already part of EmbeddingProviderConfig and serialized automatically.
 fn inject_is_active(provider: &EmbeddingProviderConfig, active_id: &str) -> serde_json::Value {
     let mut val = serde_json::to_value(provider).unwrap_or_default();
     if let Some(obj) = val.as_object_mut() {
@@ -158,12 +159,14 @@ pub async fn handle_update(
     {
         let mut cfg = config.write().await;
 
-        // Find and update the provider
+        // Find and update the provider — config change resets verified
         let provider = cfg.memory.embedding.providers.iter_mut().find(|p| p.id == params.id);
 
         match provider {
             Some(existing) => {
-                *existing = params.config;
+                let mut new_config = params.config;
+                new_config.verified = false;
+                *existing = new_config;
             }
             None => {
                 return JsonRpcResponse::error(
@@ -279,13 +282,27 @@ pub async fn handle_set_active(
     {
         let mut cfg = config.write().await;
 
-        // Check if provider exists
-        if !cfg.memory.embedding.providers.iter().any(|p| p.id == params.id) {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("Embedding provider '{}' not found", params.id),
-            );
+        // Check if provider exists and is verified
+        match cfg.memory.embedding.providers.iter().find(|p| p.id == params.id) {
+            Some(provider) => {
+                if !provider.verified {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        format!(
+                            "Provider '{}' must pass a connection test before being set as default",
+                            params.id
+                        ),
+                    );
+                }
+            }
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Embedding provider '{}' not found", params.id),
+                );
+            }
         }
 
         cfg.memory.embedding.active_provider_id = params.id.clone();
@@ -370,16 +387,29 @@ pub async fn handle_test(
     };
 
     match provider.test_connection().await {
-        Ok(()) => JsonRpcResponse::success(
-            request.id,
-            serde_json::json!({
-                "success": true,
-                "message": format!(
-                    "Connection successful — model '{}', {} dimensions",
-                    provider_config.model, provider_config.dimensions
-                ),
-            }),
-        ),
+        Ok(()) => {
+            // Persist verified=true for the provider
+            {
+                let mut cfg = config.write().await;
+                if let Some(p) = cfg.memory.embedding.providers.iter_mut().find(|p| p.id == provider_config.id) {
+                    p.verified = true;
+                    if let Err(e) = cfg.save() {
+                        tracing::error!(error = %e, "Failed to save config after embedding test");
+                    }
+                }
+            }
+
+            JsonRpcResponse::success(
+                request.id,
+                serde_json::json!({
+                    "success": true,
+                    "message": format!(
+                        "Connection successful — model '{}', {} dimensions",
+                        provider_config.model, provider_config.dimensions
+                    ),
+                }),
+            )
+        }
         Err(e) => JsonRpcResponse::success(
             request.id,
             serde_json::json!({
@@ -441,8 +471,17 @@ mod tests {
         assert_eq!(presets.len(), 3);
     }
 
+    /// Build a Config with siliconflow added and set as active
+    fn config_with_siliconflow() -> Config {
+        use crate::config::types::memory::EmbeddingProviderConfig;
+        let mut cfg = Config::default();
+        cfg.memory.embedding.providers.push(EmbeddingProviderConfig::siliconflow());
+        cfg.memory.embedding.active_provider_id = "siliconflow".to_string();
+        cfg
+    }
+
     #[tokio::test]
-    async fn test_handle_list() {
+    async fn test_handle_list_empty_default() {
         let config = Arc::new(RwLock::new(Config::default()));
         let request = JsonRpcRequest::with_id("embedding_providers.list", None, serde_json::json!(1));
         let response = handle_list(request, config).await;
@@ -450,9 +489,19 @@ mod tests {
 
         let result = response.result.unwrap();
         let providers = result.as_array().unwrap();
-        // Default config has 3 providers: siliconflow, openai, ollama
-        assert_eq!(providers.len(), 3);
-        // First provider (siliconflow) should be active
+        assert_eq!(providers.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_handle_list_with_provider() {
+        let config = Arc::new(RwLock::new(config_with_siliconflow()));
+        let request = JsonRpcRequest::with_id("embedding_providers.list", None, serde_json::json!(1));
+        let response = handle_list(request, config).await;
+        assert!(response.is_success());
+
+        let result = response.result.unwrap();
+        let providers = result.as_array().unwrap();
+        assert_eq!(providers.len(), 1);
         let first = &providers[0];
         assert_eq!(first["id"].as_str().unwrap(), "siliconflow");
         assert!(first["is_active"].as_bool().unwrap());
@@ -460,7 +509,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_get_found() {
-        let config = Arc::new(RwLock::new(Config::default()));
+        let config = Arc::new(RwLock::new(config_with_siliconflow()));
         let request = JsonRpcRequest::with_id(
             "embedding_providers.get",
             Some(serde_json::json!({ "id": "siliconflow" })),
@@ -487,7 +536,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_remove_rejects_active() {
-        let config = Arc::new(RwLock::new(Config::default()));
+        let config = Arc::new(RwLock::new(config_with_siliconflow()));
         let event_bus = Arc::new(GatewayEventBus::new());
         let request = JsonRpcRequest::with_id(
             "embedding_providers.remove",

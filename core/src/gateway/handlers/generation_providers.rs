@@ -355,7 +355,9 @@ pub async fn handle_update(
             );
         }
 
-        // Update provider
+        // Update provider — config change resets verified
+        let mut provider_config = provider_config;
+        provider_config.verified = false;
         cfg.generation.providers.insert(params.name.clone(), provider_config);
 
         // Save to file
@@ -476,9 +478,19 @@ pub async fn handle_set_default(
     {
         let mut cfg = config.write().await;
 
-        // Check if provider exists and supports the generation type
+        // Check if provider exists, is verified, and supports the generation type
         match cfg.generation.providers.get(&params.name) {
             Some(provider_config) => {
+                if !provider_config.verified {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        format!(
+                            "Provider '{}' must pass a connection test before being set as default",
+                            params.name
+                        ),
+                    );
+                }
                 if !provider_config.capabilities.contains(&params.generation_type) {
                     return JsonRpcResponse::error(
                         request.id,
@@ -539,10 +551,13 @@ pub async fn handle_set_default(
 /// Test connection to a generation provider
 pub async fn handle_test_connection(
     request: JsonRpcRequest,
-    _config: Arc<RwLock<Config>>,
+    config: Arc<RwLock<Config>>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct Params {
+        /// Provider name (if provided, persist verified=true on success)
+        #[serde(default)]
+        name: Option<String>,
         provider_type: String,
         api_key: Option<String>,
         secret_name: Option<String>,
@@ -555,6 +570,8 @@ pub async fn handle_test_connection(
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    let provider_name = params.name;
 
     let api_key = match resolve_test_api_key(params.api_key, params.secret_name) {
         Ok(value) => value,
@@ -576,6 +593,17 @@ pub async fn handle_test_connection(
             message: "Model is required".to_string(),
         }
     } else {
+        // Persist verified=true if provider name was given
+        if let Some(ref name) = provider_name {
+            let mut cfg = config.write().await;
+            if let Some(p) = cfg.generation.providers.get_mut(name) {
+                p.verified = true;
+                if let Err(e) = save_config_with_secret_redaction(&cfg) {
+                    tracing::error!(error = %e, "Failed to save config after generation test");
+                }
+            }
+        }
+
         TestConnectionResult {
             success: true,
             message: format!("Connection test passed for {} provider", params.provider_type),

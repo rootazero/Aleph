@@ -82,6 +82,7 @@ pub fn create_claude_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
         media_resolution: None,
         repeat_penalty: None,
         system_prompt_mode: None,
+        verified: false,
     };
 
     let provider = create_provider("claude", config)
@@ -144,6 +145,7 @@ pub fn create_openai_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
         media_resolution: None,
         repeat_penalty: None,
         system_prompt_mode: None,
+        verified: false,
     };
 
     let provider = create_provider("openai", config)

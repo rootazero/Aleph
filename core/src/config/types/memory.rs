@@ -187,6 +187,9 @@ pub struct EmbeddingProviderConfig {
     /// Request timeout in milliseconds
     #[serde(default = "default_embedding_timeout_ms")]
     pub timeout_ms: u64,
+    /// Whether this provider has been verified via a successful test connection
+    #[serde(default)]
+    pub verified: bool,
 }
 
 impl EmbeddingProviderConfig {
@@ -203,6 +206,7 @@ impl EmbeddingProviderConfig {
             dimensions: 1024,
             batch_size: default_embedding_batch_size(),
             timeout_ms: default_embedding_timeout_ms(),
+            verified: false,
         }
     }
 
@@ -219,6 +223,7 @@ impl EmbeddingProviderConfig {
             dimensions: 1536,
             batch_size: default_embedding_batch_size(),
             timeout_ms: default_embedding_timeout_ms(),
+            verified: false,
         }
     }
 
@@ -235,6 +240,7 @@ impl EmbeddingProviderConfig {
             dimensions: 768,
             batch_size: default_embedding_batch_size(),
             timeout_ms: default_embedding_timeout_ms(),
+            verified: false,
         }
     }
 }
@@ -260,15 +266,11 @@ impl Default for EmbeddingSettings {
 }
 
 fn default_embedding_providers() -> Vec<EmbeddingProviderConfig> {
-    vec![
-        EmbeddingProviderConfig::siliconflow(),
-        EmbeddingProviderConfig::openai(),
-        EmbeddingProviderConfig::ollama(),
-    ]
+    Vec::new()
 }
 
 fn default_active_provider_id() -> String {
-    "siliconflow".to_string()
+    String::new()
 }
 
 // =============================================================================

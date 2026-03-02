@@ -246,14 +246,28 @@ fn PresetGrid(
                                         <span class="font-medium text-text-primary text-sm capitalize truncate">
                                             {name}
                                         </span>
-                                        {move || if is_configured() {
-                                            view! {
-                                                <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                    "Configured"
-                                                </span>
-                                            }.into_any()
-                                        } else {
-                                            view! { <span></span> }.into_any()
+                                        {move || {
+                                            let list = providers.get();
+                                            let provider = list.iter().find(|p| p.name == name);
+                                            if let Some(p) = provider {
+                                                if p.is_default {
+                                                    view! {
+                                                        <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
+                                                            "Default"
+                                                        </span>
+                                                    }.into_any()
+                                                } else if p.verified {
+                                                    view! {
+                                                        <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
+                                                            "Active"
+                                                        </span>
+                                                    }.into_any()
+                                                } else {
+                                                    view! { <span></span> }.into_any()
+                                                }
+                                            } else {
+                                                view! { <span></span> }.into_any()
+                                            }
                                         }}
                                     </div>
                                     <div class="text-xs text-text-tertiary truncate">
@@ -310,7 +324,7 @@ fn ConfiguredProviders(
                                     let name_sel = name.clone();
                                     let name_click = name.clone();
                                     let model = provider.model.clone();
-                                    let enabled = provider.enabled;
+                                    let verified = provider.verified;
                                     let is_default = provider.is_default;
                                     let protocol = provider.provider_type.clone().unwrap_or_default();
 
@@ -347,6 +361,12 @@ fn ConfiguredProviders(
                                                                 "Default"
                                                             </span>
                                                         }.into_any()
+                                                    } else if verified {
+                                                        view! {
+                                                            <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
+                                                                "Active"
+                                                            </span>
+                                                        }.into_any()
                                                     } else {
                                                         view! { <span></span> }.into_any()
                                                     }}
@@ -363,7 +383,7 @@ fn ConfiguredProviders(
                                                 <div class="text-xs text-text-tertiary truncate">{model}</div>
                                             </div>
                                             <div class=move || {
-                                                if enabled { "w-2 h-2 rounded-full bg-success shrink-0" }
+                                                if verified { "w-2 h-2 rounded-full bg-success shrink-0" }
                                                 else { "w-2 h-2 rounded-full bg-text-tertiary shrink-0" }
                                             }></div>
                                         </button>
