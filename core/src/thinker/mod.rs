@@ -194,6 +194,34 @@ impl<P: ProviderRegistry> Thinker<P> {
         self.model_selector.select(observation)
     }
 
+    /// Resolve the effective model, applying workspace profile override if set.
+    ///
+    /// If the active workspace profile specifies a `model`, it takes precedence
+    /// over the model router's selection. This allows workspace-specific model
+    /// binding (e.g., a "coding" workspace always uses claude-sonnet).
+    ///
+    /// NOTE: Temperature override is not yet supported at the per-request level
+    /// because `AiProvider::process()` does not accept generation parameters.
+    /// Temperature is currently set at provider construction time via `ProviderConfig`.
+    /// TODO: Support per-request temperature override when AiProvider trait evolves.
+    fn resolve_model(&self, observation: &Observation) -> ModelId {
+        let default_model_id = self.select_model(observation);
+
+        if let Some(ref profile) = self.config.active_profile {
+            if profile.model.is_some() {
+                let overridden = profile.effective_model(default_model_id.as_str());
+                tracing::debug!(
+                    default_model = %default_model_id.as_str(),
+                    profile_model = %overridden,
+                    "Workspace profile overrides model selection"
+                );
+                return ModelId::new(overridden);
+            }
+        }
+
+        default_model_id
+    }
+
     /// Build the complete prompt
     ///
     /// If a soul manifest is configured, identity is injected at the top of the
@@ -307,8 +335,8 @@ impl<P: ProviderRegistry> Thinker<P> {
 
         let observation = self.build_observation(state, &tools_for_observation);
 
-        // 2. Select model
-        let model_id = self.select_model(&observation);
+        // 2. Select model (with workspace profile override)
+        let model_id = self.resolve_model(&observation);
 
         // 3. Build prompt with hydration-based tools
         let (system, messages) = self.build_prompt_with_hydration(state, hydration, &observation);
@@ -364,8 +392,8 @@ impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
         // 3. Rebuild observation with filtered tools
         let observation = self.build_observation(state, &filtered_tools);
 
-        // 4. Select model
-        let model_id = self.select_model(&observation);
+        // 4. Select model (with workspace profile override)
+        let model_id = self.resolve_model(&observation);
 
         // 5. Build prompt
         let (system, messages) = self.build_prompt(state, &filtered_tools, &observation);
@@ -514,6 +542,90 @@ mod tests {
             thinking.decision,
             crate::agent_loop::Decision::Complete { .. }
         ));
+    }
+
+    #[test]
+    fn test_resolve_model_without_profile() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+
+        let observation = crate::agent_loop::Observation {
+            history_summary: String::new(),
+            recent_steps: vec![],
+            available_tools: vec![],
+            attachments: vec![],
+            current_step: 0,
+            total_tokens: 0,
+        };
+
+        // Without profile, resolve_model returns the router's selection
+        let model_id = thinker.resolve_model(&observation);
+        // Default ModelRoutingConfig uses empty strings, so selector returns ""
+        let default_id = thinker.select_model(&observation);
+        assert_eq!(model_id.as_str(), default_id.as_str());
+    }
+
+    #[test]
+    fn test_resolve_model_with_profile_override() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+
+        let config = ThinkerConfig {
+            active_profile: Some(crate::config::ProfileConfig {
+                model: Some("gemini-1.5-pro".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let thinker = Thinker::new(registry, config);
+
+        let observation = crate::agent_loop::Observation {
+            history_summary: String::new(),
+            recent_steps: vec![],
+            available_tools: vec![],
+            attachments: vec![],
+            current_step: 0,
+            total_tokens: 0,
+        };
+
+        // With profile model set, resolve_model overrides to profile's model
+        let model_id = thinker.resolve_model(&observation);
+        assert_eq!(model_id.as_str(), "gemini-1.5-pro");
+    }
+
+    #[test]
+    fn test_resolve_model_with_profile_no_model() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+
+        let config = ThinkerConfig {
+            active_profile: Some(crate::config::ProfileConfig {
+                // Profile exists but model is None — should fall through to router
+                model: None,
+                temperature: Some(0.3),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let thinker = Thinker::new(registry, config);
+
+        let observation = crate::agent_loop::Observation {
+            history_summary: String::new(),
+            recent_steps: vec![],
+            available_tools: vec![],
+            attachments: vec![],
+            current_step: 0,
+            total_tokens: 0,
+        };
+
+        // Profile without model should fall through to router's selection
+        let model_id = thinker.resolve_model(&observation);
+        let default_id = thinker.select_model(&observation);
+        assert_eq!(model_id.as_str(), default_id.as_str());
     }
 
     #[tokio::test]
