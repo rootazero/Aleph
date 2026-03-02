@@ -15,10 +15,12 @@ use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
 use alephcore::gateway::handlers::config as config_handlers;
 use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::handlers::memory as memory_handlers;
+use alephcore::gateway::handlers::workspace as workspace_handlers;
 use alephcore::gateway::{
     SessionManager,
     ChannelRegistry,
     ConfigWatcher, ConfigWatcherConfig, ConfigEvent,
+    WorkspaceManager,
 };
 use alephcore::memory::store::MemoryBackend;
 
@@ -383,6 +385,25 @@ pub(in crate::commands::start) fn register_memory_handlers(
     }
 }
 
+// ─── register_workspace_handlers ─────────────────────────────────────────────
+
+#[cfg(feature = "gateway")]
+pub(in crate::commands::start) fn register_workspace_handlers(
+    server: &mut GatewayServer,
+    workspace_manager: &Arc<WorkspaceManager>,
+    daemon: bool,
+) {
+    register_handler!(server, "workspace.switch", workspace_handlers::handle_switch, workspace_manager);
+    register_handler!(server, "workspace.getActive", workspace_handlers::handle_get_active, workspace_manager);
+
+    if !daemon {
+        println!("Workspace methods:");
+        println!("  - workspace.switch    : Switch active workspace");
+        println!("  - workspace.getActive : Get current active workspace");
+        println!();
+    }
+}
+
 // ─── register_config_handlers ────────────────────────────────────────────────
 
 #[cfg(feature = "gateway")]
@@ -493,4 +514,5 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "search_config.get", search_config::handle_get, config);
     register_handler!(server, "search_config.update", search_config::handle_update, config, event_bus);
     register_handler!(server, "search_config.test", search_config::handle_test, config);
+    register_handler!(server, "search_config.deleteBackend", search_config::handle_delete_backend, config, event_bus);
 }

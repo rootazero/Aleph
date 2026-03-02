@@ -36,6 +36,8 @@ use alephcore::gateway::pairing_store::SqlitePairingStore;
 #[cfg(all(feature = "gateway", feature = "discord"))]
 use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
 #[cfg(feature = "gateway")]
+use alephcore::gateway::handlers::chat as chat_handlers;
+#[cfg(feature = "gateway")]
 use alephcore::gateway::handlers::auth as auth_handlers;
 #[cfg(feature = "gateway")]
 use alephcore::gateway::security::{TokenManager, PairingManager};
@@ -70,7 +72,7 @@ use alephcore::gateway::{
 };
 
 use crate::cli::DEFAULT_LOG_FILE;
-use crate::server_init::handle_run_with_engine;
+use crate::server_init::{handle_run_with_engine, handle_chat_send_with_engine};
 
 #[cfg(feature = "gateway")]
 mod builder;
@@ -237,9 +239,46 @@ async fn initialize_extension_manager(daemon: bool) {
     }
 }
 
-/// Register agent.run / agent.status / agent.cancel handlers.
-/// Selects real ExecutionEngine when an API key is available, otherwise uses
-/// the simulated AgentRunManager.
+/// Try to create a provider registry from app config (Settings UI configured providers).
+/// Returns None if no usable provider is found.
+#[cfg(feature = "gateway")]
+fn create_provider_registry_from_config(
+    app_config: &alephcore::Config,
+) -> Option<Arc<alephcore::thinker::SingleProviderRegistry>> {
+    use alephcore::providers::create_provider;
+    use alephcore::thinker::SingleProviderRegistry;
+
+    // Determine which provider to use: default_provider or first enabled one
+    let provider_name = app_config.general.default_provider.clone()
+        .or_else(|| {
+            app_config.providers.iter()
+                .find(|(_, cfg)| cfg.enabled && cfg.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false))
+                .map(|(name, _)| name.clone())
+        });
+
+    let provider_name = provider_name?;
+    let provider_config = app_config.providers.get(&provider_name)?;
+
+    // Must have an API key
+    if provider_config.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
+        return None;
+    }
+
+    match create_provider(&provider_name, provider_config.clone()) {
+        Ok(provider) => {
+            tracing::info!(provider = %provider_name, "Created provider from app config");
+            Some(Arc::new(SingleProviderRegistry::new(provider)))
+        }
+        Err(e) => {
+            tracing::warn!(provider = %provider_name, error = %e, "Failed to create provider from config");
+            None
+        }
+    }
+}
+
+/// Register agent.run / agent.status / agent.cancel / chat.* handlers.
+/// Selects real ExecutionEngine when an API key is available (env or config),
+/// otherwise uses the simulated AgentRunManager.
 /// Returns the shared AgentRunManager (needed for status/cancel regardless of mode).
 #[cfg(feature = "gateway")]
 async fn register_agent_handlers(
@@ -248,85 +287,95 @@ async fn register_agent_handlers(
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     router: Arc<AgentRouter>,
     full_config: &FullGatewayConfig,
+    app_config: &alephcore::Config,
     daemon: bool,
 ) -> Arc<AgentRunManager> {
     let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
 
-    if can_create_provider_from_env() {
-        match create_provider_registry_from_env() {
-            Ok(provider_registry) => {
-                let tool_registry = Arc::new(BuiltinToolRegistry::new());
+    // Try to create provider: env vars first, then app config
+    let provider_registry = if can_create_provider_from_env() {
+        create_provider_registry_from_env().ok()
+    } else {
+        // Try from app config providers
+        create_provider_registry_from_config(app_config)
+    };
 
-                use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
-                use alephcore::dispatcher::{UnifiedTool, ToolSource};
-                let tools: Vec<UnifiedTool> = BUILTIN_TOOL_DEFINITIONS
-                    .iter()
-                    .map(|def| UnifiedTool::new(
-                        format!("builtin:{}", def.name),
-                        def.name,
-                        def.description,
-                        ToolSource::Builtin,
-                    ))
-                    .collect();
+    if let Some(provider_registry) = provider_registry {
+        let tool_registry = Arc::new(BuiltinToolRegistry::new());
 
-                let engine = Arc::new(ExecutionEngine::new(
-                    ExecutionEngineConfig::default(),
-                    provider_registry,
-                    tool_registry,
-                    tools,
-                    session_manager.clone(),
-                ));
+        use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
+        use alephcore::dispatcher::{UnifiedTool, ToolSource};
+        let tools: Vec<UnifiedTool> = BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|def| UnifiedTool::new(
+                format!("builtin:{}", def.name),
+                def.name,
+                def.description,
+                ToolSource::Builtin,
+            ))
+            .collect();
 
-                let agent_registry = Arc::new(AgentRegistry::new());
-                for agent_config in full_config.get_agent_instance_configs() {
-                    let agent_id = agent_config.agent_id.clone();
-                    match alephcore::gateway::AgentInstance::with_session_manager(
-                        agent_config,
-                        session_manager.clone(),
-                    ) {
-                        Ok(agent) => {
-                            agent_registry.register(agent).await;
-                            if !daemon {
-                                println!("  Registered agent: {} (with SQLite persistence)", agent_id);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Warning: Failed to create agent '{}': {}", agent_id, e);
-                        }
+        let engine = Arc::new(ExecutionEngine::new(
+            ExecutionEngineConfig::default(),
+            provider_registry,
+            tool_registry,
+            tools,
+            session_manager.clone(),
+        ));
+
+        let agent_registry = Arc::new(AgentRegistry::new());
+        for agent_config in full_config.get_agent_instance_configs() {
+            let agent_id = agent_config.agent_id.clone();
+            match alephcore::gateway::AgentInstance::with_session_manager(
+                agent_config,
+                session_manager.clone(),
+            ) {
+                Ok(agent) => {
+                    agent_registry.register(agent).await;
+                    if !daemon {
+                        println!("  Registered agent: {} (with SQLite persistence)", agent_id);
                     }
                 }
-
-                if !daemon {
-                    let provider_name = available_provider_from_env().unwrap_or("unknown");
-                    println!("  Mode: Real AgentLoop ({} API)", provider_name);
-                    println!();
+                Err(e) => {
+                    eprintln!("Warning: Failed to create agent '{}': {}", agent_id, e);
                 }
-
-                let engine_clone = engine.clone();
-                let event_bus_clone = event_bus.clone();
-                let router_clone = router.clone();
-                let agent_registry_clone = agent_registry.clone();
-                server.handlers_mut().register("agent.run", move |req| {
-                    let engine = engine_clone.clone();
-                    let event_bus = event_bus_clone.clone();
-                    let router = router_clone.clone();
-                    let agent_registry = agent_registry_clone.clone();
-                    async move {
-                        handle_run_with_engine(req, engine, event_bus, router, agent_registry).await
-                    }
-                });
-            }
-            Err(e) => {
-                if !daemon {
-                    eprintln!("Warning: Failed to create provider: {}. Falling back to simulated mode.", e);
-                }
-                let run_manager_clone = run_manager.clone();
-                server.handlers_mut().register("agent.run", move |req| {
-                    let manager = run_manager_clone.clone();
-                    async move { handle_run(req, manager).await }
-                });
             }
         }
+
+        if !daemon {
+            let provider_name = available_provider_from_env().unwrap_or("config");
+            println!("  Mode: Real AgentLoop ({} provider)", provider_name);
+            println!();
+        }
+
+        let engine_clone = engine.clone();
+        let event_bus_clone = event_bus.clone();
+        let router_clone = router.clone();
+        let agent_registry_clone = agent_registry.clone();
+        server.handlers_mut().register("agent.run", move |req| {
+            let engine = engine_clone.clone();
+            let event_bus = event_bus_clone.clone();
+            let router = router_clone.clone();
+            let agent_registry = agent_registry_clone.clone();
+            async move {
+                handle_run_with_engine(req, engine, event_bus, router, agent_registry).await
+            }
+        });
+
+        // chat.send also uses real ExecutionEngine
+        let engine_chat = engine.clone();
+        let event_bus_chat = event_bus.clone();
+        let router_chat = router.clone();
+        let agent_registry_chat = agent_registry.clone();
+        server.handlers_mut().register("chat.send", move |req| {
+            let engine = engine_chat.clone();
+            let event_bus = event_bus_chat.clone();
+            let router = router_chat.clone();
+            let agent_registry = agent_registry_chat.clone();
+            async move {
+                handle_chat_send_with_engine(req, engine, event_bus, router, agent_registry).await
+            }
+        });
     } else {
         if !daemon {
             println!("  Mode: Simulated (set ANTHROPIC_API_KEY or OPENAI_API_KEY for real execution)");
@@ -336,6 +385,12 @@ async fn register_agent_handlers(
         server.handlers_mut().register("agent.run", move |req| {
             let manager = run_manager_clone.clone();
             async move { handle_run(req, manager).await }
+        });
+
+        let rm_chat = run_manager.clone();
+        server.handlers_mut().register("chat.send", move |req| {
+            let manager = rm_chat.clone();
+            async move { chat_handlers::handle_send(req, manager).await }
         });
     }
 
@@ -352,11 +407,34 @@ async fn register_agent_handlers(
         async move { handle_agent_cancel(req, manager).await }
     });
 
+    // Register chat handlers (abort, history, clear work for both real and simulated)
+    let rm_abort = run_manager.clone();
+    server.handlers_mut().register("chat.abort", move |req| {
+        let manager = rm_abort.clone();
+        async move { chat_handlers::handle_abort(req, manager).await }
+    });
+
+    let sm_history = session_manager.clone();
+    server.handlers_mut().register("chat.history", move |req| {
+        let manager = sm_history.clone();
+        async move { chat_handlers::handle_history(req, manager).await }
+    });
+
+    let sm_clear = session_manager;
+    server.handlers_mut().register("chat.clear", move |req| {
+        let manager = sm_clear.clone();
+        async move { chat_handlers::handle_clear(req, manager).await }
+    });
+
     if !daemon {
         println!("Agent control methods:");
         println!("  - agent.run     : Execute agent request with streaming");
         println!("  - agent.status  : Query run status by run_id");
         println!("  - agent.cancel  : Cancel an active run");
+        println!("  - chat.send     : Send chat message (wraps agent.run)");
+        println!("  - chat.abort    : Abort message generation");
+        println!("  - chat.history  : Get chat history");
+        println!("  - chat.clear    : Clear chat history");
         println!();
     }
 
@@ -795,6 +873,11 @@ async fn initialize_inbound_router(
 pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::server::GatewayConfig as ServerConfig;
 
+    // Ensure ~/.aleph/ directory structure exists
+    if let Ok(config_dir) = alephcore::utils::paths::get_config_dir() {
+        let _ = std::fs::create_dir_all(&config_dir);
+    }
+
     // Migrate legacy database files from ~/.aleph/*.db to ~/.aleph/data/*.db
     alephcore::utils::paths::migrate_legacy_db_files();
 
@@ -861,9 +944,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let event_bus = server.event_bus().clone();
     let router = Arc::new(AgentRouter::new());
 
-    register_agent_handlers(
+    // Load app config early so agent handlers can use configured providers
+    let loaded_app_config = load_app_config().await;
+
+    let _run_manager = register_agent_handlers(
         &mut server, session_manager.clone(), event_bus.clone(),
-        router.clone(), &full_config, args.daemon,
+        router.clone(), &full_config, &loaded_app_config, args.daemon,
     ).await;
 
     register_poe_handlers(&mut server, event_bus.clone(), args.daemon).await;
@@ -877,8 +963,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     register_guest_handlers(&mut server, &auth_bundle.invitation_manager, &auth_bundle.guest_session_manager, &event_bus);
     server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
 
-    // App config loading and handler registration
-    let app_config = Arc::new(tokio::sync::RwLock::new(load_app_config().await));
+    // App config handler registration (reuse already-loaded config)
+    let app_config = Arc::new(tokio::sync::RwLock::new(loaded_app_config));
     let config_patcher = {
         let config_path = alephcore::Config::default_path();
         let backup = alephcore::ConfigBackup::new(
@@ -896,6 +982,29 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     register_session_handlers(&mut server, &session_manager, args.daemon);
     register_memory_handlers(&mut server, &memory_db, args.daemon);
+
+    // Initialize WorkspaceManager (SQLite-based workspace state)
+    let workspace_manager = {
+        use alephcore::gateway::WorkspaceManager;
+        match WorkspaceManager::with_defaults() {
+            Ok(wm) => {
+                let wm = Arc::new(wm);
+                if !args.daemon {
+                    println!("Workspace manager initialized (SQLite persistence)");
+                }
+                Some(wm)
+            }
+            Err(e) => {
+                if !args.daemon {
+                    eprintln!("Warning: Failed to initialize workspace manager: {}. workspace.switch/getActive disabled.", e);
+                }
+                None
+            }
+        }
+    };
+    if let Some(ref wm) = workspace_manager {
+        register_workspace_handlers(&mut server, wm, args.daemon);
+    }
 
     let channel_registry = initialize_channels(&mut server, args.daemon).await;
     initialize_inbound_router(channel_registry, router, args.daemon).await;

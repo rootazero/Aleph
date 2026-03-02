@@ -405,6 +405,20 @@ impl HandlerRegistry {
                 "workspace.archive requires MemoryBackend - wire Gateway runtime first".to_string(),
             )
         });
+        registry.register("workspace.switch", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "workspace.switch requires WorkspaceManager - wire Gateway runtime first".to_string(),
+            )
+        });
+        registry.register("workspace.getActive", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "workspace.getActive requires WorkspaceManager - wire Gateway runtime first".to_string(),
+            )
+        });
 
         registry
     }
@@ -650,5 +664,7 @@ mod tests {
         assert!(registry.has_method("workspace.get"));
         assert!(registry.has_method("workspace.update"));
         assert!(registry.has_method("workspace.archive"));
+        assert!(registry.has_method("workspace.switch"));
+        assert!(registry.has_method("workspace.getActive"));
     }
 }
