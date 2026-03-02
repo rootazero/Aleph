@@ -222,6 +222,8 @@ fn ProviderCard(
     is_selected: bool,
     on_click: impl Fn(ev::MouseEvent) + 'static,
 ) -> impl IntoView {
+    let is_verified = entry.as_ref().map_or(false, |e| e.config.verified);
+
     let is_default = move || {
         if let Some(ref e) = entry {
             !e.is_default_for.is_empty()
@@ -229,8 +231,6 @@ fn ProviderCard(
             false
         }
     };
-
-    let is_verified = entry.as_ref().map_or(false, |e| e.config.verified);
 
     view! {
         <div
@@ -267,23 +267,23 @@ fn ProviderCard(
                                             <span class="px-2 py-1 text-xs font-medium bg-success-subtle text-success rounded">
                                                 "Active"
                                             </span>
-                                        }.into_view()
+                                        }.into_any()
                                     } else {
-                                        view! { <span></span> }.into_view()
+                                        view! { <span></span> }.into_any()
                                     }}
                                 </div>
-                            }.into_view()
+                            }.into_any()
                         } else if is_verified {
                             view! {
                                 <span class="px-2 py-1 text-xs font-medium bg-success-subtle text-success rounded">
                                     "Active"
                                 </span>
-                            }.into_view()
+                            }.into_any()
                         } else {
-                            view! { <span></span> }.into_view()
+                            view! { <span></span> }.into_any()
                         }
                     } else {
-                        view! { <span></span> }.into_view()
+                        view! { <span></span> }.into_any()
                     }
                 }}
             </div>
@@ -668,6 +668,7 @@ fn AddCustomProviderPanel(
             color: "#808080".to_string(),
             capabilities: build_capabilities(),
             timeout_seconds: timeout.get(),
+            verified: false,
         }
     };
 

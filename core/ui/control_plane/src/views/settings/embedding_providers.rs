@@ -215,18 +215,18 @@ fn EmbeddingProviderCard(
                             <span class="px-2 py-1 text-xs font-medium bg-primary-subtle text-primary rounded">
                                 "Default"
                             </span>
-                        }.into_view()
+                        }.into_any()
                     } else {
-                        view! { <span></span> }.into_view()
+                        view! { <span></span> }.into_any()
                     }}
                     {if provider.verified {
                         view! {
                             <span class="px-2 py-1 text-xs font-medium bg-success-subtle text-success rounded">
                                 "Active"
                             </span>
-                        }.into_view()
+                        }.into_any()
                     } else {
-                        view! { <span></span> }.into_view()
+                        view! { <span></span> }.into_any()
                     }}
                 </div>
             </div>
@@ -428,18 +428,18 @@ fn ProviderDetailPanel(
                                 <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-primary-subtle text-primary">
                                     "Default"
                                 </span>
-                            }.into_view()
+                            }.into_any()
                         } else {
-                            view! { <span></span> }.into_view()
+                            view! { <span></span> }.into_any()
                         }}
                         {if provider.verified {
                             view! {
                                 <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-success-subtle text-success">
                                     "Active"
                                 </span>
-                            }.into_view()
+                            }.into_any()
                         } else {
-                            view! { <span></span> }.into_view()
+                            view! { <span></span> }.into_any()
                         }}
                     </div>
                 </div>
