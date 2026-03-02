@@ -2,7 +2,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos::ev::Event;
 use crate::context::DashboardState;
-use crate::api::{GeneralConfig, GeneralConfigApi};
+use crate::api::{ConfigApi, GeneralConfig, GeneralConfigApi};
 
 #[component]
 pub fn GeneralView() -> impl IntoView {
@@ -111,6 +111,8 @@ pub fn GeneralView() -> impl IntoView {
                                 }
                             />
 
+                            <ConfigReloadSection />
+
                             {move || {
                                 if saving.get() {
                                     Some(view! {
@@ -167,6 +169,65 @@ fn LanguageSection(
                     <option value="ko">"한국어"</option>
                 </select>
             </div>
+        </div>
+    }
+}
+
+#[component]
+fn ConfigReloadSection() -> impl IntoView {
+    let state = expect_context::<DashboardState>();
+    let (reloading, set_reloading) = signal(false);
+    let (result_msg, set_result_msg) = signal(Option::<(bool, String)>::None);
+
+    let on_reload = move |_| {
+        if !state.is_connected.get() { return; }
+        set_reloading.set(true);
+        set_result_msg.set(None);
+
+        spawn_local(async move {
+            match ConfigApi::reload(&state).await {
+                Ok(result) => {
+                    let msg = if result.ok {
+                        format!("Reloaded: {}", result.reloaded.join(", "))
+                    } else {
+                        let failed_names: Vec<String> = result.failed.iter()
+                            .filter_map(|f| f.get("subsystem").and_then(|s| s.as_str()).map(String::from))
+                            .collect();
+                        format!("Partial reload. Failed: {}", failed_names.join(", "))
+                    };
+                    set_result_msg.set(Some((result.ok, msg)));
+                }
+                Err(e) => {
+                    set_result_msg.set(Some((false, format!("Reload failed: {}", e))));
+                }
+            }
+            set_reloading.set(false);
+        });
+    };
+
+    view! {
+        <div class="bg-surface-raised border border-border rounded-xl p-6">
+            <h2 class="text-xl font-semibold text-text-primary mb-2">"Configuration Reload"</h2>
+            <p class="text-sm text-text-secondary mb-4">
+                "Reload configuration files from disk and refresh subsystems (profiles, providers)."
+            </p>
+
+            <button
+                on:click=on_reload
+                disabled=move || reloading.get() || !state.is_connected.get()
+                class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+            >
+                {move || if reloading.get() { "Reloading..." } else { "Reload Config" }}
+            </button>
+
+            {move || result_msg.get().map(|(ok, msg)| {
+                let class = if ok {
+                    "mt-3 p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm"
+                } else {
+                    "mt-3 p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm"
+                };
+                view! { <div class=class>{msg}</div> }
+            })}
         </div>
     }
 }
