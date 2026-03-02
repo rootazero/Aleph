@@ -15,7 +15,7 @@ fn test_build_system_prompt_with_soul() {
         ..Default::default()
     };
 
-    let prompt = builder.build_system_prompt_with_soul(&[], &soul);
+    let prompt = builder.build_system_prompt_with_soul(&[], &soul, None);
 
     // Soul should appear first
     let identity_pos = prompt.find("# Identity").unwrap();
@@ -81,7 +81,7 @@ fn test_thinking_guidance_with_soul() {
         ..Default::default()
     };
 
-    let prompt = builder.build_system_prompt_with_soul(&[], &soul);
+    let prompt = builder.build_system_prompt_with_soul(&[], &soul, None);
 
     // Both soul and thinking guidance should be present
     assert!(prompt.contains("# Identity"));
@@ -335,6 +335,6 @@ fn test_build_system_prompt_with_hooks() {
     let builder = PromptBuilder::new(PromptConfig::default());
     let soul = SoulManifest::default();
     let hooks: Vec<Box<dyn PromptHook>> = vec![Box::new(AppendHook)];
-    let prompt = builder.build_system_prompt_with_hooks(&[], &soul, &hooks);
+    let prompt = builder.build_system_prompt_with_hooks(&[], &soul, None, &hooks);
     assert!(prompt.contains("## Custom Section"));
 }

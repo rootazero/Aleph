@@ -218,7 +218,7 @@ impl ThinkerContext {
     pub fn build_system_prompt_with_soul(&mut self) {
         if let Some(builder) = &self.builder {
             let soul = self.soul.clone().unwrap_or_default();
-            self.system_prompt = Some(builder.build_system_prompt_with_soul(&self.tools, &soul));
+            self.system_prompt = Some(builder.build_system_prompt_with_soul(&self.tools, &soul, None));
         }
     }
 

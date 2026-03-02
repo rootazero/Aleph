@@ -12,6 +12,7 @@ mod tests;
 
 pub use messages::{Message, MessageRole};
 
+use crate::config::ProfileConfig;
 use crate::dispatcher::tool_index::HydrationResult;
 use crate::agent_loop::ToolInfo;
 
@@ -119,8 +120,16 @@ impl PromptBuilder {
     ///
     /// This is the primary entry point when using the Embodiment Engine.
     /// Soul content appears at the very top of the prompt for highest priority.
-    pub fn build_system_prompt_with_soul(&self, tools: &[ToolInfo], soul: &SoulManifest) -> String {
-        let input = LayerInput::soul(&self.config, tools, soul);
+    /// When a workspace profile is provided, its system_prompt is injected
+    /// between Soul (priority 50) and Role (priority 100).
+    pub fn build_system_prompt_with_soul(
+        &self,
+        tools: &[ToolInfo],
+        soul: &SoulManifest,
+        profile: Option<&ProfileConfig>,
+    ) -> String {
+        let input = LayerInput::soul(&self.config, tools, soul)
+            .with_profile(profile);
         self.pipeline.execute(AssemblyPath::Soul, &input)
     }
 
@@ -132,6 +141,7 @@ impl PromptBuilder {
         &self,
         tools: &[ToolInfo],
         soul: &SoulManifest,
+        profile: Option<&ProfileConfig>,
         hooks: &[Box<dyn crate::thinker::prompt_hooks::PromptHook>],
     ) -> String {
         // Clone config so hooks can modify it
@@ -146,7 +156,7 @@ impl PromptBuilder {
 
         // Build with potentially modified config
         let builder = PromptBuilder::new(config);
-        let mut prompt = builder.build_system_prompt_with_soul(tools, soul);
+        let mut prompt = builder.build_system_prompt_with_soul(tools, soul, profile);
 
         // After hooks
         for hook in hooks {

@@ -263,7 +263,7 @@ fn test_full_prompt_no_injection_markers_from_soul() {
         ..Default::default()
     };
 
-    let prompt = builder.build_system_prompt_with_soul(&[], &soul);
+    let prompt = builder.build_system_prompt_with_soul(&[], &soul, None);
 
     // No injection markers should survive in the final prompt
     assert!(!prompt.contains("<system-reminder>"));

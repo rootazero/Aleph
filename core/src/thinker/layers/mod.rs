@@ -21,6 +21,9 @@ mod response_format;
 // --- Identity layer ---
 mod soul;
 
+// --- Profile layer ---
+pub mod profile;
+
 // --- Tool layers ---
 mod tools;
 
@@ -48,6 +51,7 @@ pub use thinking_guidance::ThinkingGuidanceLayer;
 pub use response_format::ResponseFormatLayer;
 
 pub use soul::SoulLayer;
+pub use profile::ProfileLayer;
 
 pub use tools::ToolsLayer;
 pub use tools::HydratedToolsLayer;

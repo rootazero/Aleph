@@ -36,10 +36,11 @@ impl PromptPipeline {
         output
     }
 
-    /// Create a pipeline pre-loaded with the 21 default layers.
+    /// Create a pipeline pre-loaded with the 22 default layers.
     ///
     /// Layer order (by priority):
     ///   50  SoulLayer
+    ///   75  ProfileLayer
     ///  100  RoleLayer
     ///  200  RuntimeContextLayer
     ///  300  EnvironmentLayer
@@ -62,6 +63,7 @@ impl PromptPipeline {
     pub fn default_layers() -> Self {
         Self::new(vec![
             Box::new(SoulLayer),
+            Box::new(ProfileLayer),
             Box::new(RoleLayer),
             Box::new(RuntimeContextLayer),
             Box::new(EnvironmentLayer),
@@ -179,7 +181,7 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        assert_eq!(pipeline.layer_count(), 21);
+        assert_eq!(pipeline.layer_count(), 22);
     }
 
     #[test]

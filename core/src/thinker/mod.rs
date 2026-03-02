@@ -197,9 +197,15 @@ impl<P: ProviderRegistry> Thinker<P> {
     ///
     /// If a soul manifest is configured, identity is injected at the top of the
     /// system prompt via `build_system_prompt_with_soul()`.
+    /// If an active workspace profile is configured, its system_prompt is
+    /// injected between Soul (priority 50) and Role (priority 100).
     fn build_prompt(&self, state: &LoopState, tools: &[ToolInfo], observation: &Observation) -> (String, Vec<Message>) {
         let system = if let Some(ref soul) = self.config.soul {
-            self.prompt_builder.build_system_prompt_with_soul(tools, soul)
+            self.prompt_builder.build_system_prompt_with_soul(
+                tools,
+                soul,
+                self.config.active_profile.as_ref(),
+            )
         } else {
             self.prompt_builder.build_system_prompt(tools)
         };
