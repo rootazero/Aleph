@@ -14,6 +14,8 @@ pub struct ProviderPreset {
     pub protocol: &'static str,
     /// Default color for UI
     pub color: &'static str,
+    /// Default model for the provider
+    pub default_model: &'static str,
 }
 
 /// Registry of known provider presets
@@ -27,6 +29,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.openai.com/v1",
             protocol: "openai",
             color: "#10a37f",
+            default_model: "gpt-4o",
         },
     );
 
@@ -37,6 +40,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.deepseek.com",
             protocol: "openai",
             color: "#0066cc",
+            default_model: "deepseek-chat",
         },
     );
 
@@ -47,6 +51,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.moonshot.cn/v1",
             protocol: "openai",
             color: "#6366f1",
+            default_model: "moonshot-v1-8k",
         },
     );
     m.insert(
@@ -55,6 +60,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.moonshot.cn/v1",
             protocol: "openai",
             color: "#6366f1",
+            default_model: "moonshot-v1-8k",
         },
     );
 
@@ -65,6 +71,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://ark.cn-beijing.volces.com/api/v3",
             protocol: "openai",
             color: "#ff6b35",
+            default_model: "doubao-1.5-pro-256k",
         },
     );
     m.insert(
@@ -73,6 +80,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://ark.cn-beijing.volces.com/api/v3",
             protocol: "openai",
             color: "#ff6b35",
+            default_model: "doubao-1.5-pro-256k",
         },
     );
     m.insert(
@@ -81,6 +89,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://ark.cn-beijing.volces.com/api/v3",
             protocol: "openai",
             color: "#ff6b35",
+            default_model: "doubao-1.5-pro-256k",
         },
     );
 
@@ -91,6 +100,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.siliconflow.cn/v1",
             protocol: "openai",
             color: "#6c5ce7",
+            default_model: "deepseek-ai/DeepSeek-V3",
         },
     );
 
@@ -101,6 +111,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://open.bigmodel.cn/api/paas/v4",
             protocol: "openai",
             color: "#3b5998",
+            default_model: "GLM-5",
         },
     );
     m.insert(
@@ -109,6 +120,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://open.bigmodel.cn/api/paas/v4",
             protocol: "openai",
             color: "#3b5998",
+            default_model: "GLM-5",
         },
     );
 
@@ -119,6 +131,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.minimax.io/v1",
             protocol: "openai",
             color: "#e84393",
+            default_model: "MiniMax-M2.5",
         },
     );
 
@@ -129,6 +142,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.t8star.cn/v1",
             protocol: "openai",
             color: "#f59e0b",
+            default_model: "",
         },
     );
 
@@ -139,6 +153,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.anthropic.com",
             protocol: "anthropic",
             color: "#d97757",
+            default_model: "claude-sonnet-4-5-20250514",
         },
     );
 
@@ -149,6 +164,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://generativelanguage.googleapis.com",
             protocol: "gemini",
             color: "#4285f4",
+            default_model: "gemini-2.5-flash",
         },
     );
 
@@ -159,6 +175,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.groq.com/openai/v1",
             protocol: "openai",
             color: "#f55036",
+            default_model: "llama-3.3-70b-versatile",
         },
     );
 
@@ -169,6 +186,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.together.xyz/v1",
             protocol: "openai",
             color: "#6366f1",
+            default_model: "",
         },
     );
 
@@ -179,6 +197,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.perplexity.ai",
             protocol: "openai",
             color: "#20808d",
+            default_model: "",
         },
     );
 
@@ -189,6 +208,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.mistral.ai/v1",
             protocol: "openai",
             color: "#ff7000",
+            default_model: "",
         },
     );
 
@@ -199,6 +219,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.cohere.ai/v1",
             protocol: "openai",
             color: "#39594d",
+            default_model: "",
         },
     );
 
@@ -209,6 +230,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.fireworks.ai/inference/v1",
             protocol: "openai",
             color: "#ff6b35",
+            default_model: "",
         },
     );
 
@@ -219,6 +241,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.endpoints.anyscale.com/v1",
             protocol: "openai",
             color: "#00d4aa",
+            default_model: "",
         },
     );
 
@@ -229,6 +252,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.replicate.com/v1",
             protocol: "openai",
             color: "#0c0c0d",
+            default_model: "",
         },
     );
 
@@ -239,6 +263,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://openrouter.ai/api/v1",
             protocol: "openai",
             color: "#7c3aed",
+            default_model: "anthropic/claude-sonnet-4-5",
         },
     );
 
@@ -249,6 +274,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.lepton.ai/api/v1",
             protocol: "openai",
             color: "#4f46e5",
+            default_model: "",
         },
     );
 
@@ -259,6 +285,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://api.hyperbolic.xyz/v1",
             protocol: "openai",
             color: "#8b5cf6",
+            default_model: "",
         },
     );
 
@@ -268,6 +295,52 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
 /// Get a preset by name (case-insensitive)
 pub fn get_preset(name: &str) -> Option<&'static ProviderPreset> {
     PRESETS.get(name.to_lowercase().as_str())
+}
+
+/// Get a preset with override support.
+///
+/// Resolution order:
+/// 1. If a user override exists for the name (or via alias), merge it onto the built-in preset.
+/// 2. If only a built-in preset exists, convert it to owned form.
+/// 3. If only a user override exists (new provider), create from partial.
+/// 4. Returns `None` if disabled or not found.
+pub fn get_merged_preset(
+    name: &str,
+    overrides: &crate::config::presets_override::PresetsOverride,
+) -> Option<crate::config::presets_override::OwnedProviderPreset> {
+    let lower = name.to_lowercase();
+    let builtin = PRESETS.get(lower.as_str());
+    let partial = overrides
+        .providers
+        .get(&lower)
+        .or_else(|| {
+            // Check aliases in user overrides
+            overrides.providers.values().find(|p| {
+                p.aliases.iter().any(|a| a.to_lowercase() == lower)
+            })
+        });
+
+    match (builtin, partial) {
+        (Some(b), Some(p)) => {
+            if !p.enabled {
+                return None;
+            }
+            Some(crate::config::presets_override::merge_provider_preset(b, p))
+        }
+        (Some(b), None) => Some(crate::config::presets_override::OwnedProviderPreset {
+            base_url: b.base_url.to_string(),
+            protocol: b.protocol.to_string(),
+            color: b.color.to_string(),
+            default_model: b.default_model.to_string(),
+        }),
+        (None, Some(p)) => {
+            if !p.enabled {
+                return None;
+            }
+            crate::config::presets_override::partial_to_provider_preset(p)
+        }
+        (None, None) => None,
+    }
 }
 
 #[cfg(test)]
@@ -349,5 +422,123 @@ mod tests {
         assert!(get_preset("gemini").is_some());
         assert!(get_preset("kimi").is_some());
         assert!(get_preset("moonshot").is_some());
+    }
+
+    // =========================================================================
+    // get_merged_preset tests
+    // =========================================================================
+
+    #[test]
+    fn test_get_merged_preset_builtin_only() {
+        let overrides = crate::config::presets_override::PresetsOverride::default();
+        let preset = get_merged_preset("openai", &overrides).unwrap();
+        assert_eq!(preset.base_url, "https://api.openai.com/v1");
+        assert_eq!(preset.protocol, "openai");
+        assert_eq!(preset.color, "#10a37f");
+        assert_eq!(preset.default_model, "gpt-4o");
+    }
+
+    #[test]
+    fn test_get_merged_preset_with_override() {
+        let mut overrides = crate::config::presets_override::PresetsOverride::default();
+        overrides.providers.insert(
+            "openai".to_string(),
+            crate::config::presets_override::PartialProviderPreset {
+                base_url: Some("https://custom-openai.example.com/v1".to_string()),
+                default_model: Some("gpt-5".to_string()),
+                enabled: true,
+                ..Default::default()
+            },
+        );
+
+        let preset = get_merged_preset("openai", &overrides).unwrap();
+        assert_eq!(preset.base_url, "https://custom-openai.example.com/v1");
+        assert_eq!(preset.default_model, "gpt-5");
+        // Non-overridden fields fall back to built-in
+        assert_eq!(preset.protocol, "openai");
+        assert_eq!(preset.color, "#10a37f");
+    }
+
+    #[test]
+    fn test_get_merged_preset_disabled() {
+        let mut overrides = crate::config::presets_override::PresetsOverride::default();
+        overrides.providers.insert(
+            "openai".to_string(),
+            crate::config::presets_override::PartialProviderPreset {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+
+        assert!(get_merged_preset("openai", &overrides).is_none());
+    }
+
+    #[test]
+    fn test_get_merged_preset_new_provider() {
+        let mut overrides = crate::config::presets_override::PresetsOverride::default();
+        overrides.providers.insert(
+            "my-custom-llm".to_string(),
+            crate::config::presets_override::PartialProviderPreset {
+                base_url: Some("https://my-llm.example.com/v1".to_string()),
+                protocol: Some("openai".to_string()),
+                color: Some("#abcdef".to_string()),
+                default_model: Some("my-model-v1".to_string()),
+                enabled: true,
+                ..Default::default()
+            },
+        );
+
+        let preset = get_merged_preset("my-custom-llm", &overrides).unwrap();
+        assert_eq!(preset.base_url, "https://my-llm.example.com/v1");
+        assert_eq!(preset.protocol, "openai");
+        assert_eq!(preset.color, "#abcdef");
+        assert_eq!(preset.default_model, "my-model-v1");
+    }
+
+    #[test]
+    fn test_get_merged_preset_alias_lookup() {
+        let mut overrides = crate::config::presets_override::PresetsOverride::default();
+        overrides.providers.insert(
+            "my-provider".to_string(),
+            crate::config::presets_override::PartialProviderPreset {
+                base_url: Some("https://alias-test.example.com/v1".to_string()),
+                aliases: vec!["alias-one".to_string(), "alias-two".to_string()],
+                enabled: true,
+                ..Default::default()
+            },
+        );
+
+        // Look up by alias — no built-in exists for "alias-one"
+        let preset = get_merged_preset("alias-one", &overrides).unwrap();
+        assert_eq!(preset.base_url, "https://alias-test.example.com/v1");
+    }
+
+    #[test]
+    fn test_get_merged_preset_case_insensitive() {
+        let overrides = crate::config::presets_override::PresetsOverride::default();
+        let preset = get_merged_preset("OpenAI", &overrides).unwrap();
+        assert_eq!(preset.base_url, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn test_get_merged_preset_not_found() {
+        let overrides = crate::config::presets_override::PresetsOverride::default();
+        assert!(get_merged_preset("nonexistent-provider", &overrides).is_none());
+    }
+
+    #[test]
+    fn test_get_merged_preset_new_provider_no_base_url() {
+        let mut overrides = crate::config::presets_override::PresetsOverride::default();
+        overrides.providers.insert(
+            "incomplete-provider".to_string(),
+            crate::config::presets_override::PartialProviderPreset {
+                // Missing base_url — partial_to_provider_preset returns None
+                protocol: Some("openai".to_string()),
+                enabled: true,
+                ..Default::default()
+            },
+        );
+
+        assert!(get_merged_preset("incomplete-provider", &overrides).is_none());
     }
 }
