@@ -91,6 +91,25 @@ pub trait ToolRegistry: Send + Sync {
         tool_name: &str,
         arguments: Value,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>>;
+
+    /// Get the shared workspace handle for workspace-aware tools (e.g., memory_search).
+    ///
+    /// The execution engine writes the active workspace_id to this handle after
+    /// workspace resolution, so tools use the correct workspace by default.
+    /// Returns None if no workspace-aware tools are registered.
+    fn workspace_handle(&self) -> Option<std::sync::Arc<tokio::sync::RwLock<String>>> {
+        None
+    }
+
+    /// Get the shared SmartRecallConfig handle for the memory_search tool.
+    ///
+    /// The execution engine writes the active workspace profile's SmartRecallConfig
+    /// here so the memory_search tool can use Two-Phase Smart Recall.
+    fn smart_recall_config_handle(
+        &self,
+    ) -> Option<std::sync::Arc<tokio::sync::RwLock<Option<crate::config::types::profile::SmartRecallConfig>>>> {
+        None
+    }
 }
 
 /// Single-step executor for Agent Loop

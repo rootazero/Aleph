@@ -8,6 +8,8 @@ use crate::agents::sub_agents::SubAgentDispatcher;
 use crate::config::{Config, ConfigPatcher};
 use crate::dispatcher::ToolRegistry as DispatcherToolRegistry;
 use crate::generation::GenerationProviderRegistry;
+use crate::memory::store::MemoryBackend;
+use crate::memory::EmbeddingProvider;
 #[cfg(feature = "gateway")]
 use crate::gateway::context::GatewayContext;
 
@@ -26,6 +28,10 @@ pub struct BuiltinToolConfig {
     pub config: Option<Arc<RwLock<Config>>>,
     /// ConfigPatcher for ConfigUpdateTool
     pub config_patcher: Option<Arc<ConfigPatcher>>,
+    /// Memory backend for memory_search and memory_browse tools
+    pub memory_db: Option<MemoryBackend>,
+    /// Embedding provider for semantic memory search
+    pub embedder: Option<Arc<dyn EmbeddingProvider>>,
     /// Gateway context for sessions tools (sessions_list, sessions_send)
     /// Requires the "gateway" feature to be enabled.
     #[cfg(feature = "gateway")]

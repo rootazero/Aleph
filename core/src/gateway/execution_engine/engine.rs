@@ -411,6 +411,28 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             "Resolved active workspace"
         );
 
+        // Propagate workspace_id to workspace-aware tools (memory_search, memory_browse)
+        if let Some(ws_handle) = self.tool_registry.workspace_handle() {
+            let mut ws = ws_handle.write().await;
+            *ws = active_workspace.workspace_id.clone();
+            debug!(
+                run_id = run_id,
+                workspace_id = %active_workspace.workspace_id,
+                "Updated tool workspace handle"
+            );
+        }
+
+        // Propagate SmartRecallConfig from workspace profile to memory_search tool
+        if let Some(sr_handle) = self.tool_registry.smart_recall_config_handle() {
+            let mut sr = sr_handle.write().await;
+            *sr = active_workspace.profile.smart_recall.clone();
+            debug!(
+                run_id = run_id,
+                enabled = active_workspace.profile.smart_recall.as_ref().map_or(false, |c| c.enabled),
+                "Updated tool smart recall config"
+            );
+        }
+
         // --- Identity / Bootstrap / User Profile ---
         // Resolve AI identity from ~/.aleph/soul.md (layered: session > project > global > default)
         let mut identity_resolver = crate::thinker::identity::IdentityResolver::with_defaults();
