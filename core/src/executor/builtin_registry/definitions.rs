@@ -110,6 +110,16 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Update Aleph configuration with schema validation and secret vault integration",
         requires_config: true, // Requires ConfigPatcher
     },
+    BuiltinToolDefinition {
+        name: "memory_search",
+        description: "Search personal memory for relevant facts and conversation history with workspace-scoped retrieval",
+        requires_config: true, // Requires memory_db + embedder
+    },
+    BuiltinToolDefinition {
+        name: "memory_browse",
+        description: "Browse personal memory via hierarchical VFS navigation (ls, read, glob on aleph:// paths)",
+        requires_config: true, // Requires memory_db
+    },
     #[cfg(feature = "gateway")]
     BuiltinToolDefinition {
         name: "sessions_list",

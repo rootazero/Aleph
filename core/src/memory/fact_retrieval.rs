@@ -3,6 +3,8 @@
 //! Retrieves relevant context with priority given to compressed facts
 //! over raw memories. Falls back to raw memories when facts are insufficient.
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::AlephError;
 use crate::memory::context::{MemoryEntry, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
@@ -315,6 +317,109 @@ impl FactRetrieval {
         context
     }
 
+    /// Two-Phase Smart Recall: automatically expands to cross-workspace search
+    /// when primary results are sparse or low-relevance.
+    ///
+    /// Phase 1: Search the primary workspace.
+    /// Phase 2 (conditional): If top score < threshold OR result count < minimum,
+    ///   expand to ALL workspaces, excluding already-found primary results.
+    pub async fn retrieve_with_smart_recall(
+        &self,
+        query: &str,
+        primary_workspace: &str,
+        config: &crate::config::types::profile::SmartRecallConfig,
+    ) -> Result<SmartRetrievalResult, AlephError> {
+        use crate::memory::workspace::WorkspaceFilter;
+        use tracing::debug;
+
+        // Phase 1: Search primary workspace
+        let primary = self
+            .retrieve_with_filter(query, WorkspaceFilter::Single(primary_workspace.to_string()))
+            .await?;
+
+        // Evaluate trigger conditions
+        let top_score = primary
+            .facts
+            .iter()
+            .filter_map(|f| f.similarity_score)
+            .fold(0.0f32, f32::max);
+        let result_count = primary.facts.len();
+
+        let low_score = top_score < config.score_threshold;
+        let too_few = result_count < config.min_primary_results;
+
+        if !low_score && !too_few {
+            // Phase 1 sufficient — no cross-workspace expansion needed
+            return Ok(SmartRetrievalResult {
+                primary,
+                cross_workspace: Vec::new(),
+                recall_triggered: false,
+                trigger_reason: None,
+            });
+        }
+
+        // Phase 2: Expand to all workspaces
+        let trigger_reason = if low_score && too_few {
+            format!(
+                "top_score {:.2} < threshold {:.2} AND count {} < min {}",
+                top_score, config.score_threshold, result_count, config.min_primary_results
+            )
+        } else if low_score {
+            format!(
+                "top_score {:.2} < threshold {:.2}",
+                top_score, config.score_threshold
+            )
+        } else {
+            format!(
+                "count {} < min {}",
+                result_count, config.min_primary_results
+            )
+        };
+
+        debug!(
+            query = query,
+            primary_workspace = primary_workspace,
+            reason = %trigger_reason,
+            "Smart Recall Phase 2 triggered"
+        );
+
+        let all_results = self
+            .retrieve_with_filter(query, WorkspaceFilter::All)
+            .await?;
+
+        // Collect primary fact IDs for deduplication
+        let primary_ids: std::collections::HashSet<&str> =
+            primary.facts.iter().map(|f| f.id.as_str()).collect();
+
+        // Filter to cross-workspace results only, excluding primary workspace facts
+        let mut cross_facts: Vec<CrossWorkspaceFact> = all_results
+            .facts
+            .into_iter()
+            .filter(|f| f.workspace != primary_workspace && !primary_ids.contains(f.id.as_str()))
+            .map(|f| CrossWorkspaceFact {
+                content: f.content.clone(),
+                source_workspace: f.workspace.clone(),
+                relevance_score: f.similarity_score.unwrap_or(0.0),
+            })
+            .collect();
+
+        // Sort by relevance and take top N
+        cross_facts.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
+        cross_facts.truncate(config.max_cross_results);
+
+        debug!(
+            cross_count = cross_facts.len(),
+            "Smart Recall Phase 2 complete"
+        );
+
+        Ok(SmartRetrievalResult {
+            primary,
+            cross_workspace: cross_facts,
+            recall_triggered: true,
+            trigger_reason: Some(trigger_reason),
+        })
+    }
+
     /// Update configuration
     pub fn update_config(&mut self, config: FactRetrievalConfig) {
         self.config = config;
@@ -324,6 +429,30 @@ impl FactRetrieval {
     pub fn get_config(&self) -> &FactRetrievalConfig {
         &self.config
     }
+}
+
+/// Result of a Two-Phase Smart Recall retrieval
+#[derive(Debug, Clone)]
+pub struct SmartRetrievalResult {
+    /// Primary workspace results (Phase 1)
+    pub primary: RetrievalResult,
+    /// Cross-workspace results (Phase 2, empty if not triggered)
+    pub cross_workspace: Vec<CrossWorkspaceFact>,
+    /// Whether Phase 2 was triggered
+    pub recall_triggered: bool,
+    /// Reason for trigger (for logging/debugging)
+    pub trigger_reason: Option<String>,
+}
+
+/// A fact from a different workspace discovered by Smart Recall
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossWorkspaceFact {
+    /// Fact content
+    pub content: String,
+    /// Source workspace ID
+    pub source_workspace: String,
+    /// Relevance score from vector search
+    pub relevance_score: f32,
 }
 
 /// Format a single fact with source citation metadata.
@@ -473,5 +602,60 @@ mod tests {
         let config = FactRetrievalConfig::default();
         assert_eq!(config.max_facts, 5);
         assert_eq!(config.max_raw_fallback, 3);
+    }
+
+    // ── Smart Recall tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_smart_retrieval_result_not_triggered() {
+        let result = SmartRetrievalResult {
+            primary: RetrievalResult::default(),
+            cross_workspace: Vec::new(),
+            recall_triggered: false,
+            trigger_reason: None,
+        };
+        assert!(!result.recall_triggered);
+        assert!(result.cross_workspace.is_empty());
+        assert!(result.trigger_reason.is_none());
+    }
+
+    #[test]
+    fn test_smart_retrieval_result_triggered() {
+        let result = SmartRetrievalResult {
+            primary: RetrievalResult::default(),
+            cross_workspace: vec![
+                CrossWorkspaceFact {
+                    content: "Deep work requires 90-minute blocks".to_string(),
+                    source_workspace: "health".to_string(),
+                    relevance_score: 0.72,
+                },
+                CrossWorkspaceFact {
+                    content: "Cal Newport's Deep Work".to_string(),
+                    source_workspace: "reading".to_string(),
+                    relevance_score: 0.68,
+                },
+            ],
+            recall_triggered: true,
+            trigger_reason: Some("top_score 0.52 < threshold 0.60".to_string()),
+        };
+        assert!(result.recall_triggered);
+        assert_eq!(result.cross_workspace.len(), 2);
+        assert_eq!(result.cross_workspace[0].source_workspace, "health");
+        assert_eq!(result.cross_workspace[1].source_workspace, "reading");
+        assert!(result.cross_workspace[0].relevance_score > result.cross_workspace[1].relevance_score);
+    }
+
+    #[test]
+    fn test_cross_workspace_fact_serde() {
+        let fact = CrossWorkspaceFact {
+            content: "Test content".to_string(),
+            source_workspace: "coding".to_string(),
+            relevance_score: 0.85,
+        };
+        let json = serde_json::to_string(&fact).unwrap();
+        let deserialized: CrossWorkspaceFact = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.content, "Test content");
+        assert_eq!(deserialized.source_workspace, "coding");
+        assert!((deserialized.relevance_score - 0.85).abs() < f32::EPSILON);
     }
 }

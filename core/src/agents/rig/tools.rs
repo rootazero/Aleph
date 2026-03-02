@@ -68,12 +68,7 @@ pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> AlephTo
         let mut config = UnifiedBuiltinToolConfig {
             tavily_api_key: cfg.tavily_api_key.clone(),
             generation_registry: cfg.generation_registry.clone(),
-            dispatcher_registry: None,
-            sub_agent_dispatcher: None,
-            config: None,
-            config_patcher: None,
-            #[cfg(feature = "gateway")]
-            gateway_context: None,
+            ..Default::default()
         };
         config
     });

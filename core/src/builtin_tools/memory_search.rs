@@ -10,11 +10,12 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use super::error::ToolError;
+use crate::config::types::profile::SmartRecallConfig;
 use crate::error::Result;
 use crate::memory::store::MemoryBackend;
 use crate::memory::{
-    ComptrollerConfig, ContextComptroller, EmbeddingProvider, FactRetrieval, FactRetrievalConfig,
-    TokenBudget, TranscriptIndexer, DEFAULT_WORKSPACE,
+    ComptrollerConfig, ContextComptroller, CrossWorkspaceFact, EmbeddingProvider, FactRetrieval,
+    FactRetrievalConfig, TokenBudget, TranscriptIndexer, DEFAULT_WORKSPACE,
 };
 use crate::tools::AlephTool;
 
@@ -69,6 +70,12 @@ pub struct MemorySearchOutput {
     pub query: String,
     pub tokens_saved: usize,
     pub path_clusters: Vec<PathCluster>,
+    /// Cross-workspace results from Smart Recall Phase 2 (empty if not triggered)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cross_workspace: Vec<CrossWorkspaceFact>,
+    /// Whether Smart Recall Phase 2 was triggered
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub smart_recall_triggered: bool,
 }
 
 /// A cluster of facts under the same VFS path
@@ -116,6 +123,9 @@ pub struct MemorySearchTool {
     /// Shared default workspace ID, set by the execution engine based on active workspace.
     /// Falls back to DEFAULT_WORKSPACE ("default") when not set.
     default_workspace: Arc<RwLock<String>>,
+    /// Smart recall config from the active workspace profile.
+    /// Updated by the execution engine when workspace is resolved.
+    smart_recall_config: Arc<RwLock<Option<SmartRecallConfig>>>,
 }
 
 impl MemorySearchTool {
@@ -155,6 +165,7 @@ impl MemorySearchTool {
             comptroller,
             _indexer: indexer,
             default_workspace: Arc::new(RwLock::new(DEFAULT_WORKSPACE.to_string())),
+            smart_recall_config: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -164,6 +175,14 @@ impl MemorySearchTool {
     /// so that tool calls without an explicit `workspace` arg use the correct workspace.
     pub fn default_workspace_handle(&self) -> Arc<RwLock<String>> {
         Arc::clone(&self.default_workspace)
+    }
+
+    /// Get a shared handle to the smart recall config.
+    ///
+    /// The execution engine writes the active workspace profile's SmartRecallConfig
+    /// here after workspace resolution.
+    pub fn smart_recall_config_handle(&self) -> Arc<RwLock<Option<SmartRecallConfig>>> {
+        Arc::clone(&self.smart_recall_config)
     }
 
     /// Execute memory search (internal implementation)
@@ -203,13 +222,48 @@ impl MemorySearchTool {
 
         info!(query = %args.query, max_results = args.max_results, workspace = %workspace_label, "Executing memory search");
 
-        // Step 1: Fact-first retrieval with workspace filter
-        debug!(workspace = %workspace_label, "Performing fact-first retrieval with workspace filter");
-        let retrieval_result = self
-            .fact_retrieval
-            .retrieve_with_filter(&args.query, workspace_filter)
-            .await
-            .map_err(|e| ToolError::Execution(format!("Fact retrieval failed: {}", e)))?;
+        // Determine if Smart Recall should be used:
+        // Only for single-workspace queries where user didn't explicitly request cross-workspace
+        let smart_recall_cfg = self.smart_recall_config.read().await;
+        let use_smart_recall = matches!(&workspace_filter, WorkspaceFilter::Single(_))
+            && args.cross_workspace.is_none()
+            && args.workspaces.is_none()
+            && smart_recall_cfg.as_ref().map_or(false, |c| c.enabled);
+
+        // Step 1: Fact-first retrieval (with optional Smart Recall Phase 2)
+        let (retrieval_result, cross_workspace_results, recall_triggered) = if use_smart_recall {
+            let primary_ws = match &workspace_filter {
+                WorkspaceFilter::Single(ws) => ws.as_str(),
+                _ => unreachable!(),
+            };
+            let config = smart_recall_cfg.as_ref().unwrap();
+            debug!(workspace = %workspace_label, "Performing Smart Recall retrieval");
+            let smart_result = self
+                .fact_retrieval
+                .retrieve_with_smart_recall(&args.query, primary_ws, config)
+                .await
+                .map_err(|e| ToolError::Execution(format!("Smart recall failed: {}", e)))?;
+
+            if smart_result.recall_triggered {
+                info!(
+                    cross_count = smart_result.cross_workspace.len(),
+                    reason = ?smart_result.trigger_reason,
+                    "Smart Recall Phase 2 returned cross-workspace results"
+                );
+            }
+
+            (smart_result.primary, smart_result.cross_workspace, smart_result.recall_triggered)
+        } else {
+            debug!(workspace = %workspace_label, "Performing fact-first retrieval with workspace filter");
+            let result = self
+                .fact_retrieval
+                .retrieve_with_filter(&args.query, workspace_filter)
+                .await
+                .map_err(|e| ToolError::Execution(format!("Fact retrieval failed: {}", e)))?;
+            (result, Vec::new(), false)
+        };
+        // Drop the read lock before further async work
+        drop(smart_recall_cfg);
 
         debug!(
             facts_count = retrieval_result.facts.len(),
@@ -270,10 +324,16 @@ impl MemorySearchTool {
         }
 
         // Notify success
+        let cross_suffix = if !cross_workspace_results.is_empty() {
+            format!(", {} 条跨域回忆", cross_workspace_results.len())
+        } else {
+            String::new()
+        };
         let result_summary = format!(
-            "找到 {} 条事实, {} 条对话记录 (节省 {} tokens)",
+            "找到 {} 条事实, {} 条对话记录{} (节省 {} tokens)",
             facts.len(),
             transcripts.len(),
+            cross_suffix,
             arbitrated.tokens_saved
         );
         notify_tool_result(Self::NAME, &result_summary, true);
@@ -284,6 +344,8 @@ impl MemorySearchTool {
             query: args.query,
             tokens_saved: arbitrated.tokens_saved,
             path_clusters,
+            cross_workspace: cross_workspace_results,
+            smart_recall_triggered: recall_triggered,
         })
     }
 }
@@ -296,6 +358,7 @@ impl Clone for MemorySearchTool {
             comptroller: self.comptroller.clone(),
             _indexer: self._indexer.clone(),
             default_workspace: self.default_workspace.clone(),
+            smart_recall_config: self.smart_recall_config.clone(),
         }
     }
 }

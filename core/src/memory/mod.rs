@@ -97,7 +97,7 @@ pub use decay::{DecayConfig, MemoryStrength};
 pub use dreaming::{DailyInsight, DreamStatus, MemoryDecayReport, ensure_dream_daemon, record_activity};
 pub use lazy_decay::{LazyDecayEngine, DecayEvaluation};
 pub use graph::{GraphStore, ResolvedEntity, GraphDecayConfig, GraphDecayReport};
-pub use fact_retrieval::{FactRetrieval, FactRetrievalConfig, RetrievalResult};
+pub use fact_retrieval::{CrossWorkspaceFact, FactRetrieval, FactRetrievalConfig, RetrievalResult, SmartRetrievalResult};
 pub use hybrid_retrieval::{HybridRetrieval, HybridSearchConfig, RetrievalStrategy};
 pub use ingestion::MemoryIngestion;
 pub use namespace::NamespaceScope;

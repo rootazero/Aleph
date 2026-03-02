@@ -116,6 +116,14 @@ impl MemoryBrowseTool {
         Arc::clone(&self.default_workspace)
     }
 
+    /// Replace the workspace handle with an externally-shared one.
+    ///
+    /// Used by BuiltinToolRegistry to share a single workspace handle across
+    /// both memory_search and memory_browse tools.
+    pub fn set_workspace_handle(&mut self, handle: Arc<RwLock<String>>) {
+        self.default_workspace = handle;
+    }
+
     async fn call_impl(
         &self,
         args: MemoryBrowseArgs,

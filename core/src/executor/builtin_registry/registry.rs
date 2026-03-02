@@ -11,7 +11,7 @@ use crate::agents::sub_agents::SubAgentDispatcher;
 use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
 use crate::error::{AlephError, Result};
 use crate::generation::GenerationProviderRegistry;
-use crate::builtin_tools::{BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool, PimTool, SearchTool, WebFetchTool, YouTubeTool};
+use crate::builtin_tools::{BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PimTool, ProfileUpdateTool, ScratchpadTool, SearchTool, SoulUpdateTool, WebFetchTool, YouTubeTool};
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::builtin_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillListTool};
 #[cfg(feature = "gateway")]
@@ -55,10 +55,22 @@ pub struct BuiltinToolRegistry {
     pub(crate) desktop_tool: DesktopTool,
     /// PIM (Personal Information Management) tool instance
     pub(crate) pim_tool: PimTool,
+    /// Soul update tool instance (identity evolution via soul_update)
+    pub(crate) soul_update_tool: SoulUpdateTool,
+    /// Profile update tool instance (user profile management)
+    pub(crate) profile_update_tool: ProfileUpdateTool,
+    /// Scratchpad tool instance (project working memory)
+    pub(crate) scratchpad_tool: ScratchpadTool,
     /// Config read tool instance (optional - requires config handle)
     pub(crate) config_read_tool: Option<ConfigReadTool>,
     /// Config update tool instance (optional - requires ConfigPatcher)
     pub(crate) config_update_tool: Option<ConfigUpdateTool>,
+    /// Memory search tool instance (optional - requires memory_db + embedder)
+    pub(crate) memory_search_tool: Option<MemorySearchTool>,
+    /// Memory browse tool instance (optional - requires memory_db)
+    pub(crate) memory_browse_tool: Option<MemoryBrowseTool>,
+    /// Shared workspace handle for memory tools — written by ExecutionEngine after workspace resolution
+    memory_workspace_handle: Option<Arc<RwLock<String>>>,
     /// Generation provider registry for video/audio generation
     pub(crate) generation_registry: Option<Arc<std::sync::RwLock<GenerationProviderRegistry>>>,
     /// Dispatcher tool registry for meta tools (smart tool discovery)
@@ -113,6 +125,14 @@ impl BuiltinToolRegistry {
         // PIM tool (Calendar, Reminders, Notes, Contacts via Desktop Bridge)
         let pim_tool = PimTool::new();
 
+        // Soul update tool — evolves AI identity via ~/.aleph/soul.md
+        let aleph_dir = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".aleph");
+        let soul_update_tool = SoulUpdateTool::new(aleph_dir.join("soul.md"));
+        let profile_update_tool = ProfileUpdateTool::new(aleph_dir.join("user_profile.md"));
+        let scratchpad_tool = ScratchpadTool::new();
+
         // Create config tools if handles are provided
         let config_read_tool = config.config.as_ref().map(|cfg| {
             info!("Creating ConfigReadTool with config handle");
@@ -122,6 +142,26 @@ impl BuiltinToolRegistry {
             info!("Creating ConfigUpdateTool with ConfigPatcher");
             ConfigUpdateTool::new(Arc::clone(patcher))
         });
+
+        // Create memory tools if backend and embedder are provided
+        let (memory_search_tool, memory_browse_tool, memory_workspace_handle) =
+            if let (Some(ref db), Some(ref embedder)) = (&config.memory_db, &config.embedder) {
+                let search_tool = MemorySearchTool::new_with_embedder(db.clone(), Arc::clone(embedder));
+                let ws_handle = search_tool.default_workspace_handle();
+                let mut browse_tool = MemoryBrowseTool::new(db.clone());
+                // Share the same workspace handle between search and browse tools
+                browse_tool.set_workspace_handle(Arc::clone(&ws_handle));
+                info!("Created memory_search and memory_browse tools");
+                (Some(search_tool), Some(browse_tool), Some(ws_handle))
+            } else if let Some(ref db) = config.memory_db {
+                // No embedder — can still create browse tool (no embedding needed)
+                let browse_tool = MemoryBrowseTool::new(db.clone());
+                let ws_handle = browse_tool.default_workspace_handle();
+                info!("Created memory_browse tool (no embedder for memory_search)");
+                (None, Some(browse_tool), Some(ws_handle))
+            } else {
+                (None, None, None)
+            };
 
         // Create image generation tool if generation registry is provided
         let image_generate_tool = config.generation_registry.as_ref().map(|registry| {
@@ -243,7 +283,63 @@ impl BuiltinToolRegistry {
             ),
         );
 
+        tools.insert(
+            "soul_update".to_string(),
+            UnifiedTool::new(
+                "builtin:soul_update",
+                "soul_update",
+                SoulUpdateTool::DESCRIPTION,
+                ToolSource::Builtin,
+            ),
+        );
+
+        tools.insert(
+            "profile_update".to_string(),
+            UnifiedTool::new(
+                "builtin:profile_update",
+                "profile_update",
+                ProfileUpdateTool::DESCRIPTION,
+                ToolSource::Builtin,
+            ),
+        );
+
+        tools.insert(
+            "scratchpad".to_string(),
+            UnifiedTool::new(
+                "builtin:scratchpad",
+                "scratchpad",
+                ScratchpadTool::DESCRIPTION,
+                ToolSource::Builtin,
+            ),
+        );
+
         info!("Registered skill reading tools (read_skill, list_skills) in BuiltinToolRegistry");
+
+        // Add memory tools if backend/embedder are available
+        if memory_search_tool.is_some() {
+            tools.insert(
+                "memory_search".to_string(),
+                UnifiedTool::new(
+                    "builtin:memory_search",
+                    "memory_search",
+                    MemorySearchTool::DESCRIPTION,
+                    ToolSource::Builtin,
+                ),
+            );
+            info!("Registered memory_search tool in BuiltinToolRegistry");
+        }
+        if memory_browse_tool.is_some() {
+            tools.insert(
+                "memory_browse".to_string(),
+                UnifiedTool::new(
+                    "builtin:memory_browse",
+                    "memory_browse",
+                    MemoryBrowseTool::DESCRIPTION,
+                    ToolSource::Builtin,
+                ),
+            );
+            info!("Registered memory_browse tool in BuiltinToolRegistry");
+        }
 
         // Add config tools if handles are available
         if config_read_tool.is_some() {
@@ -404,8 +500,14 @@ impl BuiltinToolRegistry {
             list_skills_tool,
             desktop_tool,
             pim_tool,
+            soul_update_tool,
+            profile_update_tool,
+            scratchpad_tool,
             config_read_tool,
             config_update_tool,
+            memory_search_tool,
+            memory_browse_tool,
+            memory_workspace_handle,
             generation_registry,
             dispatcher_registry,
             sub_agent_dispatcher,
@@ -438,6 +540,16 @@ impl Default for BuiltinToolRegistry {
 impl ToolRegistry for BuiltinToolRegistry {
     fn get_tool(&self, name: &str) -> Option<&UnifiedTool> {
         self.tools.get(name)
+    }
+
+    fn workspace_handle(&self) -> Option<Arc<RwLock<String>>> {
+        self.memory_workspace_handle.clone()
+    }
+
+    fn smart_recall_config_handle(
+        &self,
+    ) -> Option<Arc<RwLock<Option<crate::config::types::profile::SmartRecallConfig>>>> {
+        self.memory_search_tool.as_ref().map(|t| t.smart_recall_config_handle())
     }
 
     fn execute_tool(
@@ -498,6 +610,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             "list_skills" => Box::pin(async move { self.list_skills_tool.call_json(arguments).await }),
             "desktop" => Box::pin(async move { self.desktop_tool.call_json(arguments).await }),
             "pim" => Box::pin(async move { self.pim_tool.call_json(arguments).await }),
+            "soul_update" => Box::pin(async move { self.soul_update_tool.call_json(arguments).await }),
+            "profile_update" => Box::pin(async move { self.profile_update_tool.call_json(arguments).await }),
+            "scratchpad" => Box::pin(async move { self.scratchpad_tool.call_json(arguments).await }),
 
             // Config tools - read/update Aleph configuration
             "config_read" => Box::pin(async move {
@@ -509,6 +624,20 @@ impl ToolRegistry for BuiltinToolRegistry {
             "config_update" => Box::pin(async move {
                 let tool = self.config_update_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("config_update not available: no ConfigPatcher configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+
+            // Memory tools - search and browse personal memory
+            "memory_search" => Box::pin(async move {
+                let tool = self.memory_search_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("memory_search not available: no memory backend or embedding provider configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "memory_browse" => Box::pin(async move {
+                let tool = self.memory_browse_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("memory_browse not available: no memory backend configured")
                 })?;
                 tool.call_json(arguments).await
             }),

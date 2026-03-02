@@ -288,6 +288,7 @@ async fn register_agent_handlers(
     router: Arc<AgentRouter>,
     full_config: &FullGatewayConfig,
     app_config: &alephcore::Config,
+    memory_db: &alephcore::memory::store::MemoryBackend,
     daemon: bool,
 ) -> Arc<AgentRunManager> {
     let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
@@ -301,7 +302,34 @@ async fn register_agent_handlers(
     };
 
     if let Some(provider_registry) = provider_registry {
-        let tool_registry = Arc::new(BuiltinToolRegistry::new());
+        // Create embedding provider from app config for memory tools
+        let embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = {
+            let embedding_settings = &app_config.memory.embedding;
+            let manager = alephcore::memory::EmbeddingManager::new(embedding_settings.clone());
+            match manager.init().await {
+                Ok(()) => {
+                    let provider = manager.get_active_provider().await;
+                    if provider.is_some() && !daemon {
+                        println!("  Embedding provider initialized for memory tools");
+                    }
+                    provider
+                }
+                Err(e) => {
+                    if !daemon {
+                        eprintln!("  Warning: Failed to initialize embedding provider: {}", e);
+                    }
+                    None
+                }
+            }
+        };
+
+        // Build tool config with memory backend and embedder
+        let tool_config = alephcore::executor::BuiltinToolConfig {
+            memory_db: Some(memory_db.clone()),
+            embedder,
+            ..Default::default()
+        };
+        let tool_registry = Arc::new(BuiltinToolRegistry::with_config(tool_config));
 
         use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
         use alephcore::dispatcher::{UnifiedTool, ToolSource};
@@ -949,7 +977,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let _run_manager = register_agent_handlers(
         &mut server, session_manager.clone(), event_bus.clone(),
-        router.clone(), &full_config, &loaded_app_config, args.daemon,
+        router.clone(), &full_config, &loaded_app_config, &memory_db, args.daemon,
     ).await;
 
     register_poe_handlers(&mut server, event_bus.clone(), args.daemon).await;
