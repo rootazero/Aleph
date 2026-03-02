@@ -254,6 +254,39 @@ impl ActiveWorkspace {
         }
     }
 
+    /// Build from a specific workspace ID (used by channel→workspace routing).
+    ///
+    /// Unlike `from_manager()` which reads the user's active workspace,
+    /// this directly loads the specified workspace. Falls back to creating
+    /// a workspace with the given ID and default profile if not found.
+    pub async fn from_workspace_id(manager: &WorkspaceManager, workspace_id: &str) -> Self {
+        let workspace = manager
+            .get(workspace_id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| Workspace::new(workspace_id, &manager.config.default_profile));
+
+        let profile = manager
+            .get_profile(&workspace.profile)
+            .unwrap_or_else(|| {
+                debug!(
+                    "Profile '{}' not found for workspace '{}', using default",
+                    workspace.profile, workspace.id
+                );
+                ProfileConfig::default()
+            });
+
+        let memory_filter =
+            crate::memory::workspace::WorkspaceFilter::Single(workspace.id.clone());
+
+        Self {
+            workspace_id: workspace.id,
+            profile,
+            memory_filter,
+        }
+    }
+
     /// Create a default global workspace when no WorkspaceManager is available.
     ///
     /// Uses "global" as the workspace ID, default profile configuration,
