@@ -10,6 +10,7 @@
 
 mod config;
 mod defaults;
+pub mod presets;
 mod provider;
 
 // Re-export all types for backward compatibility
