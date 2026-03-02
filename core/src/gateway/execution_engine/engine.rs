@@ -16,6 +16,7 @@ use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
 use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, RunSummary, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::loop_callback_adapter::EventEmittingCallback;
+use crate::gateway::workspace::{ActiveWorkspace, WorkspaceManager};
 
 use crate::agent_loop::{AgentLoop, LoopConfig, LoopResult, RequestContext, RunContext};
 use crate::compressor::NoOpCompressor;
@@ -40,6 +41,8 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     tools: Arc<Vec<UnifiedTool>>,
     /// Session manager for identity context
     session_manager: Arc<crate::gateway::SessionManager>,
+    /// Workspace manager for workspace-scoped profile resolution
+    workspace_manager: Option<Arc<WorkspaceManager>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -58,7 +61,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             tool_registry,
             tools: Arc::new(tools),
             session_manager,
+            workspace_manager: None,
         }
+    }
+
+    /// Set the workspace manager for workspace-scoped profile resolution.
+    ///
+    /// When set, the engine resolves the user's active workspace at the start
+    /// of each run and injects the workspace profile into the Thinker and
+    /// the workspace_id into the request context metadata.
+    pub fn with_workspace_manager(mut self, manager: Arc<WorkspaceManager>) -> Self {
+        self.workspace_manager = Some(manager);
+        self
     }
 
     /// Format history for AgentLoop
@@ -374,8 +388,101 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             })
         };
 
+        // --- Workspace Resolution ---
+        // Resolve the user's active workspace (profile, memory filter, workspace_id)
+        let active_workspace = if let Some(ref ws_manager) = self.workspace_manager {
+            ActiveWorkspace::from_manager(ws_manager, "owner").await
+        } else {
+            ActiveWorkspace::default_global()
+        };
+
+        debug!(
+            run_id = run_id,
+            workspace_id = %active_workspace.workspace_id,
+            profile_model = ?active_workspace.profile.model,
+            "Resolved active workspace"
+        );
+
+        // --- Identity / Bootstrap / User Profile ---
+        // Resolve AI identity from ~/.aleph/soul.md (layered: session > project > global > default)
+        let mut identity_resolver = crate::thinker::identity::IdentityResolver::with_defaults();
+        let agent_id = request.session_key.agent_id().to_string();
+        identity_resolver.add_project(&agent_id);
+        let resolved_soul = identity_resolver.resolve();
+
+        // Check bootstrap state — if no soul.md, inject First Contact Protocol
+        let bootstrap_detector = crate::agent_loop::bootstrap::BootstrapDetector::new(
+            identity_resolver.global_path().clone(),
+        );
+        let bootstrap_prompt = bootstrap_detector.bootstrap_prompt();
+
+        info!(
+            run_id = run_id,
+            bootstrap = bootstrap_prompt.is_some(),
+            soul_exists = !resolved_soul.is_empty(),
+            "Identity/Bootstrap check"
+        );
+
+        // Load user profile from ~/.aleph/user_profile.md
+        let user_profile = {
+            let profile_path = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".aleph")
+                .join("user_profile.md");
+            crate::thinker::user_profile::UserProfile::load_from_file(&profile_path)
+        };
+
+        // Load scratchpad for current agent/project
+        let scratchpad_content = {
+            let manager = crate::memory::scratchpad::ScratchpadManager::new(&agent_id, run_id);
+            if manager.exists() {
+                manager.read().await.ok()
+            } else {
+                None
+            }
+        };
+
+        // Build custom_instructions from bootstrap + user_profile + scratchpad
+        let mut extra_instructions = Vec::new();
+        if let Some(bp) = &bootstrap_prompt {
+            extra_instructions.push(bp.clone());
+        }
+        if let Some(ref profile) = user_profile {
+            if !profile.is_empty() {
+                extra_instructions.push(profile.to_prompt_section());
+            }
+        }
+        if let Some(ref pad) = scratchpad_content {
+            extra_instructions.push(format!("## Active Scratchpad\n\n{}", pad));
+        }
+        // Inject workspace profile system_prompt if configured
+        if let Some(ref ws_prompt) = active_workspace.profile.system_prompt {
+            if !ws_prompt.is_empty() {
+                extra_instructions.push(format!("## Workspace Profile\n\n{}", ws_prompt));
+            }
+        }
+        let custom_instructions = if extra_instructions.is_empty() {
+            None
+        } else {
+            Some(extra_instructions.join("\n"))
+        };
+
+        // Only inject soul into prompts if bootstrap is complete (soul.md exists)
+        let soul = if bootstrap_prompt.is_none() && !resolved_soul.is_empty() {
+            Some(resolved_soul)
+        } else {
+            None
+        };
+
         let thinker_config = ThinkerConfig {
-            prompt: PromptConfig { skill_instructions, runtime_capabilities, ..PromptConfig::default() },
+            prompt: PromptConfig {
+                skill_instructions,
+                runtime_capabilities,
+                custom_instructions,
+                ..PromptConfig::default()
+            },
+            soul,
+            active_profile: Some(active_workspace.profile.clone()),
             ..ThinkerConfig::default()
         };
         let thinker = Arc::new(Thinker::new(thinker_registry, thinker_config));
@@ -390,8 +497,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let max_loops = agent.config().max_loops as usize;
         let loop_config = LoopConfig::default().with_max_steps(max_loops);
 
-        // Build request context (empty for Gateway mode, context is from session history)
-        let context = RequestContext::empty();
+        // Build request context with workspace_id in metadata
+        let mut context = RequestContext::empty();
+        context.metadata.insert(
+            "workspace_id".to_string(),
+            active_workspace.workspace_id.clone(),
+        );
 
         // Format history as initial summary
         let history_summary = self.format_history(&history);
