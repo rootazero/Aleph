@@ -200,10 +200,18 @@ impl<P: ProviderRegistry> Thinker<P> {
     /// over the model router's selection. This allows workspace-specific model
     /// binding (e.g., a "coding" workspace always uses claude-sonnet).
     ///
-    /// NOTE: Temperature override is not yet supported at the per-request level
-    /// because `AiProvider::process()` does not accept generation parameters.
-    /// Temperature is currently set at provider construction time via `ProviderConfig`.
-    /// TODO: Support per-request temperature override when AiProvider trait evolves.
+    /// Resolve per-request generation parameters from workspace profile.
+    ///
+    /// Returns (temperature, max_tokens) overrides that take precedence over
+    /// provider config values. Used by `call_llm_with_level()` via
+    /// `AiProvider::process_with_overrides()`.
+    fn resolve_generation_params(&self) -> (Option<f32>, Option<u32>) {
+        match &self.config.active_profile {
+            Some(profile) => (profile.temperature, profile.max_tokens),
+            None => (None, None),
+        }
+    }
+
     fn resolve_model(&self, observation: &Observation) -> ModelId {
         let default_model_id = self.select_model(observation);
 
@@ -257,7 +265,7 @@ impl<P: ProviderRegistry> Thinker<P> {
         (system, messages)
     }
 
-    /// Call LLM with a specific thinking level
+    /// Call LLM with a specific thinking level and workspace generation overrides
     async fn call_llm_with_level(
         &self,
         provider: Arc<dyn AiProvider>,
@@ -278,8 +286,28 @@ impl<P: ProviderRegistry> Thinker<P> {
 
         let full_prompt = prompt_parts.join("\n\n");
 
-        // Use thinking-aware processing if provider supports it and level is not Off
-        if think_level != ThinkLevel::Off && provider.supports_thinking() {
+        // Resolve per-request generation params from workspace profile
+        let (temperature, max_tokens) = self.resolve_generation_params();
+
+        // Use process_with_overrides which combines thinking + generation params
+        if temperature.is_some() || max_tokens.is_some() {
+            tracing::debug!(
+                ?temperature,
+                ?max_tokens,
+                think_level = %think_level,
+                provider = %provider.name(),
+                "Using generation overrides from workspace profile"
+            );
+            provider
+                .process_with_overrides(
+                    &full_prompt,
+                    Some(system),
+                    think_level,
+                    temperature,
+                    max_tokens,
+                )
+                .await
+        } else if think_level != ThinkLevel::Off && provider.supports_thinking() {
             tracing::debug!(
                 think_level = %think_level,
                 provider = %provider.name(),
@@ -626,6 +654,37 @@ mod tests {
         let model_id = thinker.resolve_model(&observation);
         let default_id = thinker.select_model(&observation);
         assert_eq!(model_id.as_str(), default_id.as_str());
+    }
+
+    #[test]
+    fn test_resolve_generation_params_with_profile() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+
+        let config = ThinkerConfig {
+            active_profile: Some(crate::config::ProfileConfig {
+                temperature: Some(0.3),
+                max_tokens: Some(4096),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let thinker = Thinker::new(registry, config);
+        let (temp, max) = thinker.resolve_generation_params();
+        assert_eq!(temp, Some(0.3));
+        assert_eq!(max, Some(4096));
+    }
+
+    #[test]
+    fn test_resolve_generation_params_without_profile() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+        let (temp, max) = thinker.resolve_generation_params();
+        assert_eq!(temp, None);
+        assert_eq!(max, None);
     }
 
     #[tokio::test]

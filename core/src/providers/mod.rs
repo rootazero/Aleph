@@ -422,6 +422,31 @@ pub trait AiProvider: Send + Sync {
     fn max_think_level(&self) -> ThinkLevel {
         ThinkLevel::Off
     }
+
+    /// Process input with per-request generation overrides and thinking level.
+    ///
+    /// This combines thinking support with per-request temperature/max_tokens
+    /// overrides from workspace profiles. Providers that support `RequestPayload`
+    /// (e.g., `HttpProvider`) override this to inject the overrides.
+    ///
+    /// # Default Implementation
+    ///
+    /// Delegates to `process_with_thinking()` or `process()`, ignoring overrides.
+    fn process_with_overrides(
+        &self,
+        input: &str,
+        system_prompt: Option<&str>,
+        think_level: ThinkLevel,
+        temperature: Option<f32>,
+        max_tokens: Option<u32>,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        let _ = (temperature, max_tokens); // unused in default impl
+        if think_level != ThinkLevel::Off && self.supports_thinking() {
+            self.process_with_thinking(input, system_prompt, think_level)
+        } else {
+            self.process(input, system_prompt)
+        }
+    }
 }
 
 #[cfg(test)]

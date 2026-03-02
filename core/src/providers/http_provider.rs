@@ -238,6 +238,27 @@ impl AiProvider for HttpProvider {
         }
     }
 
+    fn process_with_overrides(
+        &self,
+        input: &str,
+        system_prompt: Option<&str>,
+        think_level: ThinkLevel,
+        temperature: Option<f32>,
+        max_tokens: Option<u32>,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        let input = input.to_string();
+        let system_prompt = system_prompt.map(|s| s.to_string());
+
+        Box::pin(async move {
+            let payload = RequestPayload::new(&input)
+                .with_system(system_prompt.as_deref())
+                .with_think_level(Some(think_level))
+                .with_temperature(temperature)
+                .with_max_tokens(max_tokens);
+            self.execute(payload).await
+        })
+    }
+
     fn name(&self) -> &str {
         &self.name
     }
