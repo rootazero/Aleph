@@ -1,17 +1,19 @@
 //! Workspace RPC Handlers
 //!
-//! Handlers for workspace management: create, list, get, update, archive.
+//! Handlers for workspace management: create, list, get, update, archive, switch, getActive.
 
 use serde::Deserialize;
 use serde_json::json;
 
 use super::super::protocol::{
-    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, RESOURCE_NOT_FOUND,
+    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
 };
 use super::parse_params;
+use crate::gateway::workspace::WorkspaceManager;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::workspace::Workspace;
 use crate::memory::workspace_store;
+use crate::sync_primitives::Arc;
 
 // ============================================================================
 // Create
@@ -248,6 +250,146 @@ pub async fn handle_archive(request: JsonRpcRequest, db: MemoryBackend) -> JsonR
     }
 }
 
+// ============================================================================
+// Switch
+// ============================================================================
+
+/// Parameters for workspace.switch
+#[derive(Debug, Deserialize)]
+pub struct SwitchParams {
+    /// Target workspace identifier
+    pub workspace_id: String,
+    /// User identifier (defaults to "owner" for single-user mode)
+    #[serde(default = "default_user_id")]
+    pub user_id: String,
+}
+
+fn default_user_id() -> String {
+    "owner".to_string()
+}
+
+/// Switch the active workspace for a user
+///
+/// Validates the workspace exists, sets it as active for the user, and
+/// updates the workspace's last_active_at timestamp.
+///
+/// # Example Request
+///
+/// ```json
+/// {"jsonrpc":"2.0","method":"workspace.switch","params":{"workspace_id":"project-x"},"id":1}
+/// ```
+pub async fn handle_switch(
+    request: JsonRpcRequest,
+    workspace_manager: Arc<WorkspaceManager>,
+) -> JsonRpcResponse {
+    let params: SwitchParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    // Verify workspace exists
+    match workspace_manager.get(&params.workspace_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return JsonRpcResponse::error(
+                request.id,
+                RESOURCE_NOT_FOUND,
+                format!("Workspace '{}' not found", params.workspace_id),
+            );
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to get workspace: {}", e),
+            );
+        }
+    }
+
+    // Set active workspace for the user
+    if let Err(e) = workspace_manager
+        .set_active(&params.user_id, &params.workspace_id)
+        .await
+    {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to switch workspace: {}", e),
+        );
+    }
+
+    // Touch the workspace to update last_active_at
+    let _ = workspace_manager.touch(&params.workspace_id).await;
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "ok": true,
+            "workspace_id": params.workspace_id,
+        }),
+    )
+}
+
+// ============================================================================
+// GetActive
+// ============================================================================
+
+/// Parameters for workspace.getActive
+#[derive(Debug, Deserialize)]
+pub struct GetActiveParams {
+    /// User identifier (defaults to "owner" for single-user mode)
+    #[serde(default = "default_user_id")]
+    pub user_id: String,
+}
+
+/// Get the current active workspace for a user
+///
+/// Returns the active workspace ID and its associated profile name.
+///
+/// # Example Request
+///
+/// ```json
+/// {"jsonrpc":"2.0","method":"workspace.getActive","params":{},"id":1}
+/// ```
+pub async fn handle_get_active(
+    request: JsonRpcRequest,
+    workspace_manager: Arc<WorkspaceManager>,
+) -> JsonRpcResponse {
+    // Parse params — allow missing params (defaults to "owner")
+    let user_id = match &request.params {
+        Some(p) => {
+            let params: GetActiveParams = match serde_json::from_value(p.clone()) {
+                Ok(p) => p,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        format!("Invalid params: {}", e),
+                    );
+                }
+            };
+            params.user_id
+        }
+        None => "owner".to_string(),
+    };
+
+    let workspace_id = workspace_manager.get_active_id(&user_id).await;
+
+    // Fetch workspace to get the profile name
+    let profile = match workspace_manager.get(&workspace_id).await {
+        Ok(Some(ws)) => ws.profile,
+        _ => "default".to_string(),
+    };
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "workspace_id": workspace_id,
+            "profile": profile,
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,5 +441,35 @@ mod tests {
         assert_eq!(params.name.as_deref(), Some("Crypto Research"));
         assert_eq!(params.description.as_deref(), Some("Updated description"));
         assert_eq!(params.icon.as_deref(), Some("\u{1F4B0}"));
+    }
+
+    #[test]
+    fn test_switch_params_deserialization() {
+        let json = serde_json::json!({"workspace_id": "project-x"});
+        let params: SwitchParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.workspace_id, "project-x");
+        assert_eq!(params.user_id, "owner"); // default
+    }
+
+    #[test]
+    fn test_switch_params_with_user_id() {
+        let json = serde_json::json!({"workspace_id": "project-x", "user_id": "alice"});
+        let params: SwitchParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.workspace_id, "project-x");
+        assert_eq!(params.user_id, "alice");
+    }
+
+    #[test]
+    fn test_get_active_params_deserialization() {
+        let json = serde_json::json!({});
+        let params: GetActiveParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.user_id, "owner"); // default
+    }
+
+    #[test]
+    fn test_get_active_params_with_user_id() {
+        let json = serde_json::json!({"user_id": "bob"});
+        let params: GetActiveParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.user_id, "bob");
     }
 }
