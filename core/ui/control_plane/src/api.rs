@@ -327,10 +327,25 @@ pub struct ProviderInfo {
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default = "default_provider_color")]
+    pub color: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
     pub is_default: bool,
     #[serde(default)]
     pub verified: bool,
 }
+
+fn default_provider_color() -> String { "#808080".to_string() }
+fn default_timeout() -> u64 { 300 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -404,13 +419,13 @@ impl ProvidersApi {
         name: String,
         config: ProviderConfig,
     ) -> Result<(), String> {
-        let mut params = serde_json::to_value(&config)
+        let config_value = serde_json::to_value(&config)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
 
-        // Add name to params
-        if let Some(obj) = params.as_object_mut() {
-            obj.insert("name".to_string(), serde_json::json!(name));
-        }
+        let params = serde_json::json!({
+            "name": name,
+            "config": config_value,
+        });
 
         state.rpc_call("providers.create", params).await?;
         Ok(())
@@ -422,13 +437,13 @@ impl ProvidersApi {
         name: String,
         config: ProviderConfig,
     ) -> Result<(), String> {
-        let mut params = serde_json::to_value(&config)
+        let config_value = serde_json::to_value(&config)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
 
-        // Add name to params
-        if let Some(obj) = params.as_object_mut() {
-            obj.insert("name".to_string(), serde_json::json!(name));
-        }
+        let params = serde_json::json!({
+            "name": name,
+            "config": config_value,
+        });
 
         state.rpc_call("providers.update", params).await?;
         Ok(())
@@ -1270,6 +1285,12 @@ impl SearchConfigApi {
         let result = state.rpc_call("search_config.test", params).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
+
+    pub async fn delete_backend(state: &DashboardState, name: &str) -> Result<(), String> {
+        let params = serde_json::json!({ "name": name });
+        state.rpc_call("search_config.deleteBackend", params).await?;
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -1491,5 +1512,63 @@ impl EmbeddingProvidersApi {
     pub async fn presets(state: &DashboardState) -> Result<Vec<EmbeddingPresetEntry>, String> {
         let result = state.rpc_call("embedding_providers.presets", Value::Null).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+}
+
+// ============================================================================
+// Workspace API
+// ============================================================================
+
+/// A workspace entry returned by workspace.list
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceEntry {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+/// Response from workspace.getActive
+#[derive(Debug, Clone, Deserialize)]
+pub struct ActiveWorkspaceInfo {
+    pub workspace_id: String,
+    #[serde(default)]
+    pub profile: Option<String>,
+}
+
+pub struct WorkspaceApi;
+
+impl WorkspaceApi {
+    /// List all available workspaces
+    pub async fn list(state: &DashboardState) -> Result<Vec<WorkspaceEntry>, String> {
+        let result = state.rpc_call("workspace.list", Value::Null).await?;
+
+        // Backend returns { "workspaces": [...] }
+        result.get("workspaces")
+            .ok_or_else(|| "Invalid response: missing workspaces".to_string())
+            .and_then(|workspaces| {
+                serde_json::from_value(workspaces.clone())
+                    .map_err(|e| format!("Failed to parse workspaces: {}", e))
+            })
+    }
+
+    /// Get the currently active workspace
+    pub async fn get_active(state: &DashboardState) -> Result<ActiveWorkspaceInfo, String> {
+        let result = state.rpc_call("workspace.getActive", Value::Null).await?;
+
+        serde_json::from_value(result)
+            .map_err(|e| format!("Failed to parse active workspace: {}", e))
+    }
+
+    /// Switch to a different workspace
+    pub async fn switch(state: &DashboardState, workspace_id: &str) -> Result<(), String> {
+        let params = serde_json::json!({
+            "workspace_id": workspace_id,
+        });
+
+        state.rpc_call("workspace.switch", params).await?;
+        Ok(())
     }
 }
