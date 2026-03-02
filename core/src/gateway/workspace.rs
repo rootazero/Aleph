@@ -188,6 +188,88 @@ pub struct UserActiveWorkspace {
 }
 
 // =============================================================================
+// ActiveWorkspace
+// =============================================================================
+
+/// Resolved workspace context for the current execution pipeline.
+///
+/// This is the central data structure that flows through the entire execution
+/// pipeline (Thinker, Memory, Executor). It carries the resolved profile
+/// configuration and a memory filter scoped to this workspace.
+///
+/// Created via `from_manager()` (when a WorkspaceManager is available) or
+/// `default_global()` (fallback when no manager exists).
+#[derive(Debug, Clone)]
+pub struct ActiveWorkspace {
+    /// The workspace identifier (e.g., "project-x", "global")
+    pub workspace_id: String,
+
+    /// Resolved profile configuration for this workspace
+    pub profile: ProfileConfig,
+
+    /// Memory filter scoped to this workspace
+    pub memory_filter: crate::memory::workspace::WorkspaceFilter,
+}
+
+impl ActiveWorkspace {
+    /// Resolve the active workspace for a user from the WorkspaceManager.
+    ///
+    /// Looks up the user's active workspace, resolves its profile binding,
+    /// and builds a `WorkspaceFilter::Single` for memory scoping.
+    ///
+    /// Falls back to the "global" workspace with a default profile if:
+    /// - No active workspace is set for the user
+    /// - The workspace's profile cannot be resolved
+    pub async fn from_manager(
+        manager: &WorkspaceManager,
+        user_id: &str,
+    ) -> Self {
+        // Get the active workspace for this user (defaults to "global" internally)
+        let workspace = manager
+            .get_active(user_id)
+            .await
+            .unwrap_or_else(|_| {
+                // If get_active fails entirely, construct a minimal global workspace
+                Workspace::new("global", "default")
+            });
+
+        // Resolve the profile from the workspace's profile binding
+        let profile = manager
+            .get_profile(&workspace.profile)
+            .unwrap_or_else(|| {
+                debug!(
+                    "Profile '{}' not found for workspace '{}', using default",
+                    workspace.profile, workspace.id
+                );
+                ProfileConfig::default()
+            });
+
+        let memory_filter =
+            crate::memory::workspace::WorkspaceFilter::Single(workspace.id.clone());
+
+        Self {
+            workspace_id: workspace.id,
+            profile,
+            memory_filter,
+        }
+    }
+
+    /// Create a default global workspace when no WorkspaceManager is available.
+    ///
+    /// Uses "global" as the workspace ID, default profile configuration,
+    /// and a memory filter scoped to "global".
+    pub fn default_global() -> Self {
+        Self {
+            workspace_id: "global".to_string(),
+            profile: ProfileConfig::default(),
+            memory_filter: crate::memory::workspace::WorkspaceFilter::Single(
+                "global".to_string(),
+            ),
+        }
+    }
+}
+
+// =============================================================================
 // WorkspaceManager
 // =============================================================================
 
@@ -830,5 +912,72 @@ mod tests {
         let main_key = SessionKey::main("main");
         assert!(!main_key.is_workspace());
         assert_eq!(main_key.workspace_id(), None);
+    }
+
+    #[tokio::test]
+    async fn test_active_workspace_from_manager() {
+        let temp = tempdir().unwrap();
+        let config = test_config(temp.path().join("test.db"));
+        let manager = WorkspaceManager::new(config).unwrap();
+
+        // Load profiles with a custom "coding" profile
+        let coding_profile = ProfileConfig {
+            description: Some("Coding profile".to_string()),
+            model: Some("claude-sonnet".to_string()),
+            tools: vec!["git_*".to_string()],
+            temperature: Some(0.2),
+            ..Default::default()
+        };
+        manager.load_profiles(HashMap::from([
+            ("coding".to_string(), coding_profile.clone()),
+        ]));
+
+        // Create a workspace bound to the "coding" profile
+        manager.create("project-x", "coding", Some("Test project")).await.unwrap();
+        manager.set_active("user-1", "project-x").await.unwrap();
+
+        // Resolve active workspace — should get "project-x" with "coding" profile
+        let active = ActiveWorkspace::from_manager(&manager, "user-1").await;
+        assert_eq!(active.workspace_id, "project-x");
+        assert_eq!(active.profile.model, Some("claude-sonnet".to_string()));
+        assert_eq!(active.profile.temperature, Some(0.2));
+        assert_eq!(active.profile.tools, vec!["git_*".to_string()]);
+
+        // Memory filter should be scoped to this workspace
+        let filter_sql = active.memory_filter.to_sql_filter();
+        assert!(filter_sql.contains("project-x"));
+    }
+
+    #[tokio::test]
+    async fn test_active_workspace_fallback_to_global() {
+        let temp = tempdir().unwrap();
+        let config = test_config(temp.path().join("test.db"));
+        let manager = WorkspaceManager::new(config).unwrap();
+
+        // Load only default profile (no custom profiles)
+        manager.load_profiles(HashMap::new());
+
+        // Unknown user with no active workspace → should fall back to "global"
+        let active = ActiveWorkspace::from_manager(&manager, "unknown-user").await;
+        assert_eq!(active.workspace_id, "global");
+
+        // Profile should be the default (since global workspace uses "default" profile)
+        assert!(active.profile.model.is_none());
+        assert!(active.profile.tools.is_empty());
+
+        // Memory filter should be scoped to "global"
+        let filter_sql = active.memory_filter.to_sql_filter();
+        assert!(filter_sql.contains("global"));
+    }
+
+    #[test]
+    fn test_active_workspace_default_global() {
+        let active = ActiveWorkspace::default_global();
+        assert_eq!(active.workspace_id, "global");
+        assert!(active.profile.model.is_none());
+        assert!(active.profile.tools.is_empty());
+
+        let filter_sql = active.memory_filter.to_sql_filter();
+        assert_eq!(filter_sql, "workspace = 'global'");
     }
 }
