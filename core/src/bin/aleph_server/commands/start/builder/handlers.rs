@@ -149,6 +149,7 @@ pub(in crate::commands::start) async fn setup_config_watcher(
     config_path: Option<PathBuf>,
     event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     daemon_mode: bool,
+    app_config: Option<Arc<tokio::sync::RwLock<alephcore::Config>>>,
 ) -> Option<Arc<ConfigWatcher>> {
     let path = config_path?;
 
@@ -171,7 +172,11 @@ pub(in crate::commands::start) async fn setup_config_watcher(
             let watcher = Arc::new(watcher);
 
             // Register config handlers
-            register_handler!(server, "config.reload", config_handlers::handle_reload, watcher);
+            if let Some(ref ac) = app_config {
+                register_handler!(server, "config.reload", config_handlers::handle_reload_with_subsystems, watcher, ac);
+            } else {
+                register_handler!(server, "config.reload", config_handlers::handle_reload, watcher);
+            }
             register_handler!(server, "config.get", config_handlers::handle_get, watcher);
             register_handler!(server, "config.validate", config_handlers::handle_validate, watcher);
             register_handler!(server, "config.path", config_handlers::handle_path, watcher);

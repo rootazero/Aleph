@@ -978,6 +978,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             backup,
         ))
     };
+    let app_config_for_reload = app_config.clone();
     register_config_handlers(&mut server, app_config, config_patcher, event_bus.clone(), auth_bundle.device_store.clone());
 
     register_session_handlers(&mut server, &session_manager, args.daemon);
@@ -1012,7 +1013,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let config_path = args.config.clone()
         .map(|p| expand_path(&p.to_string_lossy()))
         .or_else(|| dirs::home_dir().map(|h| h.join(".aleph/config.toml")));
-    let _config_watcher = setup_config_watcher(&mut server, config_path, &event_bus, args.daemon).await;
+    let _config_watcher = setup_config_watcher(&mut server, config_path, &event_bus, args.daemon, Some(app_config_for_reload)).await;
 
     start_webchat_server(args, &final_bind, final_port).await;
 

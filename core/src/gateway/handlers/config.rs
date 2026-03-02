@@ -54,6 +54,91 @@ pub async fn handle_reload(
     }
 }
 
+/// Handle config.reload with subsystem refresh.
+///
+/// Reloads both:
+/// - Gateway config (aleph.toml) via ConfigWatcher
+/// - App config (config.toml) via Config::load(), then updates shared state
+///
+/// Reports what subsystems were refreshed (profiles, providers, etc.).
+pub async fn handle_reload_with_subsystems(
+    request: JsonRpcRequest,
+    watcher: Arc<ConfigWatcher>,
+    app_config: Arc<RwLock<Config>>,
+) -> JsonRpcResponse {
+    debug!("Handling config.reload with subsystem refresh");
+
+    let mut reloaded = Vec::new();
+    let mut failed: Vec<(String, String)> = Vec::new();
+
+    // 1. Reload gateway config (aleph.toml)
+    let gateway_config = match watcher.reload().await {
+        Ok(cfg) => {
+            reloaded.push("gateway".to_string());
+            Some(cfg)
+        }
+        Err(e) => {
+            failed.push(("gateway".to_string(), e.to_string()));
+            None
+        }
+    };
+
+    // 2. Reload app config (config.toml) and update shared state
+    match Config::load() {
+        Ok(new_app_config) => {
+            let has_profiles = !new_app_config.profiles.is_empty();
+            let has_providers = !new_app_config.generation.providers.is_empty();
+
+            {
+                let mut config_guard = app_config.write().await;
+                *config_guard = new_app_config;
+            }
+            reloaded.push("app_config".to_string());
+
+            if has_profiles {
+                reloaded.push("profiles".to_string());
+            }
+            if has_providers {
+                reloaded.push("providers".to_string());
+            }
+        }
+        Err(e) => {
+            failed.push(("app_config".to_string(), e.to_string()));
+        }
+    }
+
+    let ok = failed.is_empty();
+
+    info!(
+        reloaded = ?reloaded,
+        failed_count = failed.len(),
+        "Configuration reloaded with subsystem refresh"
+    );
+
+    // Build response with gateway config summary if available
+    let config_summary = if let Some(ref gw) = gateway_config {
+        json!({
+            "agents": gw.agents.keys().collect::<Vec<_>>(),
+            "bindings_count": gw.bindings.len(),
+        })
+    } else {
+        json!(null)
+    };
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "ok": ok,
+            "reloaded": reloaded,
+            "failed": failed.iter().map(|(name, err)| json!({
+                "subsystem": name,
+                "error": err,
+            })).collect::<Vec<_>>(),
+            "config": config_summary,
+        }),
+    )
+}
+
 /// Handle config.get RPC request
 ///
 /// Returns the current configuration.
