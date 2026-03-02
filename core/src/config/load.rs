@@ -90,6 +90,13 @@ impl Config {
         // unless user has defined a rule with the same regex pattern
         config.merge_builtin_rules();
 
+        // Load presets override from ~/.aleph/presets.toml
+        if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
+            let presets_path = config_dir.join("presets.toml");
+            config.presets_override =
+                crate::config::presets_override::load_presets_override(&presets_path);
+        }
+
         debug!(
             path = %path.display(),
             rules_count = config.rules.len(),
@@ -173,7 +180,13 @@ impl Config {
                 path = %path.display(),
                 "Config file not found, generating default configuration"
             );
-            let config = Self::default();
+            let mut config = Self::default();
+            // Load presets override even when no config.toml exists
+            if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
+                let presets_path = config_dir.join("presets.toml");
+                config.presets_override =
+                    crate::config::presets_override::load_presets_override(&presets_path);
+            }
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
