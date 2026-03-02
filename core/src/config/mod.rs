@@ -23,6 +23,7 @@ pub mod patcher;
 pub mod schema;
 pub mod types;
 pub mod ui_hints;
+pub mod presets_override;
 
 // Re-export main types
 pub use structs::{Config, FullConfig};
