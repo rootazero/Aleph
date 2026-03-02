@@ -43,6 +43,9 @@ pub struct ResolvedRoute {
     pub session_key: SessionKey,
     pub main_session_key: SessionKey,
     pub matched_by: MatchedBy,
+    /// Workspace from route binding (if set). When present, the execution engine
+    /// uses this workspace instead of the user's active workspace.
+    pub workspace: Option<String>,
 }
 
 /// How the route was matched
@@ -77,7 +80,7 @@ pub fn resolve_route(
         .filter(|b| matches_account(&b.match_rule, &account_id))
         .collect();
 
-    let build = |agent_id: &str, matched_by: MatchedBy| -> ResolvedRoute {
+    let build = |agent_id: &str, matched_by: MatchedBy, workspace: Option<String>| -> ResolvedRoute {
         let agent_id = normalize_agent_id(agent_id);
         let session_key = build_session_key(
             &agent_id,
@@ -97,13 +100,14 @@ pub fn resolve_route(
             session_key,
             main_session_key,
             matched_by,
+            workspace,
         }
     };
 
     // 1. Peer match
     if let Some(peer) = &input.peer {
         if let Some(b) = candidates.iter().find(|b| matches_peer(&b.match_rule, peer)) {
-            return build(&b.agent_id, MatchedBy::Peer);
+            return build(&b.agent_id, MatchedBy::Peer, b.match_rule.workspace.clone());
         }
     }
 
@@ -113,7 +117,7 @@ pub fn resolve_route(
             .iter()
             .find(|b| matches_guild(&b.match_rule, guild_id))
         {
-            return build(&b.agent_id, MatchedBy::Guild);
+            return build(&b.agent_id, MatchedBy::Guild, b.match_rule.workspace.clone());
         }
     }
 
@@ -123,7 +127,7 @@ pub fn resolve_route(
             .iter()
             .find(|b| matches_team(&b.match_rule, team_id))
         {
-            return build(&b.agent_id, MatchedBy::Team);
+            return build(&b.agent_id, MatchedBy::Team, b.match_rule.workspace.clone());
         }
     }
 
@@ -138,7 +142,7 @@ pub fn resolve_route(
             && b.match_rule.guild_id.is_none()
             && b.match_rule.team_id.is_none()
     }) {
-        return build(&b.agent_id, MatchedBy::Account);
+        return build(&b.agent_id, MatchedBy::Account, b.match_rule.workspace.clone());
     }
 
     // 5. Channel match (wildcard account)
@@ -152,11 +156,11 @@ pub fn resolve_route(
             && b.match_rule.guild_id.is_none()
             && b.match_rule.team_id.is_none()
     }) {
-        return build(&b.agent_id, MatchedBy::Channel);
+        return build(&b.agent_id, MatchedBy::Channel, b.match_rule.workspace.clone());
     }
 
-    // 6. Default
-    build(default_agent, MatchedBy::Default)
+    // 6. Default (no binding matched, no workspace override)
+    build(default_agent, MatchedBy::Default, None)
 }
 
 fn build_session_key(
@@ -419,6 +423,40 @@ mod tests {
         });
         // Should resolve to canonical "john" instead of "123"
         assert_eq!(route.session_key.to_key_string(), "agent:main:dm:john");
+    }
+
+    #[test]
+    fn test_workspace_from_route_binding() {
+        let bindings = vec![RouteBinding {
+            agent_id: "main".to_string(),
+            match_rule: MatchRule {
+                channel: Some("telegram".to_string()),
+                account_id: Some("*".to_string()),
+                workspace: Some("crypto".to_string()),
+                ..Default::default()
+            },
+        }];
+        let route = resolve_route(&bindings, &default_session_cfg(), "main", &RouteInput {
+            channel: "telegram".to_string(),
+            account_id: None,
+            peer: None,
+            guild_id: None,
+            team_id: None,
+        });
+        assert_eq!(route.workspace.as_deref(), Some("crypto"));
+        assert_eq!(route.matched_by, MatchedBy::Channel);
+    }
+
+    #[test]
+    fn test_default_route_no_workspace() {
+        let route = resolve_route(&[], &default_session_cfg(), "main", &RouteInput {
+            channel: "telegram".to_string(),
+            account_id: None,
+            peer: None,
+            guild_id: None,
+            team_id: None,
+        });
+        assert!(route.workspace.is_none());
     }
 
     #[test]

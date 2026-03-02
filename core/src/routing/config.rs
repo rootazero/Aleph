@@ -47,6 +47,9 @@ pub struct MatchRule {
     pub guild_id: Option<String>,
     /// Slack team ID
     pub team_id: Option<String>,
+    /// Workspace to auto-route to when this binding matches.
+    /// When set, the execution engine uses this workspace instead of the user's active workspace.
+    pub workspace: Option<String>,
 }
 
 /// Peer match configuration
@@ -92,5 +95,20 @@ mod tests {
         assert_eq!(binding.agent_id, "work");
         assert_eq!(binding.match_rule.channel.as_deref(), Some("slack"));
         assert_eq!(binding.match_rule.team_id.as_deref(), Some("T12345"));
+        assert!(binding.match_rule.workspace.is_none());
+    }
+
+    #[test]
+    fn test_route_binding_with_workspace() {
+        let toml_str = r#"
+            agent_id = "main"
+            [match]
+            channel = "telegram"
+            workspace = "crypto"
+        "#;
+        let binding: RouteBinding = toml::from_str(toml_str).unwrap();
+        assert_eq!(binding.agent_id, "main");
+        assert_eq!(binding.match_rule.channel.as_deref(), Some("telegram"));
+        assert_eq!(binding.match_rule.workspace.as_deref(), Some("crypto"));
     }
 }
