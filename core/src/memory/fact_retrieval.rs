@@ -132,6 +132,66 @@ impl FactRetrieval {
         })
     }
 
+    /// Retrieve relevant context for a query within a specific workspace.
+    ///
+    /// Same as `retrieve()` but adds a workspace filter to isolate results
+    /// to the given workspace. This enables memory isolation per workspace.
+    pub async fn retrieve_in_workspace(
+        &self,
+        query: &str,
+        workspace: &str,
+    ) -> Result<RetrievalResult, AlephError> {
+        use crate::memory::workspace::WorkspaceFilter;
+
+        let query_embedding = self
+            .embedder
+            .embed(query)
+            .await
+            .map_err(|e| AlephError::other(format!("Failed to embed query: {}", e)))?;
+
+        // Build filter with workspace isolation
+        let dim_hint = query_embedding.len() as u32;
+        let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner))
+            .with_workspace(WorkspaceFilter::Single(workspace.to_string()));
+        let scored_facts = self
+            .database
+            .vector_search(&query_embedding, dim_hint, &filter, self.config.max_facts as usize)
+            .await?;
+
+        let facts: Vec<MemoryFact> = scored_facts
+            .into_iter()
+            .filter(|sf| sf.score >= self.config.similarity_threshold)
+            .map(|sf| {
+                let mut fact = sf.fact;
+                fact.similarity_score = Some(sf.score);
+                fact
+            })
+            .collect();
+
+        // Fallback to raw memories with workspace filter
+        let raw_memories = if facts.len() < self.config.max_facts as usize {
+            let remaining = self.config.max_raw_fallback;
+            if remaining > 0 {
+                let mem_filter = MemoryFilter {
+                    workspace: Some(WorkspaceFilter::Single(workspace.to_string())),
+                    ..Default::default()
+                };
+                self.database
+                    .search_memories(&query_embedding, &mem_filter, remaining as usize)
+                    .await?
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        Ok(RetrievalResult {
+            facts,
+            raw_memories,
+        })
+    }
+
     /// Retrieve with custom limits
     pub async fn retrieve_with_limits(
         &self,
