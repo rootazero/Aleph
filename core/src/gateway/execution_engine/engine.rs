@@ -389,9 +389,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         };
 
         // --- Workspace Resolution ---
-        // Resolve the user's active workspace (profile, memory filter, workspace_id)
+        // Priority: route binding workspace > user active workspace > global
+        let route_workspace = request.metadata.get("route_workspace").cloned();
         let active_workspace = if let Some(ref ws_manager) = self.workspace_manager {
-            ActiveWorkspace::from_manager(ws_manager, "owner").await
+            if let Some(ref route_ws) = route_workspace {
+                // Channel routing specifies workspace
+                debug!(run_id = run_id, route_workspace = %route_ws, "Using route-resolved workspace");
+                ActiveWorkspace::from_workspace_id(ws_manager, route_ws).await
+            } else {
+                // Use user's active workspace
+                ActiveWorkspace::from_manager(ws_manager, "owner").await
+            }
         } else {
             ActiveWorkspace::default_global()
         };
