@@ -12,6 +12,8 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, IN
 use super::parse_params;
 use super::super::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::config::{Config, ProviderConfig};
+use crate::config::presets_override::PresetsOverride;
+use crate::providers::presets::get_merged_preset;
 use crate::secrets::types::EntryMetadata;
 use crate::secrets::{resolve_master_key, SecretVault};
 
@@ -231,6 +233,7 @@ fn resolve_test_api_key(
 fn build_provider_config_for_persistence(
     provider_name: &str,
     params: ProviderConfigJson,
+    presets_override: &PresetsOverride,
 ) -> Result<ProviderConfig, String> {
     let api_key = normalize_optional_string(params.api_key);
     let requested_secret_name = normalize_optional_string(params.secret_name);
@@ -245,12 +248,33 @@ fn build_provider_config_for_persistence(
         requested_secret_name
     };
 
+    // Restore preset defaults for empty base_url / model (merged with user overrides)
+    let preset = get_merged_preset(provider_name, presets_override);
+
+    let base_url = match normalize_optional_string(params.base_url) {
+        Some(url) => Some(url),
+        None => preset.as_ref().map(|p| p.base_url.clone()),
+    };
+
+    let model = {
+        let trimmed = params.model.trim();
+        if trimmed.is_empty() {
+            preset
+                .as_ref()
+                .filter(|p| !p.default_model.is_empty())
+                .map(|p| p.default_model.clone())
+                .unwrap_or_default()
+        } else {
+            trimmed.to_string()
+        }
+    };
+
     Ok(ProviderConfig {
         protocol: params.protocol,
         api_key: None,
         secret_name,
-        model: params.model,
-        base_url: params.base_url,
+        model,
+        base_url,
         color: params.color.unwrap_or_else(|| "#808080".to_string()),
         timeout_seconds: params.timeout_seconds.unwrap_or(300),
         enabled: params.enabled,
@@ -294,7 +318,11 @@ pub async fn handle_update(
         }
 
         // Convert JSON config to ProviderConfig and move plaintext api_key into vault
-        let provider_config = match build_provider_config_for_persistence(&params.name, params.config) {
+        let provider_config = match build_provider_config_for_persistence(
+            &params.name,
+            params.config,
+            &cfg.presets_override,
+        ) {
             Ok(cfg) => cfg,
             Err(e) => {
                 return JsonRpcResponse::error(
@@ -377,7 +405,11 @@ pub async fn handle_create(
         }
 
         // Convert JSON config to ProviderConfig and move plaintext api_key into vault
-        let provider_config = match build_provider_config_for_persistence(&params.name, params.config) {
+        let provider_config = match build_provider_config_for_persistence(
+            &params.name,
+            params.config,
+            &cfg.presets_override,
+        ) {
             Ok(cfg) => cfg,
             Err(e) => {
                 return JsonRpcResponse::error(
@@ -752,7 +784,8 @@ mod tests {
             top_k: None,
         };
 
-        let config = build_provider_config_for_persistence("openai-main", params).unwrap();
+        let overrides = crate::config::presets_override::PresetsOverride::default();
+        let config = build_provider_config_for_persistence("openai-main", params, &overrides).unwrap();
         assert_eq!(config.secret_name.as_deref(), Some("openai_main_api_key"));
         assert!(config.api_key.is_none());
     }

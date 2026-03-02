@@ -3,6 +3,7 @@
 //! Provides RPC methods for managing generation providers (image, video, audio, speech).
 
 use crate::config::types::generation::GenerationProviderConfig;
+use crate::config::types::generation::presets::get_merged_generation_preset;
 use crate::config::Config;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::event_bus::GatewayEventBus;
@@ -103,6 +104,7 @@ fn store_generation_provider_api_key(
 fn build_generation_provider_for_persistence(
     provider_name: &str,
     config: GenerationProviderConfig,
+    generation_overrides: &crate::config::presets_override::GenerationPresetsOverride,
 ) -> Result<GenerationProviderConfig, String> {
     let api_key = normalize_optional_string(config.api_key.clone());
     let requested_secret_name = normalize_optional_string(config.secret_name.clone());
@@ -117,9 +119,31 @@ fn build_generation_provider_for_persistence(
         requested_secret_name
     };
 
+    // Restore preset defaults for empty base_url / model (merged with user overrides)
+    let preset = get_merged_generation_preset(
+        provider_name,
+        &config.provider_type,
+        generation_overrides,
+    );
+
+    let base_url = match normalize_optional_string(config.base_url) {
+        Some(url) => Some(url),
+        None => preset.as_ref().and_then(|p| p.base_url.clone()),
+    };
+
+    let model = match normalize_optional_string(config.model) {
+        Some(m) => Some(m),
+        None => preset
+            .as_ref()
+            .filter(|p| !p.default_model.is_empty())
+            .map(|p| p.default_model.clone()),
+    };
+
     Ok(GenerationProviderConfig {
         secret_name,
         api_key: None,
+        base_url,
+        model,
         ..config
     })
 }
@@ -259,22 +283,6 @@ pub async fn handle_create(
         Err(e) => return e,
     };
 
-    let provider_config = match build_generation_provider_for_persistence(&params.name, params.config) {
-        Ok(config) => config,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("Invalid provider credentials: {}", e),
-            )
-        }
-    };
-
-    // Validate provider config
-    if let Err(e) = provider_config.validate(&params.name) {
-        return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Validation failed: {}", e));
-    }
-
     {
         let mut cfg = config.write().await;
 
@@ -285,6 +293,26 @@ pub async fn handle_create(
                 INVALID_PARAMS,
                 format!("Provider '{}' already exists", params.name),
             );
+        }
+
+        let provider_config = match build_generation_provider_for_persistence(
+            &params.name,
+            params.config,
+            &cfg.presets_override.generation,
+        ) {
+            Ok(config) => config,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid provider credentials: {}", e),
+                )
+            }
+        };
+
+        // Validate provider config
+        if let Err(e) = provider_config.validate(&params.name) {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Validation failed: {}", e));
         }
 
         // Add provider
@@ -327,22 +355,6 @@ pub async fn handle_update(
         Err(e) => return e,
     };
 
-    let provider_config = match build_generation_provider_for_persistence(&params.name, params.config) {
-        Ok(config) => config,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("Invalid provider credentials: {}", e),
-            )
-        }
-    };
-
-    // Validate provider config
-    if let Err(e) = provider_config.validate(&params.name) {
-        return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Validation failed: {}", e));
-    }
-
     {
         let mut cfg = config.write().await;
 
@@ -353,6 +365,26 @@ pub async fn handle_update(
                 INVALID_PARAMS,
                 format!("Provider '{}' not found", params.name),
             );
+        }
+
+        let provider_config = match build_generation_provider_for_persistence(
+            &params.name,
+            params.config,
+            &cfg.presets_override.generation,
+        ) {
+            Ok(config) => config,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid provider credentials: {}", e),
+                )
+            }
+        };
+
+        // Validate provider config
+        if let Err(e) = provider_config.validate(&params.name) {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Validation failed: {}", e));
         }
 
         // Update provider — config change resets verified
@@ -631,7 +663,8 @@ mod tests {
         cfg.api_key = None;
         cfg.secret_name = Some("gen_openai_key".to_string());
 
-        let persisted = build_generation_provider_for_persistence("dalle_main", cfg).unwrap();
+        let overrides = crate::config::presets_override::GenerationPresetsOverride::default();
+        let persisted = build_generation_provider_for_persistence("dalle_main", cfg, &overrides).unwrap();
         assert!(persisted.api_key.is_none());
         assert_eq!(persisted.secret_name.as_deref(), Some("gen_openai_key"));
     }
