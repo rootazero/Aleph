@@ -1004,7 +1004,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
     if let Some(ref wm) = workspace_manager {
-        register_workspace_handlers(&mut server, wm, args.daemon);
+        register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
     }
 
     let channel_registry = initialize_channels(&mut server, args.daemon).await;
