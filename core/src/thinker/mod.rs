@@ -166,7 +166,8 @@ impl<P: ProviderRegistry> Thinker<P> {
     pub fn new(providers: Arc<P>, config: ThinkerConfig) -> Self {
         Self {
             providers,
-            tool_filter: ToolFilter::new(config.tool_filter.clone()),
+            tool_filter: ToolFilter::new(config.tool_filter.clone())
+                .with_profile(config.active_profile.clone()),
             prompt_builder: PromptBuilder::new(config.prompt.clone()),
             model_selector: ThinkerModelSelector::new(config.model_routing.clone()),
             decision_parser: DecisionParser::new(),
