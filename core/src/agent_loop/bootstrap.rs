@@ -41,6 +41,23 @@ impl BootstrapDetector {
             BootstrapPhase::Complete => None,
         }
     }
+
+    /// Generate the bootstrap prompt with override support.
+    /// Uses the user-defined prompt from prompts.toml if available,
+    /// otherwise falls back to the built-in BOOTSTRAP_PROMPT.
+    /// Returns None if bootstrap is complete.
+    pub fn bootstrap_prompt_with_override(
+        &self,
+        overrides: &crate::config::prompts_override::PromptsOverride,
+    ) -> Option<String> {
+        match self.detect_phase() {
+            BootstrapPhase::Uninitialized => {
+                let prompt = overrides.bootstrap_prompt().unwrap_or(BOOTSTRAP_PROMPT);
+                Some(prompt.to_string())
+            }
+            BootstrapPhase::Complete => None,
+        }
+    }
 }
 
 /// The bootstrap prompt template.

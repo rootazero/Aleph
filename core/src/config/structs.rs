@@ -105,6 +105,10 @@ pub struct Config {
     /// Not serialized to config.toml — lives in its own file
     #[serde(skip)]
     pub presets_override: crate::config::presets_override::PresetsOverride,
+    /// Prompts override loaded from ~/.aleph/prompts.toml
+    /// Not serialized to config.toml — lives in its own file
+    #[serde(skip)]
+    pub prompts_override: crate::config::prompts_override::PromptsOverride,
 }
 
 // =============================================================================
@@ -196,6 +200,7 @@ impl Default for Config {
             secrets: HashMap::new(),
             secrets_config: SecretsConfig::default(),
             presets_override: crate::config::presets_override::PresetsOverride::default(),
+            prompts_override: crate::config::prompts_override::PromptsOverride::default(),
         }
     }
 }

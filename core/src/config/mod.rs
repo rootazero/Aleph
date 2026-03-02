@@ -24,6 +24,7 @@ pub mod schema;
 pub mod types;
 pub mod ui_hints;
 pub mod presets_override;
+pub mod prompts_override;
 
 // Re-export main types
 pub use structs::{Config, FullConfig};

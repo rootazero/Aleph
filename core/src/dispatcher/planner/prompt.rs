@@ -207,6 +207,15 @@ User: "Analyze my notes and create a summary PDF"
 Now, break down the following user request into tasks:
 "#;
 
+/// Get the planning system prompt, checking override first
+pub fn get_planning_system_prompt(
+    overrides: &crate::config::prompts_override::PromptsOverride,
+) -> &str {
+    overrides
+        .planner_system_prompt()
+        .unwrap_or(PLANNING_SYSTEM_PROMPT)
+}
+
 /// Build the user prompt for planning
 pub fn build_user_prompt(request: &str) -> String {
     format!("User request: {}", request)
