@@ -29,6 +29,13 @@ pub struct MemorySearchArgs {
     /// Workspace to search in. If omitted, uses the active workspace from execution context.
     #[serde(default)]
     pub workspace: Option<String>,
+    /// Search across multiple specific workspaces (e.g., ["crypto", "health"]).
+    /// Takes priority over `workspace` when set.
+    #[serde(default)]
+    pub workspaces: Option<Vec<String>>,
+    /// If true, search across ALL workspaces. Takes highest priority.
+    #[serde(default)]
+    pub cross_workspace: Option<bool>,
 }
 
 fn default_max_results() -> usize {
@@ -117,7 +124,9 @@ impl MemorySearchTool {
 
     /// Tool description for AI prompt
     pub const DESCRIPTION: &'static str = "Search personal memory for relevant facts and conversation history. \
-        Returns both compressed facts and raw transcripts with redundancy elimination.";
+        Returns both compressed facts and raw transcripts with redundancy elimination. \
+        By default searches the active workspace. Use 'workspaces' to search specific workspaces, \
+        or 'cross_workspace: true' to search all workspaces.";
 
     /// Create a new MemorySearchTool instance
     pub fn new_with_embedder(database: MemoryBackend, embedder: Arc<dyn EmbeddingProvider>) -> Self {
@@ -164,24 +173,41 @@ impl MemorySearchTool {
     ) -> std::result::Result<MemorySearchOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
-        // Resolve workspace: explicit arg > default_workspace (set by execution engine) > DEFAULT_WORKSPACE
+        use crate::memory::workspace::WorkspaceFilter;
+
+        // Resolve workspace filter with priority:
+        // cross_workspace: true → All
+        // workspaces: [...] → Multiple
+        // workspace: "x" → Single
+        // default → Single (active workspace)
         let default_ws = self.default_workspace.read().await;
-        let workspace = args
-            .workspace
-            .as_deref()
-            .unwrap_or(&default_ws);
+        let workspace_filter = if args.cross_workspace.unwrap_or(false) {
+            WorkspaceFilter::All
+        } else if let Some(ref wss) = args.workspaces {
+            WorkspaceFilter::Multiple(wss.clone())
+        } else {
+            let ws = args.workspace.as_deref().unwrap_or(&default_ws);
+            WorkspaceFilter::Single(ws.to_string())
+        };
+
+        // For logging and path lookups, extract a primary workspace name
+        let workspace_label = match &workspace_filter {
+            WorkspaceFilter::Single(ws) => ws.clone(),
+            WorkspaceFilter::Multiple(wss) => format!("[{}]", wss.join(", ")),
+            WorkspaceFilter::All => "ALL".to_string(),
+        };
 
         // Notify tool start
         let args_summary = format!("记忆搜索: {}", &args.query);
         notify_tool_start(Self::NAME, &args_summary);
 
-        info!(query = %args.query, max_results = args.max_results, workspace = workspace, "Executing memory search");
+        info!(query = %args.query, max_results = args.max_results, workspace = %workspace_label, "Executing memory search");
 
-        // Step 1: Fact-first retrieval with workspace isolation
-        debug!(workspace = workspace, "Performing fact-first retrieval with workspace filter");
+        // Step 1: Fact-first retrieval with workspace filter
+        debug!(workspace = %workspace_label, "Performing fact-first retrieval with workspace filter");
         let retrieval_result = self
             .fact_retrieval
-            .retrieve_in_workspace(&args.query, workspace)
+            .retrieve_with_filter(&args.query, workspace_filter)
             .await
             .map_err(|e| ToolError::Execution(format!("Fact retrieval failed: {}", e)))?;
 
@@ -235,7 +261,7 @@ impl MemorySearchTool {
                 &*self.database,
                 &cluster.path,
                 &crate::memory::NamespaceScope::Owner,
-                workspace,
+                &workspace_label,
             ).await {
                 if l1.fact_source == crate::memory::FactSource::Summary {
                     cluster.l1_overview = Some(l1.content);
@@ -279,7 +305,9 @@ impl Clone for MemorySearchTool {
 impl AlephTool for MemorySearchTool {
     const NAME: &'static str = "memory_search";
     const DESCRIPTION: &'static str = "Search personal memory for relevant facts and conversation history. \
-        Returns both compressed facts and raw transcripts with redundancy elimination.";
+        Returns both compressed facts and raw transcripts with redundancy elimination. \
+        By default searches the active workspace. Use 'workspaces' to search specific workspaces, \
+        or 'cross_workspace: true' to search all workspaces.";
 
     type Args = MemorySearchArgs;
     type Output = MemorySearchOutput;
@@ -308,6 +336,8 @@ mod tests {
             query: "test query".to_string(),
             max_results: 5,
             workspace: None,
+            workspaces: None,
+            cross_workspace: None,
         };
 
         let json = serde_json::to_string(&args).unwrap();
@@ -315,6 +345,29 @@ mod tests {
 
         assert_eq!(args.query, deserialized.query);
         assert_eq!(args.max_results, deserialized.max_results);
+    }
+
+    #[test]
+    fn test_cross_workspace_args_deserialization() {
+        // Test cross_workspace: true
+        let json = r#"{"query": "exercise plan", "cross_workspace": true}"#;
+        let args: MemorySearchArgs = serde_json::from_str(json).unwrap();
+        assert!(args.cross_workspace.unwrap());
+        assert!(args.workspaces.is_none());
+
+        // Test workspaces: [...]
+        let json = r#"{"query": "health tips", "workspaces": ["health", "fitness"]}"#;
+        let args: MemorySearchArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.workspaces.as_ref().unwrap().len(), 2);
+        assert!(args.cross_workspace.is_none());
+
+        // Test backward compatibility: just query
+        let json = r#"{"query": "hello"}"#;
+        let args: MemorySearchArgs = serde_json::from_str(json).unwrap();
+        assert!(args.workspace.is_none());
+        assert!(args.workspaces.is_none());
+        assert!(args.cross_workspace.is_none());
+        assert_eq!(args.max_results, 10); // default
     }
 
     #[test]
