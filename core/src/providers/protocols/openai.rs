@@ -264,11 +264,11 @@ impl ProtocolAdapter for OpenAiProtocol {
             "stream": is_streaming,
         });
 
-        // Add optional parameters
-        if let Some(max_tokens) = config.max_tokens {
+        // Add optional parameters (per-request overrides provider config)
+        if let Some(max_tokens) = payload.max_tokens.or(config.max_tokens) {
             body["max_tokens"] = json!(max_tokens);
         }
-        if let Some(temp) = config.temperature {
+        if let Some(temp) = payload.temperature.or(config.temperature) {
             body["temperature"] = json!(temp);
         }
         if let Some(top_p) = config.top_p {

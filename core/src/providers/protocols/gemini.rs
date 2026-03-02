@@ -229,9 +229,10 @@ impl ProtocolAdapter for GeminiProtocol {
                 thinking_budget: Some(budget),
             });
 
+        // Per-request overrides provider config
         let generation_config = GenerationConfig {
-            max_output_tokens: config.max_tokens.or(Some(DEFAULT_MAX_TOKENS)),
-            temperature: config.temperature,
+            max_output_tokens: payload.max_tokens.or(config.max_tokens).or(Some(DEFAULT_MAX_TOKENS)),
+            temperature: payload.temperature.or(config.temperature),
             top_p: config.top_p,
             top_k: None,
             thinking_config,

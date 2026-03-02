@@ -74,6 +74,21 @@ impl TemplateContext {
         self
     }
 
+    /// Apply per-request overrides from RequestPayload (temperature, max_tokens)
+    ///
+    /// Must be called after `with_config()` to override config values.
+    pub fn with_payload_overrides(mut self, payload: &super::super::adapter::RequestPayload) -> Self {
+        if let Some(ref mut config) = self.config {
+            if let Some(temp) = payload.temperature {
+                config["temperature"] = json!(temp);
+            }
+            if let Some(max) = payload.max_tokens {
+                config["max_tokens"] = json!(max);
+            }
+        }
+        self
+    }
+
     /// Add user input text to the context
     ///
     /// Available as `{{input}}` in templates.

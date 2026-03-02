@@ -34,6 +34,12 @@ pub struct RequestPayload<'a> {
 
     /// Force standard mode for system prompt handling
     pub force_standard_mode: bool,
+
+    /// Per-request temperature override (takes priority over provider config)
+    pub temperature: Option<f32>,
+
+    /// Per-request max_tokens override (takes priority over provider config)
+    pub max_tokens: Option<u32>,
 }
 
 impl<'a> RequestPayload<'a> {
@@ -72,6 +78,18 @@ impl<'a> RequestPayload<'a> {
     /// Set force standard mode
     pub fn with_force_standard_mode(mut self, force: bool) -> Self {
         self.force_standard_mode = force;
+        self
+    }
+
+    /// Set per-request temperature override
+    pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
+        self.temperature = temperature;
+        self
+    }
+
+    /// Set per-request max_tokens override
+    pub fn with_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
+        self.max_tokens = max_tokens;
         self
     }
 }
@@ -147,5 +165,17 @@ mod tests {
         assert!(payload.image.is_none());
         assert!(payload.attachments.is_none());
         assert!(payload.think_level.is_none());
+        assert!(payload.temperature.is_none());
+        assert!(payload.max_tokens.is_none());
+    }
+
+    #[test]
+    fn test_payload_with_generation_overrides() {
+        let payload = RequestPayload::new("Hello")
+            .with_temperature(Some(0.7))
+            .with_max_tokens(Some(4096));
+
+        assert_eq!(payload.temperature, Some(0.7));
+        assert_eq!(payload.max_tokens, Some(4096));
     }
 }
