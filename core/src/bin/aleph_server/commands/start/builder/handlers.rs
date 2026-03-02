@@ -396,13 +396,24 @@ pub(in crate::commands::start) fn register_memory_handlers(
 pub(in crate::commands::start) fn register_workspace_handlers(
     server: &mut GatewayServer,
     workspace_manager: &Arc<WorkspaceManager>,
+    memory_db: &MemoryBackend,
     daemon: bool,
 ) {
+    register_handler!(server, "workspace.create", workspace_handlers::handle_create, memory_db);
+    register_handler!(server, "workspace.list", workspace_handlers::handle_list, memory_db);
+    register_handler!(server, "workspace.get", workspace_handlers::handle_get, memory_db);
+    register_handler!(server, "workspace.update", workspace_handlers::handle_update, memory_db);
+    register_handler!(server, "workspace.archive", workspace_handlers::handle_archive, memory_db);
     register_handler!(server, "workspace.switch", workspace_handlers::handle_switch, workspace_manager);
     register_handler!(server, "workspace.getActive", workspace_handlers::handle_get_active, workspace_manager);
 
     if !daemon {
         println!("Workspace methods:");
+        println!("  - workspace.create    : Create a new workspace");
+        println!("  - workspace.list      : List all workspaces");
+        println!("  - workspace.get       : Get workspace by ID");
+        println!("  - workspace.update    : Update workspace metadata");
+        println!("  - workspace.archive   : Archive (soft-delete) a workspace");
         println!("  - workspace.switch    : Switch active workspace");
         println!("  - workspace.getActive : Get current active workspace");
         println!();
