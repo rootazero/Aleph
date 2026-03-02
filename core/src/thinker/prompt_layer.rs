@@ -37,32 +37,40 @@ pub struct LayerInput<'a> {
     pub context: Option<&'a ResolvedContext>,
     /// POE context (success criteria, behavioral anchors, hints)
     pub poe: Option<&'a PoePromptContext>,
+    /// Active workspace profile (system_prompt overlay, tool whitelist, etc.)
+    pub profile: Option<&'a crate::config::ProfileConfig>,
 }
 
 impl<'a> LayerInput<'a> {
     /// Input for the `Basic` path — config + tool list.
     pub fn basic(config: &'a PromptConfig, tools: &'a [ToolInfo]) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, poe: None }
+        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, poe: None, profile: None }
     }
 
     /// Input for the `Hydration` path — config + hydration result.
     pub fn hydration(config: &'a PromptConfig, hydration: &'a HydrationResult) -> Self {
-        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, poe: None }
+        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, poe: None, profile: None }
     }
 
     /// Input for the `Soul` path — config + tools + soul manifest.
     pub fn soul(config: &'a PromptConfig, tools: &'a [ToolInfo], soul: &'a SoulManifest) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, poe: None }
+        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, poe: None, profile: None }
     }
 
     /// Input for the `Context` path — config + resolved context.
     pub fn context(config: &'a PromptConfig, ctx: &'a ResolvedContext) -> Self {
-        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), poe: None }
+        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), poe: None, profile: None }
     }
 
     /// Attach POE context to this input.
     pub fn with_poe(mut self, poe: &'a PoePromptContext) -> Self {
         self.poe = Some(poe);
+        self
+    }
+
+    /// Attach workspace profile to this input.
+    pub fn with_profile(mut self, profile: Option<&'a crate::config::ProfileConfig>) -> Self {
+        self.profile = profile;
         self
     }
 
