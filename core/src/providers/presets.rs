@@ -84,6 +84,16 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
+    // SiliconFlow — Chinese AI cloud platform
+    m.insert(
+        "siliconflow",
+        ProviderPreset {
+            base_url: "https://api.siliconflow.cn/v1",
+            protocol: "openai",
+            color: "#6c5ce7",
+        },
+    );
+
     // T8Star
     m.insert(
         "t8star",
@@ -242,6 +252,7 @@ mod tests {
         assert!(PRESETS.contains_key("deepseek"));
         assert!(PRESETS.contains_key("moonshot"));
         assert!(PRESETS.contains_key("doubao"));
+        assert!(PRESETS.contains_key("siliconflow"));
         assert!(PRESETS.contains_key("openai"));
 
         // Native protocols
