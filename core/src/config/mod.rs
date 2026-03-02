@@ -23,6 +23,7 @@ pub mod patcher;
 pub mod schema;
 pub mod types;
 pub mod ui_hints;
+pub mod defaults_override;
 pub mod presets_override;
 pub mod prompts_override;
 

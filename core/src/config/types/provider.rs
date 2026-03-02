@@ -110,7 +110,9 @@ pub fn default_provider_color() -> String {
 }
 
 pub fn default_timeout_seconds() -> u64 {
-    300 // 300 seconds default timeout
+    crate::config::defaults_override::get_defaults_override()
+        .provider_timeout_seconds()
+        .unwrap_or(300)
 }
 
 pub fn default_provider_enabled() -> bool {

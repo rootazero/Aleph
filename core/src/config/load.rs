@@ -65,6 +65,16 @@ impl Config {
             "Config file read successfully, parsing TOML"
         );
 
+        // Load defaults override BEFORE parsing config.toml
+        // because serde calls fn default_*() during deserialization,
+        // and those functions need to read from the OnceLock.
+        if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
+            let defaults_path = config_dir.join("defaults.toml");
+            let defaults =
+                crate::config::defaults_override::load_defaults_override(&defaults_path);
+            crate::config::defaults_override::init_defaults_override(defaults);
+        }
+
         // Pre-process TOML: Migrate [mcp.builtin] to [tools] if needed
         let contents = Self::migrate_mcp_builtin_in_toml(&contents)?;
 
@@ -103,6 +113,10 @@ impl Config {
             config.prompts_override =
                 crate::config::prompts_override::load_prompts_override(&prompts_path);
         }
+
+        // Assign defaults override to config (already loaded into OnceLock above)
+        config.defaults_override =
+            crate::config::defaults_override::get_defaults_override().clone();
 
         debug!(
             path = %path.display(),
@@ -187,7 +201,18 @@ impl Config {
                 path = %path.display(),
                 "Config file not found, generating default configuration"
             );
+            // Load defaults override BEFORE Self::default() so serde default
+            // functions can read from the OnceLock during construction.
+            if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
+                let defaults_path = config_dir.join("defaults.toml");
+                let defaults =
+                    crate::config::defaults_override::load_defaults_override(&defaults_path);
+                crate::config::defaults_override::init_defaults_override(defaults);
+            }
             let mut config = Self::default();
+            // Assign defaults override to config
+            config.defaults_override =
+                crate::config::defaults_override::get_defaults_override().clone();
             // Load presets override even when no config.toml exists
             if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
                 let presets_path = config_dir.join("presets.toml");
