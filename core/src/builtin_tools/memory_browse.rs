@@ -5,13 +5,15 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use crate::sync_primitives::Arc;
+use tokio::sync::RwLock;
 
 use super::error::ToolError;
 use crate::error::Result;
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::{MemoryBackend, MemoryStore, PathEntry as StorePathEntry};
 use crate::memory::workspace::WorkspaceFilter;
-use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter};
+use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter, DEFAULT_WORKSPACE};
 use crate::tools::AlephTool;
 
 /// Browse action type
@@ -36,7 +38,7 @@ pub struct MemoryBrowseArgs {
     /// Glob pattern (only used with glob action)
     #[serde(default)]
     pub pattern: Option<String>,
-    /// Workspace to browse in (defaults to "default")
+    /// Workspace to browse in. If omitted, uses the active workspace from execution context.
     #[serde(default)]
     pub workspace: Option<String>,
 }
@@ -93,11 +95,25 @@ pub struct GlobMatch {
 /// Memory browse tool
 pub struct MemoryBrowseTool {
     database: MemoryBackend,
+    /// Shared default workspace ID, set by the execution engine based on active workspace.
+    /// Falls back to DEFAULT_WORKSPACE ("default") when not set.
+    default_workspace: Arc<RwLock<String>>,
 }
 
 impl MemoryBrowseTool {
     pub fn new(database: MemoryBackend) -> Self {
-        Self { database }
+        Self {
+            database,
+            default_workspace: Arc::new(RwLock::new(DEFAULT_WORKSPACE.to_string())),
+        }
+    }
+
+    /// Get a shared handle to the default workspace setting.
+    ///
+    /// The execution engine can update this value when the active workspace changes,
+    /// so that tool calls without an explicit `workspace` arg use the correct workspace.
+    pub fn default_workspace_handle(&self) -> Arc<RwLock<String>> {
+        Arc::clone(&self.default_workspace)
     }
 
     async fn call_impl(
@@ -106,7 +122,9 @@ impl MemoryBrowseTool {
     ) -> std::result::Result<MemoryBrowseOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
-        let workspace = args.workspace.as_deref().unwrap_or("default");
+        // Resolve workspace: explicit arg > default_workspace (set by execution engine) > DEFAULT_WORKSPACE
+        let default_ws = self.default_workspace.read().await;
+        let workspace = args.workspace.as_deref().unwrap_or(&default_ws);
 
         // Validate path
         if !args.path.starts_with("aleph://") {
@@ -341,6 +359,7 @@ impl Clone for MemoryBrowseTool {
     fn clone(&self) -> Self {
         Self {
             database: self.database.clone(),
+            default_workspace: self.default_workspace.clone(),
         }
     }
 }

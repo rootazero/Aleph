@@ -269,6 +269,12 @@ impl MemoryFact {
         self
     }
 
+    /// Set workspace ID for domain isolation
+    pub fn with_workspace(mut self, workspace: String) -> Self {
+        self.workspace = workspace;
+        self
+    }
+
     /// Set persona identifier (implies Persona scope)
     pub fn with_persona_id(mut self, persona_id: String) -> Self {
         self.persona_id = Some(persona_id);

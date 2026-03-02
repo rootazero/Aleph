@@ -130,7 +130,21 @@ impl CompressionService {
     }
 
     /// Execute a compression operation
+    ///
+    /// Extracted facts are tagged with DEFAULT_WORKSPACE ("default").
+    /// Use `compress_in_workspace()` to tag facts with a specific workspace.
     pub async fn compress(&self) -> Result<CompressionResult, AlephError> {
+        self.compress_in_workspace(crate::memory::DEFAULT_WORKSPACE).await
+    }
+
+    /// Execute a compression operation with workspace tagging.
+    ///
+    /// All extracted facts are stamped with the given `workspace_id` so that
+    /// memories are isolated per workspace.
+    pub async fn compress_in_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> Result<CompressionResult, AlephError> {
         let start = Instant::now();
 
         // 1. Get last compression timestamp
@@ -172,11 +186,13 @@ impl CompressionService {
         );
 
         // 4. Process each fact (conflict detection and storage)
+        //    Tag each fact with the target workspace for memory isolation.
         let mut stored_fact_ids = Vec::new();
         let mut total_invalidated = 0u32;
         let mut affected_paths: HashSet<String> = HashSet::new();
 
-        for fact in extracted_facts {
+        for mut fact in extracted_facts {
+            fact.workspace = workspace_id.to_string();
             // Detect conflicts
             let resolutions = self.conflict_detector.resolve_conflicts(&fact).await?;
 

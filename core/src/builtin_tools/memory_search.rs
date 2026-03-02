@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use crate::sync_primitives::Arc;
+use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use super::error::ToolError;
@@ -13,7 +14,7 @@ use crate::error::Result;
 use crate::memory::store::MemoryBackend;
 use crate::memory::{
     ComptrollerConfig, ContextComptroller, EmbeddingProvider, FactRetrieval, FactRetrievalConfig,
-    TokenBudget, TranscriptIndexer,
+    TokenBudget, TranscriptIndexer, DEFAULT_WORKSPACE,
 };
 use crate::tools::AlephTool;
 
@@ -25,7 +26,7 @@ pub struct MemorySearchArgs {
     /// Max results to return (default 10)
     #[serde(default = "default_max_results")]
     pub max_results: usize,
-    /// Workspace to search in (defaults to "default")
+    /// Workspace to search in. If omitted, uses the active workspace from execution context.
     #[serde(default)]
     pub workspace: Option<String>,
 }
@@ -105,6 +106,9 @@ pub struct MemorySearchTool {
     fact_retrieval: Arc<FactRetrieval>,
     comptroller: Arc<ContextComptroller>,
     _indexer: Arc<TranscriptIndexer>,
+    /// Shared default workspace ID, set by the execution engine based on active workspace.
+    /// Falls back to DEFAULT_WORKSPACE ("default") when not set.
+    default_workspace: Arc<RwLock<String>>,
 }
 
 impl MemorySearchTool {
@@ -141,7 +145,16 @@ impl MemorySearchTool {
             fact_retrieval,
             comptroller,
             _indexer: indexer,
+            default_workspace: Arc::new(RwLock::new(DEFAULT_WORKSPACE.to_string())),
         }
+    }
+
+    /// Get a shared handle to the default workspace setting.
+    ///
+    /// The execution engine can update this value when the active workspace changes,
+    /// so that tool calls without an explicit `workspace` arg use the correct workspace.
+    pub fn default_workspace_handle(&self) -> Arc<RwLock<String>> {
+        Arc::clone(&self.default_workspace)
     }
 
     /// Execute memory search (internal implementation)
@@ -151,7 +164,12 @@ impl MemorySearchTool {
     ) -> std::result::Result<MemorySearchOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
-        let workspace = args.workspace.as_deref().unwrap_or("default");
+        // Resolve workspace: explicit arg > default_workspace (set by execution engine) > DEFAULT_WORKSPACE
+        let default_ws = self.default_workspace.read().await;
+        let workspace = args
+            .workspace
+            .as_deref()
+            .unwrap_or(&default_ws);
 
         // Notify tool start
         let args_summary = format!("记忆搜索: {}", &args.query);
@@ -159,11 +177,11 @@ impl MemorySearchTool {
 
         info!(query = %args.query, max_results = args.max_results, workspace = workspace, "Executing memory search");
 
-        // Step 1: Fact-first retrieval
-        debug!("Performing fact-first retrieval");
+        // Step 1: Fact-first retrieval with workspace isolation
+        debug!(workspace = workspace, "Performing fact-first retrieval with workspace filter");
         let retrieval_result = self
             .fact_retrieval
-            .retrieve(&args.query)
+            .retrieve_in_workspace(&args.query, workspace)
             .await
             .map_err(|e| ToolError::Execution(format!("Fact retrieval failed: {}", e)))?;
 
@@ -251,6 +269,7 @@ impl Clone for MemorySearchTool {
             fact_retrieval: self.fact_retrieval.clone(),
             comptroller: self.comptroller.clone(),
             _indexer: self._indexer.clone(),
+            default_workspace: self.default_workspace.clone(),
         }
     }
 }
