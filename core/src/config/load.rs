@@ -97,6 +97,13 @@ impl Config {
                 crate::config::presets_override::load_presets_override(&presets_path);
         }
 
+        // Load prompts override from ~/.aleph/prompts.toml
+        if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
+            let prompts_path = config_dir.join("prompts.toml");
+            config.prompts_override =
+                crate::config::prompts_override::load_prompts_override(&prompts_path);
+        }
+
         debug!(
             path = %path.display(),
             rules_count = config.rules.len(),
@@ -186,6 +193,12 @@ impl Config {
                 let presets_path = config_dir.join("presets.toml");
                 config.presets_override =
                     crate::config::presets_override::load_presets_override(&presets_path);
+            }
+            // Load prompts override even when no config.toml exists
+            if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
+                let prompts_path = config_dir.join("prompts.toml");
+                config.prompts_override =
+                    crate::config::prompts_override::load_prompts_override(&prompts_path);
             }
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
