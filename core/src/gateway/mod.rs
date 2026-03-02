@@ -198,7 +198,7 @@ pub use run_event_bus::{
 #[cfg(feature = "gateway")]
 pub use workspace::{
     Workspace, WorkspaceManager, WorkspaceManagerConfig, WorkspaceError,
-    CacheState, UserActiveWorkspace,
+    CacheState, UserActiveWorkspace, ActiveWorkspace,
 };
 
 // Property-based tests (require gateway feature for protocol/channel types)

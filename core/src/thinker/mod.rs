@@ -102,6 +102,14 @@ pub struct ThinkerConfig {
     pub compression: CompressionConfig,
     /// Thinking level for LLM reasoning depth
     pub think_level: ThinkLevel,
+    /// Soul manifest for identity injection into prompts.
+    /// When set, the Thinker uses `build_system_prompt_with_soul()`
+    /// so that identity appears at the top of every system prompt.
+    pub soul: Option<soul::SoulManifest>,
+    /// Active workspace profile configuration.
+    /// When set, provides workspace-specific overrides (model, temperature,
+    /// tool whitelist, system_prompt) resolved from the user's active workspace.
+    pub active_profile: Option<crate::config::ProfileConfig>,
 }
 
 
@@ -186,8 +194,15 @@ impl<P: ProviderRegistry> Thinker<P> {
     }
 
     /// Build the complete prompt
+    ///
+    /// If a soul manifest is configured, identity is injected at the top of the
+    /// system prompt via `build_system_prompt_with_soul()`.
     fn build_prompt(&self, state: &LoopState, tools: &[ToolInfo], observation: &Observation) -> (String, Vec<Message>) {
-        let system = self.prompt_builder.build_system_prompt(tools);
+        let system = if let Some(ref soul) = self.config.soul {
+            self.prompt_builder.build_system_prompt_with_soul(tools, soul)
+        } else {
+            self.prompt_builder.build_system_prompt(tools)
+        };
         let messages = self.prompt_builder.build_messages(&state.original_request, observation);
         (system, messages)
     }
