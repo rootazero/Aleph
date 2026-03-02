@@ -99,6 +99,10 @@ pub struct ProviderConfig {
     /// - "standard": Use a separate system message (for standard OpenAI-compatible APIs)
     #[serde(default)]
     pub system_prompt_mode: Option<String>,
+
+    /// Whether this provider has been verified via a successful test connection
+    #[serde(default)]
+    pub verified: bool,
 }
 
 pub fn default_provider_color() -> String {
@@ -148,6 +152,7 @@ impl ProviderConfig {
             media_resolution: None,
             repeat_penalty: None,
             system_prompt_mode: None,
+            verified: false,
         }
     }
 }
@@ -191,6 +196,7 @@ mod tests {
             media_resolution: None,
             repeat_penalty: None,
             system_prompt_mode: None,
+            verified: false,
         };
         assert_eq!(config.protocol(), "anthropic");
     }
@@ -217,6 +223,7 @@ mod tests {
             media_resolution: None,
             repeat_penalty: None,
             system_prompt_mode: None,
+            verified: false,
         };
         assert_eq!(config.protocol(), "openai");
     }

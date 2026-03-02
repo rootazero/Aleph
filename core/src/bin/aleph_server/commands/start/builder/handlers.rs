@@ -419,7 +419,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "providers.update", providers::handle_update, config, event_bus);
     register_handler!(server, "providers.delete", providers::handle_delete, config, event_bus);
     register_handler!(server, "providers.setDefault", providers::handle_set_default, config, event_bus);
-    register_handler!(server, "providers.test", providers::handle_test);
+    register_handler!(server, "providers.test", providers::handle_test, config);
 
     // Routing rules
     register_handler!(server, "routing_rules.list", routing_rules::handle_list, config);
@@ -492,4 +492,5 @@ pub(in crate::commands::start) fn register_config_handlers(
     // Search config
     register_handler!(server, "search_config.get", search_config::handle_get, config);
     register_handler!(server, "search_config.update", search_config::handle_update, config, event_bus);
+    register_handler!(server, "search_config.test", search_config::handle_test, config);
 }

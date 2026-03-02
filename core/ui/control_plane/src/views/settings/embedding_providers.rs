@@ -209,19 +209,26 @@ fn EmbeddingProviderCard(
                     </h3>
                     <span class="text-xs text-text-tertiary">{preset_label}</span>
                 </div>
-                {if is_active {
-                    view! {
-                        <span class="px-2 py-1 text-xs font-medium bg-primary-subtle text-primary rounded">
-                            "Active"
-                        </span>
-                    }.into_view()
-                } else {
-                    view! {
-                        <span class="px-2 py-1 text-xs font-medium bg-surface-raised text-text-tertiary rounded">
-                            "Inactive"
-                        </span>
-                    }.into_view()
-                }}
+                <div class="flex gap-1">
+                    {if is_active {
+                        view! {
+                            <span class="px-2 py-1 text-xs font-medium bg-primary-subtle text-primary rounded">
+                                "Default"
+                            </span>
+                        }.into_view()
+                    } else {
+                        view! { <span></span> }.into_view()
+                    }}
+                    {if provider.verified {
+                        view! {
+                            <span class="px-2 py-1 text-xs font-medium bg-success-subtle text-success rounded">
+                                "Active"
+                            </span>
+                        }.into_view()
+                    } else {
+                        view! { <span></span> }.into_view()
+                    }}
+                </div>
             </div>
 
             <div class="flex items-center gap-2 text-xs text-text-tertiary">
@@ -415,19 +422,26 @@ fn ProviderDetailPanel(
                             {format!("ID: {}", provider_id.clone())}
                         </p>
                     </div>
-                    {if is_active {
-                        view! {
-                            <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-success-subtle text-success">
-                                "Active"
-                            </span>
-                        }.into_view()
-                    } else {
-                        view! {
-                            <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-surface-sunken text-text-tertiary">
-                                "Inactive"
-                            </span>
-                        }.into_view()
-                    }}
+                    <div class="flex gap-1">
+                        {if is_active {
+                            view! {
+                                <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-primary-subtle text-primary">
+                                    "Default"
+                                </span>
+                            }.into_view()
+                        } else {
+                            view! { <span></span> }.into_view()
+                        }}
+                        {if provider.verified {
+                            view! {
+                                <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-success-subtle text-success">
+                                    "Active"
+                                </span>
+                            }.into_view()
+                        } else {
+                            view! { <span></span> }.into_view()
+                        }}
+                    </div>
                 </div>
             </div>
 
@@ -559,7 +573,7 @@ fn ProviderDetailPanel(
                         disabled=move || activating.get()
                         class="w-full px-4 py-2.5 bg-surface-raised text-text-secondary rounded-lg hover:bg-surface-sunken disabled:opacity-50 transition-colors font-medium"
                     >
-                        {move || if activating.get() { "Activating..." } else { "Set as Active" }}
+                        {move || if activating.get() { "Setting default..." } else { "Set as Default" }}
                     </button>
                 })
             } else {

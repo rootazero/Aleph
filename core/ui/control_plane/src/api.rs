@@ -328,6 +328,8 @@ pub struct ProviderInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_type: Option<String>,
     pub is_default: bool,
+    #[serde(default)]
+    pub verified: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -922,6 +924,8 @@ pub struct GenerationProviderConfig {
     pub color: String,
     pub capabilities: Vec<GenerationType>,
     pub timeout_seconds: u64,
+    #[serde(default)]
+    pub verified: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1211,6 +1215,8 @@ pub struct SearchBackendEntry {
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_id: Option<String>,
+    #[serde(default)]
+    pub verified: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1228,6 +1234,12 @@ pub struct SearchConfig {
     pub backends: Vec<SearchBackendEntry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchTestResult {
+    pub success: bool,
+    pub message: String,
+}
+
 pub struct SearchConfigApi;
 
 impl SearchConfigApi {
@@ -1240,6 +1252,23 @@ impl SearchConfigApi {
         let params = serde_json::to_value(&config).map_err(|e| e.to_string())?;
         state.rpc_call("search_config.update", params).await?;
         Ok(())
+    }
+
+    pub async fn test_connection(
+        state: &DashboardState,
+        name: &str,
+        api_key: Option<String>,
+        base_url: Option<String>,
+        engine_id: Option<String>,
+    ) -> Result<SearchTestResult, String> {
+        let params = serde_json::json!({
+            "name": name,
+            "api_key": api_key,
+            "base_url": base_url,
+            "engine_id": engine_id,
+        });
+        let result = state.rpc_call("search_config.test", params).await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
     }
 }
 
@@ -1349,6 +1378,8 @@ pub struct EmbeddingProviderEntry {
     pub timeout_ms: u64,
     #[serde(default)]
     pub is_active: bool,
+    #[serde(default)]
+    pub verified: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

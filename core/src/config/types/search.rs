@@ -130,6 +130,10 @@ pub struct SearchBackendConfig {
     /// Search engine ID (required for Google CSE only)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_id: Option<String>,
+
+    /// Whether this backend has been verified via a successful test connection
+    #[serde(default)]
+    pub verified: bool,
 }
 
 // =============================================================================

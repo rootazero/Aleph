@@ -277,14 +277,25 @@ fn PresetGrid(
                                         <span class="font-medium text-text-primary text-sm truncate">
                                             {display_name}
                                         </span>
-                                        {move || if is_active() {
-                                            view! {
-                                                <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                    "Active"
-                                                </span>
-                                            }.into_any()
-                                        } else {
-                                            view! { <span></span> }.into_any()
+                                        {move || {
+                                            let cfg = config.get();
+                                            let is_default = !cfg.default_provider.is_empty() && cfg.default_provider == name;
+                                            let backend_verified = cfg.backends.iter().find(|b| b.name == name).map_or(false, |b| b.verified);
+                                            if is_default {
+                                                view! {
+                                                    <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
+                                                        "Default"
+                                                    </span>
+                                                }.into_any()
+                                            } else if backend_verified {
+                                                view! {
+                                                    <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
+                                                        "Active"
+                                                    </span>
+                                                }.into_any()
+                                            } else {
+                                                view! { <span></span> }.into_any()
+                                            }
                                         }}
                                     </div>
                                     <div class="text-xs text-text-tertiary truncate">
@@ -383,6 +394,8 @@ fn ProviderDetailPanel(
 
     let saving = RwSignal::new(false);
     let save_success = RwSignal::new(false);
+    let testing = RwSignal::new(false);
+    let test_success = RwSignal::new(Option::<bool>::None);
 
     // Sync form when config or selection changes
     Effect::new(move || {
@@ -429,9 +442,60 @@ fn ProviderDetailPanel(
             api_key: if api_key.is_empty() { None } else { Some(api_key) },
             base_url: if base_url.is_empty() { None } else { Some(base_url) },
             engine_id: if engine_id.is_empty() { None } else { Some(engine_id) },
+            verified: false,
         });
         backends
     }
+
+    let on_test = move |_| {
+        let sel = selected.get();
+        if sel.is_none() { return; }
+        let provider_name = sel.unwrap();
+
+        testing.set(true);
+        test_success.set(None);
+        error.set(None);
+
+        let api_key = form_api_key.get();
+        let base_url = form_base_url.get();
+        let engine_id = form_engine_id.get();
+
+        spawn_local(async move {
+            match SearchConfigApi::test_connection(
+                &state,
+                &provider_name,
+                if api_key.is_empty() { None } else { Some(api_key) },
+                if base_url.is_empty() { None } else { Some(base_url) },
+                if engine_id.is_empty() { None } else { Some(engine_id) },
+            ).await {
+                Ok(result) => {
+                    test_success.set(Some(result.success));
+                    if result.success {
+                        // Refresh config to pick up verified=true
+                        if let Ok(new_cfg) = SearchConfigApi::get(&state).await {
+                            config.set(new_cfg);
+                        }
+                    }
+                    if !result.success {
+                        error.set(Some(result.message));
+                    }
+                    set_timeout(
+                        move || test_success.set(None),
+                        std::time::Duration::from_secs(3),
+                    );
+                }
+                Err(e) => {
+                    test_success.set(Some(false));
+                    error.set(Some(format!("Test failed: {}", e)));
+                    set_timeout(
+                        move || test_success.set(None),
+                        std::time::Duration::from_secs(3),
+                    );
+                }
+            }
+            testing.set(false);
+        });
+    };
 
     let on_save = move |_| {
         let sel = selected.get();
@@ -530,6 +594,7 @@ fn ProviderDetailPanel(
                     let dp = config.get().default_provider;
                     !dp.is_empty() && dp == sel_name
                 };
+                let is_verified = config.get().backends.iter().find(|b| b.name == sel_name).map_or(false, |b| b.verified);
 
                 view! {
                     <div class="flex flex-col h-full">
@@ -559,6 +624,15 @@ fn ProviderDetailPanel(
                                             {preset.map(|p| p.display_name).unwrap_or(&sel_name)}
                                         </h2>
                                         {if is_active {
+                                            view! {
+                                                <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded">
+                                                    "Default"
+                                                </span>
+                                            }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }}
+                                        {if is_verified {
                                             view! {
                                                 <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded">
                                                     "Active"
@@ -767,15 +841,48 @@ fn ProviderDetailPanel(
                                 </div>
                             })}
 
+                            // Test result
+                            {move || test_success.get().map(|success| {
+                                if success {
+                                    view! {
+                                        <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm flex items-center gap-2">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                            </svg>
+                                            "Connection successful"
+                                        </div>
+                                    }.into_any()
+                                } else {
+                                    view! {
+                                        <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm flex items-center gap-2">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                            </svg>
+                                            "Connection failed"
+                                        </div>
+                                    }.into_any()
+                                }
+                            })}
+
                             // Actions
                             <div class="space-y-2">
-                                <button
-                                    on:click=on_save
-                                    prop:disabled=move || saving.get()
-                                    class="w-full px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
-                                >
-                                    {move || if saving.get() { "Saving..." } else { "Save Settings" }}
-                                </button>
+                                <div class="flex flex-row gap-3">
+                                    <button
+                                        on:click=on_test
+                                        prop:disabled=move || testing.get()
+                                        class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium text-sm"
+                                    >
+                                        {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                                    </button>
+
+                                    <button
+                                        on:click=on_save
+                                        prop:disabled=move || saving.get()
+                                        class="flex-1 px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+                                    >
+                                        {move || if saving.get() { "Saving..." } else { "Save Settings" }}
+                                    </button>
+                                </div>
 
                                 {move || {
                                     if !is_active {
@@ -785,7 +892,7 @@ fn ProviderDetailPanel(
                                                 prop:disabled=move || saving.get()
                                                 class="w-full px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
                                             >
-                                                "Set as Active Provider"
+                                                "Set as Default"
                                             </button>
                                         }.into_any()
                                     } else {
@@ -846,6 +953,7 @@ fn AddCustomSearchProviderPanel(
                 let v = form_engine_id.get();
                 if v.is_empty() { None } else { Some(v) }
             },
+            verified: false,
         });
 
         spawn_local(async move {

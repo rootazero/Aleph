@@ -24,6 +24,7 @@ pub struct ProviderInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_type: Option<String>,
     pub is_default: bool,
+    pub verified: bool,
 }
 
 /// Test result
@@ -54,6 +55,7 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -
             model: cfg.model.clone(),
             provider_type: Some(cfg.protocol()),
             is_default: default_provider.as_ref() == Some(name),
+            verified: cfg.verified,
         })
         .collect();
 
@@ -87,6 +89,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
                 model: cfg.model.clone(),
                 provider_type: Some(cfg.protocol()),
                 is_default: default_provider.as_ref() == Some(&params.name),
+                verified: cfg.verified,
             };
             JsonRpcResponse::success(request.id, json!({ "provider": info }))
         }
@@ -262,6 +265,7 @@ fn build_provider_config_for_persistence(
         media_resolution: None,
         repeat_penalty: None,
         system_prompt_mode: None,
+        verified: false,
     })
 }
 
@@ -301,7 +305,9 @@ pub async fn handle_update(
             }
         };
 
-        // Update provider
+        // Update provider — config change resets verified status
+        let mut provider_config = provider_config;
+        provider_config.verified = false;
         cfg.providers.insert(params.name.clone(), provider_config);
 
         // Save to file
@@ -500,16 +506,20 @@ pub async fn handle_delete(
 /// Parameters for providers.test
 #[derive(Debug, Deserialize)]
 pub struct TestParams {
+    /// Provider name (if provided, persist verified=true on success)
+    #[serde(default)]
+    pub name: Option<String>,
     pub config: ProviderConfigJson,
 }
 
 /// Test a provider connection
-pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
+pub async fn handle_test(request: JsonRpcRequest, config_store: Arc<RwLock<Config>>) -> JsonRpcResponse {
     let params: TestParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
+    let provider_name = params.name;
     let config = params.config;
     let test_api_key = match resolve_test_api_key(config.api_key.clone(), config.secret_name.clone()) {
         Ok(value) => value,
@@ -546,6 +556,7 @@ pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
         media_resolution: None,
         repeat_penalty: None,
         system_prompt_mode: None,
+        verified: false,
     };
 
     // Create provider instance
@@ -568,6 +579,18 @@ pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
     match provider.process("ping", Some("Reply with 'pong'")).await {
         Ok(_) => {
             let latency_ms = start.elapsed().as_millis() as u64;
+
+            // Persist verified=true if provider name was given
+            if let Some(ref name) = provider_name {
+                let mut cfg = config_store.write().await;
+                if let Some(p) = cfg.providers.get_mut(name) {
+                    p.verified = true;
+                    if let Err(e) = save_config_with_secret_redaction(&cfg) {
+                        error!(error = %e, "Failed to save config after test");
+                    }
+                }
+            }
+
             JsonRpcResponse::success(
                 request.id,
                 json!(TestResult {
@@ -615,6 +638,17 @@ pub async fn handle_set_default(
     // Set default provider
     {
         let mut cfg = config.write().await;
+
+        // Guard: only verified providers can be set as default
+        if let Some(provider) = cfg.providers.get(&params.name) {
+            if !provider.verified {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Provider '{}' must pass a connection test before being set as default", params.name),
+                );
+            }
+        }
 
         // Use the existing set_default_provider method
         if let Err(e) = cfg.set_default_provider(&params.name) {

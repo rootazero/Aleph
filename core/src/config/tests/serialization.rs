@@ -15,15 +15,15 @@ fn test_config_deserialization() {
     let json = r#"{"default_hotkey":"Grave"}"#;
     let config: Config = serde_json::from_str(json).unwrap();
     assert_eq!(config.default_hotkey, "Grave");
-    // memory field should use default
-    assert_eq!(config.memory.embedding.active_provider_id, "siliconflow");
+    // memory field should use default (empty — no pre-filled providers)
+    assert!(config.memory.embedding.active_provider_id.is_empty());
 }
 
 #[test]
 fn test_memory_config_serialization() {
     let mem_config = MemoryConfig::default();
     let json = serde_json::to_string(&mem_config).unwrap();
-    assert!(json.contains("BAAI/bge-m3")); // default siliconflow model
+    // No pre-filled providers — embedding list is empty by default
     assert!(json.contains("lancedb"));
     assert!(json.contains("dreaming"));
 }

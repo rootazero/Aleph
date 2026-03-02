@@ -183,6 +183,7 @@ impl AuthProfileProviderRegistry {
             media_resolution: None,
             repeat_penalty: None,
             system_prompt_mode: None,
+            verified: false,
         };
 
         create_provider(&self.config.provider_type, provider_config)
