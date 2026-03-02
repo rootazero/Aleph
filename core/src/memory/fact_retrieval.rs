@@ -142,20 +142,32 @@ impl FactRetrieval {
         workspace: &str,
     ) -> Result<RetrievalResult, AlephError> {
         use crate::memory::workspace::WorkspaceFilter;
+        self.retrieve_with_filter(query, WorkspaceFilter::Single(workspace.to_string()))
+            .await
+    }
 
+    /// Retrieve facts across workspaces using a WorkspaceFilter.
+    ///
+    /// Supports Single, Multiple, and All workspace scopes. This is the
+    /// generalized form of `retrieve_in_workspace()`.
+    pub async fn retrieve_with_filter(
+        &self,
+        query: &str,
+        filter: crate::memory::workspace::WorkspaceFilter,
+    ) -> Result<RetrievalResult, AlephError> {
         let query_embedding = self
             .embedder
             .embed(query)
             .await
             .map_err(|e| AlephError::other(format!("Failed to embed query: {}", e)))?;
 
-        // Build filter with workspace isolation
+        // Build search filter with workspace scope
         let dim_hint = query_embedding.len() as u32;
-        let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner))
-            .with_workspace(WorkspaceFilter::Single(workspace.to_string()));
+        let search_filter = SearchFilter::valid_only(Some(NamespaceScope::Owner))
+            .with_workspace(filter.clone());
         let scored_facts = self
             .database
-            .vector_search(&query_embedding, dim_hint, &filter, self.config.max_facts as usize)
+            .vector_search(&query_embedding, dim_hint, &search_filter, self.config.max_facts as usize)
             .await?;
 
         let facts: Vec<MemoryFact> = scored_facts
@@ -168,12 +180,12 @@ impl FactRetrieval {
             })
             .collect();
 
-        // Fallback to raw memories with workspace filter
+        // Fallback to raw memories with same workspace filter
         let raw_memories = if facts.len() < self.config.max_facts as usize {
             let remaining = self.config.max_raw_fallback;
             if remaining > 0 {
                 let mem_filter = MemoryFilter {
-                    workspace: Some(WorkspaceFilter::Single(workspace.to_string())),
+                    workspace: Some(filter),
                     ..Default::default()
                 };
                 self.database
