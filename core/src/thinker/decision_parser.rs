@@ -126,17 +126,20 @@ impl DecisionParser {
             return Ok(thinking);
         }
 
-        // Try to detect completion intent
-        if let Some(thinking) = self.try_detect_completion(response) {
+        // Treat any substantive non-JSON response as a direct answer.
+        //
+        // Design rationale (borrowed from OpenClaw):
+        // OpenClaw uses native tool_use from the LLM API — when the LLM outputs
+        // plain text, that IS the answer. We can't use native tool_use (our JSON
+        // action format is baked into the system prompt), but we can adopt the
+        // same principle: if the LLM produced real content but didn't wrap it in
+        // JSON, the content itself is the answer. Delivering it as Complete is
+        // always better than returning a parse error to the user.
+        if let Some(thinking) = self.try_text_as_completion(response) {
             return Ok(thinking);
         }
 
-        // Last resort: treat substantive plain text as completion (better than error)
-        if let Some(thinking) = self.try_plain_text_as_completion(response) {
-            return Ok(thinking);
-        }
-
-        // If all else fails, treat as a failure
+        // If all else fails, treat as a failure (only for very short/empty responses)
         if self.strict_mode {
             Err(AlephError::Other {
                 message: "Could not parse LLM response into valid decision".to_string(),
@@ -146,7 +149,7 @@ impl DecisionParser {
             tracing::error!(
                 response_len = response.len(),
                 preview = %response.chars().take(300).collect::<String>(),
-                "All 6 parsing strategies failed — returning Decision::Fail"
+                "All parsing strategies failed — returning Decision::Fail"
             );
             let reasoning = Some(response.to_string());
             let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
@@ -597,100 +600,92 @@ impl DecisionParser {
         None
     }
 
-    /// Try to detect completion intent from response
-    fn try_detect_completion(&self, response: &str) -> Option<Thinking> {
-        let response_lower = response.to_lowercase();
+    /// Treat any substantive non-JSON response as a direct answer (Complete).
+    ///
+    /// Design principle (from OpenClaw): when the LLM produces text content
+    /// without the expected structured format, the text itself IS the answer.
+    /// A parse error is never useful to the user; the LLM's actual content
+    /// always is. This is language-agnostic — no keyword matching needed.
+    fn try_text_as_completion(&self, response: &str) -> Option<Thinking> {
+        let trimmed = response.trim();
 
-        // Completion indicators (English)
-        let completion_patterns = [
-            "task complete",
-            "task is complete",
-            "i have completed",
-            "successfully completed",
-            "finished",
-            "done",
-            "here is the result",
-            "here are the results",
-        ];
-
-        // Chinese completion indicators
-        let chinese_patterns = [
-            "以下是",
-            "以上是",
-            "分析如下",
-            "报告如下",
-            "结果如下",
-            "总结如下",
-            "如下所示",
-            "汇总如下",
-            "整理如下",
-            "分析报告",
-            "技术分析",
-            "行情分析",
-            "任务完成",
-            "已完成",
-            "希望对你有帮助",
-            "希望以上",
-            "希望这份",
-        ];
-
-        for pattern in completion_patterns {
-            if response_lower.contains(pattern) {
-                return Some(self.build_completion_thinking(response));
-            }
+        // Empty or trivially short responses are not real answers.
+        // Threshold: 20 chars — even a short sentence like "我不确定" (12 bytes)
+        // or "I don't know" (12 bytes) should pass. Only truly empty/garbage
+        // responses (protocol errors, empty strings) get rejected.
+        if trimmed.len() < 20 {
+            return None;
         }
 
-        for pattern in chinese_patterns {
-            if response.contains(pattern) {
-                return Some(self.build_completion_thinking(response));
+        // If it starts with '{', the LLM was trying to produce JSON but failed.
+        // Still recover the content — strip the broken JSON wrapper if possible,
+        // or use the raw text. Either way, better than an error.
+        let summary = if trimmed.starts_with('{') {
+            // Try to extract any readable content from the broken JSON
+            self.extract_readable_from_broken_json(trimmed)
+                .unwrap_or_else(|| trimmed.to_string())
+        } else {
+            trimmed.to_string()
+        };
+
+        tracing::warn!(
+            response_len = response.len(),
+            starts_with_brace = trimmed.starts_with('{'),
+            "LLM returned non-JSON response — treating as direct answer (Complete)"
+        );
+
+        let reasoning = Some(response.to_string());
+        let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
+        Some(Thinking {
+            reasoning,
+            decision: Decision::Complete { summary },
+            structured,
+            tokens_used: None,
+        })
+    }
+
+    /// Try to extract human-readable text from broken/incomplete JSON.
+    ///
+    /// When the LLM attempts JSON but fails (e.g., truncated, malformed),
+    /// we try to salvage the "reasoning" or "summary" field content.
+    fn extract_readable_from_broken_json(&self, json_text: &str) -> Option<String> {
+        // Try to extract value of known text fields
+        for field in &["summary", "reasoning", "reason", "thought", "thinking"] {
+            let pattern = format!("\"{}\"", field);
+            if let Some(key_pos) = json_text.find(&pattern) {
+                let after_key = &json_text[key_pos + pattern.len()..];
+                // Skip : and whitespace to find opening quote
+                let value_start = after_key.find('"')?;
+                let value_content = &after_key[value_start + 1..];
+                // Extract until unescaped quote or end of string
+                let mut result = String::new();
+                let mut escape = false;
+                for ch in value_content.chars() {
+                    if escape {
+                        match ch {
+                            'n' => result.push('\n'),
+                            't' => result.push('\t'),
+                            '"' => result.push('"'),
+                            '\\' => result.push('\\'),
+                            _ => { result.push('\\'); result.push(ch); }
+                        }
+                        escape = false;
+                    } else if ch == '\\' {
+                        escape = true;
+                    } else if ch == '"' {
+                        break; // End of value
+                    } else {
+                        result.push(ch);
+                    }
+                }
+                if result.len() >= 20 {
+                    return Some(result);
+                }
             }
         }
-
         None
     }
 
-    /// Last resort: treat a substantive plain-text response as completion.
-    ///
-    /// If the LLM returned a long, non-JSON response (likely a direct answer
-    /// instead of using the JSON action envelope), treat it as Complete rather
-    /// than Fail — the user gets the content instead of an error.
-    fn try_plain_text_as_completion(&self, response: &str) -> Option<Thinking> {
-        let trimmed = response.trim();
-
-        // Must be substantive (not a short error or empty response)
-        // 100 chars is roughly 30-50 Chinese characters — enough for a real answer
-        if trimmed.len() < 100 {
-            return None;
-        }
-
-        // Skip if it looks like a JSON attempt that failed (starts with { but isn't valid)
-        // — those should be handled by other strategies
-        if trimmed.starts_with('{') {
-            return None;
-        }
-
-        tracing::warn!(
-            response_len = trimmed.len(),
-            preview = %trimmed.chars().take(200).collect::<String>(),
-            "LLM returned plain text instead of JSON action — recovering as Complete"
-        );
-
-        Some(self.build_completion_thinking(response))
-    }
-
-    /// Build a Thinking with Decision::Complete from a raw response
-    fn build_completion_thinking(&self, response: &str) -> Thinking {
-        let reasoning = Some(response.to_string());
-        let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
-        Thinking {
-            reasoning,
-            decision: Decision::Complete {
-                summary: response.to_string(),
-            },
-            structured,
-            tokens_used: None,
-        }
-    }
 
     /// Validate a decision
     pub fn validate(&self, decision: &Decision) -> Result<()> {
@@ -1200,74 +1195,107 @@ Now I need to write these to a file:
     }
 
     #[test]
-    fn test_detect_completion_chinese_patterns() {
+    fn test_text_as_completion_chinese() {
         let parser = DecisionParser::new();
 
-        // Chinese response with "以下是" pattern
+        // Any Chinese text response should be treated as Complete — no keyword matching
         let response = "以下是中国A股近一个月的技术面分析报告：\n\n## 上证指数\n\n当前点位约3200点，MACD金叉形成，KDJ指标超买区域。短期均线多头排列，支撑位3150，压力位3280。";
         let thinking = parser.parse_with_fallback(response).unwrap();
         assert!(
             matches!(thinking.decision, Decision::Complete { .. }),
-            "Chinese '以下是' should trigger completion, got {:?}",
+            "Chinese text should be Complete, got {:?}",
             thinking.decision
         );
     }
 
     #[test]
-    fn test_detect_completion_chinese_report() {
+    fn test_text_as_completion_chinese_no_keywords() {
         let parser = DecisionParser::new();
 
-        // Chinese response with "分析报告" pattern
-        let response = "# 中国A股技术分析报告\n\n## 市场概况\n\n上证指数在过去一个月中呈现震荡上行态势。";
+        // Chinese text WITHOUT any common keywords — still should work
+        let response = "上证指数近一个月走势呈现震荡格局。从日K线来看，指数在3100-3300区间内反复波动，成交量维持在万亿水平。";
         let thinking = parser.parse_with_fallback(response).unwrap();
         assert!(
             matches!(thinking.decision, Decision::Complete { .. }),
-            "Chinese '分析报告' should trigger completion, got {:?}",
+            "Any substantive Chinese text should be Complete, got {:?}",
             thinking.decision
         );
     }
 
     #[test]
-    fn test_plain_text_as_completion_fallback() {
+    fn test_text_as_completion_english() {
         let parser = DecisionParser::new();
 
-        // Long plain text without any known patterns — should still be treated as Complete
-        let response = "Bitcoin has shown significant price movement over the past month. The current price stands at approximately $67,000. Technical indicators suggest a bullish trend with the MACD showing positive momentum. RSI is at 65, indicating the asset is approaching overbought territory but still has room for growth. Key support levels are at $62,000 and $58,000. Resistance is seen at $70,000 and the all-time high of $73,000.";
+        // English text without any special keywords
+        let response = "Bitcoin has shown significant price movement over the past month. The current price stands at approximately $67,000. Technical indicators suggest a bullish trend.";
         let thinking = parser.parse_with_fallback(response).unwrap();
         assert!(
             matches!(thinking.decision, Decision::Complete { .. }),
-            "Long plain text should be treated as Complete via plain_text fallback, got {:?}",
+            "Substantive English text should be Complete, got {:?}",
             thinking.decision
         );
     }
 
     #[test]
-    fn test_short_text_not_treated_as_completion() {
+    fn test_text_as_completion_japanese() {
         let parser = DecisionParser::new();
 
-        // Short response should NOT trigger plain text fallback
-        let response = "I don't know";
+        // Japanese text — language-agnostic, no keyword lists needed
+        let response = "ビットコインの価格は過去1ヶ月で大幅な変動を見せています。現在の価格は約67,000ドルで、テクニカル指標は強気トレンドを示唆しています。";
         let thinking = parser.parse_with_fallback(response).unwrap();
         assert!(
-            matches!(thinking.decision, Decision::Fail { .. }),
-            "Short text should remain as Fail, got {:?}",
+            matches!(thinking.decision, Decision::Complete { .. }),
+            "Japanese text should be Complete — language-agnostic, got {:?}",
             thinking.decision
         );
     }
 
     #[test]
-    fn test_json_attempt_not_treated_as_plain_text() {
+    fn test_very_short_text_is_fail() {
         let parser = DecisionParser::new();
 
-        // A response starting with { should NOT trigger plain text fallback
-        // (it should be handled by JSON recovery strategies instead)
-        let response = "{this is not valid json but starts with a brace and is long enough to pass the length check, it contains over one hundred characters of content that should not be treated as plain text completion}";
+        // Very short responses are likely errors, not real answers
+        let response = "Error";
         let thinking = parser.parse_with_fallback(response).unwrap();
-        // This starts with { so plain_text_as_completion skips it,
-        // but it's also not valid JSON, so it falls through to Fail
         assert!(
             matches!(thinking.decision, Decision::Fail { .. }),
-            "JSON-like text should not be rescued by plain text fallback, got {:?}",
+            "Very short text should remain as Fail, got {:?}",
+            thinking.decision
+        );
+    }
+
+    #[test]
+    fn test_broken_json_recovers_content() {
+        let parser = DecisionParser::new();
+
+        // Broken JSON that starts with { — should still recover readable content
+        let response = r#"{"reasoning": "用户需要A股技术分析。上证指数3200点，深证成指11000点，创业板2100点。整体呈现震荡上行格局，量能配合良好。", "action": {"type": "compl"#;
+        let thinking = parser.parse_with_fallback(response).unwrap();
+        assert!(
+            matches!(thinking.decision, Decision::Complete { .. }),
+            "Broken JSON with readable content should be Complete, got {:?}",
+            thinking.decision
+        );
+        if let Decision::Complete { summary } = &thinking.decision {
+            assert!(
+                summary.contains("A股") || summary.contains("上证"),
+                "Should extract readable Chinese content from broken JSON, got: {}",
+                &summary[..summary.len().min(100)]
+            );
+        }
+    }
+
+    #[test]
+    fn test_broken_json_no_readable_fields_still_completes() {
+        let parser = DecisionParser::new();
+
+        // Broken JSON without recognizable fields but long enough
+        let response = "{this is not valid json but starts with a brace and is long enough to pass the length check, it contains over twenty characters of content}";
+        let thinking = parser.parse_with_fallback(response).unwrap();
+        // Now even { responses get recovered as Complete (not Fail)
+        assert!(
+            matches!(thinking.decision, Decision::Complete { .. }),
+            "Even broken JSON should be Complete (user gets content), got {:?}",
             thinking.decision
         );
     }
