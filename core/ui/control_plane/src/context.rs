@@ -54,12 +54,32 @@ pub struct DashboardState {
     alert_subscription_id: StoredValue<Option<usize>>,
 }
 
+/// Derive the Gateway WebSocket URL from the current page location.
+/// Since the Panel UI and Gateway share the same port, we use same-origin.
+fn derive_gateway_url() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(window) = web_sys::window() {
+            let location = window.location();
+            if let (Ok(protocol), Ok(host)) = (location.protocol(), location.host()) {
+                let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
+                return format!("{}//{}/ws", ws_protocol, host);
+            }
+        }
+        "ws://127.0.0.1:18790/ws".to_string()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        "ws://127.0.0.1:18790/ws".to_string()
+    }
+}
+
 impl DashboardState {
     pub fn new() -> Self {
         Self {
             is_connected: RwSignal::new(false),
             reconnect_count: RwSignal::new(0),
-            gateway_url: RwSignal::new("ws://127.0.0.1:18789".to_string()),
+            gateway_url: RwSignal::new(derive_gateway_url()),
             connection_error: RwSignal::new(None),
             is_reconnecting: RwSignal::new(false),
             rpc_tx: StoredValue::new(None),
