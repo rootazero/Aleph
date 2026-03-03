@@ -173,7 +173,7 @@ fn load_gateway_config(args: &Args) -> (FullGatewayConfig, String, u16, usize) {
     } else {
         full_config.gateway.host.clone()
     };
-    let final_port = if args.port != 18789 {
+    let final_port = if args.port != 18790 {
         args.port
     } else {
         full_config.gateway.port
@@ -907,9 +907,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     start_webchat_server(args, &final_bind, final_port).await;
 
-    #[cfg(feature = "control-plane")]
-    start_control_plane_server(&final_bind, final_port, args.daemon).await;
-
     // Start desktop bridge (non-blocking — server runs headless if bridge not found)
     let run_dir = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
@@ -918,6 +915,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let mut bridge_manager = DesktopBridgeManager::new(run_dir, final_port);
     if let Err(e) = bridge_manager.start().await {
         tracing::warn!("Desktop bridge not started: {e} — running headless");
+    }
+
+    if !args.daemon {
+        println!();
+        println!("Aleph Server:");
+        println!("  - URL:       http://{}:{}", final_bind, final_port);
+        println!("  - WebSocket: ws://{}:{}/ws", final_bind, final_port);
+        println!("  - Panel UI:  http://{}:{}/", final_bind, final_port);
+        println!();
     }
 
     let shutdown_rx = setup_graceful_shutdown(args);

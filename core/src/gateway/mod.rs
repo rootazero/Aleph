@@ -17,7 +17,7 @@
 //! use alephcore::gateway::GatewayServer;
 //! use std::net::SocketAddr;
 //!
-//! let addr: SocketAddr = "127.0.0.1:18789".parse().unwrap();
+//! let addr: SocketAddr = "127.0.0.1:18790".parse().unwrap();
 //! let server = GatewayServer::new(addr);
 //! server.run().await?;
 //! ```
