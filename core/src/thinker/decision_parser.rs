@@ -131,6 +131,11 @@ impl DecisionParser {
             return Ok(thinking);
         }
 
+        // Last resort: treat substantive plain text as completion (better than error)
+        if let Some(thinking) = self.try_plain_text_as_completion(response) {
+            return Ok(thinking);
+        }
+
         // If all else fails, treat as a failure
         if self.strict_mode {
             Err(AlephError::Other {
@@ -138,6 +143,11 @@ impl DecisionParser {
                 suggestion: Some("Check the LLM response format".to_string()),
             })
         } else {
+            tracing::error!(
+                response_len = response.len(),
+                preview = %response.chars().take(300).collect::<String>(),
+                "All 6 parsing strategies failed — returning Decision::Fail"
+            );
             let reasoning = Some(response.to_string());
             let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
             Ok(Thinking {
@@ -591,7 +601,7 @@ impl DecisionParser {
     fn try_detect_completion(&self, response: &str) -> Option<Thinking> {
         let response_lower = response.to_lowercase();
 
-        // Completion indicators
+        // Completion indicators (English)
         let completion_patterns = [
             "task complete",
             "task is complete",
@@ -603,22 +613,83 @@ impl DecisionParser {
             "here are the results",
         ];
 
+        // Chinese completion indicators
+        let chinese_patterns = [
+            "以下是",
+            "以上是",
+            "分析如下",
+            "报告如下",
+            "结果如下",
+            "总结如下",
+            "如下所示",
+            "汇总如下",
+            "整理如下",
+            "分析报告",
+            "技术分析",
+            "行情分析",
+            "任务完成",
+            "已完成",
+            "希望对你有帮助",
+            "希望以上",
+            "希望这份",
+        ];
+
         for pattern in completion_patterns {
             if response_lower.contains(pattern) {
-                let reasoning = Some(response.to_string());
-                let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
-                return Some(Thinking {
-                    reasoning,
-                    decision: Decision::Complete {
-                        summary: response.to_string(),
-                    },
-                    structured,
-                    tokens_used: None,
-                });
+                return Some(self.build_completion_thinking(response));
+            }
+        }
+
+        for pattern in chinese_patterns {
+            if response.contains(pattern) {
+                return Some(self.build_completion_thinking(response));
             }
         }
 
         None
+    }
+
+    /// Last resort: treat a substantive plain-text response as completion.
+    ///
+    /// If the LLM returned a long, non-JSON response (likely a direct answer
+    /// instead of using the JSON action envelope), treat it as Complete rather
+    /// than Fail — the user gets the content instead of an error.
+    fn try_plain_text_as_completion(&self, response: &str) -> Option<Thinking> {
+        let trimmed = response.trim();
+
+        // Must be substantive (not a short error or empty response)
+        // 100 chars is roughly 30-50 Chinese characters — enough for a real answer
+        if trimmed.len() < 100 {
+            return None;
+        }
+
+        // Skip if it looks like a JSON attempt that failed (starts with { but isn't valid)
+        // — those should be handled by other strategies
+        if trimmed.starts_with('{') {
+            return None;
+        }
+
+        tracing::warn!(
+            response_len = trimmed.len(),
+            preview = %trimmed.chars().take(200).collect::<String>(),
+            "LLM returned plain text instead of JSON action — recovering as Complete"
+        );
+
+        Some(self.build_completion_thinking(response))
+    }
+
+    /// Build a Thinking with Decision::Complete from a raw response
+    fn build_completion_thinking(&self, response: &str) -> Thinking {
+        let reasoning = Some(response.to_string());
+        let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
+        Thinking {
+            reasoning,
+            decision: Decision::Complete {
+                summary: response.to_string(),
+            },
+            structured,
+            tokens_used: None,
+        }
     }
 
     /// Validate a decision
@@ -1126,5 +1197,78 @@ Now I need to write these to a file:
         if let Decision::Complete { summary } = &thinking.decision {
             assert_eq!(summary, "done");
         }
+    }
+
+    #[test]
+    fn test_detect_completion_chinese_patterns() {
+        let parser = DecisionParser::new();
+
+        // Chinese response with "以下是" pattern
+        let response = "以下是中国A股近一个月的技术面分析报告：\n\n## 上证指数\n\n当前点位约3200点，MACD金叉形成，KDJ指标超买区域。短期均线多头排列，支撑位3150，压力位3280。";
+        let thinking = parser.parse_with_fallback(response).unwrap();
+        assert!(
+            matches!(thinking.decision, Decision::Complete { .. }),
+            "Chinese '以下是' should trigger completion, got {:?}",
+            thinking.decision
+        );
+    }
+
+    #[test]
+    fn test_detect_completion_chinese_report() {
+        let parser = DecisionParser::new();
+
+        // Chinese response with "分析报告" pattern
+        let response = "# 中国A股技术分析报告\n\n## 市场概况\n\n上证指数在过去一个月中呈现震荡上行态势。";
+        let thinking = parser.parse_with_fallback(response).unwrap();
+        assert!(
+            matches!(thinking.decision, Decision::Complete { .. }),
+            "Chinese '分析报告' should trigger completion, got {:?}",
+            thinking.decision
+        );
+    }
+
+    #[test]
+    fn test_plain_text_as_completion_fallback() {
+        let parser = DecisionParser::new();
+
+        // Long plain text without any known patterns — should still be treated as Complete
+        let response = "Bitcoin has shown significant price movement over the past month. The current price stands at approximately $67,000. Technical indicators suggest a bullish trend with the MACD showing positive momentum. RSI is at 65, indicating the asset is approaching overbought territory but still has room for growth. Key support levels are at $62,000 and $58,000. Resistance is seen at $70,000 and the all-time high of $73,000.";
+        let thinking = parser.parse_with_fallback(response).unwrap();
+        assert!(
+            matches!(thinking.decision, Decision::Complete { .. }),
+            "Long plain text should be treated as Complete via plain_text fallback, got {:?}",
+            thinking.decision
+        );
+    }
+
+    #[test]
+    fn test_short_text_not_treated_as_completion() {
+        let parser = DecisionParser::new();
+
+        // Short response should NOT trigger plain text fallback
+        let response = "I don't know";
+        let thinking = parser.parse_with_fallback(response).unwrap();
+        assert!(
+            matches!(thinking.decision, Decision::Fail { .. }),
+            "Short text should remain as Fail, got {:?}",
+            thinking.decision
+        );
+    }
+
+    #[test]
+    fn test_json_attempt_not_treated_as_plain_text() {
+        let parser = DecisionParser::new();
+
+        // A response starting with { should NOT trigger plain text fallback
+        // (it should be handled by JSON recovery strategies instead)
+        let response = "{this is not valid json but starts with a brace and is long enough to pass the length check, it contains over one hundred characters of content that should not be treated as plain text completion}";
+        let thinking = parser.parse_with_fallback(response).unwrap();
+        // This starts with { so plain_text_as_completion skips it,
+        // but it's also not valid JSON, so it falls through to Fail
+        assert!(
+            matches!(thinking.decision, Decision::Fail { .. }),
+            "JSON-like text should not be rescued by plain text fallback, got {:?}",
+            thinking.decision
+        );
     }
 }
