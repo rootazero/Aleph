@@ -444,7 +444,7 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             label: "Gateway Port",
             help: "Port for the WebSocket gateway",
             group: "advanced",
-            placeholder: "18789",
+            placeholder: "18790",
         },
         "gateway.bind" => {
             label: "Bind Address",

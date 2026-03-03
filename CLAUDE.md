@@ -292,7 +292,7 @@ aleph/
 cd core && cargo build && cargo test
 
 # 启动 Server (所有功能始终编译)
-cargo run --bin aleph-server
+cargo run --bin aleph
 
 # Tauri App
 cd apps/desktop && pnpm install && pnpm tauri dev
@@ -308,8 +308,8 @@ cd apps/desktop && cargo tauri build
 详见：[Server 开发与发布指南](docs/reference/SERVER_DEVELOPMENT.md)
 
 快速参考：
-- Debug：`cargo run --bin aleph-server`
-- Release：`cargo build --bin aleph-server --release`
+- Debug：`cargo run --bin aleph`
+- Release：`cargo build --bin aleph --release`
 - 全流程 (WASM + Server)：`just server`
 
 所有生产功能始终编译，无需指定 `--features`。

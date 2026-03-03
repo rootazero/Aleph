@@ -29,13 +29,13 @@ jobs:
 
       - name: Build universal server binary
         run: |
-          cargo build --bin aleph-server --features control-plane --release --target aarch64-apple-darwin
-          cargo build --bin aleph-server --features control-plane --release --target x86_64-apple-darwin
+          cargo build --bin aleph --features control-plane --release --target aarch64-apple-darwin
+          cargo build --bin aleph --features control-plane --release --target x86_64-apple-darwin
           mkdir -p apps/macos-native/Aleph/Resources
           lipo -create \
-            target/aarch64-apple-darwin/release/aleph-server \
-            target/x86_64-apple-darwin/release/aleph-server \
-            -output apps/macos-native/Aleph/Resources/aleph-server
+            target/aarch64-apple-darwin/release/aleph \
+            target/x86_64-apple-darwin/release/aleph \
+            -output apps/macos-native/Aleph/Resources/aleph
 
       - name: Generate Xcode project
         run: cd apps/macos-native && xcodegen generate

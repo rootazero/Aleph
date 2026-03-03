@@ -67,7 +67,7 @@ func main() {
 
 	log.Printf("whatsapp-bridge listening on %s (data-dir: %s)", *socketPath, *dataDir)
 
-	// Accept connections. Typically one persistent connection from aleph-server,
+	// Accept connections. Typically one persistent connection from aleph,
 	// but we allow multiple for robustness during reconnects.
 	for {
 		conn, err := listener.Accept()

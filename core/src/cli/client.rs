@@ -9,7 +9,7 @@ use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 /// Default Gateway URL
-pub const DEFAULT_GATEWAY_URL: &str = "ws://127.0.0.1:18789";
+pub const DEFAULT_GATEWAY_URL: &str = "ws://127.0.0.1:18790/ws";
 
 /// Default timeout in milliseconds
 pub const DEFAULT_TIMEOUT_MS: u64 = 30000;

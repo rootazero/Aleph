@@ -21,7 +21,7 @@ Aleph uses a JSON5 configuration file at `~/.aleph/config.json`.
 
   // Gateway configuration
   gateway: {
-    port: 18789,
+    port: 18790,
     bind: "loopback",  // or "all"
     require_auth: false,
   },
@@ -100,7 +100,7 @@ agents: {
 ```json5
 gateway: {
   // Port to listen on
-  port: 18789,
+  port: 18790,
 
   // Bind address
   bind: "loopback",  // localhost only

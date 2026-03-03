@@ -9,7 +9,7 @@
 //! use alephcore::gateway::MdnsBroadcaster;
 //!
 //! # async fn example() -> Result<(), String> {
-//! let broadcaster = MdnsBroadcaster::new(18789, "aleph")?;
+//! let broadcaster = MdnsBroadcaster::new(18790, "aleph")?;
 //! // Service is now discoverable on the local network
 //! broadcaster.shutdown();
 //! # Ok(())
@@ -46,7 +46,7 @@ impl MdnsBroadcaster {
     /// use alephcore::gateway::MdnsBroadcaster;
     ///
     /// # async fn example() -> Result<(), String> {
-    /// let broadcaster = MdnsBroadcaster::new(18789, "aleph")?;
+    /// let broadcaster = MdnsBroadcaster::new(18790, "aleph")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn test_broadcaster_creation() {
         // Note: This test may fail in CI environments without mDNS support
-        match MdnsBroadcaster::new(18789, "aleph-test") {
+        match MdnsBroadcaster::new(18790, "aleph-test") {
             Ok(broadcaster) => {
                 broadcaster.shutdown();
             }

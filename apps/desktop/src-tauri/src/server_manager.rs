@@ -1,6 +1,6 @@
-//! Server Manager — manages the embedded aleph-server lifecycle.
+//! Server Manager — manages the embedded aleph lifecycle.
 //!
-//! On Linux/Windows, the Tauri app bundles the `aleph-server` binary as a
+//! On Linux/Windows, the Tauri app bundles the `aleph` binary as a
 //! resource. `ServerManager` spawns it as a child process, waits for the
 //! UDS/named-pipe socket to become ready, and ensures graceful shutdown on
 //! drop.
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use tracing::{error, info, warn};
 
-/// Manages the lifecycle of an embedded aleph-server process.
+/// Manages the lifecycle of an embedded aleph process.
 pub struct ServerManager {
     process: Option<Child>,
     socket_path: PathBuf,
@@ -24,22 +24,22 @@ impl ServerManager {
         }
     }
 
-    /// Start the aleph-server binary from the given resource directory.
+    /// Start the aleph binary from the given resource directory.
     ///
-    /// The binary is expected at `resource_dir/aleph-server` (Unix) or
-    /// `resource_dir/aleph-server.exe` (Windows).
+    /// The binary is expected at `resource_dir/aleph` (Unix) or
+    /// `resource_dir/aleph.exe` (Windows).
     pub fn start(&mut self, resource_dir: &std::path::Path) -> Result<(), String> {
         let server_bin = if cfg!(target_os = "windows") {
-            resource_dir.join("aleph-server.exe")
+            resource_dir.join("aleph.exe")
         } else {
-            resource_dir.join("aleph-server")
+            resource_dir.join("aleph")
         };
 
         if !server_bin.exists() {
             return Err(format!("Server binary not found at {:?}", server_bin));
         }
 
-        info!("Starting aleph-server from {:?}", server_bin);
+        info!("Starting aleph from {:?}", server_bin);
 
         // Ensure socket parent directory exists
         if let Some(parent) = self.socket_path.parent() {
@@ -58,15 +58,15 @@ impl ServerManager {
             .spawn()
             .map_err(|e| format!("Failed to start server: {}", e))?;
 
-        info!("aleph-server started (PID: {})", child.id());
+        info!("aleph started (PID: {})", child.id());
         self.process = Some(child);
         self.wait_for_ready()
     }
 
-    /// Stop the aleph-server process gracefully (SIGTERM on Unix, kill on Windows).
+    /// Stop the aleph process gracefully (SIGTERM on Unix, kill on Windows).
     pub fn stop(&mut self) {
         if let Some(mut child) = self.process.take() {
-            info!("Stopping aleph-server");
+            info!("Stopping aleph");
 
             // Send SIGTERM on Unix, hard kill on Windows
             #[cfg(unix)]

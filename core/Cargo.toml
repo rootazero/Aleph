@@ -158,7 +158,7 @@ tokio-tungstenite = "0.26"
 futures-util = "0.3"
 clap = { version = "4.4", features = ["derive"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 tower = "0.5"
 mime_guess = "2.0"
 mdns-sd = { workspace = true }
@@ -194,8 +194,8 @@ aleph-desktop = { path = "../crates/desktop" }
 # No build dependencies - using Gateway WebSocket architecture
 
 [[bin]]
-name = "aleph-server"
-path = "src/bin/aleph_server/main.rs"
+name = "aleph"
+path = "src/bin/aleph/main.rs"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }

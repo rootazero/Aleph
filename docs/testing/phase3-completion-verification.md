@@ -199,7 +199,7 @@ $ cargo check --lib --target wasm32-unknown-unknown
 ### Aleph Server
 
 ```bash
-$ cargo check --bin aleph-server --features control-plane
+$ cargo check --bin aleph
 ```
 
 **Result**: ✅ PASS

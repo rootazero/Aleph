@@ -80,7 +80,7 @@ impl Default for GatewayServerConfig {
     fn default() -> Self {
         Self {
             host: "127.0.0.1".to_string(),
-            port: 18789,
+            port: 18790,
             max_connections: 100,
             require_auth: false,
             protocol_version: 1,
@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = GatewayConfig::default();
-        assert_eq!(config.gateway.port, 18789);
+        assert_eq!(config.gateway.port, 18790);
         assert!(config.agents.contains_key("main"));
     }
 
@@ -488,7 +488,7 @@ model = "claude-opus-4-5"
         let toml = r#"
 [gateway]
 host = "0.0.0.0"
-port = 18789
+port = 18790
 max_connections = 200
 
 [agents.main]

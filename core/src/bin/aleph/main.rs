@@ -16,23 +16,23 @@
 //! # Usage
 //!
 //! ```bash
-//! # Run with default settings (127.0.0.1:18789)
-//! cargo run --bin aleph-server
+//! # Run with default settings (127.0.0.1:18790)
+//! cargo run --bin aleph
 //!
 //! # Specify custom bind address and port
-//! cargo run --bin aleph-server -- --bind 0.0.0.0 --port 9000
+//! cargo run --bin aleph -- --bind 0.0.0.0 --port 9000
 //!
 //! # Load configuration from file
-//! cargo run --bin aleph-server -- --config ~/.aleph/gateway.toml
+//! cargo run --bin aleph -- --config ~/.aleph/gateway.toml
 //!
 //! # Run as daemon (background process)
-//! cargo run --bin aleph-server -- --daemon
+//! cargo run --bin aleph -- --daemon
 //!
 //! # Stop a running daemon
-//! cargo run --bin aleph-server -- stop
+//! cargo run --bin aleph -- stop
 //!
 //! # Check server status
-//! cargo run --bin aleph-server -- status
+//! cargo run --bin aleph -- status
 //! ```
 //!
 //! # Testing
@@ -41,13 +41,13 @@
 //!
 //! ```bash
 //! # Health check
-//! echo '{"jsonrpc":"2.0","method":"health","id":1}' | websocat ws://127.0.0.1:18789
+//! echo '{"jsonrpc":"2.0","method":"health","id":1}' | websocat ws://127.0.0.1:18790/ws
 //!
 //! # Echo test
-//! echo '{"jsonrpc":"2.0","method":"echo","params":{"hello":"world"},"id":2}' | websocat ws://127.0.0.1:18789
+//! echo '{"jsonrpc":"2.0","method":"echo","params":{"hello":"world"},"id":2}' | websocat ws://127.0.0.1:18790/ws
 //!
 //! # Version info
-//! echo '{"jsonrpc":"2.0","method":"version","id":3}' | websocat ws://127.0.0.1:18789
+//! echo '{"jsonrpc":"2.0","method":"version","id":3}' | websocat ws://127.0.0.1:18790/ws
 //! ```
 
 mod cli;
