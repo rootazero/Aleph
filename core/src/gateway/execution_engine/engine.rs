@@ -166,6 +166,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             })
             .await;
 
+        // Ensure session exists in memory + SQLite before adding messages
+        agent.ensure_session(&request.session_key).await;
+
         // Store user message in session
         agent
             .add_message(&request.session_key, MessageRole::User, &request.input)

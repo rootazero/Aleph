@@ -300,6 +300,34 @@ impl AgentInstance {
         }
     }
 
+    /// Ensure a session exists in both the in-memory cache and SQLite.
+    ///
+    /// Must be called before `add_message()` for any new session key
+    /// to guarantee the in-memory HashMap has an entry.
+    pub async fn ensure_session(&self, key: &SessionKey) {
+        let key_str = key.to_key_string();
+
+        // Ensure in-memory entry exists
+        {
+            let mut sessions = self.sessions.write().await;
+            sessions.entry(key_str.clone()).or_insert_with(|| {
+                let now = chrono::Utc::now();
+                SessionData {
+                    messages: Vec::new(),
+                    created_at: now,
+                    last_active_at: now,
+                }
+            });
+        }
+
+        // Ensure SQLite row exists
+        if let Some(ref sm) = self.session_manager {
+            if let Err(e) = sm.get_or_create(key).await {
+                warn!("Failed to ensure session in SessionManager: {}", e);
+            }
+        }
+    }
+
     /// Add a message to a session
     ///
     /// The message is added to the in-memory session and persisted to disk (JSONL).
