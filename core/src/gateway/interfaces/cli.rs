@@ -23,8 +23,8 @@ use uuid::Uuid;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelProvider,
-    ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId, InboundMessage,
-    MessageId, OutboundMessage, SendResult, UserId,
+    ChannelId, ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId,
+    InboundMessage, MessageId, OutboundMessage, SendResult, UserId,
 };
 use crate::thinker::interaction::{InteractionConstraints, InteractionManifest, InteractionParadigm};
 
@@ -70,8 +70,6 @@ impl Default for CliChannelConfig {
 
 /// CLI channel state
 struct CliChannelState {
-    status: ChannelStatus,
-    inbound_tx: Option<mpsc::Sender<InboundMessage>>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -79,7 +77,8 @@ struct CliChannelState {
 pub struct CliChannel {
     info: ChannelInfo,
     config: CliChannelConfig,
-    state: Arc<RwLock<CliChannelState>>,
+    cli_state: Arc<RwLock<CliChannelState>>,
+    channel_state: ChannelState,
 }
 
 impl CliChannel {
@@ -95,8 +94,6 @@ impl CliChannel {
 
     /// Create a new CLI channel with custom configuration
     pub fn with_config(config: CliChannelConfig) -> Self {
-        let (inbound_tx, _inbound_rx) = mpsc::channel(100);
-
         let info = ChannelInfo {
             id: ChannelId::new(&config.id),
             name: format!("CLI Channel ({})", config.id),
@@ -119,41 +116,38 @@ impl CliChannel {
             },
         };
 
-        let state = CliChannelState {
-            status: ChannelStatus::Disconnected,
-            inbound_tx: Some(inbound_tx),
+        let cli_state = CliChannelState {
             shutdown_tx: None,
         };
 
         Self {
             info,
             config,
-            state: Arc::new(RwLock::new(state)),
+            cli_state: Arc::new(RwLock::new(cli_state)),
+            channel_state: ChannelState::new(100),
         }
     }
 
     /// Create a test message (useful for testing)
     pub async fn inject_message(&self, text: impl Into<String>) -> ChannelResult<()> {
-        let state = self.state.read().await;
-        if let Some(tx) = &state.inbound_tx {
-            let message = InboundMessage {
-                id: MessageId::new(Uuid::new_v4().to_string()),
-                channel_id: self.info.id.clone(),
-                conversation_id: ConversationId::new("cli:main"),
-                sender_id: UserId::new(&self.config.username),
-                sender_name: Some(self.config.username.clone()),
-                text: text.into(),
-                attachments: Vec::new(),
-                timestamp: Utc::now(),
-                reply_to: None,
-                is_group: false,
-                raw: None,
-            };
+        let tx = self.channel_state.sender();
+        let message = InboundMessage {
+            id: MessageId::new(Uuid::new_v4().to_string()),
+            channel_id: self.info.id.clone(),
+            conversation_id: ConversationId::new("cli:main"),
+            sender_id: UserId::new(&self.config.username),
+            sender_name: Some(self.config.username.clone()),
+            text: text.into(),
+            attachments: Vec::new(),
+            timestamp: Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+        };
 
-            tx.send(message)
-                .await
-                .map_err(|e| ChannelError::Internal(format!("Failed to inject message: {}", e)))?;
-        }
+        tx.send(message)
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Failed to inject message: {}", e)))?;
         Ok(())
     }
 }
@@ -164,24 +158,22 @@ impl Channel for CliChannel {
         &self.info
     }
 
-    async fn start(&mut self) -> ChannelResult<()> {
-        let mut state = self.state.write().await;
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
+    }
 
-        if state.status == ChannelStatus::Connected {
+    async fn start(&mut self) -> ChannelResult<()> {
+        if self.channel_state.status() == ChannelStatus::Connected {
             return Ok(());
         }
 
-        state.status = ChannelStatus::Connecting;
-        drop(state);
-
-        // Update info status
-        self.info.status = ChannelStatus::Connecting;
+        self.channel_state.set_status(ChannelStatus::Connecting).await;
 
         // Create shutdown channel
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
 
-        // Get inbound sender
-        let state_clone = self.state.clone();
+        // Clone sender from channel_state for the spawned task
+        let inbound_tx = self.channel_state.sender();
         let config = self.config.clone();
 
         // Create a channel for lines from the blocking reader thread
@@ -216,61 +208,55 @@ impl Channel for CliChannel {
                             continue;
                         }
 
-                        let state = state_clone.read().await;
-                        if let Some(tx) = &state.inbound_tx {
-                            let message = InboundMessage {
-                                id: MessageId::new(Uuid::new_v4().to_string()),
-                                channel_id: ChannelId::new(&config.id),
-                                conversation_id: ConversationId::new("cli:main"),
-                                sender_id: UserId::new(&config.username),
-                                sender_name: Some(config.username.clone()),
-                                text,
-                                attachments: Vec::new(),
-                                timestamp: Utc::now(),
-                                reply_to: None,
-                                is_group: false,
-                                raw: None,
-                            };
+                        let message = InboundMessage {
+                            id: MessageId::new(Uuid::new_v4().to_string()),
+                            channel_id: ChannelId::new(&config.id),
+                            conversation_id: ConversationId::new("cli:main"),
+                            sender_id: UserId::new(&config.username),
+                            sender_name: Some(config.username.clone()),
+                            text,
+                            attachments: Vec::new(),
+                            timestamp: Utc::now(),
+                            reply_to: None,
+                            is_group: false,
+                            raw: None,
+                        };
 
-                            if tx.send(message).await.is_err() {
-                                debug!("CLI channel receiver dropped");
-                                break;
-                            }
+                        if inbound_tx.send(message).await.is_err() {
+                            debug!("CLI channel receiver dropped");
+                            break;
                         }
                     }
                 }
             }
         });
 
-        let mut state = self.state.write().await;
-        state.status = ChannelStatus::Connected;
-        state.shutdown_tx = Some(shutdown_tx);
-        self.info.status = ChannelStatus::Connected;
+        let mut cli_state = self.cli_state.write().await;
+        cli_state.shutdown_tx = Some(shutdown_tx);
+        self.channel_state.set_status(ChannelStatus::Connected).await;
 
         info!("CLI channel started: {}", self.info.id);
         Ok(())
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
-        let mut state = self.state.write().await;
+        let mut cli_state = self.cli_state.write().await;
 
-        if let Some(shutdown_tx) = state.shutdown_tx.take() {
+        if let Some(shutdown_tx) = cli_state.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
         }
+        drop(cli_state);
 
-        state.status = ChannelStatus::Disconnected;
-        self.info.status = ChannelStatus::Disconnected;
+        self.channel_state.set_status(ChannelStatus::Disconnected).await;
 
         info!("CLI channel stopped: {}", self.info.id);
         Ok(())
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let state = self.state.read().await;
-        if state.status != ChannelStatus::Connected {
+        if self.channel_state.status() != ChannelStatus::Connected {
             return Err(ChannelError::NotConnected("CLI channel not connected".to_string()));
         }
-        drop(state);
 
         // Write to stdout
         let mut stdout = io::stdout().lock();
@@ -290,11 +276,6 @@ impl Channel for CliChannel {
         })
     }
 
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        // This is a bit tricky - we need to return the receiver only once
-        // For now, return None as the registry will handle forwarding
-        None
-    }
 }
 
 impl ChannelProvider for CliChannel {

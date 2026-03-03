@@ -37,11 +37,11 @@ pub use message_ops::EmailMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelStatus, ConversationId, InboundMessage, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, OutboundMessage,
+    SendResult,
 };
 use async_trait::async_trait;
-use crate::sync_primitives::Arc;
-use tokio::sync::{mpsc, watch, RwLock};
+use tokio::sync::{mpsc, watch};
 
 /// Email channel implementation using IMAP + SMTP.
 pub struct EmailChannel {
@@ -49,21 +49,15 @@ pub struct EmailChannel {
     info: ChannelInfo,
     /// Configuration
     config: EmailConfig,
-    /// Inbound message sender
-    inbound_tx: mpsc::Sender<InboundMessage>,
-    /// Inbound message receiver (taken on first call)
-    inbound_rx: Option<mpsc::Receiver<InboundMessage>>,
+    /// Unified channel state (status + inbound sender/receiver)
+    channel_state: ChannelState,
     /// Shutdown signal sender
     shutdown_tx: Option<watch::Sender<bool>>,
-    /// Current status
-    status: Arc<RwLock<ChannelStatus>>,
 }
 
 impl EmailChannel {
     /// Create a new Email channel
     pub fn new(id: impl Into<String>, config: EmailConfig) -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::channel(100);
-
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "Email".to_string(),
@@ -75,10 +69,8 @@ impl EmailChannel {
         Self {
             info,
             config,
-            inbound_tx,
-            inbound_rx: Some(inbound_rx),
+            channel_state: ChannelState::new(100),
             shutdown_tx: None,
-            status: Arc::new(RwLock::new(ChannelStatus::Disconnected)),
         }
     }
 
@@ -102,13 +94,8 @@ impl EmailChannel {
     }
 
     /// Take the inbound receiver (can only be called once)
-    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<InboundMessage>> {
-        self.inbound_rx.take()
-    }
-
-    /// Update internal status
-    async fn set_status(&self, status: ChannelStatus) {
-        *self.status.write().await = status;
+    pub fn take_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
+        self.channel_state.take_receiver()
     }
 }
 
@@ -118,8 +105,8 @@ impl Channel for EmailChannel {
         &self.info
     }
 
-    fn status(&self) -> ChannelStatus {
-        self.info.status
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
@@ -128,24 +115,26 @@ impl Channel for EmailChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        self.set_status(ChannelStatus::Connecting).await;
-        tracing::info!(
-            "Starting Email channel (IMAP: {}:{}, SMTP: {}:{})...",
-            self.config.imap_host,
-            self.config.imap_port,
-            self.config.smtp_host,
-            self.config.smtp_port,
-        );
+        #[cfg(feature = "email")]
+        {
+            self.channel_state.set_status(ChannelStatus::Connecting).await;
+            tracing::info!(
+                "Starting Email channel (IMAP: {}:{}, SMTP: {}:{})...",
+                self.config.imap_host,
+                self.config.imap_port,
+                self.config.smtp_host,
+                self.config.smtp_port,
+            );
 
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
-        // Spawn IMAP polling loop
-        let config = self.config.clone();
-        let channel_id = self.info.id.clone();
-        let inbound_tx = self.inbound_tx.clone();
-        let status = self.status.clone();
+            // Spawn IMAP polling loop
+            let config = self.config.clone();
+            let channel_id = self.info.id.clone();
+            let inbound_tx = self.channel_state.sender();
+            let status = self.channel_state.status_handle();
 
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
@@ -161,8 +150,9 @@ impl Channel for EmailChannel {
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-        self.set_status(ChannelStatus::Connected).await;
-        Ok(())
+            self.channel_state.set_status(ChannelStatus::Connected).await;
+            Ok(())
+        }
 
     }
 
@@ -173,7 +163,7 @@ impl Channel for EmailChannel {
             let _ = shutdown_tx.send(true);
         }
 
-        self.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state.set_status(ChannelStatus::Disconnected).await;
         Ok(())
     }
 
@@ -192,17 +182,8 @@ impl Channel for EmailChannel {
 
     }
 
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        None // Already taken during construction or via take_receiver
-    }
-
-    async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        // Email does not support typing indicators
-        let _ = conversation_id;
-        Err(ChannelError::UnsupportedFeature(
-            "typing indicator".to_string(),
-        ))
-    }
+    // inbound_receiver() — uses default from Channel trait via state()
+    // send_typing() — uses default from Channel trait (returns UnsupportedFeature via capabilities)
 }
 
 /// Factory for creating Email channels
@@ -274,7 +255,7 @@ mod tests {
     #[test]
     fn test_take_receiver() {
         let config = EmailConfig::default();
-        let mut channel = EmailChannel::new("email", config);
+        let channel = EmailChannel::new("email", config);
 
         // First take should succeed
         assert!(channel.take_receiver().is_some());

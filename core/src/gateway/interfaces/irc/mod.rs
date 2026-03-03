@@ -34,8 +34,8 @@ pub use message_ops::IrcMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelStatus, ConversationId, InboundMessage, MessageId, OutboundMessage,
-    SendResult,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
+    OutboundMessage, SendResult,
 };
 use async_trait::async_trait;
 use crate::sync_primitives::Arc;
@@ -47,14 +47,10 @@ pub struct IrcChannel {
     info: ChannelInfo,
     /// Configuration
     config: IrcConfig,
-    /// Inbound message sender
-    inbound_tx: mpsc::Sender<InboundMessage>,
-    /// Inbound message receiver (taken on first call)
-    inbound_rx: Option<mpsc::Receiver<InboundMessage>>,
+    /// Shared mutable state (status + inbound channel)
+    channel_state: ChannelState,
     /// Shutdown signal sender
     shutdown_tx: Option<watch::Sender<bool>>,
-    /// Current status
-    status: Arc<RwLock<ChannelStatus>>,
     /// Write channel for sending raw IRC commands
     write_tx: Arc<RwLock<Option<mpsc::Sender<String>>>>,
 }
@@ -62,8 +58,6 @@ pub struct IrcChannel {
 impl IrcChannel {
     /// Create a new IRC channel
     pub fn new(id: impl Into<String>, config: IrcConfig) -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::channel(100);
-
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "IRC".to_string(),
@@ -75,10 +69,8 @@ impl IrcChannel {
         Self {
             info,
             config,
-            inbound_tx,
-            inbound_rx: Some(inbound_rx),
+            channel_state: ChannelState::new(100),
             shutdown_tx: None,
-            status: Arc::new(RwLock::new(ChannelStatus::Disconnected)),
             write_tx: Arc::new(RwLock::new(None)),
         }
     }
@@ -102,15 +94,6 @@ impl IrcChannel {
         }
     }
 
-    /// Take the inbound receiver (can only be called once)
-    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<InboundMessage>> {
-        self.inbound_rx.take()
-    }
-
-    /// Update internal status
-    async fn set_status(&self, status: ChannelStatus) {
-        *self.status.write().await = status;
-    }
 }
 
 #[async_trait]
@@ -119,8 +102,8 @@ impl Channel for IrcChannel {
         &self.info
     }
 
-    fn status(&self) -> ChannelStatus {
-        self.info.status
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
@@ -129,12 +112,14 @@ impl Channel for IrcChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        self.set_status(ChannelStatus::Connecting).await;
-        tracing::info!(
-            "Starting IRC channel (server={}, nick={})...",
-            self.config.server,
-            self.config.nick
-        );
+        #[cfg(feature = "irc")]
+        {
+            self.channel_state.set_status(ChannelStatus::Connecting).await;
+            tracing::info!(
+                "Starting IRC channel (server={}, nick={})...",
+                self.config.server,
+                self.config.nick
+            );
 
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -144,11 +129,11 @@ impl Channel for IrcChannel {
         let (write_cmd_tx, write_cmd_rx) = mpsc::channel::<String>(64);
         *self.write_tx.write().await = Some(write_cmd_tx);
 
-        // Spawn IRC connection loop
-        let config = self.config.clone();
-        let channel_id = self.info.id.clone();
-        let inbound_tx = self.inbound_tx.clone();
-        let status = self.status.clone();
+            // Spawn IRC connection loop
+            let config = self.config.clone();
+            let channel_id = self.info.id.clone();
+            let inbound_tx = self.channel_state.sender();
+            let status = self.channel_state.status_handle();
 
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
@@ -165,8 +150,9 @@ impl Channel for IrcChannel {
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-        self.set_status(ChannelStatus::Connected).await;
-        Ok(())
+            self.channel_state.set_status(ChannelStatus::Connected).await;
+            Ok(())
+        }
 
     }
 
@@ -180,7 +166,7 @@ impl Channel for IrcChannel {
         // Clear write channel
         *self.write_tx.write().await = None;
 
-        self.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state.set_status(ChannelStatus::Disconnected).await;
         Ok(())
     }
 
@@ -201,31 +187,6 @@ impl Channel for IrcChannel {
 
     }
 
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        None // Already taken during construction or via take_receiver
-    }
-
-    async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        // IRC does not support typing indicators
-        let _ = conversation_id;
-        Err(ChannelError::UnsupportedFeature(
-            "IRC does not support typing indicators".to_string(),
-        ))
-    }
-
-    async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
-        let _ = (message_id, new_text);
-        Err(ChannelError::UnsupportedFeature(
-            "IRC does not support message editing".to_string(),
-        ))
-    }
-
-    async fn react(&self, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
-        let _ = (message_id, reaction);
-        Err(ChannelError::UnsupportedFeature(
-            "IRC does not support reactions".to_string(),
-        ))
-    }
 }
 
 /// Factory for creating IRC channels
@@ -293,13 +254,13 @@ mod tests {
     #[test]
     fn test_take_receiver() {
         let config = IrcConfig::default();
-        let mut channel = IrcChannel::new("irc", config);
+        let channel = IrcChannel::new("irc", config);
 
         // First take should succeed
-        assert!(channel.take_receiver().is_some());
+        assert!(channel.state().take_receiver().is_some());
 
         // Second take should return None
-        assert!(channel.take_receiver().is_none());
+        assert!(channel.state().take_receiver().is_none());
     }
 
     #[tokio::test]
@@ -396,10 +357,7 @@ mod tests {
 
         let conv_id = ConversationId::new("#test");
         let result = channel.send_typing(&conv_id).await;
-        assert!(result.is_err());
-        if let Err(ChannelError::UnsupportedFeature(msg)) = result {
-            assert!(msg.contains("typing"));
-        }
+        assert!(matches!(result, Err(ChannelError::UnsupportedFeature(_))));
     }
 
     #[tokio::test]
@@ -409,10 +367,7 @@ mod tests {
 
         let msg_id = MessageId::new("test-msg");
         let result = channel.edit(&msg_id, "new text").await;
-        assert!(result.is_err());
-        if let Err(ChannelError::UnsupportedFeature(msg)) = result {
-            assert!(msg.contains("editing"));
-        }
+        assert!(matches!(result, Err(ChannelError::UnsupportedFeature(_))));
     }
 
     #[tokio::test]
@@ -422,9 +377,6 @@ mod tests {
 
         let msg_id = MessageId::new("test-msg");
         let result = channel.react(&msg_id, "thumbsup").await;
-        assert!(result.is_err());
-        if let Err(ChannelError::UnsupportedFeature(msg)) = result {
-            assert!(msg.contains("reactions"));
-        }
+        assert!(matches!(result, Err(ChannelError::UnsupportedFeature(_))));
     }
 }

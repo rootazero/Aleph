@@ -36,8 +36,8 @@ pub use message_ops::XmppMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelStatus, ConversationId, InboundMessage, MessageId, OutboundMessage,
-    SendResult,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
+    OutboundMessage, SendResult,
 };
 use async_trait::async_trait;
 use crate::sync_primitives::Arc;
@@ -49,14 +49,10 @@ pub struct XmppChannel {
     info: ChannelInfo,
     /// Configuration
     config: XmppConfig,
-    /// Inbound message sender
-    inbound_tx: mpsc::Sender<InboundMessage>,
-    /// Inbound message receiver (taken on first call)
-    inbound_rx: Option<mpsc::Receiver<InboundMessage>>,
+    /// Shared mutable state (status + inbound channel)
+    channel_state: ChannelState,
     /// Shutdown signal sender
     shutdown_tx: Option<watch::Sender<bool>>,
-    /// Current status
-    status: Arc<RwLock<ChannelStatus>>,
     /// Write channel for sending raw XMPP stanzas
     write_tx: Arc<RwLock<Option<mpsc::Sender<String>>>>,
 }
@@ -64,8 +60,6 @@ pub struct XmppChannel {
 impl XmppChannel {
     /// Create a new XMPP channel
     pub fn new(id: impl Into<String>, config: XmppConfig) -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::channel(100);
-
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "XMPP".to_string(),
@@ -77,10 +71,8 @@ impl XmppChannel {
         Self {
             info,
             config,
-            inbound_tx,
-            inbound_rx: Some(inbound_rx),
+            channel_state: ChannelState::new(100),
             shutdown_tx: None,
-            status: Arc::new(RwLock::new(ChannelStatus::Disconnected)),
             write_tx: Arc::new(RwLock::new(None)),
         }
     }
@@ -104,15 +96,6 @@ impl XmppChannel {
         }
     }
 
-    /// Take the inbound receiver (can only be called once)
-    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<InboundMessage>> {
-        self.inbound_rx.take()
-    }
-
-    /// Update internal status
-    async fn set_status(&self, status: ChannelStatus) {
-        *self.status.write().await = status;
-    }
 }
 
 #[async_trait]
@@ -121,8 +104,8 @@ impl Channel for XmppChannel {
         &self.info
     }
 
-    fn status(&self) -> ChannelStatus {
-        self.info.status
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
@@ -131,12 +114,14 @@ impl Channel for XmppChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        self.set_status(ChannelStatus::Connecting).await;
-        tracing::info!(
-            "Starting XMPP channel (jid={}, rooms={})...",
-            self.config.jid,
-            self.config.muc_rooms.len()
-        );
+        #[cfg(feature = "xmpp")]
+        {
+            self.channel_state.set_status(ChannelStatus::Connecting).await;
+            tracing::info!(
+                "Starting XMPP channel (jid={}, rooms={})...",
+                self.config.jid,
+                self.config.muc_rooms.len()
+            );
 
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -146,11 +131,11 @@ impl Channel for XmppChannel {
         let (write_cmd_tx, write_cmd_rx) = mpsc::channel::<String>(64);
         *self.write_tx.write().await = Some(write_cmd_tx);
 
-        // Spawn XMPP connection loop
-        let config = self.config.clone();
-        let channel_id = self.info.id.clone();
-        let inbound_tx = self.inbound_tx.clone();
-        let status = self.status.clone();
+            // Spawn XMPP connection loop
+            let config = self.config.clone();
+            let channel_id = self.info.id.clone();
+            let inbound_tx = self.channel_state.sender();
+            let status = self.channel_state.status_handle();
 
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
@@ -167,8 +152,9 @@ impl Channel for XmppChannel {
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-        self.set_status(ChannelStatus::Connected).await;
-        Ok(())
+            self.channel_state.set_status(ChannelStatus::Connected).await;
+            Ok(())
+        }
 
     }
 
@@ -182,7 +168,7 @@ impl Channel for XmppChannel {
         // Clear write channel
         *self.write_tx.write().await = None;
 
-        self.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state.set_status(ChannelStatus::Disconnected).await;
         Ok(())
     }
 
@@ -208,10 +194,6 @@ impl Channel for XmppChannel {
 
     }
 
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        None // Already taken during construction or via take_receiver
-    }
-
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
         // XMPP supports typing via XEP-0085 Chat State Notifications
         // For now, send a <composing/> chat state
@@ -229,19 +211,6 @@ impl Channel for XmppChannel {
 
     }
 
-    async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
-        let _ = (message_id, new_text);
-        Err(ChannelError::UnsupportedFeature(
-            "XMPP message editing not implemented".to_string(),
-        ))
-    }
-
-    async fn react(&self, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
-        let _ = (message_id, reaction);
-        Err(ChannelError::UnsupportedFeature(
-            "XMPP reactions not implemented".to_string(),
-        ))
-    }
 }
 
 /// Factory for creating XMPP channels
@@ -308,13 +277,13 @@ mod tests {
     #[test]
     fn test_take_receiver() {
         let config = XmppConfig::default();
-        let mut channel = XmppChannel::new("xmpp", config);
+        let channel = XmppChannel::new("xmpp", config);
 
         // First take should succeed
-        assert!(channel.take_receiver().is_some());
+        assert!(channel.state().take_receiver().is_some());
 
         // Second take should return None
-        assert!(channel.take_receiver().is_none());
+        assert!(channel.state().take_receiver().is_none());
     }
 
     #[tokio::test]
@@ -421,10 +390,7 @@ mod tests {
 
         let msg_id = MessageId::new("test-msg");
         let result = channel.edit(&msg_id, "new text").await;
-        assert!(result.is_err());
-        if let Err(ChannelError::UnsupportedFeature(msg)) = result {
-            assert!(msg.contains("editing"));
-        }
+        assert!(matches!(result, Err(ChannelError::UnsupportedFeature(_))));
     }
 
     #[tokio::test]
@@ -434,10 +400,7 @@ mod tests {
 
         let msg_id = MessageId::new("test-msg");
         let result = channel.react(&msg_id, "thumbsup").await;
-        assert!(result.is_err());
-        if let Err(ChannelError::UnsupportedFeature(msg)) = result {
-            assert!(msg.contains("reactions"));
-        }
+        assert!(matches!(result, Err(ChannelError::UnsupportedFeature(_))));
     }
 
     #[tokio::test]

@@ -32,12 +32,12 @@ pub use message_ops::SlackMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelStatus, ConversationId, InboundMessage, MessageId, OutboundMessage,
-    SendResult,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
+    OutboundMessage, SendResult,
 };
 use async_trait::async_trait;
 use crate::sync_primitives::Arc;
-use tokio::sync::{mpsc, watch, RwLock};
+use tokio::sync::{watch, RwLock};
 
 /// Slack channel implementation using Socket Mode + REST API.
 pub struct SlackChannel {
@@ -45,14 +45,10 @@ pub struct SlackChannel {
     info: ChannelInfo,
     /// Configuration
     config: SlackConfig,
-    /// Inbound message sender
-    inbound_tx: mpsc::Sender<InboundMessage>,
-    /// Inbound message receiver (taken on first call)
-    inbound_rx: Option<mpsc::Receiver<InboundMessage>>,
+    /// Shared mutable state (status + inbound channel)
+    channel_state: ChannelState,
     /// Shutdown signal sender
     shutdown_tx: Option<watch::Sender<bool>>,
-    /// Current status
-    status: Arc<RwLock<ChannelStatus>>,
     /// Bot's own user ID (populated after auth.test)
     bot_user_id: Arc<RwLock<Option<String>>>,
     /// HTTP client for Slack API calls
@@ -62,8 +58,6 @@ pub struct SlackChannel {
 impl SlackChannel {
     /// Create a new Slack channel
     pub fn new(id: impl Into<String>, config: SlackConfig) -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::channel(100);
-
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "Slack".to_string(),
@@ -75,16 +69,14 @@ impl SlackChannel {
         Self {
             info,
             config,
-            inbound_tx,
-            inbound_rx: Some(inbound_rx),
+            channel_state: ChannelState::new(100),
             shutdown_tx: None,
-            status: Arc::new(RwLock::new(ChannelStatus::Disconnected)),
             bot_user_id: Arc::new(RwLock::new(None)),
             client: reqwest::Client::new(),
         }
     }
 
-    /// Get Slack-specific capabilities
+    /// Get Slack-specific capabilities.
     fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
             attachments: true,
@@ -103,15 +95,6 @@ impl SlackChannel {
         }
     }
 
-    /// Take the inbound receiver (can only be called once)
-    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<InboundMessage>> {
-        self.inbound_rx.take()
-    }
-
-    /// Update internal status
-    async fn set_status(&self, status: ChannelStatus) {
-        *self.status.write().await = status;
-    }
 }
 
 #[async_trait]
@@ -120,8 +103,8 @@ impl Channel for SlackChannel {
         &self.info
     }
 
-    fn status(&self) -> ChannelStatus {
-        self.info.status
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
@@ -130,19 +113,55 @@ impl Channel for SlackChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        self.set_status(ChannelStatus::Connecting).await;
-        tracing::info!("Starting Slack channel...");
+        #[cfg(feature = "slack")]
+        {
+            self.channel_state.set_status(ChannelStatus::Connecting).await;
+            tracing::info!("Starting Slack channel...");
 
-        // Validate bot token via auth.test
-        match SlackMessageOps::validate_bot_token(&self.client, &self.config.bot_token).await {
-            Ok(user_id) => {
-                tracing::info!("Slack bot authenticated (user_id: {user_id})");
-                *self.bot_user_id.write().await = Some(user_id);
+            // Validate bot token via auth.test
+            match SlackMessageOps::validate_bot_token(&self.client, &self.config.bot_token).await {
+                Ok(user_id) => {
+                    tracing::info!("Slack bot authenticated (user_id: {user_id})");
+                    *self.bot_user_id.write().await = Some(user_id);
+                }
+                Err(e) => {
+                    self.channel_state.set_status(ChannelStatus::Error).await;
+                    return Err(e);
+                }
             }
-            Err(e) => {
-                self.set_status(ChannelStatus::Error).await;
-                return Err(e);
-            }
+
+            // Create shutdown channel
+            let (shutdown_tx, shutdown_rx) = watch::channel(false);
+            self.shutdown_tx = Some(shutdown_tx);
+
+            // Clone handles for the spawned task
+            let client = self.client.clone();
+            let app_token = self.config.app_token.clone();
+            let bot_user_id = self.bot_user_id.clone();
+            let channel_id = self.info.id.clone();
+            let config = self.config.clone();
+            let inbound_tx = self.channel_state.sender();
+            let status = self.channel_state.status_handle();
+
+            tokio::spawn(async move {
+                *status.write().await = ChannelStatus::Connected;
+
+                SlackMessageOps::run_socket_mode_loop(
+                    client,
+                    app_token,
+                    bot_user_id,
+                    channel_id,
+                    config,
+                    inbound_tx,
+                    shutdown_rx,
+                )
+                .await;
+
+                *status.write().await = ChannelStatus::Disconnected;
+            });
+
+            self.channel_state.set_status(ChannelStatus::Connected).await;
+            Ok(())
         }
 
         // Create shutdown channel
@@ -187,7 +206,7 @@ impl Channel for SlackChannel {
             let _ = shutdown_tx.send(true);
         }
 
-        self.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state.set_status(ChannelStatus::Disconnected).await;
         Ok(())
     }
 
@@ -210,10 +229,6 @@ impl Channel for SlackChannel {
         )
         .await
 
-    }
-
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        None // Already taken during construction or via take_receiver
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
@@ -319,13 +334,13 @@ mod tests {
     #[test]
     fn test_take_receiver() {
         let config = SlackConfig::default();
-        let mut channel = SlackChannel::new("slack", config);
+        let channel = SlackChannel::new("slack", config);
 
-        // First take should succeed
-        assert!(channel.take_receiver().is_some());
+        // First take should succeed (via ChannelState)
+        assert!(channel.inbound_receiver().is_some());
 
         // Second take should return None
-        assert!(channel.take_receiver().is_none());
+        assert!(channel.inbound_receiver().is_none());
     }
 
     #[tokio::test]
