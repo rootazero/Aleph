@@ -256,12 +256,17 @@ impl<E: EventEmitter + Send + Sync + 'static> LoopCallback for EventEmittingCall
                 .await;
 
             // Record tool result for lazy POE evaluator
-            let result_non_empty = matches!(
-                result,
-                ActionResult::ToolSuccess { output, .. }
-                    if !output.is_null()
-                       && output.as_str().map_or(true, |s| !s.trim().is_empty())
-            );
+            // Consistent with lazy_evaluator::is_empty_output
+            let result_non_empty = match result {
+                ActionResult::ToolSuccess { output, .. } => match output {
+                    serde_json::Value::Null => false,
+                    serde_json::Value::String(s) => !s.trim().is_empty(),
+                    serde_json::Value::Array(arr) => !arr.is_empty(),
+                    serde_json::Value::Object(obj) => !obj.is_empty(),
+                    _ => true,
+                },
+                _ => false,
+            };
             self.lazy_poe.record_tool_result(tool_name, result_non_empty).await;
         }
     }
