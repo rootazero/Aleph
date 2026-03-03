@@ -43,6 +43,8 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     session_manager: Arc<crate::gateway::SessionManager>,
     /// Workspace manager for workspace-scoped profile resolution
     workspace_manager: Option<Arc<WorkspaceManager>>,
+    /// Memory backend for auto-memorization of conversations
+    memory_backend: Option<crate::memory::store::MemoryBackend>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -53,6 +55,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         tool_registry: Arc<R>,
         tools: Vec<UnifiedTool>,
         session_manager: Arc<crate::gateway::SessionManager>,
+        memory_backend: Option<crate::memory::store::MemoryBackend>,
     ) -> Self {
         Self {
             config,
@@ -62,6 +65,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             tools: Arc::new(tools),
             session_manager,
             workspace_manager: None,
+            memory_backend,
         }
     }
 
@@ -253,6 +257,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         session_key: request.session_key.to_key_string(),
                     })
                     .await;
+
+                // Async write to memory system (Layer 1)
+                if let Some(ref mb) = self.memory_backend {
+                    let mb = mb.clone();
+                    let sk = request.session_key.to_key_string();
+                    let ui = request.input.clone();
+                    let ao = response.clone();
+                    tokio::spawn(async move {
+                        write_conversation_memory(mb, sk, ui, ao).await;
+                    });
+                }
                 Ok(())
             }
             Err(e) => {
@@ -662,5 +677,40 @@ where
 
     async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
         ExecutionEngine::get_status(self, run_id).await
+    }
+}
+
+// ============================================================================
+// Background memory persistence
+// ============================================================================
+
+/// Write a conversation turn to the memory system (Layer 1).
+///
+/// Runs in a background task — failures are logged but never block the caller.
+async fn write_conversation_memory(
+    memory_backend: crate::memory::store::MemoryBackend,
+    session_key: String,
+    user_input: String,
+    ai_output: String,
+) {
+    use crate::memory::context::{ContextAnchor, MemoryEntry};
+
+    let context = ContextAnchor::with_topic(
+        "aleph.chat".to_string(),
+        session_key.clone(),
+        session_key,
+    );
+    let entry = MemoryEntry::new(
+        uuid::Uuid::new_v4().to_string(),
+        context,
+        user_input,
+        ai_output,
+    );
+
+    use crate::memory::store::SessionStore;
+    if let Err(e) = memory_backend.insert_memory(&entry).await {
+        warn!("Failed to write conversation memory: {}", e);
+    } else {
+        debug!("Conversation memory saved to Layer 1");
     }
 }
