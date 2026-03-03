@@ -18,7 +18,7 @@
 │       └─────────────┴─────────────┴─────────────┴─────────────┘             │
 │                                   │                                          │
 │                          WebSocket (JSON-RPC 2.0)                           │
-│                          ws://127.0.0.1:18789                               │
+│                          ws://127.0.0.1:18790/ws                             │
 └───────────────────────────────────┬─────────────────────────────────────────┘
                                     │
 ┌───────────────────────────────────┴─────────────────────────────────────────┐
@@ -362,28 +362,16 @@ See `docs/PROTOCOL_ADAPTER_USER_GUIDE.md` for user documentation.
 
 ## Feature Flags
 
+所有生产功能始终编译，无需 feature flags。仅保留测试用 features：
+
 ```toml
 [features]
-default = ["gateway"]
-
-# Core features
-gateway = ["tokio-tungstenite", "axum", ...]
-cli = ["inquire"]
-
-# Interfaces (require gateway)
-telegram = ["teloxide", "gateway"]
-discord = ["serenity", "gateway"]
-all-interfaces = ["telegram", "discord"]
-
-# Optional features
-cron = ["cron", "gateway"]
-browser = ["chromiumoxide", "gateway"]
-
-# Plugin runtimes
-plugin-wasm = ["extism"]
-plugin-nodejs = []
-plugin-all = ["plugin-wasm", "plugin-nodejs"]
+default = []
+loom = ["dep:loom"]       # 并发测试
+test-helpers = []          # 集成测试工具
 ```
+
+通道在运行时通过 `aleph.toml` 配置启用/禁用。
 
 ---
 

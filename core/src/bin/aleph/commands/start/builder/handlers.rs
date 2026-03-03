@@ -314,45 +314,6 @@ pub(in crate::commands::start) async fn start_webchat_server(args: &Args, final_
     }
 }
 
-// ─── start_control_plane_server ──────────────────────────────────────────────
-
-/// Start ControlPlane embedded web UI server
-pub(in crate::commands::start) async fn start_control_plane_server(final_bind: &str, final_port: u16, daemon_mode: bool) {
-    use std::net::SocketAddr;
-    use alephcore::gateway::control_plane::create_control_plane_router;
-
-    // Use a different port for ControlPlane (default: 8081)
-    let cp_port = final_port + 1;
-    let control_plane_addr: SocketAddr = format!("{}:{}", final_bind, cp_port)
-        .parse()
-        .expect("Invalid control plane address");
-
-    // Create ControlPlane router (serves at root path)
-    let app = create_control_plane_router();
-
-    // Spawn ControlPlane server
-    tokio::spawn(async move {
-        match tokio::net::TcpListener::bind(control_plane_addr).await {
-            Ok(listener) => {
-                tracing::info!("ControlPlane UI available at http://{}", control_plane_addr);
-                if let Err(e) = axum::serve(listener, app).await {
-                    tracing::error!("ControlPlane server error: {}", e);
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to bind ControlPlane server: {}", e);
-            }
-        }
-    });
-
-    if !daemon_mode {
-        println!("ControlPlane UI:");
-        println!("  - URL: http://{}", control_plane_addr);
-        println!("  - Embedded: rust-embed (WASM)");
-        println!();
-    }
-}
-
 // ─── register_memory_handlers ────────────────────────────────────────────────
 
 pub(in crate::commands::start) fn register_memory_handlers(

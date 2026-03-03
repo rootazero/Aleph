@@ -311,7 +311,7 @@ A. aleph-core (The Server / Daemon)
 
 职责： LLM 编排、本地数据库 (Vector DB) 交互、文件系统监控、以及你刚才研究的 Docker/Firecracker 调度。
 
-对外接口： 启动一个 WebSocket Server，监听一个固定端口（如 18789）。
+对外接口： 启动一个 HTTP/WebSocket Server，监听一个固定端口（如 18790）。
 
 B. aleph-protocol (The Shared Schema)
 
@@ -329,7 +329,7 @@ C. aleph-client (The UI Shells)
 
 Tauri/Web: 仅处理复杂的对话流展示。
 
-逻辑： 启动后尝试连接 ws://127.0.0.1:18789。
+逻辑： 启动后尝试连接 ws://127.0.0.1:18790/ws。
 
 2. 这样做带来的即时好处
 流式输出的完美支持： Rust Core 只要收到 LLM 的一个 Token，就立刻通过 WS 发送一个 ChatChunk 给 Client。UI 不再会被阻塞。
@@ -462,7 +462,7 @@ Context 显式化： 所有请求都应该携带一个 session_id。
 4. 改进方向与独立思考
 Ziv，分离代码最难的部分不是技术，而是**“忍住不把逻辑写在 UI 里”**。
 
-改进方向建议： 你现在可以尝试在 Rust 中创建一个名为 alephd (Aleph Daemon) 的独立二进制项目。它启动后只打印一行：Aleph engine running on port 18789...。
+改进方向建议： 你现在可以尝试在 Rust 中创建一个名为 alephd (Aleph Daemon) 的独立二进制项目。它启动后只打印一行：Aleph engine running on port 18790...。
 
 然后尝试用 wscat 或任何浏览器插件发送一个 JSON 过去，看看能不能得到响应。一旦这步通了，Aleph 就已经完成了向“服务器模式”的基因突变。
 

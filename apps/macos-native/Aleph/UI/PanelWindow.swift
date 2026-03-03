@@ -5,7 +5,7 @@ import os
 /// Unified Panel window — the single window hosting the full Leptos/WASM Panel UI.
 ///
 /// PanelWindow is a standard titled, closable, resizable NSWindow with a WKWebView that
-/// loads the Panel root from aleph-server. It replaces both HaloWindow and SettingsWindow
+/// loads the Panel root from the aleph server. It replaces both HaloWindow and SettingsWindow
 /// as the unified interface surface. The Panel UI handles its own internal navigation
 /// (Chat, Settings, Dashboard, etc.) via Leptos client-side routing.
 ///

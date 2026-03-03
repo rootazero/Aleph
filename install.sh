@@ -5,7 +5,7 @@ set -euo pipefail
 
 REPO="rootazero/Aleph"
 INSTALL_DIR="/usr/local/bin"
-BINARY_NAME="aleph-server"
+BINARY_NAME="aleph"
 VERSION="${1:-latest}"
 
 # Detect platform
@@ -54,8 +54,8 @@ fi
 
 mkdir -p "$HOME/.aleph"
 echo ""
-echo "aleph-server installed successfully!"
-echo "Run: aleph-server"
+echo "aleph installed successfully!"
+echo "Run: aleph"
 
 # Offer service installation
 read -p "Install as system service? [y/N] " -n 1 -r
@@ -80,7 +80,7 @@ EOFPLIST
         launchctl load "$PLIST"
         echo "Service installed. Use: launchctl start com.aleph.server"
     else
-        SERVICE_FILE="$HOME/.config/systemd/user/aleph-server.service"
+        SERVICE_FILE="$HOME/.config/systemd/user/aleph.service"
         mkdir -p "$(dirname "$SERVICE_FILE")"
         cat > "$SERVICE_FILE" << EOFSVC
 [Unit]
@@ -94,8 +94,8 @@ RestartSec=5
 WantedBy=default.target
 EOFSVC
         systemctl --user daemon-reload
-        systemctl --user enable aleph-server
-        systemctl --user start aleph-server
-        echo "Service installed. Use: systemctl --user status aleph-server"
+        systemctl --user enable aleph
+        systemctl --user start aleph
+        echo "Service installed. Use: systemctl --user status aleph"
     fi
 fi

@@ -600,7 +600,7 @@ mod tests {
             temp_file,
             r#"
 [gateway]
-port = 18789
+port = 18790
 
 [agents.main]
 model = "claude-sonnet-4-5"
@@ -658,7 +658,7 @@ model = "claude-opus-4-5"
         assert!(response.result.is_some());
 
         let result = response.result.unwrap();
-        assert_eq!(result["port"], 18789);
+        assert_eq!(result["port"], 18790);
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 //! Bridge RPC Protocol Types
 //!
-//! JSON-RPC 2.0 message types for communication between the Rust aleph-server
+//! JSON-RPC 2.0 message types for communication between the Rust aleph
 //! and the Go whatsapp-bridge binary over Unix domain socket (newline-delimited JSON).
 //!
 //! # Wire Protocol

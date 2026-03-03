@@ -5,7 +5,7 @@ import os
 ///
 /// Responsibilities:
 /// - Set activation policy to .accessory (hide from Dock)
-/// - Manage aleph-server process lifecycle via `ServerManager`
+/// - Manage aleph process lifecycle via `ServerManager`
 /// - Set up menu bar status item via `MenuBarController`
 /// - Manage unified Panel window and Canvas overlay
 /// - Handle UDS bridge connection via `BridgeServer`
@@ -67,15 +67,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Service Startup
 
-    /// Start aleph-server and bridge server sequentially.
+    /// Start aleph and bridge server sequentially.
     @MainActor
     private func startServices() async {
-        // Start aleph-server process
+        // Start aleph process
         do {
             try await serverManager.start()
-            logger.info("aleph-server started successfully")
+            logger.info("aleph started successfully")
         } catch {
-            logger.error("Failed to start aleph-server: \(error.localizedDescription)")
+            logger.error("Failed to start aleph: \(error.localizedDescription)")
         }
 
         // Configure panel window with server port

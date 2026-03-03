@@ -12,7 +12,7 @@ pub const DEFAULT_LOG_FILE: &str = "~/.aleph/gateway.log";
 
 /// Aleph Gateway - WebSocket control plane for AI agents
 #[derive(Parser, Debug)]
-#[command(name = "aleph-gateway")]
+#[command(name = "aleph")]
 #[command(version, about, long_about = None)]
 pub struct Args {
     /// Subcommand (start, stop, status)
@@ -40,7 +40,7 @@ pub struct Args {
     pub bind: String,
 
     /// Port number
-    #[arg(long, default_value = "18789")]
+    #[arg(long, default_value = "18790")]
     pub port: u16,
 
     /// Force start even if port appears to be in use
@@ -193,7 +193,7 @@ pub enum GatewayAction {
         params: Option<String>,
 
         /// Gateway WebSocket URL
-        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        #[arg(long, default_value = "ws://127.0.0.1:18790/ws")]
         url: String,
 
         /// Timeout in milliseconds
@@ -215,7 +215,7 @@ pub enum ConfigAction {
         json: bool,
 
         /// Gateway URL
-        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        #[arg(long, default_value = "ws://127.0.0.1:18790/ws")]
         url: String,
     },
     /// Set a configuration value
@@ -227,7 +227,7 @@ pub enum ConfigAction {
         value: String,
 
         /// Gateway URL
-        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        #[arg(long, default_value = "ws://127.0.0.1:18790/ws")]
         url: String,
     },
     /// Edit configuration in editor
@@ -235,13 +235,13 @@ pub enum ConfigAction {
     /// Validate configuration
     Validate {
         /// Gateway URL
-        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        #[arg(long, default_value = "ws://127.0.0.1:18790/ws")]
         url: String,
     },
     /// Reload configuration
     Reload {
         /// Gateway URL
-        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        #[arg(long, default_value = "ws://127.0.0.1:18790/ws")]
         url: String,
     },
     /// Output JSON Schema
@@ -251,7 +251,7 @@ pub enum ConfigAction {
         output: Option<String>,
 
         /// Gateway URL
-        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        #[arg(long, default_value = "ws://127.0.0.1:18790/ws")]
         url: String,
     },
 }
@@ -266,7 +266,7 @@ pub enum ChannelsAction {
         json: bool,
 
         /// Gateway URL
-        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        #[arg(long, default_value = "ws://127.0.0.1:18790/ws")]
         url: String,
     },
     /// Get channel status
@@ -279,7 +279,7 @@ pub enum ChannelsAction {
         json: bool,
 
         /// Gateway URL
-        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        #[arg(long, default_value = "ws://127.0.0.1:18790/ws")]
         url: String,
     },
 }
@@ -294,7 +294,7 @@ pub enum CronAction {
         json: bool,
 
         /// Gateway URL
-        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        #[arg(long, default_value = "ws://127.0.0.1:18790/ws")]
         url: String,
     },
     /// Get cron service status
@@ -304,7 +304,7 @@ pub enum CronAction {
         json: bool,
 
         /// Gateway URL
-        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        #[arg(long, default_value = "ws://127.0.0.1:18790/ws")]
         url: String,
     },
     /// Trigger a cron job manually
@@ -313,7 +313,7 @@ pub enum CronAction {
         job_id: String,
 
         /// Gateway URL
-        #[arg(long, default_value = "ws://127.0.0.1:18789")]
+        #[arg(long, default_value = "ws://127.0.0.1:18790/ws")]
         url: String,
     },
 }
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_plugins_list() {
-        let args = Args::try_parse_from(["aleph-gateway", "plugins", "list"]);
+        let args = Args::try_parse_from(["aleph", "plugins", "list"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn test_cli_parses_plugins_install() {
         let args = Args::try_parse_from([
-            "aleph-gateway",
+            "aleph",
             "plugins",
             "install",
             "https://github.com/example/plugin.git",
@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_plugins_uninstall() {
-        let args = Args::try_parse_from(["aleph-gateway", "plugins", "uninstall", "my-plugin"]);
+        let args = Args::try_parse_from(["aleph", "plugins", "uninstall", "my-plugin"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_plugins_enable() {
-        let args = Args::try_parse_from(["aleph-gateway", "plugins", "enable", "my-plugin"]);
+        let args = Args::try_parse_from(["aleph", "plugins", "enable", "my-plugin"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_plugins_disable() {
-        let args = Args::try_parse_from(["aleph-gateway", "plugins", "disable", "my-plugin"]);
+        let args = Args::try_parse_from(["aleph", "plugins", "disable", "my-plugin"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_config_get() {
-        let args = Args::try_parse_from(["aleph-gateway", "config", "get"]);
+        let args = Args::try_parse_from(["aleph", "config", "get"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_config_get_with_path() {
-        let args = Args::try_parse_from(["aleph-gateway", "config", "get", "general.language", "--json"]);
+        let args = Args::try_parse_from(["aleph", "config", "get", "general.language", "--json"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_config_set() {
-        let args = Args::try_parse_from(["aleph-gateway", "config", "set", "general.language", "zh-Hans"]);
+        let args = Args::try_parse_from(["aleph", "config", "set", "general.language", "zh-Hans"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_config_edit() {
-        let args = Args::try_parse_from(["aleph-gateway", "config", "edit"]);
+        let args = Args::try_parse_from(["aleph", "config", "edit"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_config_validate() {
-        let args = Args::try_parse_from(["aleph-gateway", "config", "validate"]);
+        let args = Args::try_parse_from(["aleph", "config", "validate"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -543,7 +543,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_config_reload() {
-        let args = Args::try_parse_from(["aleph-gateway", "config", "reload"]);
+        let args = Args::try_parse_from(["aleph", "config", "reload"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_config_schema() {
-        let args = Args::try_parse_from(["aleph-gateway", "config", "schema", "-o", "schema.json"]);
+        let args = Args::try_parse_from(["aleph", "config", "schema", "-o", "schema.json"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -573,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_audit_tools() {
-        let args = Args::try_parse_from(["aleph-gateway", "audit", "tools"]);
+        let args = Args::try_parse_from(["aleph", "audit", "tools"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_audit_tool() {
-        let args = Args::try_parse_from(["aleph-gateway", "audit", "tool", "my_tool"]);
+        let args = Args::try_parse_from(["aleph", "audit", "tool", "my_tool"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_audit_tool_with_limit() {
-        let args = Args::try_parse_from(["aleph-gateway", "audit", "tool", "my_tool", "--limit", "50"]);
+        let args = Args::try_parse_from(["aleph", "audit", "tool", "my_tool", "--limit", "50"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -622,7 +622,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_audit_escalations() {
-        let args = Args::try_parse_from(["aleph-gateway", "audit", "escalations"]);
+        let args = Args::try_parse_from(["aleph", "audit", "escalations"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -639,7 +639,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_audit_escalations_with_limit() {
-        let args = Args::try_parse_from(["aleph-gateway", "audit", "escalations", "-l", "100"]);
+        let args = Args::try_parse_from(["aleph", "audit", "escalations", "-l", "100"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {
@@ -657,7 +657,7 @@ mod tests {
     #[test]
     fn test_cli_parses_secret_set() {
         let args = Args::try_parse_from([
-            "aleph-gateway",
+            "aleph",
             "secret",
             "set",
             "openai.main",
@@ -681,7 +681,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_secret_verify() {
-        let args = Args::try_parse_from(["aleph-gateway", "secret", "verify", "wallet.main"]);
+        let args = Args::try_parse_from(["aleph", "secret", "verify", "wallet.main"]);
         assert!(args.is_ok());
         let args = args.unwrap();
         match args.command {

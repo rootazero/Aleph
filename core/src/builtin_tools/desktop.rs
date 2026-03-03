@@ -691,7 +691,7 @@ Examples:
                 message: Some(
                     "Desktop bridge not connected. The bridge provides screenshot, OCR, \
                      keyboard, and UI automation capabilities. It starts automatically \
-                     with aleph-server, or can be run standalone via aleph-tauri."
+                     with aleph, or can be run standalone via aleph-tauri."
                         .to_string(),
                 ),
             });

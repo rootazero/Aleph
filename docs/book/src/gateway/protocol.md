@@ -5,7 +5,7 @@ The Aleph Gateway uses JSON-RPC 2.0 over WebSocket for all communication.
 ## Connection
 
 ```
-ws://127.0.0.1:18789
+ws://127.0.0.1:18790/ws
 ```
 
 When `require_auth: true`, the first message must be a `connect` request:

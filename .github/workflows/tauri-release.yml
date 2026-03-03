@@ -92,15 +92,15 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev
 
-      - name: Build aleph-server
+      - name: Build aleph
         run: |
-          cargo build --bin aleph-server --features control-plane --release --target ${{ matrix.server_target }}
+          cargo build --bin aleph --features control-plane --release --target ${{ matrix.server_target }}
 
-      - name: Copy aleph-server into Tauri resources
+      - name: Copy aleph into Tauri resources
         shell: bash
         run: |
           mkdir -p apps/desktop/src-tauri/binaries
-          SRC="target/${{ matrix.server_target }}/release/aleph-server"
+          SRC="target/${{ matrix.server_target }}/release/aleph"
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then SRC="${SRC}.exe"; fi
           cp "$SRC" "apps/desktop/src-tauri/binaries/"
 
