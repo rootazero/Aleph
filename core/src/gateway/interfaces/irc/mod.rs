@@ -112,14 +112,12 @@ impl Channel for IrcChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "irc")]
-        {
-            self.channel_state.set_status(ChannelStatus::Connecting).await;
-            tracing::info!(
-                "Starting IRC channel (server={}, nick={})...",
-                self.config.server,
-                self.config.nick
-            );
+        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        tracing::info!(
+            "Starting IRC channel (server={}, nick={})...",
+            self.config.server,
+            self.config.nick
+        );
 
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -129,11 +127,11 @@ impl Channel for IrcChannel {
         let (write_cmd_tx, write_cmd_rx) = mpsc::channel::<String>(64);
         *self.write_tx.write().await = Some(write_cmd_tx);
 
-            // Spawn IRC connection loop
-            let config = self.config.clone();
-            let channel_id = self.info.id.clone();
-            let inbound_tx = self.channel_state.sender();
-            let status = self.channel_state.status_handle();
+        // Spawn IRC connection loop
+        let config = self.config.clone();
+        let channel_id = self.info.id.clone();
+        let inbound_tx = self.channel_state.sender();
+        let status = self.channel_state.status_handle();
 
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
@@ -150,10 +148,8 @@ impl Channel for IrcChannel {
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-            self.channel_state.set_status(ChannelStatus::Connected).await;
-            Ok(())
-        }
-
+        self.channel_state.set_status(ChannelStatus::Connected).await;
+        Ok(())
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {

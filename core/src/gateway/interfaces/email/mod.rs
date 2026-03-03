@@ -115,26 +115,24 @@ impl Channel for EmailChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "email")]
-        {
-            self.channel_state.set_status(ChannelStatus::Connecting).await;
-            tracing::info!(
-                "Starting Email channel (IMAP: {}:{}, SMTP: {}:{})...",
-                self.config.imap_host,
-                self.config.imap_port,
-                self.config.smtp_host,
-                self.config.smtp_port,
-            );
+        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        tracing::info!(
+            "Starting Email channel (IMAP: {}:{}, SMTP: {}:{})...",
+            self.config.imap_host,
+            self.config.imap_port,
+            self.config.smtp_host,
+            self.config.smtp_port,
+        );
 
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
-            // Spawn IMAP polling loop
-            let config = self.config.clone();
-            let channel_id = self.info.id.clone();
-            let inbound_tx = self.channel_state.sender();
-            let status = self.channel_state.status_handle();
+        // Spawn IMAP polling loop
+        let config = self.config.clone();
+        let channel_id = self.info.id.clone();
+        let inbound_tx = self.channel_state.sender();
+        let status = self.channel_state.status_handle();
 
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
@@ -150,10 +148,8 @@ impl Channel for EmailChannel {
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-            self.channel_state.set_status(ChannelStatus::Connected).await;
-            Ok(())
-        }
-
+        self.channel_state.set_status(ChannelStatus::Connected).await;
+        Ok(())
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {

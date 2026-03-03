@@ -134,42 +134,6 @@ impl Channel for MattermostChannel {
                 self.set_status(ChannelStatus::Error).await;
                 return Err(e);
             }
-
-            // Create shutdown channel
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            self.shutdown_tx = Some(shutdown_tx);
-
-            // Spawn WebSocket event loop
-            let client = self.client.clone();
-            let config = self.config.clone();
-            let bot_user_id = self.bot_user_id.clone();
-            let channel_id = self.info.id.clone();
-            let inbound_tx = self.channel_state.sender();
-            let status = self.channel_state.status_handle();
-
-            tokio::spawn(async move {
-                *status.write().await = ChannelStatus::Connected;
-
-                let uid = {
-                    let guard = bot_user_id.read().await;
-                    guard.as_deref().unwrap_or("").to_string()
-                };
-
-                MattermostMessageOps::run_ws_loop(
-                    client,
-                    config,
-                    uid,
-                    channel_id,
-                    inbound_tx,
-                    shutdown_rx,
-                )
-                .await;
-
-                *status.write().await = ChannelStatus::Disconnected;
-            });
-
-            self.set_status(ChannelStatus::Connected).await;
-            Ok(())
         }
 
         // Create shutdown channel
@@ -181,8 +145,8 @@ impl Channel for MattermostChannel {
         let config = self.config.clone();
         let bot_user_id = self.bot_user_id.clone();
         let channel_id = self.info.id.clone();
-        let inbound_tx = self.inbound_tx.clone();
-        let status = self.status.clone();
+        let inbound_tx = self.channel_state.sender();
+        let status = self.channel_state.status_handle();
 
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
@@ -207,7 +171,6 @@ impl Channel for MattermostChannel {
 
         self.set_status(ChannelStatus::Connected).await;
         Ok(())
-
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {

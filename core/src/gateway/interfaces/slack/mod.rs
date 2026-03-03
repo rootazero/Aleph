@@ -113,69 +113,33 @@ impl Channel for SlackChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "slack")]
-        {
-            self.channel_state.set_status(ChannelStatus::Connecting).await;
-            tracing::info!("Starting Slack channel...");
+        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        tracing::info!("Starting Slack channel...");
 
-            // Validate bot token via auth.test
-            match SlackMessageOps::validate_bot_token(&self.client, &self.config.bot_token).await {
-                Ok(user_id) => {
-                    tracing::info!("Slack bot authenticated (user_id: {user_id})");
-                    *self.bot_user_id.write().await = Some(user_id);
-                }
-                Err(e) => {
-                    self.channel_state.set_status(ChannelStatus::Error).await;
-                    return Err(e);
-                }
+        // Validate bot token via auth.test
+        match SlackMessageOps::validate_bot_token(&self.client, &self.config.bot_token).await {
+            Ok(user_id) => {
+                tracing::info!("Slack bot authenticated (user_id: {user_id})");
+                *self.bot_user_id.write().await = Some(user_id);
             }
-
-            // Create shutdown channel
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            self.shutdown_tx = Some(shutdown_tx);
-
-            // Clone handles for the spawned task
-            let client = self.client.clone();
-            let app_token = self.config.app_token.clone();
-            let bot_user_id = self.bot_user_id.clone();
-            let channel_id = self.info.id.clone();
-            let config = self.config.clone();
-            let inbound_tx = self.channel_state.sender();
-            let status = self.channel_state.status_handle();
-
-            tokio::spawn(async move {
-                *status.write().await = ChannelStatus::Connected;
-
-                SlackMessageOps::run_socket_mode_loop(
-                    client,
-                    app_token,
-                    bot_user_id,
-                    channel_id,
-                    config,
-                    inbound_tx,
-                    shutdown_rx,
-                )
-                .await;
-
-                *status.write().await = ChannelStatus::Disconnected;
-            });
-
-            self.channel_state.set_status(ChannelStatus::Connected).await;
-            Ok(())
+            Err(e) => {
+                self.channel_state.set_status(ChannelStatus::Error).await;
+                return Err(e);
+            }
         }
 
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
-        // Spawn Socket Mode WebSocket loop
+        // Clone handles for the spawned task
         let client = self.client.clone();
         let app_token = self.config.app_token.clone();
         let bot_user_id = self.bot_user_id.clone();
         let channel_id = self.info.id.clone();
         let config = self.config.clone();
-        let inbound_tx = self.inbound_tx.clone();
-        let status = self.status.clone();
+        let inbound_tx = self.channel_state.sender();
+        let status = self.channel_state.status_handle();
 
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
@@ -194,9 +158,8 @@ impl Channel for SlackChannel {
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-        self.set_status(ChannelStatus::Connected).await;
+        self.channel_state.set_status(ChannelStatus::Connected).await;
         Ok(())
-
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {

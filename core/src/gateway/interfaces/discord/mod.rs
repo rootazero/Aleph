@@ -81,7 +81,6 @@ impl DiscordChannel {
             config,
             channel_state: ChannelState::new(100),
             shutdown_tx: None,
-            #[cfg(feature = "discord")]
             http: None,
         }
     }
@@ -277,10 +276,8 @@ impl Channel for DiscordChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "discord")]
-        {
-            self.channel_state.set_status(ChannelStatus::Connecting).await;
-            tracing::info!("Starting Discord channel...");
+        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        tracing::info!("Starting Discord channel...");
 
         // Build gateway intents
         let mut intents = GatewayIntents::empty();
@@ -297,13 +294,13 @@ impl Channel for DiscordChannel {
             intents |= GatewayIntents::GUILD_MEMBERS;
         }
 
-            // Create event handler
-            let handler = Handler {
-                inbound_tx: self.channel_state.sender(),
-                config: self.config.clone(),
-                status: self.channel_state.status_handle(),
-                bot_user_id: Arc::new(RwLock::new(None)),
-            };
+        // Create event handler
+        let handler = Handler {
+            inbound_tx: self.channel_state.sender(),
+            config: self.config.clone(),
+            status: self.channel_state.status_handle(),
+            bot_user_id: Arc::new(RwLock::new(None)),
+        };
 
         // Build client
         let mut client = Client::builder(&self.config.bot_token, intents)
@@ -318,7 +315,7 @@ impl Channel for DiscordChannel {
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
 
-            let status = self.channel_state.status_handle();
+        let status = self.channel_state.status_handle();
 
         // Start the client in a background task
         tokio::spawn(async move {

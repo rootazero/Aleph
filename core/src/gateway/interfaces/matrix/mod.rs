@@ -138,39 +138,6 @@ impl Channel for MatrixChannel {
                 self.set_status(ChannelStatus::Error).await;
                 return Err(e);
             }
-
-            // Create shutdown channel
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            self.shutdown_tx = Some(shutdown_tx);
-
-            // Spawn /sync long-polling loop
-            let client = self.client.clone();
-            let config = self.config.clone();
-            let user_id = self.user_id.clone();
-            let since_token = self.since_token.clone();
-            let channel_id = self.info.id.clone();
-            let inbound_tx = self.channel_state.sender();
-            let status = self.channel_state.status_handle();
-
-            tokio::spawn(async move {
-                *status.write().await = ChannelStatus::Connected;
-
-                MatrixMessageOps::run_sync_loop(
-                    client,
-                    config,
-                    user_id,
-                    since_token,
-                    channel_id,
-                    inbound_tx,
-                    shutdown_rx,
-                )
-                .await;
-
-                *status.write().await = ChannelStatus::Disconnected;
-            });
-
-            self.set_status(ChannelStatus::Connected).await;
-            Ok(())
         }
 
         // Create shutdown channel
@@ -183,8 +150,8 @@ impl Channel for MatrixChannel {
         let user_id = self.user_id.clone();
         let since_token = self.since_token.clone();
         let channel_id = self.info.id.clone();
-        let inbound_tx = self.inbound_tx.clone();
-        let status = self.status.clone();
+        let inbound_tx = self.channel_state.sender();
+        let status = self.channel_state.status_handle();
 
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
@@ -205,7 +172,6 @@ impl Channel for MatrixChannel {
 
         self.set_status(ChannelStatus::Connected).await;
         Ok(())
-
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
