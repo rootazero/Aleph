@@ -103,11 +103,7 @@ pub mod initialization {
     pub use crate::init_unified::*;
 }
 
-// Feature-gated modules
-#[cfg(feature = "gateway")]
 pub mod gateway;
-
-#[cfg(feature = "cron")]
 pub mod cron;
 
 #[cfg(test)]
