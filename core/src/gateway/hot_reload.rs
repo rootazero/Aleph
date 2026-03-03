@@ -248,7 +248,7 @@ mod tests {
             temp_file,
             r#"
 [gateway]
-port = 18789
+port = 18790
 
 [agents.main]
 model = "claude-sonnet-4-5"
@@ -285,7 +285,7 @@ model = "claude-sonnet-4-5"
             temp_file,
             r#"
 [gateway]
-port = 18789
+port = 18790
 
 [agents.main]
 model = "claude-sonnet-4-5"
@@ -303,7 +303,7 @@ model = "claude-sonnet-4-5"
 
         // Get initial config
         let initial = watcher.current_config().await;
-        assert_eq!(initial.gateway.port, 18789);
+        assert_eq!(initial.gateway.port, 18790);
 
         // Modify config file - truncate and rewrite
         use std::io::{Seek, SeekFrom};
@@ -334,7 +334,7 @@ model = "claude-opus-4-5"
             temp_file,
             r#"
 [gateway]
-port = 18789
+port = 18790
 
 [agents.main]
 model = "claude-sonnet-4-5"

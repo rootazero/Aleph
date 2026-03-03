@@ -488,7 +488,7 @@ model = "claude-opus-4-5"
         let toml = r#"
 [gateway]
 host = "0.0.0.0"
-port = 18789
+port = 18790
 max_connections = 200
 
 [agents.main]

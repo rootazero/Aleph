@@ -30,7 +30,7 @@ pub struct HttpServerConfig {
 impl Default for HttpServerConfig {
     fn default() -> Self {
         Self {
-            addr: ([127, 0, 0, 1], 18789).into(),
+            addr: ([127, 0, 0, 1], 18790).into(),
             static_dir: None,
             fallback_file: Some("index.html".to_string()),
             enable_cors: true,
