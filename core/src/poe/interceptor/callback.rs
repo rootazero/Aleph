@@ -2,6 +2,10 @@
 //!
 //! All LoopCallback methods delegate to the inner callback, except `on_step_evaluate`
 //! which uses the shared StepEvaluator to evaluate each step against the SuccessManifest.
+//!
+//! Note: `on_validate_completion` intentionally uses the trait default (returns None)
+//! because full POE has its own validation via SuccessManifest + CompositeValidator.
+//! The lazy POE completion validation in EventEmittingCallback is for non-POE paths only.
 
 use crate::sync_primitives::Arc;
 

@@ -514,11 +514,12 @@ fn extract_tool_name(action: &Action) -> &str {
 
 /// Check whether a tool output value is considered "empty".
 ///
-/// Empty means: null, empty string, empty array, or empty object.
+/// Empty means: null, empty/whitespace-only string, empty array, or empty object.
+/// Must stay consistent with the emptiness check in `loop_callback_adapter.rs`.
 fn is_empty_output(output: &serde_json::Value) -> bool {
     match output {
         serde_json::Value::Null => true,
-        serde_json::Value::String(s) => s.is_empty(),
+        serde_json::Value::String(s) => s.trim().is_empty(),
         serde_json::Value::Array(arr) => arr.is_empty(),
         serde_json::Value::Object(obj) => obj.is_empty(),
         _ => false,
