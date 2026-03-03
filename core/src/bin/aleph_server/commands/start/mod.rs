@@ -26,7 +26,6 @@ use alephcore::gateway::{
     ChannelRegistry, InboundMessageRouter, RoutingConfig,
 };
 use alephcore::gateway::pairing_store::SqlitePairingStore;
-use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
 use alephcore::gateway::handlers::chat as chat_handlers;
 use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::security::{TokenManager, PairingManager};
