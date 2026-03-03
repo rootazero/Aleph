@@ -291,14 +291,8 @@ aleph/
 # Rust Core
 cd core && cargo build && cargo test
 
-# 启动 Server (不含 Control Plane UI)
+# 启动 Server (所有功能始终编译)
 cargo run --bin aleph-server
-
-# 启动 Server (含 Control Plane UI)
-cargo run --bin aleph-server --features control-plane
-
-# 启动 Server (含原生桌面能力 + UI)
-cargo run --bin aleph-server --features desktop,control-plane
 
 # Tauri App
 cd apps/desktop && pnpm install && pnpm tauri dev
@@ -314,28 +308,30 @@ cd apps/desktop && cargo tauri build
 详见：[Server 开发与发布指南](docs/reference/SERVER_DEVELOPMENT.md)
 
 快速参考：
-- 不含 UI：`cargo run --bin aleph-server`
-- 含 UI：`cargo run --bin aleph-server --features control-plane`
-- 含原生桌面：`cargo run --bin aleph-server --features desktop`
-- 全功能：`cargo run --bin aleph-server --features desktop,control-plane`
-- Release：`cargo build --bin aleph-server --features desktop,control-plane --release`
+- Debug：`cargo run --bin aleph-server`
+- Release：`cargo build --bin aleph-server --release`
+- 全流程 (WASM + Server)：`just server`
+
+所有生产功能始终编译，无需指定 `--features`。
 
 ---
 
 ### Feature Flags
 
+所有生产功能始终编译，无需 feature flags。仅保留测试用 features：
+
 ```toml
 [features]
-default = ["gateway"]
-gateway = ["tokio-tungstenite", "axum"]
-telegram = ["teloxide", "gateway"]
-discord = ["serenity", "gateway"]
-cron = ["cron", "gateway"]
-browser = ["chromiumoxide", "gateway"]
-cli = ["inquire"]
-plugin-wasm = ["extism"]
-desktop-native = ["aleph-desktop"]  # In-process desktop capabilities (xcap/enigo)
-desktop = ["desktop-native"]        # Server-friendly alias
+default = []
+loom = ["dep:loom"]       # 并发测试
+test-helpers = []          # 集成测试工具
+```
+
+通道在运行时通过 `aleph.toml` 配置启用/禁用：
+```toml
+[channels.telegram]
+enabled = true
+token = "your-bot-token"
 ```
 
 ### Environment
