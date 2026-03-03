@@ -28,15 +28,15 @@ dev:
 # ─── Full Builds ───
 
 # Full build: WASM → Server → macOS App (release)
-build: server macos
+all: build macos
 
 # Build server (release)
-server: wasm
+build: wasm
     cargo build --bin {{server_bin}} --release
     @echo "✓ Server: {{release_dir}}/{{server_bin}}"
 
 # Build server (debug, faster compile)
-server-debug: wasm
+build-debug: wasm
     cargo build --bin {{server_bin}}
     @echo "✓ Server (debug): {{debug_dir}}/{{server_bin}}"
 
@@ -182,7 +182,7 @@ _ensure-server:
     #!/usr/bin/env bash
     if [ ! -f {{release_dir}}/{{server_bin}} ]; then
         echo "Server binary not found, building..."
-        just server
+        just build
     else
         echo "✓ Server binary exists: {{release_dir}}/{{server_bin}}"
     fi
