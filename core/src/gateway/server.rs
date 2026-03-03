@@ -106,10 +106,10 @@ impl Default for GatewayConfig {
     }
 }
 
-/// WebSocket Gateway Server
+/// Unified Gateway Server
 ///
-/// The main entry point for running a Gateway server. Creates a TCP listener,
-/// accepts WebSocket connections, and dispatches JSON-RPC requests to handlers.
+/// Serves WebSocket connections at `/ws` and the ControlPlane UI as fallback,
+/// dispatching JSON-RPC 2.0 requests to registered handlers.
 ///
 /// # Example
 ///
@@ -119,7 +119,7 @@ impl Default for GatewayConfig {
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let addr: SocketAddr = "127.0.0.1:18789".parse().unwrap();
+///     let addr: SocketAddr = "127.0.0.1:18790".parse().unwrap();
 ///     let server = GatewayServer::new(addr);
 ///     server.run().await.unwrap();
 /// }
