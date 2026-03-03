@@ -11,7 +11,7 @@ wasm_dist       := "core/ui/control_plane/dist"
 macos_dir       := "apps/macos-native"
 macos_resources := "apps/macos-native/Aleph/Resources"
 macos_app       := "apps/macos-native/build/Build/Products/Release/Aleph.app"
-server_bin      := "aleph-server"
+server_bin      := "aleph"
 
 # ─── Default ───
 

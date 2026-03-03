@@ -4,7 +4,7 @@
 # Tests the server-bridge lifecycle. This script manages its own server/bridge
 # processes and does NOT require a pre-running bridge (unlike other test scripts).
 #
-# Requires: ALEPH_SERVER_BIN environment variable pointing to the aleph-server binary.
+# Requires: ALEPH_SERVER_BIN environment variable pointing to the aleph binary.
 #
 # Usage: ./test_e2e_flow.sh
 
@@ -24,8 +24,8 @@ echo "${BOLD}Bridge Acceptance Tests — End-to-End Flow${RESET}"
 # E2E tests need the server binary
 if [[ -z "$ALEPH_SERVER_BIN" ]]; then
     echo "${YELLOW}WARNING: ALEPH_SERVER_BIN not set.${RESET}"
-    echo "E2E tests require the aleph-server binary to manage lifecycle."
-    echo "Set ALEPH_SERVER_BIN=/path/to/aleph-server to enable."
+    echo "E2E tests require the aleph binary to manage lifecycle."
+    echo "Set ALEPH_SERVER_BIN=/path/to/aleph to enable."
     echo ""
     echo "Falling back to socket-only tests (E3 only)..."
     echo ""

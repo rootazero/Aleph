@@ -17,22 +17,22 @@
 //!
 //! ```bash
 //! # Run with default settings (127.0.0.1:18789)
-//! cargo run --features gateway --bin aleph-server
+//! cargo run --features gateway --bin aleph
 //!
 //! # Specify custom bind address and port
-//! cargo run --features gateway --bin aleph-server -- --bind 0.0.0.0 --port 9000
+//! cargo run --features gateway --bin aleph -- --bind 0.0.0.0 --port 9000
 //!
 //! # Load configuration from file
-//! cargo run --features gateway --bin aleph-server -- --config ~/.aleph/gateway.toml
+//! cargo run --features gateway --bin aleph -- --config ~/.aleph/gateway.toml
 //!
 //! # Run as daemon (background process)
-//! cargo run --features gateway --bin aleph-server -- --daemon
+//! cargo run --features gateway --bin aleph -- --daemon
 //!
 //! # Stop a running daemon
-//! cargo run --features gateway --bin aleph-server -- stop
+//! cargo run --features gateway --bin aleph -- stop
 //!
 //! # Check server status
-//! cargo run --features gateway --bin aleph-server -- status
+//! cargo run --features gateway --bin aleph -- status
 //! ```
 //!
 //! # Testing
