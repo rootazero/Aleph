@@ -508,6 +508,17 @@ where
             // ===== Decide =====
             let action: Action = match &thinking.decision {
                 Decision::Complete { summary } => {
+                    // ===== POE Lazy Validation: Check before completing =====
+                    if let Some(hint) = callback.on_validate_completion(summary, &state).await {
+                        tracing::info!(
+                            session_id = %state.session_id,
+                            hint = %hint,
+                            "POE lazy validation failed at completion, retrying"
+                        );
+                        state.set_poe_hint(hint);
+                        continue; // Retry the loop with the hint
+                    }
+
                     callback.on_complete(summary).await;
                     // ===== COMPACTION TRIGGER: Session End (Completed) =====
                     self.compaction_trigger
