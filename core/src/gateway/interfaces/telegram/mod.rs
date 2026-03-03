@@ -31,13 +31,12 @@ pub use message_ops::TelegramMessageOps;
 
 use crate::gateway::channel::{
     Attachment, CallbackQuery, Channel, ChannelCapabilities, ChannelError, ChannelFactory,
-    ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId, InboundMessage,
-    InlineKeyboard, MessageId, OutboundMessage, SendResult, UserId,
+    ChannelId, ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId,
+    InboundMessage, InlineKeyboard, MessageId, OutboundMessage, SendResult, UserId,
 };
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
-use crate::sync_primitives::Arc;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{mpsc, oneshot};
 
 use teloxide::{
     prelude::*,
@@ -53,18 +52,14 @@ pub struct TelegramChannel {
     info: ChannelInfo,
     /// Configuration
     config: TelegramConfig,
-    /// Inbound message sender
-    inbound_tx: mpsc::Sender<InboundMessage>,
-    /// Inbound message receiver (taken on first call)
-    inbound_rx: Option<mpsc::Receiver<InboundMessage>>,
+    /// Unified channel state (status + inbound sender/receiver)
+    channel_state: ChannelState,
     /// Callback query sender
     callback_tx: mpsc::Sender<CallbackQuery>,
     /// Callback query receiver (taken on first call)
     callback_rx: Option<mpsc::Receiver<CallbackQuery>>,
     /// Shutdown signal sender
     shutdown_tx: Option<oneshot::Sender<()>>,
-    /// Current status
-    status: Arc<RwLock<ChannelStatus>>,
     /// Teloxide bot instance
     bot: Option<Bot>,
 }
@@ -72,7 +67,6 @@ pub struct TelegramChannel {
 impl TelegramChannel {
     /// Create a new Telegram channel
     pub fn new(id: impl Into<String>, config: TelegramConfig) -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::channel(100);
         let (callback_tx, callback_rx) = mpsc::channel(100);
 
         let info = ChannelInfo {
@@ -86,12 +80,11 @@ impl TelegramChannel {
         Self {
             info,
             config,
-            inbound_tx,
-            inbound_rx: Some(inbound_rx),
+            channel_state: ChannelState::new(100),
             callback_tx,
             callback_rx: Some(callback_rx),
             shutdown_tx: None,
-            status: Arc::new(RwLock::new(ChannelStatus::Disconnected)),
+            #[cfg(feature = "telegram")]
             bot: None,
         }
     }
@@ -286,7 +279,7 @@ impl TelegramChannel {
 
     /// Update internal status
     async fn set_status(&self, status: ChannelStatus) {
-        *self.status.write().await = status;
+        self.channel_state.set_status(status).await;
     }
 }
 
@@ -296,10 +289,8 @@ impl Channel for TelegramChannel {
         &self.info
     }
 
-    fn status(&self) -> ChannelStatus {
-        // Return cached status synchronously
-        // The actual status is updated by the polling/webhook task
-        self.info.status
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
@@ -427,8 +418,108 @@ impl Channel for TelegramChannel {
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-        self.set_status(ChannelStatus::Connected).await;
-        Ok(())
+            // Create shutdown channel
+            let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+            self.shutdown_tx = Some(shutdown_tx);
+
+            // Start message polling
+            let inbound_tx = self.channel_state.sender();
+            let callback_tx = self.callback_tx.clone();
+            let config = self.config.clone();
+            let status = self.channel_state.status_handle();
+
+            tokio::spawn(async move {
+                tracing::info!("Starting Telegram long-polling...");
+                *status.write().await = ChannelStatus::Connected;
+
+                // Message handler
+                let message_handler = Update::filter_message().endpoint(
+                    move |_bot: Bot, msg: teloxide::types::Message| {
+                        let inbound_tx = inbound_tx.clone();
+                        let config = config.clone();
+                        async move {
+                            if let Some(inbound) = TelegramChannel::convert_message(&msg, &config) {
+                                if let Err(e) = inbound_tx.send(inbound).await {
+                                    tracing::error!("Failed to send inbound message: {}", e);
+                                }
+                            }
+                            Ok::<(), std::convert::Infallible>(())
+                        }
+                    },
+                );
+
+                // Callback query handler
+                let callback_handler = Update::filter_callback_query().endpoint(
+                    move |bot: Bot, q: TgCallbackQuery| {
+                        let tx = callback_tx.clone();
+                        async move {
+                            if let Some(data) = q.data.clone() {
+                                let chat_id = q
+                                    .message
+                                    .as_ref()
+                                    .map(|m| m.chat().id.to_string())
+                                    .unwrap_or_default();
+                                let msg_id = q
+                                    .message
+                                    .as_ref()
+                                    .map(|m| m.id().to_string())
+                                    .unwrap_or_default();
+
+                                let query = CallbackQuery {
+                                    id: q.id.clone(),
+                                    user_id: UserId::new(q.from.id.to_string()),
+                                    chat_id: ConversationId::new(chat_id),
+                                    message_id: MessageId::new(msg_id),
+                                    data,
+                                };
+
+                                if let Err(e) = tx.send(query).await {
+                                    tracing::error!("Failed to send callback query: {}", e);
+                                }
+                            }
+
+                            // Answer callback to remove loading indicator
+                            if let Err(e) = bot.answer_callback_query(&q.id).await {
+                                tracing::warn!("Failed to answer callback query: {}", e);
+                            }
+
+                            Ok::<(), std::convert::Infallible>(())
+                        }
+                    },
+                );
+
+                // Combine handlers
+                let handler = dptree::entry()
+                    .branch(message_handler)
+                    .branch(callback_handler);
+
+                let mut dispatcher = Dispatcher::builder(bot, handler)
+                    .enable_ctrlc_handler()
+                    .build();
+
+                tokio::select! {
+                    _ = dispatcher.dispatch() => {
+                        tracing::info!("Telegram dispatcher stopped");
+                    }
+                    _ = &mut shutdown_rx => {
+                        tracing::info!("Telegram channel shutdown requested");
+                        // Dispatcher will stop when this task ends
+                    }
+                }
+
+                *status.write().await = ChannelStatus::Disconnected;
+            });
+
+            self.set_status(ChannelStatus::Connected).await;
+            Ok(())
+        }
+
+        #[cfg(not(feature = "telegram"))]
+        {
+            Err(ChannelError::UnsupportedFeature(
+                "Telegram support not compiled (enable 'telegram' feature)".to_string(),
+            ))
+        }
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
@@ -507,10 +598,6 @@ impl Channel for TelegramChannel {
         })
     }
 
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        None // Already taken during construction or via take_receiver
-    }
-
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
         let bot = self
             .bot
@@ -550,11 +637,6 @@ impl Channel for TelegramChannel {
 }
 
 impl TelegramChannel {
-    /// Take the inbound receiver (can only be called once)
-    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<InboundMessage>> {
-        self.inbound_rx.take()
-    }
-
     /// Take the callback receiver (can only be called once)
     pub fn take_callback_receiver(&mut self) -> Option<mpsc::Receiver<CallbackQuery>> {
         self.callback_rx.take()

@@ -35,12 +35,12 @@ use crate::sync_primitives::{AtomicBool, Ordering};
 use crate::sync_primitives::Arc;
 use std::time::Duration;
 use async_trait::async_trait;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelStatus, InboundMessage, MessageId,
+    ChannelResult, ChannelState, ChannelStatus, MessageId,
     OutboundMessage, SendResult,
 };
 
@@ -49,16 +49,14 @@ pub struct IMessageChannel {
     info: ChannelInfo,
     config: IMessageConfig,
     db: Arc<Mutex<Option<MessagesDb>>>,
-    inbound_tx: mpsc::Sender<InboundMessage>,
     running: Arc<AtomicBool>,
     poll_handle: Option<tokio::task::JoinHandle<()>>,
+    channel_state: ChannelState,
 }
 
 impl IMessageChannel {
     /// Create a new iMessage channel
     pub fn new(config: IMessageConfig) -> Self {
-        let (tx, _rx) = mpsc::channel(100);
-
         let info = ChannelInfo {
             id: ChannelId::new("imessage"),
             name: "iMessage".to_string(),
@@ -85,9 +83,9 @@ impl IMessageChannel {
             info,
             config,
             db: Arc::new(Mutex::new(None)),
-            inbound_tx: tx,
             running: Arc::new(AtomicBool::new(false)),
             poll_handle: None,
+            channel_state: ChannelState::new(100),
         }
     }
 
@@ -109,7 +107,7 @@ impl IMessageChannel {
 
         // Clone what we need for the polling task
         let db = self.db.clone();
-        let tx = self.inbound_tx.clone();
+        let tx = self.channel_state.sender();
         let running = self.running.clone();
         let poll_interval = Duration::from_millis(self.config.poll_interval_ms);
 
@@ -159,18 +157,22 @@ impl Channel for IMessageChannel {
         &self.info
     }
 
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
+    }
+
     async fn start(&mut self) -> ChannelResult<()> {
         if self.running.load(Ordering::SeqCst) {
             return Ok(());
         }
 
         info!("Starting iMessage channel");
-        self.info.status = ChannelStatus::Connecting;
+        self.channel_state.set_status(ChannelStatus::Connecting).await;
 
         // Start polling
         self.start_polling().await?;
 
-        self.info.status = ChannelStatus::Connected;
+        self.channel_state.set_status(ChannelStatus::Connected).await;
         info!("iMessage channel started");
         Ok(())
     }
@@ -194,7 +196,7 @@ impl Channel for IMessageChannel {
             *db_lock = None;
         }
 
-        self.info.status = ChannelStatus::Disconnected;
+        self.channel_state.set_status(ChannelStatus::Disconnected).await;
         info!("iMessage channel stopped");
         Ok(())
     }
@@ -224,11 +226,6 @@ impl Channel for IMessageChannel {
         })
     }
 
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        // This is a bit hacky - we can only call this once
-        // In practice, the channel manager should take ownership
-        None // The receiver is taken during construction
-    }
 }
 
 /// Factory for creating iMessage channels

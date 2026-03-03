@@ -35,8 +35,8 @@ pub use message_ops::DiscordMessageOps;
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,
-    ChannelInfo, ChannelResult, ChannelStatus, ConversationId, InboundMessage, MessageId,
-    OutboundMessage, SendResult, UserId,
+    ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
+    MessageId, OutboundMessage, SendResult, UserId,
 };
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
@@ -57,14 +57,10 @@ pub struct DiscordChannel {
     info: ChannelInfo,
     /// Configuration
     config: DiscordConfig,
-    /// Inbound message sender
-    inbound_tx: mpsc::Sender<InboundMessage>,
-    /// Inbound message receiver (taken on first call)
-    inbound_rx: Option<mpsc::Receiver<InboundMessage>>,
+    /// Unified channel state (status + inbound sender/receiver)
+    channel_state: ChannelState,
     /// Shutdown signal sender
     shutdown_tx: Option<oneshot::Sender<()>>,
-    /// Current status
-    status: Arc<RwLock<ChannelStatus>>,
     /// HTTP client for sending messages (serenity's Http)
     http: Option<Arc<serenity::http::Http>>,
 }
@@ -72,8 +68,6 @@ pub struct DiscordChannel {
 impl DiscordChannel {
     /// Create a new Discord channel
     pub fn new(id: impl Into<String>, config: DiscordConfig) -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::channel(100);
-
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "Discord".to_string(),
@@ -85,10 +79,9 @@ impl DiscordChannel {
         Self {
             info,
             config,
-            inbound_tx,
-            inbound_rx: Some(inbound_rx),
+            channel_state: ChannelState::new(100),
             shutdown_tx: None,
-            status: Arc::new(RwLock::new(ChannelStatus::Disconnected)),
+            #[cfg(feature = "discord")]
             http: None,
         }
     }
@@ -112,15 +105,6 @@ impl DiscordChannel {
         }
     }
 
-    /// Update internal status
-    async fn set_status(&self, status: ChannelStatus) {
-        *self.status.write().await = status;
-    }
-
-    /// Take the inbound receiver (can only be called once)
-    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<InboundMessage>> {
-        self.inbound_rx.take()
-    }
 }
 
 /// Event handler for Discord gateway events
@@ -283,8 +267,8 @@ impl Channel for DiscordChannel {
         &self.info
     }
 
-    fn status(&self) -> ChannelStatus {
-        self.info.status
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
@@ -293,8 +277,10 @@ impl Channel for DiscordChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        self.set_status(ChannelStatus::Connecting).await;
-        tracing::info!("Starting Discord channel...");
+        #[cfg(feature = "discord")]
+        {
+            self.channel_state.set_status(ChannelStatus::Connecting).await;
+            tracing::info!("Starting Discord channel...");
 
         // Build gateway intents
         let mut intents = GatewayIntents::empty();
@@ -311,13 +297,13 @@ impl Channel for DiscordChannel {
             intents |= GatewayIntents::GUILD_MEMBERS;
         }
 
-        // Create event handler
-        let handler = Handler {
-            inbound_tx: self.inbound_tx.clone(),
-            config: self.config.clone(),
-            status: self.status.clone(),
-            bot_user_id: Arc::new(RwLock::new(None)),
-        };
+            // Create event handler
+            let handler = Handler {
+                inbound_tx: self.channel_state.sender(),
+                config: self.config.clone(),
+                status: self.channel_state.status_handle(),
+                bot_user_id: Arc::new(RwLock::new(None)),
+            };
 
         // Build client
         let mut client = Client::builder(&self.config.bot_token, intents)
@@ -332,7 +318,7 @@ impl Channel for DiscordChannel {
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
 
-        let status = self.status.clone();
+            let status = self.channel_state.status_handle();
 
         // Start the client in a background task
         tokio::spawn(async move {
@@ -369,7 +355,7 @@ impl Channel for DiscordChannel {
             let _ = shutdown_tx.send(());
         }
 
-        self.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state.set_status(ChannelStatus::Disconnected).await;
 
         self.http = None;
 
@@ -448,10 +434,6 @@ impl Channel for DiscordChannel {
                 .single()
                 .unwrap_or_else(Utc::now),
         })
-    }
-
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        None // Already taken during construction or via take_receiver
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {

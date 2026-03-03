@@ -32,8 +32,8 @@ pub use config::WhatsAppConfig;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelStatus, InboundMessage, MessageId, OutboundMessage, PairingData,
-    SendResult,
+    ChannelResult, ChannelState, ChannelStatus, InboundMessage, MessageId, OutboundMessage,
+    PairingData, SendResult,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -52,8 +52,8 @@ pub struct WhatsAppChannel {
     info: ChannelInfo,
     /// Configuration
     config: WhatsAppConfig,
-    /// Inbound message sender
-    inbound_tx: mpsc::Sender<InboundMessage>,
+    /// Shared mutable state (status + inbound channel)
+    channel_state: ChannelState,
     /// Bridge process manager
     bridge_manager: BridgeManager,
     /// JSON-RPC client for communicating with the bridge
@@ -67,8 +67,6 @@ pub struct WhatsAppChannel {
 impl WhatsAppChannel {
     /// Create a new WhatsApp channel
     pub fn new(id: impl Into<String>, config: WhatsAppConfig) -> Self {
-        let (inbound_tx, _inbound_rx) = mpsc::channel(100);
-
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "WhatsApp".to_string(),
@@ -83,7 +81,7 @@ impl WhatsAppChannel {
         Self {
             info,
             config,
-            inbound_tx,
+            channel_state: ChannelState::new(100),
             bridge_manager,
             rpc_client: None,
             pairing_state: Arc::new(RwLock::new(PairingState::Idle)),
@@ -304,8 +302,13 @@ impl Channel for WhatsAppChannel {
         &self.info
     }
 
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
+    }
+
     fn status(&self) -> ChannelStatus {
-        // status() is sync but pairing_state uses tokio::sync::RwLock.
+        // Override the trait default: WhatsApp maps its fine-grained PairingState
+        // to ChannelStatus. status() is sync but pairing_state uses tokio::sync::RwLock.
         // Use try_read() which is non-blocking; fall back to Connecting
         // if the lock is contended (likely during state transitions).
         match self.pairing_state.try_read() {
@@ -357,7 +360,7 @@ impl Channel for WhatsAppChannel {
         // 6. Spawn event loop
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let pairing_state = Arc::clone(&self.pairing_state);
-        let inbound_tx = self.inbound_tx.clone();
+        let inbound_tx = self.channel_state.sender();
         let channel_id = self.info.id.clone();
 
         tokio::spawn(event_loop(
@@ -434,11 +437,6 @@ impl Channel for WhatsAppChannel {
         })
     }
 
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        // NOTE: This always returns None because we can't take from &self.
-        // The receiver is taken during construction via take() in the registry.
-        None
-    }
 }
 
 /// Factory for creating WhatsApp channels

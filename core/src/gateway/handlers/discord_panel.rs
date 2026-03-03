@@ -43,13 +43,13 @@ async fn require_connected_channel(
     match registry.get(&channel_id).await {
         Some(channel_arc) => {
             let channel = channel_arc.read().await;
-            if channel.info().status != ChannelStatus::Connected {
+            if channel.status() != ChannelStatus::Connected {
                 Err((
                     INTERNAL_ERROR,
                     format!(
                         "Discord channel '{}' is not connected (status: {:?})",
                         channel_id_str,
-                        channel.info().status,
+                        channel.status(),
                     ),
                 ))
             } else {
