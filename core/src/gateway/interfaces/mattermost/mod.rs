@@ -32,12 +32,12 @@ pub use message_ops::MattermostMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelStatus, ConversationId, InboundMessage, MessageId, OutboundMessage,
-    SendResult,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
+    OutboundMessage, SendResult,
 };
 use async_trait::async_trait;
 use crate::sync_primitives::Arc;
-use tokio::sync::{mpsc, watch, RwLock};
+use tokio::sync::{watch, RwLock};
 
 /// Mattermost channel implementation using WebSocket + REST API v4.
 pub struct MattermostChannel {
@@ -45,14 +45,10 @@ pub struct MattermostChannel {
     info: ChannelInfo,
     /// Configuration
     config: MattermostConfig,
-    /// Inbound message sender
-    inbound_tx: mpsc::Sender<InboundMessage>,
-    /// Inbound message receiver (taken on first call)
-    inbound_rx: Option<mpsc::Receiver<InboundMessage>>,
+    /// Unified channel state (status + inbound sender/receiver)
+    channel_state: ChannelState,
     /// Shutdown signal sender
     shutdown_tx: Option<watch::Sender<bool>>,
-    /// Current status
-    status: Arc<RwLock<ChannelStatus>>,
     /// Bot's own user ID (populated after /api/v4/users/me)
     bot_user_id: Arc<RwLock<Option<String>>>,
     /// HTTP client for Mattermost API calls
@@ -62,8 +58,6 @@ pub struct MattermostChannel {
 impl MattermostChannel {
     /// Create a new Mattermost channel
     pub fn new(id: impl Into<String>, config: MattermostConfig) -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::channel(100);
-
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "Mattermost".to_string(),
@@ -75,10 +69,8 @@ impl MattermostChannel {
         Self {
             info,
             config,
-            inbound_tx,
-            inbound_rx: Some(inbound_rx),
+            channel_state: ChannelState::new(100),
             shutdown_tx: None,
-            status: Arc::new(RwLock::new(ChannelStatus::Disconnected)),
             bot_user_id: Arc::new(RwLock::new(None)),
             client: reqwest::Client::new(),
         }
@@ -103,14 +95,9 @@ impl MattermostChannel {
         }
     }
 
-    /// Take the inbound receiver (can only be called once)
-    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<InboundMessage>> {
-        self.inbound_rx.take()
-    }
-
     /// Update internal status
     async fn set_status(&self, status: ChannelStatus) {
-        *self.status.write().await = status;
+        self.channel_state.set_status(status).await;
     }
 }
 
@@ -120,8 +107,8 @@ impl Channel for MattermostChannel {
         &self.info
     }
 
-    fn status(&self) -> ChannelStatus {
-        self.info.status
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
@@ -160,8 +147,8 @@ impl Channel for MattermostChannel {
             let config = self.config.clone();
             let bot_user_id = self.bot_user_id.clone();
             let channel_id = self.info.id.clone();
-            let inbound_tx = self.inbound_tx.clone();
-            let status = self.status.clone();
+            let inbound_tx = self.channel_state.sender();
+            let status = self.channel_state.status_handle();
 
             tokio::spawn(async move {
                 *status.write().await = ChannelStatus::Connected;
@@ -244,10 +231,6 @@ impl Channel for MattermostChannel {
                 "Mattermost support not compiled".to_string(),
             ))
         }
-    }
-
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        None // Already taken during construction or via take_receiver
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
@@ -466,13 +449,13 @@ mod tests {
     #[test]
     fn test_take_receiver() {
         let config = MattermostConfig::default();
-        let mut channel = MattermostChannel::new("mattermost", config);
+        let channel = MattermostChannel::new("mattermost", config);
 
-        // First take should succeed
-        assert!(channel.take_receiver().is_some());
+        // First take should succeed (via ChannelState)
+        assert!(channel.state().take_receiver().is_some());
 
         // Second take should return None
-        assert!(channel.take_receiver().is_none());
+        assert!(channel.state().take_receiver().is_none());
     }
 
     #[tokio::test]
