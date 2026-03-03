@@ -126,51 +126,42 @@ impl Channel for SignalChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "signal")]
-        {
-            self.set_status(ChannelStatus::Connecting).await;
-            tracing::info!(
-                "Starting Signal channel (api_url={}, phone={})...",
-                self.config.api_url,
-                self.config.phone_number
-            );
+        self.set_status(ChannelStatus::Connecting).await;
+        tracing::info!(
+            "Starting Signal channel (api_url={}, phone={})...",
+            self.config.api_url,
+            self.config.phone_number
+        );
 
-            // Create shutdown channel
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            self.shutdown_tx = Some(shutdown_tx);
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        self.shutdown_tx = Some(shutdown_tx);
 
-            // Spawn polling loop
-            let client = self.client.clone();
-            let config = self.config.clone();
-            let channel_id = self.info.id.clone();
-            let inbound_tx = self.inbound_tx.clone();
-            let status = self.status.clone();
+        // Spawn polling loop
+        let client = self.client.clone();
+        let config = self.config.clone();
+        let channel_id = self.info.id.clone();
+        let inbound_tx = self.inbound_tx.clone();
+        let status = self.status.clone();
 
-            tokio::spawn(async move {
-                *status.write().await = ChannelStatus::Connected;
+        tokio::spawn(async move {
+            *status.write().await = ChannelStatus::Connected;
 
-                SignalMessageOps::run_poll_loop(
-                    client,
-                    config,
-                    channel_id,
-                    inbound_tx,
-                    shutdown_rx,
-                )
-                .await;
+            SignalMessageOps::run_poll_loop(
+                client,
+                config,
+                channel_id,
+                inbound_tx,
+                shutdown_rx,
+            )
+            .await;
 
-                *status.write().await = ChannelStatus::Disconnected;
-            });
+            *status.write().await = ChannelStatus::Disconnected;
+        });
 
-            self.set_status(ChannelStatus::Connected).await;
-            Ok(())
-        }
+        self.set_status(ChannelStatus::Connected).await;
+        Ok(())
 
-        #[cfg(not(feature = "signal"))]
-        {
-            Err(ChannelError::UnsupportedFeature(
-                "Signal support not compiled (enable 'signal' feature)".to_string(),
-            ))
-        }
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
@@ -185,25 +176,15 @@ impl Channel for SignalChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        #[cfg(feature = "signal")]
-        {
-            SignalMessageOps::send_message(
-                &self.client,
-                &self.config.api_url,
-                &self.config.phone_number,
-                message.conversation_id.as_str(),
-                &message.text,
-            )
-            .await
-        }
+        SignalMessageOps::send_message(
+            &self.client,
+            &self.config.api_url,
+            &self.config.phone_number,
+            message.conversation_id.as_str(),
+            &message.text,
+        )
+        .await
 
-        #[cfg(not(feature = "signal"))]
-        {
-            let _ = message;
-            Err(ChannelError::UnsupportedFeature(
-                "Signal support not compiled".to_string(),
-            ))
-        }
     }
 
     fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {

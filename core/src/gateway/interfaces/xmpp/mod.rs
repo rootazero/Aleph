@@ -131,54 +131,45 @@ impl Channel for XmppChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "xmpp")]
-        {
-            self.set_status(ChannelStatus::Connecting).await;
-            tracing::info!(
-                "Starting XMPP channel (jid={}, rooms={})...",
-                self.config.jid,
-                self.config.muc_rooms.len()
-            );
+        self.set_status(ChannelStatus::Connecting).await;
+        tracing::info!(
+            "Starting XMPP channel (jid={}, rooms={})...",
+            self.config.jid,
+            self.config.muc_rooms.len()
+        );
 
-            // Create shutdown channel
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            self.shutdown_tx = Some(shutdown_tx);
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        self.shutdown_tx = Some(shutdown_tx);
 
-            // Create write channel for outbound stanzas
-            let (write_cmd_tx, write_cmd_rx) = mpsc::channel::<String>(64);
-            *self.write_tx.write().await = Some(write_cmd_tx);
+        // Create write channel for outbound stanzas
+        let (write_cmd_tx, write_cmd_rx) = mpsc::channel::<String>(64);
+        *self.write_tx.write().await = Some(write_cmd_tx);
 
-            // Spawn XMPP connection loop
-            let config = self.config.clone();
-            let channel_id = self.info.id.clone();
-            let inbound_tx = self.inbound_tx.clone();
-            let status = self.status.clone();
+        // Spawn XMPP connection loop
+        let config = self.config.clone();
+        let channel_id = self.info.id.clone();
+        let inbound_tx = self.inbound_tx.clone();
+        let status = self.status.clone();
 
-            tokio::spawn(async move {
-                *status.write().await = ChannelStatus::Connected;
+        tokio::spawn(async move {
+            *status.write().await = ChannelStatus::Connected;
 
-                XmppMessageOps::run_xmpp_loop(
-                    config,
-                    channel_id,
-                    inbound_tx,
-                    write_cmd_rx,
-                    shutdown_rx,
-                )
-                .await;
+            XmppMessageOps::run_xmpp_loop(
+                config,
+                channel_id,
+                inbound_tx,
+                write_cmd_rx,
+                shutdown_rx,
+            )
+            .await;
 
-                *status.write().await = ChannelStatus::Disconnected;
-            });
+            *status.write().await = ChannelStatus::Disconnected;
+        });
 
-            self.set_status(ChannelStatus::Connected).await;
-            Ok(())
-        }
+        self.set_status(ChannelStatus::Connected).await;
+        Ok(())
 
-        #[cfg(not(feature = "xmpp"))]
-        {
-            Err(ChannelError::UnsupportedFeature(
-                "XMPP support not compiled (enable 'xmpp' feature)".to_string(),
-            ))
-        }
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
@@ -196,35 +187,25 @@ impl Channel for XmppChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        #[cfg(feature = "xmpp")]
-        {
-            let write_tx = self.write_tx.read().await;
-            let write_tx = write_tx.as_ref().ok_or_else(|| {
-                ChannelError::NotConnected(
-                    "XMPP adapter not started - call start() first".to_string(),
-                )
-            })?;
+        let write_tx = self.write_tx.read().await;
+        let write_tx = write_tx.as_ref().ok_or_else(|| {
+            ChannelError::NotConnected(
+                "XMPP adapter not started - call start() first".to_string(),
+            )
+        })?;
 
-            // Determine message type based on conversation ID
-            // MUC rooms contain '@conference' or similar patterns
-            // We use groupchat for any room in the muc_rooms list
-            let conversation = message.conversation_id.as_str();
-            let msg_type = if self.config.muc_rooms.iter().any(|r| r == conversation) {
-                "groupchat"
-            } else {
-                "chat"
-            };
+        // Determine message type based on conversation ID
+        // MUC rooms contain '@conference' or similar patterns
+        // We use groupchat for any room in the muc_rooms list
+        let conversation = message.conversation_id.as_str();
+        let msg_type = if self.config.muc_rooms.iter().any(|r| r == conversation) {
+            "groupchat"
+        } else {
+            "chat"
+        };
 
-            XmppMessageOps::send_message(write_tx, conversation, &message.text, msg_type).await
-        }
+        XmppMessageOps::send_message(write_tx, conversation, &message.text, msg_type).await
 
-        #[cfg(not(feature = "xmpp"))]
-        {
-            let _ = message;
-            Err(ChannelError::UnsupportedFeature(
-                "XMPP support not compiled".to_string(),
-            ))
-        }
     }
 
     fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
@@ -234,26 +215,18 @@ impl Channel for XmppChannel {
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
         // XMPP supports typing via XEP-0085 Chat State Notifications
         // For now, send a <composing/> chat state
-        #[cfg(feature = "xmpp")]
-        {
-            let write_tx = self.write_tx.read().await;
-            if let Some(write_tx) = write_tx.as_ref() {
-                let stanza = format!(
-                    "<message to='{}' type='chat'>\
-                     <composing xmlns='http://jabber.org/protocol/chatstates'/>\
-                     </message>",
-                    conversation_id.as_str()
-                );
-                let _ = write_tx.send(stanza).await;
-            }
-            Ok(())
+        let write_tx = self.write_tx.read().await;
+        if let Some(write_tx) = write_tx.as_ref() {
+            let stanza = format!(
+                "<message to='{}' type='chat'>\
+                 <composing xmlns='http://jabber.org/protocol/chatstates'/>\
+                 </message>",
+                conversation_id.as_str()
+            );
+            let _ = write_tx.send(stanza).await;
         }
+        Ok(())
 
-        #[cfg(not(feature = "xmpp"))]
-        {
-            let _ = conversation_id;
-            Ok(())
-        }
     }
 
     async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {

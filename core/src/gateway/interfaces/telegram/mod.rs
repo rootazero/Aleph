@@ -39,7 +39,6 @@ use chrono::{TimeZone, Utc};
 use crate::sync_primitives::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
-#[cfg(feature = "telegram")]
 use teloxide::{
     prelude::*,
     types::{
@@ -67,7 +66,6 @@ pub struct TelegramChannel {
     /// Current status
     status: Arc<RwLock<ChannelStatus>>,
     /// Teloxide bot instance
-    #[cfg(feature = "telegram")]
     bot: Option<Bot>,
 }
 
@@ -94,7 +92,6 @@ impl TelegramChannel {
             callback_rx: Some(callback_rx),
             shutdown_tx: None,
             status: Arc::new(RwLock::new(ChannelStatus::Disconnected)),
-            #[cfg(feature = "telegram")]
             bot: None,
         }
     }
@@ -119,7 +116,6 @@ impl TelegramChannel {
     }
 
     /// Convert Telegram message to InboundMessage
-    #[cfg(feature = "telegram")]
     fn convert_message(msg: &teloxide::types::Message, config: &TelegramConfig) -> Option<InboundMessage> {
         // Get sender info
         let (sender_id, sender_name) = if let Some(from) = &msg.from {
@@ -198,7 +194,6 @@ impl TelegramChannel {
     }
 
     /// Extract attachments from Telegram message
-    #[cfg(feature = "telegram")]
     fn extract_attachments(msg: &teloxide::types::Message) -> Vec<Attachment> {
         let mut attachments = Vec::new();
 
@@ -313,137 +308,127 @@ impl Channel for TelegramChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "telegram")]
-        {
-            self.set_status(ChannelStatus::Connecting).await;
-            tracing::info!("Starting Telegram channel...");
+        self.set_status(ChannelStatus::Connecting).await;
+        tracing::info!("Starting Telegram channel...");
 
-            // Create bot instance
-            let bot = Bot::new(&self.config.bot_token);
+        // Create bot instance
+        let bot = Bot::new(&self.config.bot_token);
 
-            // Verify bot token by getting bot info
-            match bot.get_me().await {
-                Ok(me) => {
-                    tracing::info!(
-                        "Telegram bot connected: @{} ({})",
-                        me.username(),
-                        me.id
-                    );
+        // Verify bot token by getting bot info
+        match bot.get_me().await {
+            Ok(me) => {
+                tracing::info!(
+                    "Telegram bot connected: @{} ({})",
+                    me.username(),
+                    me.id
+                );
+            }
+            Err(e) => {
+                self.set_status(ChannelStatus::Error).await;
+                return Err(ChannelError::AuthFailed(format!(
+                    "Failed to verify bot token: {}",
+                    e
+                )));
+            }
+        }
+
+        // Store bot instance
+        self.bot = Some(bot.clone());
+
+        // Create shutdown channel
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+        self.shutdown_tx = Some(shutdown_tx);
+
+        // Start message polling
+        let inbound_tx = self.inbound_tx.clone();
+        let callback_tx = self.callback_tx.clone();
+        let config = self.config.clone();
+        let status = self.status.clone();
+
+        tokio::spawn(async move {
+            tracing::info!("Starting Telegram long-polling...");
+            *status.write().await = ChannelStatus::Connected;
+
+            // Message handler
+            let message_handler = Update::filter_message().endpoint(
+                move |_bot: Bot, msg: teloxide::types::Message| {
+                    let inbound_tx = inbound_tx.clone();
+                    let config = config.clone();
+                    async move {
+                        if let Some(inbound) = TelegramChannel::convert_message(&msg, &config) {
+                            if let Err(e) = inbound_tx.send(inbound).await {
+                                tracing::error!("Failed to send inbound message: {}", e);
+                            }
+                        }
+                        Ok::<(), std::convert::Infallible>(())
+                    }
+                },
+            );
+
+            // Callback query handler
+            let callback_handler = Update::filter_callback_query().endpoint(
+                move |bot: Bot, q: TgCallbackQuery| {
+                    let tx = callback_tx.clone();
+                    async move {
+                        if let Some(data) = q.data.clone() {
+                            let chat_id = q
+                                .message
+                                .as_ref()
+                                .map(|m| m.chat().id.to_string())
+                                .unwrap_or_default();
+                            let msg_id = q
+                                .message
+                                .as_ref()
+                                .map(|m| m.id().to_string())
+                                .unwrap_or_default();
+
+                            let query = CallbackQuery {
+                                id: q.id.clone(),
+                                user_id: UserId::new(q.from.id.to_string()),
+                                chat_id: ConversationId::new(chat_id),
+                                message_id: MessageId::new(msg_id),
+                                data,
+                            };
+
+                            if let Err(e) = tx.send(query).await {
+                                tracing::error!("Failed to send callback query: {}", e);
+                            }
+                        }
+
+                        // Answer callback to remove loading indicator
+                        if let Err(e) = bot.answer_callback_query(&q.id).await {
+                            tracing::warn!("Failed to answer callback query: {}", e);
+                        }
+
+                        Ok::<(), std::convert::Infallible>(())
+                    }
+                },
+            );
+
+            // Combine handlers
+            let handler = dptree::entry()
+                .branch(message_handler)
+                .branch(callback_handler);
+
+            let mut dispatcher = Dispatcher::builder(bot, handler)
+                .enable_ctrlc_handler()
+                .build();
+
+            tokio::select! {
+                _ = dispatcher.dispatch() => {
+                    tracing::info!("Telegram dispatcher stopped");
                 }
-                Err(e) => {
-                    self.set_status(ChannelStatus::Error).await;
-                    return Err(ChannelError::AuthFailed(format!(
-                        "Failed to verify bot token: {}",
-                        e
-                    )));
+                _ = &mut shutdown_rx => {
+                    tracing::info!("Telegram channel shutdown requested");
+                    // Dispatcher will stop when this task ends
                 }
             }
 
-            // Store bot instance
-            self.bot = Some(bot.clone());
+            *status.write().await = ChannelStatus::Disconnected;
+        });
 
-            // Create shutdown channel
-            let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
-            self.shutdown_tx = Some(shutdown_tx);
-
-            // Start message polling
-            let inbound_tx = self.inbound_tx.clone();
-            let callback_tx = self.callback_tx.clone();
-            let config = self.config.clone();
-            let status = self.status.clone();
-
-            tokio::spawn(async move {
-                tracing::info!("Starting Telegram long-polling...");
-                *status.write().await = ChannelStatus::Connected;
-
-                // Message handler
-                let message_handler = Update::filter_message().endpoint(
-                    move |_bot: Bot, msg: teloxide::types::Message| {
-                        let inbound_tx = inbound_tx.clone();
-                        let config = config.clone();
-                        async move {
-                            if let Some(inbound) = TelegramChannel::convert_message(&msg, &config) {
-                                if let Err(e) = inbound_tx.send(inbound).await {
-                                    tracing::error!("Failed to send inbound message: {}", e);
-                                }
-                            }
-                            Ok::<(), std::convert::Infallible>(())
-                        }
-                    },
-                );
-
-                // Callback query handler
-                let callback_handler = Update::filter_callback_query().endpoint(
-                    move |bot: Bot, q: TgCallbackQuery| {
-                        let tx = callback_tx.clone();
-                        async move {
-                            if let Some(data) = q.data.clone() {
-                                let chat_id = q
-                                    .message
-                                    .as_ref()
-                                    .map(|m| m.chat().id.to_string())
-                                    .unwrap_or_default();
-                                let msg_id = q
-                                    .message
-                                    .as_ref()
-                                    .map(|m| m.id().to_string())
-                                    .unwrap_or_default();
-
-                                let query = CallbackQuery {
-                                    id: q.id.clone(),
-                                    user_id: UserId::new(q.from.id.to_string()),
-                                    chat_id: ConversationId::new(chat_id),
-                                    message_id: MessageId::new(msg_id),
-                                    data,
-                                };
-
-                                if let Err(e) = tx.send(query).await {
-                                    tracing::error!("Failed to send callback query: {}", e);
-                                }
-                            }
-
-                            // Answer callback to remove loading indicator
-                            if let Err(e) = bot.answer_callback_query(&q.id).await {
-                                tracing::warn!("Failed to answer callback query: {}", e);
-                            }
-
-                            Ok::<(), std::convert::Infallible>(())
-                        }
-                    },
-                );
-
-                // Combine handlers
-                let handler = dptree::entry()
-                    .branch(message_handler)
-                    .branch(callback_handler);
-
-                let mut dispatcher = Dispatcher::builder(bot, handler)
-                    .enable_ctrlc_handler()
-                    .build();
-
-                tokio::select! {
-                    _ = dispatcher.dispatch() => {
-                        tracing::info!("Telegram dispatcher stopped");
-                    }
-                    _ = &mut shutdown_rx => {
-                        tracing::info!("Telegram channel shutdown requested");
-                        // Dispatcher will stop when this task ends
-                    }
-                }
-
-                *status.write().await = ChannelStatus::Disconnected;
-            });
-
-            self.set_status(ChannelStatus::Connected).await;
-            Ok(())
-        }
-
-        #[cfg(not(feature = "telegram"))]
-        {
-            Err(ChannelError::UnsupportedFeature(
-                "Telegram support not compiled (enable 'telegram' feature)".to_string(),
-            ))
-        }
+        self.set_status(ChannelStatus::Connected).await;
+        Ok(())
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
@@ -455,85 +440,71 @@ impl Channel for TelegramChannel {
 
         self.set_status(ChannelStatus::Disconnected).await;
 
-        #[cfg(feature = "telegram")]
-        {
-            self.bot = None;
-        }
+        self.bot = None;
 
         Ok(())
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        #[cfg(feature = "telegram")]
-        {
-            let bot = self
-                .bot
-                .as_ref()
-                .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
+        let bot = self
+            .bot
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
 
-            let chat_id = ChatId(
-                message
-                    .conversation_id
-                    .as_str()
-                    .parse::<i64>()
-                    .map_err(|e| ChannelError::SendFailed(format!("Invalid chat ID: {}", e)))?,
-            );
+        let chat_id = ChatId(
+            message
+                .conversation_id
+                .as_str()
+                .parse::<i64>()
+                .map_err(|e| ChannelError::SendFailed(format!("Invalid chat ID: {}", e)))?,
+        );
 
-            // Send typing indicator if enabled
-            if self.config.send_typing {
-                let _ = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing).await;
+        // Send typing indicator if enabled
+        if self.config.send_typing {
+            let _ = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing).await;
+        }
+
+        // Build and send message
+        let mut request = bot.send_message(chat_id, &message.text);
+
+        // Set parse mode for Markdown support
+        request = request.parse_mode(ParseMode::MarkdownV2);
+
+        // Set reply-to if specified
+        if let Some(reply_to) = &message.reply_to {
+            if let Ok(msg_id) = reply_to.as_str().parse::<i32>() {
+                request = request.reply_parameters(teloxide::types::ReplyParameters::new(
+                    teloxide::types::MessageId(msg_id),
+                ));
             }
+        }
 
-            // Build and send message
-            let mut request = bot.send_message(chat_id, &message.text);
-
-            // Set parse mode for Markdown support
-            request = request.parse_mode(ParseMode::MarkdownV2);
-
-            // Set reply-to if specified
-            if let Some(reply_to) = &message.reply_to {
-                if let Ok(msg_id) = reply_to.as_str().parse::<i32>() {
-                    request = request.reply_parameters(teloxide::types::ReplyParameters::new(
-                        teloxide::types::MessageId(msg_id),
-                    ));
-                }
-            }
-
-            // Add inline keyboard if present
-            if let Some(ref keyboard) = message.inline_keyboard {
-                let markup = InlineKeyboardMarkup::new(
-                    keyboard.rows.iter().map(|row| {
-                        row.iter().map(|btn| {
-                            InlineKeyboardButton::callback(&btn.text, &btn.callback_data)
-                        }).collect::<Vec<_>>()
+        // Add inline keyboard if present
+        if let Some(ref keyboard) = message.inline_keyboard {
+            let markup = InlineKeyboardMarkup::new(
+                keyboard.rows.iter().map(|row| {
+                    row.iter().map(|btn| {
+                        InlineKeyboardButton::callback(&btn.text, &btn.callback_data)
                     }).collect::<Vec<_>>()
-                );
-                request = request.reply_markup(markup);
-            }
-
-            // Send the message
-            let sent = request
-                .await
-                .map_err(|e| ChannelError::SendFailed(format!("Telegram send error: {}", e)))?;
-
-            // Send attachments if any
-            for attachment in &message.attachments {
-                self.send_attachment(bot, chat_id, attachment).await?;
-            }
-
-            Ok(SendResult {
-                message_id: MessageId::new(sent.id.0.to_string()),
-                timestamp: Utc::now(),
-            })
+                }).collect::<Vec<_>>()
+            );
+            request = request.reply_markup(markup);
         }
 
-        #[cfg(not(feature = "telegram"))]
-        {
-            let _ = message;
-            Err(ChannelError::UnsupportedFeature(
-                "Telegram support not compiled".to_string(),
-            ))
+        // Send the message
+        let sent = request
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Telegram send error: {}", e)))?;
+
+        // Send attachments if any
+        for attachment in &message.attachments {
+            self.send_attachment(bot, chat_id, attachment).await?;
         }
+
+        Ok(SendResult {
+            message_id: MessageId::new(sent.id.0.to_string()),
+            timestamp: Utc::now(),
+        })
     }
 
     fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
@@ -541,73 +512,40 @@ impl Channel for TelegramChannel {
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        #[cfg(feature = "telegram")]
-        {
-            let bot = self
-                .bot
-                .as_ref()
-                .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
+        let bot = self
+            .bot
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
 
-            let chat_id = ChatId(
-                conversation_id
-                    .as_str()
-                    .parse::<i64>()
-                    .map_err(|e| ChannelError::Internal(format!("Invalid chat ID: {}", e)))?,
-            );
+        let chat_id = ChatId(
+            conversation_id
+                .as_str()
+                .parse::<i64>()
+                .map_err(|e| ChannelError::Internal(format!("Invalid chat ID: {}", e)))?,
+        );
 
-            bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing)
-                .await
-                .map_err(|e| ChannelError::Internal(format!("Failed to send typing: {}", e)))?;
+        bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing)
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Failed to send typing: {}", e)))?;
 
-            Ok(())
-        }
-
-        #[cfg(not(feature = "telegram"))]
-        {
-            let _ = conversation_id;
-            Err(ChannelError::UnsupportedFeature(
-                "Telegram support not compiled".to_string(),
-            ))
-        }
+        Ok(())
     }
 
     async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
-        #[cfg(feature = "telegram")]
-        {
-            // Note: Editing requires both message_id and chat_id
-            // This is a limitation - we'd need to track chat_id per message
-            let _ = (message_id, new_text);
-            Err(ChannelError::UnsupportedFeature(
-                "Message editing requires chat context".to_string(),
-            ))
-        }
-
-        #[cfg(not(feature = "telegram"))]
-        {
-            let _ = (message_id, new_text);
-            Err(ChannelError::UnsupportedFeature(
-                "Telegram support not compiled".to_string(),
-            ))
-        }
+        // Note: Editing requires both message_id and chat_id
+        // This is a limitation - we'd need to track chat_id per message
+        let _ = (message_id, new_text);
+        Err(ChannelError::UnsupportedFeature(
+            "Message editing requires chat context".to_string(),
+        ))
     }
 
     async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
-        #[cfg(feature = "telegram")]
-        {
-            // Note: Deleting requires both message_id and chat_id
-            let _ = message_id;
-            Err(ChannelError::UnsupportedFeature(
-                "Message deletion requires chat context".to_string(),
-            ))
-        }
-
-        #[cfg(not(feature = "telegram"))]
-        {
-            let _ = message_id;
-            Err(ChannelError::UnsupportedFeature(
-                "Telegram support not compiled".to_string(),
-            ))
-        }
+        // Note: Deleting requires both message_id and chat_id
+        let _ = message_id;
+        Err(ChannelError::UnsupportedFeature(
+            "Message deletion requires chat context".to_string(),
+        ))
     }
 }
 
@@ -623,7 +561,6 @@ impl TelegramChannel {
     }
 
     /// Send an attachment
-    #[cfg(feature = "telegram")]
     async fn send_attachment(
         &self,
         bot: &Bot,
@@ -674,7 +611,6 @@ impl TelegramChannel {
     /// * `message_id` - The message to edit
     /// * `new_text` - Optional new text (if None, text is not changed)
     /// * `keyboard` - Optional new keyboard (if None, keyboard is removed)
-    #[cfg(feature = "telegram")]
     pub async fn edit_message(
         &self,
         chat_id: &ConversationId,
@@ -751,19 +687,6 @@ impl TelegramChannel {
         Ok(())
     }
 
-    /// Edit a message's text and/or inline keyboard (stub for non-telegram builds)
-    #[cfg(not(feature = "telegram"))]
-    pub async fn edit_message(
-        &self,
-        _chat_id: &ConversationId,
-        _message_id: &MessageId,
-        _new_text: Option<&str>,
-        _keyboard: Option<&InlineKeyboard>,
-    ) -> ChannelResult<()> {
-        Err(ChannelError::UnsupportedFeature(
-            "Telegram support not compiled".to_string(),
-        ))
-    }
 }
 
 /// Factory for creating Telegram channels

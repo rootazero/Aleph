@@ -577,7 +577,6 @@ impl XmppMessageOps {
     /// 7. Joins configured MUC rooms
     /// 8. Reads stanzas, handles pings, forwards messages
     /// 9. Reconnects with exponential backoff on disconnection
-    #[cfg(feature = "xmpp")]
     pub async fn run_xmpp_loop(
         config: XmppConfig,
         channel_id: ChannelId,

@@ -60,7 +60,6 @@ impl EmailMessageOps {
     ///
     /// Prefers plain text part over HTML. Falls back to extracting
     /// text from HTML if no plain text part is available.
-    #[cfg(feature = "email")]
     pub fn extract_body_text(raw_email: &[u8]) -> String {
         use mail_parser::MessageParser;
 
@@ -83,7 +82,6 @@ impl EmailMessageOps {
     }
 
     /// Extract sender email address from raw email bytes.
-    #[cfg(feature = "email")]
     pub fn extract_sender(raw_email: &[u8]) -> Option<String> {
         use mail_parser::MessageParser;
 
@@ -93,7 +91,6 @@ impl EmailMessageOps {
     }
 
     /// Extract subject from raw email bytes.
-    #[cfg(feature = "email")]
     pub fn extract_subject(raw_email: &[u8]) -> Option<String> {
         use mail_parser::MessageParser;
 
@@ -102,7 +99,6 @@ impl EmailMessageOps {
     }
 
     /// Extract Message-ID from raw email bytes.
-    #[cfg(feature = "email")]
     pub fn extract_message_id(raw_email: &[u8]) -> Option<String> {
         use mail_parser::MessageParser;
 
@@ -155,7 +151,6 @@ impl EmailMessageOps {
     }
 
     /// Send email via SMTP using lettre.
-    #[cfg(feature = "email")]
     pub async fn send_email(
         config: &EmailConfig,
         to: &str,
@@ -222,7 +217,6 @@ impl EmailMessageOps {
     ///
     /// Spawned as a tokio task. Connects to the IMAP server, polls for unseen
     /// messages, converts them to InboundMessages, and marks them as seen.
-    #[cfg(feature = "email")]
     pub async fn run_imap_poll_loop(
         config: EmailConfig,
         inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>,
@@ -280,7 +274,6 @@ impl EmailMessageOps {
     ///
     /// Uses `tokio_util::compat` to bridge tokio's `AsyncRead/AsyncWrite` with
     /// the `futures::AsyncRead/AsyncWrite` that `async-imap` expects.
-    #[cfg(feature = "email")]
     async fn poll_imap_once(
         config: &EmailConfig,
         inbound_tx: &tokio::sync::mpsc::Sender<InboundMessage>,

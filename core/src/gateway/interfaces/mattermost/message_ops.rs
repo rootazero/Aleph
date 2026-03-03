@@ -263,7 +263,6 @@ impl MattermostMessageOps {
     /// 5. For "posted" events: parsing `data.post` (JSON string inside JSON)
     /// 6. Skipping own messages and filtered channels
     /// 7. Reconnecting with exponential backoff on disconnect
-    #[cfg(feature = "mattermost")]
     pub async fn run_ws_loop(
         _client: reqwest::Client,
         config: MattermostConfig,

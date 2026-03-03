@@ -132,69 +132,60 @@ impl Channel for MatrixChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "matrix")]
-        {
-            self.set_status(ChannelStatus::Connecting).await;
-            tracing::info!("Starting Matrix channel...");
+        self.set_status(ChannelStatus::Connecting).await;
+        tracing::info!("Starting Matrix channel...");
 
-            // Validate access token via /whoami
-            match MatrixMessageOps::validate_token(
-                &self.client,
-                &self.config.homeserver_url,
-                &self.config.access_token,
-            )
-            .await
-            {
-                Ok(uid) => {
-                    tracing::info!("Matrix bot authenticated as {uid}");
-                    *self.user_id.write().await = Some(uid);
-                }
-                Err(e) => {
-                    self.set_status(ChannelStatus::Error).await;
-                    return Err(e);
-                }
+        // Validate access token via /whoami
+        match MatrixMessageOps::validate_token(
+            &self.client,
+            &self.config.homeserver_url,
+            &self.config.access_token,
+        )
+        .await
+        {
+            Ok(uid) => {
+                tracing::info!("Matrix bot authenticated as {uid}");
+                *self.user_id.write().await = Some(uid);
             }
-
-            // Create shutdown channel
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            self.shutdown_tx = Some(shutdown_tx);
-
-            // Spawn /sync long-polling loop
-            let client = self.client.clone();
-            let config = self.config.clone();
-            let user_id = self.user_id.clone();
-            let since_token = self.since_token.clone();
-            let channel_id = self.info.id.clone();
-            let inbound_tx = self.inbound_tx.clone();
-            let status = self.status.clone();
-
-            tokio::spawn(async move {
-                *status.write().await = ChannelStatus::Connected;
-
-                MatrixMessageOps::run_sync_loop(
-                    client,
-                    config,
-                    user_id,
-                    since_token,
-                    channel_id,
-                    inbound_tx,
-                    shutdown_rx,
-                )
-                .await;
-
-                *status.write().await = ChannelStatus::Disconnected;
-            });
-
-            self.set_status(ChannelStatus::Connected).await;
-            Ok(())
+            Err(e) => {
+                self.set_status(ChannelStatus::Error).await;
+                return Err(e);
+            }
         }
 
-        #[cfg(not(feature = "matrix"))]
-        {
-            Err(ChannelError::UnsupportedFeature(
-                "Matrix support not compiled (enable 'matrix' feature)".to_string(),
-            ))
-        }
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        self.shutdown_tx = Some(shutdown_tx);
+
+        // Spawn /sync long-polling loop
+        let client = self.client.clone();
+        let config = self.config.clone();
+        let user_id = self.user_id.clone();
+        let since_token = self.since_token.clone();
+        let channel_id = self.info.id.clone();
+        let inbound_tx = self.inbound_tx.clone();
+        let status = self.status.clone();
+
+        tokio::spawn(async move {
+            *status.write().await = ChannelStatus::Connected;
+
+            MatrixMessageOps::run_sync_loop(
+                client,
+                config,
+                user_id,
+                since_token,
+                channel_id,
+                inbound_tx,
+                shutdown_rx,
+            )
+            .await;
+
+            *status.write().await = ChannelStatus::Disconnected;
+        });
+
+        self.set_status(ChannelStatus::Connected).await;
+        Ok(())
+
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
@@ -209,43 +200,33 @@ impl Channel for MatrixChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        #[cfg(feature = "matrix")]
-        {
-            // Send typing indicator if enabled
-            if self.config.send_typing {
-                if let Some(ref uid) = *self.user_id.read().await {
-                    let _ = MatrixMessageOps::send_typing(
-                        &self.client,
-                        &self.config.homeserver_url,
-                        &self.config.access_token,
-                        message.conversation_id.as_str(),
-                        uid,
-                        true,
-                    )
-                    .await;
-                }
+        // Send typing indicator if enabled
+        if self.config.send_typing {
+            if let Some(ref uid) = *self.user_id.read().await {
+                let _ = MatrixMessageOps::send_typing(
+                    &self.client,
+                    &self.config.homeserver_url,
+                    &self.config.access_token,
+                    message.conversation_id.as_str(),
+                    uid,
+                    true,
+                )
+                .await;
             }
-
-            let reply_to = message.reply_to.as_ref().map(|id| id.as_str().to_string());
-
-            MatrixMessageOps::send_message(
-                &self.client,
-                &self.config.homeserver_url,
-                &self.config.access_token,
-                message.conversation_id.as_str(),
-                &message.text,
-                reply_to.as_deref(),
-            )
-            .await
         }
 
-        #[cfg(not(feature = "matrix"))]
-        {
-            let _ = message;
-            Err(ChannelError::UnsupportedFeature(
-                "Matrix support not compiled".to_string(),
-            ))
-        }
+        let reply_to = message.reply_to.as_ref().map(|id| id.as_str().to_string());
+
+        MatrixMessageOps::send_message(
+            &self.client,
+            &self.config.homeserver_url,
+            &self.config.access_token,
+            message.conversation_id.as_str(),
+            &message.text,
+            reply_to.as_deref(),
+        )
+        .await
+
     }
 
     fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
@@ -253,29 +234,19 @@ impl Channel for MatrixChannel {
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        #[cfg(feature = "matrix")]
-        {
-            if let Some(ref uid) = *self.user_id.read().await {
-                MatrixMessageOps::send_typing(
-                    &self.client,
-                    &self.config.homeserver_url,
-                    &self.config.access_token,
-                    conversation_id.as_str(),
-                    uid,
-                    true,
-                )
-                .await?;
-            }
-            Ok(())
+        if let Some(ref uid) = *self.user_id.read().await {
+            MatrixMessageOps::send_typing(
+                &self.client,
+                &self.config.homeserver_url,
+                &self.config.access_token,
+                conversation_id.as_str(),
+                uid,
+                true,
+            )
+            .await?;
         }
+        Ok(())
 
-        #[cfg(not(feature = "matrix"))]
-        {
-            let _ = conversation_id;
-            Err(ChannelError::UnsupportedFeature(
-                "Matrix support not compiled".to_string(),
-            ))
-        }
     }
 
     async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {

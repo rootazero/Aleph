@@ -195,7 +195,6 @@ impl IrcMessageOps {
     /// 6. Processes outbound messages from the write channel
     /// 7. Reconnects with exponential backoff on disconnection
     /// 8. Sends QUIT on shutdown
-    #[cfg(feature = "irc")]
     pub async fn run_irc_loop(
         config: IrcConfig,
         channel_id: ChannelId,

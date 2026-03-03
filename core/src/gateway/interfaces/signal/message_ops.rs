@@ -210,7 +210,6 @@ impl SignalMessageOps {
     /// - Message filtering by allowed users
     /// - Graceful shutdown via watch channel
     /// - Exponential backoff on errors
-    #[cfg(feature = "signal")]
     pub async fn run_poll_loop(
         client: reqwest::Client,
         config: SignalConfig,

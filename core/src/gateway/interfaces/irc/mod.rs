@@ -129,54 +129,45 @@ impl Channel for IrcChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "irc")]
-        {
-            self.set_status(ChannelStatus::Connecting).await;
-            tracing::info!(
-                "Starting IRC channel (server={}, nick={})...",
-                self.config.server,
-                self.config.nick
-            );
+        self.set_status(ChannelStatus::Connecting).await;
+        tracing::info!(
+            "Starting IRC channel (server={}, nick={})...",
+            self.config.server,
+            self.config.nick
+        );
 
-            // Create shutdown channel
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            self.shutdown_tx = Some(shutdown_tx);
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        self.shutdown_tx = Some(shutdown_tx);
 
-            // Create write channel for outbound messages
-            let (write_cmd_tx, write_cmd_rx) = mpsc::channel::<String>(64);
-            *self.write_tx.write().await = Some(write_cmd_tx);
+        // Create write channel for outbound messages
+        let (write_cmd_tx, write_cmd_rx) = mpsc::channel::<String>(64);
+        *self.write_tx.write().await = Some(write_cmd_tx);
 
-            // Spawn IRC connection loop
-            let config = self.config.clone();
-            let channel_id = self.info.id.clone();
-            let inbound_tx = self.inbound_tx.clone();
-            let status = self.status.clone();
+        // Spawn IRC connection loop
+        let config = self.config.clone();
+        let channel_id = self.info.id.clone();
+        let inbound_tx = self.inbound_tx.clone();
+        let status = self.status.clone();
 
-            tokio::spawn(async move {
-                *status.write().await = ChannelStatus::Connected;
+        tokio::spawn(async move {
+            *status.write().await = ChannelStatus::Connected;
 
-                IrcMessageOps::run_irc_loop(
-                    config,
-                    channel_id,
-                    inbound_tx,
-                    write_cmd_rx,
-                    shutdown_rx,
-                )
-                .await;
+            IrcMessageOps::run_irc_loop(
+                config,
+                channel_id,
+                inbound_tx,
+                write_cmd_rx,
+                shutdown_rx,
+            )
+            .await;
 
-                *status.write().await = ChannelStatus::Disconnected;
-            });
+            *status.write().await = ChannelStatus::Disconnected;
+        });
 
-            self.set_status(ChannelStatus::Connected).await;
-            Ok(())
-        }
+        self.set_status(ChannelStatus::Connected).await;
+        Ok(())
 
-        #[cfg(not(feature = "irc"))]
-        {
-            Err(ChannelError::UnsupportedFeature(
-                "IRC support not compiled (enable 'irc' feature)".to_string(),
-            ))
-        }
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
@@ -194,30 +185,20 @@ impl Channel for IrcChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        #[cfg(feature = "irc")]
-        {
-            let write_tx = self.write_tx.read().await;
-            let write_tx = write_tx.as_ref().ok_or_else(|| {
-                ChannelError::NotConnected(
-                    "IRC adapter not started - call start() first".to_string(),
-                )
-            })?;
-
-            IrcMessageOps::send_message(
-                write_tx,
-                message.conversation_id.as_str(),
-                &message.text,
+        let write_tx = self.write_tx.read().await;
+        let write_tx = write_tx.as_ref().ok_or_else(|| {
+            ChannelError::NotConnected(
+                "IRC adapter not started - call start() first".to_string(),
             )
-            .await
-        }
+        })?;
 
-        #[cfg(not(feature = "irc"))]
-        {
-            let _ = message;
-            Err(ChannelError::UnsupportedFeature(
-                "IRC support not compiled".to_string(),
-            ))
-        }
+        IrcMessageOps::send_message(
+            write_tx,
+            message.conversation_id.as_str(),
+            &message.text,
+        )
+        .await
+
     }
 
     fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
