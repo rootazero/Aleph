@@ -227,6 +227,15 @@ impl LazyPoeEvaluator {
         }
     }
 
+    /// Set the original query after construction.
+    ///
+    /// This is useful when the evaluator is created before the query is known
+    /// (e.g., in `EventEmittingCallback` constructors where the query arrives
+    /// later in `on_loop_start`).
+    pub async fn set_query(&self, query: impl Into<String>) {
+        self.manifest.lock().await.original_query = query.into();
+    }
+
     /// Activate the evaluator (typically when tool calls are first detected).
     pub async fn activate(&self) {
         self.manifest.lock().await.activate();

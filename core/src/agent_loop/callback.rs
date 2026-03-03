@@ -152,6 +152,15 @@ pub trait LoopCallback: Send + Sync {
         false
     }
 
+    /// Called before completing to validate the response quality.
+    ///
+    /// Returns `Some(hint)` if the lazy POE evaluator detects a problem
+    /// (hallucination, low relevance, etc.), which causes the agent loop
+    /// to inject the hint and retry. Returns `None` if validation passes.
+    async fn on_validate_completion(&self, _summary: &str, _state: &LoopState) -> Option<String> {
+        None
+    }
+
     /// Called when a retry is scheduled for a failed operation
     ///
     /// This informs the UI that a retry will be attempted after the specified delay.
@@ -241,6 +250,9 @@ impl<T: LoopCallback + ?Sized> LoopCallback for &T {
         (*self)
             .on_doom_loop_detected(tool_name, arguments, repeat_count)
             .await
+    }
+    async fn on_validate_completion(&self, summary: &str, state: &LoopState) -> Option<String> {
+        (*self).on_validate_completion(summary, state).await
     }
     async fn on_retry_scheduled(&self, attempt: u32, max_retries: u32, delay_ms: u64, error: &str) {
         (*self)
