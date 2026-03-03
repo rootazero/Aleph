@@ -40,7 +40,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelStatus, InboundMessage, MessageId,
+    ChannelResult, ChannelState, ChannelStatus, InboundMessage, MessageId,
     OutboundMessage, SendResult,
 };
 
@@ -52,6 +52,7 @@ pub struct IMessageChannel {
     inbound_tx: mpsc::Sender<InboundMessage>,
     running: Arc<AtomicBool>,
     poll_handle: Option<tokio::task::JoinHandle<()>>,
+    channel_state: ChannelState,
 }
 
 impl IMessageChannel {
@@ -88,6 +89,7 @@ impl IMessageChannel {
             inbound_tx: tx,
             running: Arc::new(AtomicBool::new(false)),
             poll_handle: None,
+            channel_state: ChannelState::new(100),
         }
     }
 
@@ -157,6 +159,10 @@ impl IMessageChannel {
 impl Channel for IMessageChannel {
     fn info(&self) -> &ChannelInfo {
         &self.info
+    }
+
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
     }
 
     async fn start(&mut self) -> ChannelResult<()> {

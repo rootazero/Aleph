@@ -23,8 +23,8 @@ use uuid::Uuid;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelProvider,
-    ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId, InboundMessage,
-    MessageId, OutboundMessage, SendResult, UserId,
+    ChannelId, ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId,
+    InboundMessage, MessageId, OutboundMessage, SendResult, UserId,
 };
 use crate::thinker::interaction::{InteractionConstraints, InteractionManifest, InteractionParadigm};
 
@@ -80,6 +80,7 @@ pub struct CliChannel {
     info: ChannelInfo,
     config: CliChannelConfig,
     state: Arc<RwLock<CliChannelState>>,
+    channel_state: ChannelState,
 }
 
 impl CliChannel {
@@ -129,6 +130,7 @@ impl CliChannel {
             info,
             config,
             state: Arc::new(RwLock::new(state)),
+            channel_state: ChannelState::new(100),
         }
     }
 
@@ -162,6 +164,10 @@ impl CliChannel {
 impl Channel for CliChannel {
     fn info(&self) -> &ChannelInfo {
         &self.info
+    }
+
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
     }
 
     async fn start(&mut self) -> ChannelResult<()> {

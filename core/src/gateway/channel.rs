@@ -26,6 +26,8 @@
 //! - **ChannelCapabilities**: What a channel supports (attachments, reactions, etc.)
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -346,6 +348,51 @@ pub struct ChannelInfo {
     pub capabilities: ChannelCapabilities,
 }
 
+/// Shared mutable state for Channel implementations.
+///
+/// Encapsulates thread-safe status tracking and inbound message receiver management.
+/// Every Channel should embed this and return it from `fn state()`.
+pub struct ChannelState {
+    /// Thread-safe status — set by start()/stop(), read by status()
+    status: Arc<tokio::sync::RwLock<ChannelStatus>>,
+    /// One-shot receiver — taken once by ChannelRegistry::start_message_forwarder()
+    inbound_rx: StdMutex<Option<mpsc::Receiver<InboundMessage>>>,
+    /// Sender side — channel impl pushes inbound messages here
+    inbound_tx: mpsc::Sender<InboundMessage>,
+}
+
+impl ChannelState {
+    /// Create with initial Disconnected status and a bounded channel.
+    pub fn new(buffer_size: usize) -> Self {
+        let (tx, rx) = mpsc::channel(buffer_size);
+        Self {
+            status: Arc::new(tokio::sync::RwLock::new(ChannelStatus::Disconnected)),
+            inbound_rx: StdMutex::new(Some(rx)),
+            inbound_tx: tx,
+        }
+    }
+
+    /// Read current status (non-blocking via try_read, fallback Connecting).
+    pub fn status(&self) -> ChannelStatus {
+        self.status.try_read().map(|s| *s).unwrap_or(ChannelStatus::Connecting)
+    }
+
+    /// Set status (async, takes write lock).
+    pub async fn set_status(&self, status: ChannelStatus) {
+        *self.status.write().await = status;
+    }
+
+    /// Take the inbound receiver (can only succeed once).
+    pub fn take_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
+        self.inbound_rx.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    /// Get a clone of the inbound sender.
+    pub fn sender(&self) -> mpsc::Sender<InboundMessage> {
+        self.inbound_tx.clone()
+    }
+}
+
 /// Pairing data for a channel
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
@@ -364,6 +411,9 @@ pub trait Channel: Send + Sync {
     /// Get channel information
     fn info(&self) -> &ChannelInfo;
 
+    /// Get shared mutable state (status + inbound channel)
+    fn state(&self) -> &ChannelState;
+
     /// Get channel ID
     fn id(&self) -> &ChannelId {
         &self.info().id
@@ -376,7 +426,7 @@ pub trait Channel: Send + Sync {
 
     /// Get current status
     fn status(&self) -> ChannelStatus {
-        self.info().status
+        self.state().status()
     }
 
     /// Get capabilities
@@ -402,7 +452,10 @@ pub trait Channel: Send + Sync {
     ///
     /// Returns a receiver for incoming messages. The channel implementation
     /// is responsible for populating this channel with messages.
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>>;
+    /// Can only succeed once — the receiver is taken from ChannelState.
+    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
+        self.state().take_receiver()
+    }
 
     /// Send a typing indicator
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
@@ -537,5 +590,52 @@ mod tests {
         assert_eq!(keyboard.rows.len(), 2);
         assert_eq!(keyboard.rows[0].len(), 2);
         assert_eq!(keyboard.rows[1].len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_channel_state_initial_status() {
+        let state = ChannelState::new(100);
+        assert_eq!(state.status(), ChannelStatus::Disconnected);
+    }
+
+    #[tokio::test]
+    async fn test_channel_state_set_status() {
+        let state = ChannelState::new(100);
+        state.set_status(ChannelStatus::Connected).await;
+        assert_eq!(state.status(), ChannelStatus::Connected);
+    }
+
+    #[tokio::test]
+    async fn test_channel_state_take_receiver_once() {
+        let state = ChannelState::new(100);
+        let rx = state.take_receiver();
+        assert!(rx.is_some());
+        let rx2 = state.take_receiver();
+        assert!(rx2.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_channel_state_sender_delivers() {
+        let state = ChannelState::new(100);
+        let mut rx = state.take_receiver().unwrap();
+        let tx = state.sender();
+
+        let msg = InboundMessage {
+            id: MessageId::new("test-1"),
+            channel_id: ChannelId::new("test"),
+            conversation_id: ConversationId::new("conv-1"),
+            sender_id: UserId::new("user-1"),
+            sender_name: None,
+            text: "hello".to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+        };
+
+        tx.send(msg).await.unwrap();
+        let received = rx.recv().await.unwrap();
+        assert_eq!(received.text, "hello");
     }
 }
