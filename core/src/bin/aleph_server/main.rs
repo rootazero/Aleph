@@ -17,22 +17,22 @@
 //!
 //! ```bash
 //! # Run with default settings (127.0.0.1:18789)
-//! cargo run --features gateway --bin aleph-server
+//! cargo run --bin aleph-server
 //!
 //! # Specify custom bind address and port
-//! cargo run --features gateway --bin aleph-server -- --bind 0.0.0.0 --port 9000
+//! cargo run --bin aleph-server -- --bind 0.0.0.0 --port 9000
 //!
 //! # Load configuration from file
-//! cargo run --features gateway --bin aleph-server -- --config ~/.aleph/gateway.toml
+//! cargo run --bin aleph-server -- --config ~/.aleph/gateway.toml
 //!
 //! # Run as daemon (background process)
-//! cargo run --features gateway --bin aleph-server -- --daemon
+//! cargo run --bin aleph-server -- --daemon
 //!
 //! # Stop a running daemon
-//! cargo run --features gateway --bin aleph-server -- stop
+//! cargo run --bin aleph-server -- stop
 //!
 //! # Check server status
-//! cargo run --features gateway --bin aleph-server -- status
+//! cargo run --bin aleph-server -- status
 //! ```
 //!
 //! # Testing
@@ -73,7 +73,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Status { json }) => {
             return daemon::handle_status(&args.pid_file, json);
         }
-        #[cfg(feature = "gateway")]
         Some(Command::Pairing { action }) => {
             return match action {
                 PairingAction::List => commands::handle_pairing_list().await,
@@ -81,14 +80,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 PairingAction::Reject { code } => commands::handle_pairing_reject(&code).await,
             };
         }
-        #[cfg(feature = "gateway")]
         Some(Command::Devices { action }) => {
             return match action {
                 DevicesAction::List => commands::handle_devices_list(),
                 DevicesAction::Revoke { device_id } => commands::handle_devices_revoke(&device_id),
             };
         }
-        #[cfg(feature = "gateway")]
         Some(Command::Plugins { action }) => {
             return match action {
                 PluginsAction::List => commands::handle_plugins_list().await,
@@ -98,23 +95,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 PluginsAction::Disable { name } => commands::handle_plugins_disable(&name),
             };
         }
-        #[cfg(feature = "gateway")]
         Some(Command::Gateway { action }) => {
             return commands::handle_gateway_command(action).await;
         }
-        #[cfg(feature = "gateway")]
         Some(Command::Config { action }) => {
             return commands::handle_config_command(action).await;
         }
-        #[cfg(feature = "gateway")]
         Some(Command::Channels { action }) => {
             return commands::handle_channels_command(action).await;
         }
-        #[cfg(feature = "gateway")]
         Some(Command::Cron { action }) => {
             return commands::handle_cron_command(action).await;
         }
-        #[cfg(feature = "gateway")]
         Some(Command::Audit { action }) => {
             return match action {
                 AuditAction::Tools => commands::handle_audit_tools().await,
@@ -122,28 +114,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 AuditAction::Escalations { limit } => commands::handle_audit_escalations(limit).await,
             };
         }
-        #[cfg(not(feature = "gateway"))]
-        Some(Command::Pairing { .. }) | Some(Command::Devices { .. }) | Some(Command::Plugins { .. }) | Some(Command::Gateway { .. }) | Some(Command::Config { .. }) | Some(Command::Channels { .. }) | Some(Command::Cron { .. }) | Some(Command::Audit { .. }) => {
-            eprintln!("Error: Gateway feature is not enabled.");
-            std::process::exit(1);
-        }
         Some(Command::Start) | None => {
             // Continue with start logic
         }
     }
 
     // Start the gateway server
-    #[cfg(feature = "gateway")]
-    {
-        commands::start_server(&args).await?;
-    }
-
-    #[cfg(not(feature = "gateway"))]
-    {
-        eprintln!("Error: Gateway feature is not enabled.");
-        eprintln!("Rebuild with: cargo build --features gateway");
-        std::process::exit(1);
-    }
+    commands::start_server(&args).await?;
 
     Ok(())
 }

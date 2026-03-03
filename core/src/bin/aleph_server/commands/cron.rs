@@ -3,7 +3,6 @@
 use crate::cli::CronAction;
 
 /// Handle cron subcommands
-#[cfg(feature = "gateway")]
 pub async fn handle_cron_command(action: CronAction) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::cli::{cron, GatewayClient, OutputFormat};
 

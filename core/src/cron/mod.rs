@@ -72,9 +72,7 @@ use std::path::{Path, PathBuf};
 use crate::sync_primitives::Arc;
 use tokio::sync::{oneshot, RwLock, Semaphore};
 
-#[cfg(feature = "cron")]
 use cron::Schedule;
-#[cfg(feature = "cron")]
 use std::str::FromStr;
 
 /// Result type for cron operations
@@ -291,12 +289,9 @@ impl CronService {
     /// Add a new job
     pub async fn add_job(&self, job: CronJob) -> CronResult<String> {
         // Validate schedule (only for Cron kind)
-        #[cfg(feature = "cron")]
-        {
-            if job.schedule_kind == ScheduleKind::Cron {
-                Schedule::from_str(&job.schedule)
-                    .map_err(|e| CronError::InvalidSchedule(format!("{}", e)))?;
-            }
+        if job.schedule_kind == ScheduleKind::Cron {
+            Schedule::from_str(&job.schedule)
+                .map_err(|e| CronError::InvalidSchedule(format!("{}", e)))?;
         }
 
         // Compute initial next_run_at
@@ -383,12 +378,9 @@ impl CronService {
     /// Update an existing job
     pub async fn update_job(&self, job: CronJob) -> CronResult<()> {
         // Validate schedule (only for Cron kind)
-        #[cfg(feature = "cron")]
-        {
-            if job.schedule_kind == ScheduleKind::Cron {
-                Schedule::from_str(&job.schedule)
-                    .map_err(|e| CronError::InvalidSchedule(format!("{}", e)))?;
-            }
+        if job.schedule_kind == ScheduleKind::Cron {
+            Schedule::from_str(&job.schedule)
+                .map_err(|e| CronError::InvalidSchedule(format!("{}", e)))?;
         }
 
         let db_path = self.db_path.clone();
@@ -780,16 +772,10 @@ impl CronService {
     }
 
     /// Get next run time for a job
-    #[cfg(feature = "cron")]
     pub fn get_next_run(&self, job: &CronJob) -> Option<DateTime<Utc>> {
         Schedule::from_str(&job.schedule)
             .ok()
             .and_then(|schedule| schedule.upcoming(Utc).next())
-    }
-
-    #[cfg(not(feature = "cron"))]
-    pub fn get_next_run(&self, _job: &CronJob) -> Option<DateTime<Utc>> {
-        None
     }
 
     /// Start the cron scheduler
@@ -871,7 +857,6 @@ impl CronService {
     ///
     /// Uses state-machine approach: jobs with `next_run_at <= now` and `running_at IS NULL`
     /// are atomically acquired via BEGIN IMMEDIATE transaction.
-    #[cfg(feature = "cron")]
     async fn check_and_run_jobs(
         db_path: PathBuf,
         executor: JobExecutor,
@@ -1058,18 +1043,6 @@ impl CronService {
             running_jobs.write().await.insert(job_id_for_track, handle);
         }
 
-        Ok(())
-    }
-
-    #[cfg(not(feature = "cron"))]
-    async fn check_and_run_jobs(
-        _db_path: PathBuf,
-        _executor: JobExecutor,
-        _running_jobs: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>,
-        _semaphore: Arc<Semaphore>,
-        _job_timeout: u64,
-        _max_concurrent: usize,
-    ) -> CronResult<()> {
         Ok(())
     }
 

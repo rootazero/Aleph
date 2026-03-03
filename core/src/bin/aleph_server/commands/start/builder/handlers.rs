@@ -10,7 +10,6 @@ use std::sync::Arc;
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::handlers::session as session_handlers;
 use alephcore::gateway::handlers::channel as channel_handlers;
-#[cfg(all(feature = "gateway", feature = "discord"))]
 use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
 use alephcore::gateway::handlers::config as config_handlers;
 use alephcore::gateway::handlers::auth as auth_handlers;
@@ -60,7 +59,6 @@ macro_rules! register_handler {
 
 // ─── register_auth_handlers ──────────────────────────────────────────────────
 
-#[cfg(feature = "gateway")]
 pub(in crate::commands::start) fn register_auth_handlers(
     server: &mut GatewayServer,
     auth_ctx: &Arc<auth_handlers::AuthContext>,
@@ -75,7 +73,6 @@ pub(in crate::commands::start) fn register_auth_handlers(
 
 // ─── register_guest_handlers ─────────────────────────────────────────────────
 
-#[cfg(feature = "gateway")]
 pub(in crate::commands::start) fn register_guest_handlers(
     server: &mut GatewayServer,
     invitation_manager: &Arc<alephcore::gateway::security::InvitationManager>,
@@ -94,7 +91,6 @@ pub(in crate::commands::start) fn register_guest_handlers(
 
 // ─── register_session_handlers ───────────────────────────────────────────────
 
-#[cfg(feature = "gateway")]
 pub(in crate::commands::start) fn register_session_handlers(
     server: &mut GatewayServer,
     session_manager: &Arc<SessionManager>,
@@ -117,7 +113,6 @@ pub(in crate::commands::start) fn register_session_handlers(
 
 // ─── register_channel_handlers ───────────────────────────────────────────────
 
-#[cfg(feature = "gateway")]
 pub(in crate::commands::start) fn register_channel_handlers(
     server: &mut GatewayServer,
     channel_registry: &Arc<ChannelRegistry>,
@@ -130,20 +125,16 @@ pub(in crate::commands::start) fn register_channel_handlers(
     register_handler!(server, "channel.send", channel_handlers::handle_send, channel_registry);
 
     // ---- Discord Control Plane panel handlers ----
-    #[cfg(feature = "discord")]
-    {
-        register_handler!(server, "discord.validate_token", discord_panel_handlers::handle_validate_token);
-        register_handler!(server, "discord.save_config", discord_panel_handlers::handle_save_config);
-        register_handler!(server, "discord.list_guilds", discord_panel_handlers::handle_list_guilds, channel_registry);
-        register_handler!(server, "discord.list_channels", discord_panel_handlers::handle_list_channels, channel_registry);
-        register_handler!(server, "discord.audit_permissions", discord_panel_handlers::handle_audit_permissions, channel_registry);
-        register_handler!(server, "discord.update_allowlists", discord_panel_handlers::handle_update_allowlists, channel_registry);
-    }
+    register_handler!(server, "discord.validate_token", discord_panel_handlers::handle_validate_token);
+    register_handler!(server, "discord.save_config", discord_panel_handlers::handle_save_config);
+    register_handler!(server, "discord.list_guilds", discord_panel_handlers::handle_list_guilds, channel_registry);
+    register_handler!(server, "discord.list_channels", discord_panel_handlers::handle_list_channels, channel_registry);
+    register_handler!(server, "discord.audit_permissions", discord_panel_handlers::handle_audit_permissions, channel_registry);
+    register_handler!(server, "discord.update_allowlists", discord_panel_handlers::handle_update_allowlists, channel_registry);
 }
 
 // ─── setup_config_watcher ────────────────────────────────────────────────────
 
-#[cfg(feature = "gateway")]
 pub(in crate::commands::start) async fn setup_config_watcher(
     server: &mut GatewayServer,
     config_path: Option<PathBuf>,
@@ -273,7 +264,6 @@ pub(in crate::commands::start) async fn setup_config_watcher(
 
 // ─── start_webchat_server ────────────────────────────────────────────────────
 
-#[cfg(feature = "gateway")]
 pub(in crate::commands::start) async fn start_webchat_server(args: &Args, final_bind: &str, final_port: u16) {
     use std::net::SocketAddr;
 
@@ -326,7 +316,6 @@ pub(in crate::commands::start) async fn start_webchat_server(args: &Args, final_
 // ─── start_control_plane_server ──────────────────────────────────────────────
 
 /// Start ControlPlane embedded web UI server
-#[cfg(all(feature = "gateway", feature = "control-plane"))]
 pub(in crate::commands::start) async fn start_control_plane_server(final_bind: &str, final_port: u16, daemon_mode: bool) {
     use std::net::SocketAddr;
     use alephcore::gateway::control_plane::create_control_plane_router;
@@ -365,7 +354,6 @@ pub(in crate::commands::start) async fn start_control_plane_server(final_bind: &
 
 // ─── register_memory_handlers ────────────────────────────────────────────────
 
-#[cfg(feature = "gateway")]
 pub(in crate::commands::start) fn register_memory_handlers(
     server: &mut GatewayServer,
     memory_db: &MemoryBackend,
@@ -392,7 +380,6 @@ pub(in crate::commands::start) fn register_memory_handlers(
 
 // ─── register_workspace_handlers ─────────────────────────────────────────────
 
-#[cfg(feature = "gateway")]
 pub(in crate::commands::start) fn register_workspace_handlers(
     server: &mut GatewayServer,
     workspace_manager: &Arc<WorkspaceManager>,
@@ -422,7 +409,6 @@ pub(in crate::commands::start) fn register_workspace_handlers(
 
 // ─── register_config_handlers ────────────────────────────────────────────────
 
-#[cfg(feature = "gateway")]
 pub(in crate::commands::start) fn register_config_handlers(
     server: &mut GatewayServer,
     config: Arc<tokio::sync::RwLock<alephcore::Config>>,

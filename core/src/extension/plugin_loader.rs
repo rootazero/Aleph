@@ -8,7 +8,7 @@
 //! ```text
 //! PluginLoader
 //! ├── nodejs_runtime: Option<NodeJsRuntime>  (lazy initialized)
-//! ├── wasm_runtime: Option<WasmRuntime>      (feature-gated, lazy initialized)
+//! ├── wasm_runtime: Option<WasmRuntime>      (lazy initialized)
 //! └── loaded_plugins: HashMap<String, PluginKind>
 //! ```
 //!
@@ -41,7 +41,6 @@ use crate::extension::manifest::PluginManifest;
 use crate::extension::registry::PluginRegistry;
 use crate::extension::runtime::nodejs::{hook_def_to_registration, tool_def_to_registration};
 use crate::extension::runtime::NodeJsRuntime;
-#[cfg(feature = "plugin-wasm")]
 use crate::extension::runtime::WasmRuntime;
 use crate::extension::types::{DirectCommandResult, PluginKind};
 
@@ -56,7 +55,7 @@ use crate::extension::types::{DirectCommandResult, PluginKind};
 /// # Plugin Kinds
 ///
 /// - `NodeJs`: JavaScript/TypeScript plugins using Node.js subprocess
-/// - `Wasm`: WebAssembly plugins using Extism (feature-gated)
+/// - `Wasm`: WebAssembly plugins using Extism
 /// - `Static`: Static content plugins (handled by ComponentLoader, not this loader)
 ///
 /// # Thread Safety and Write Lock Requirement
@@ -79,7 +78,6 @@ pub struct PluginLoader {
     nodejs_runtime: Option<NodeJsRuntime>,
 
     /// WASM runtime (lazy initialized)
-    #[cfg(feature = "plugin-wasm")]
     wasm_runtime: Option<WasmRuntime>,
 
     /// Map of plugin_id -> runtime kind for fast lookup
@@ -94,7 +92,6 @@ impl PluginLoader {
     pub fn new() -> Self {
         Self {
             nodejs_runtime: None,
-            #[cfg(feature = "plugin-wasm")]
             wasm_runtime: None,
             loaded_plugins: HashMap::new(),
         }
@@ -105,14 +102,7 @@ impl PluginLoader {
     /// Returns `true` if Node.js or WASM runtime has been initialized.
     pub fn is_any_runtime_active(&self) -> bool {
         let nodejs_active = self.nodejs_runtime.is_some();
-        #[cfg(feature = "plugin-wasm")]
-        {
-            nodejs_active || self.wasm_runtime.is_some()
-        }
-        #[cfg(not(feature = "plugin-wasm"))]
-        {
-            nodejs_active
-        }
+        nodejs_active || self.wasm_runtime.is_some()
     }
 
     /// Check if a specific plugin is loaded.
@@ -171,12 +161,7 @@ impl PluginLoader {
 
         match manifest.kind {
             PluginKind::NodeJs => self.load_nodejs_plugin(manifest, registry),
-            #[cfg(feature = "plugin-wasm")]
             PluginKind::Wasm => self.load_wasm_plugin(manifest, registry),
-            #[cfg(not(feature = "plugin-wasm"))]
-            PluginKind::Wasm => Err(ExtensionError::Runtime(
-                "WASM runtime not enabled. Compile with --features plugin-wasm".to_string(),
-            )),
             PluginKind::Static => {
                 // Static plugins are handled by ComponentLoader, not runtime
                 info!(
@@ -249,7 +234,6 @@ impl PluginLoader {
     }
 
     /// Load a WASM plugin.
-    #[cfg(feature = "plugin-wasm")]
     fn load_wasm_plugin(
         &mut self,
         manifest: &PluginManifest,
@@ -302,7 +286,6 @@ impl PluginLoader {
                     info!("Unloaded Node.js plugin '{}'", plugin_id);
                 }
             }
-            #[cfg(feature = "plugin-wasm")]
             Some(PluginKind::Wasm) => {
                 if let Some(runtime) = &mut self.wasm_runtime {
                     if !runtime.unload_plugin(plugin_id) {
@@ -313,10 +296,6 @@ impl PluginLoader {
                     }
                     info!("Unloaded WASM plugin '{}'", plugin_id);
                 }
-            }
-            #[cfg(not(feature = "plugin-wasm"))]
-            Some(PluginKind::Wasm) => {
-                // WASM not enabled, nothing to do
             }
             Some(PluginKind::Static) => {
                 // Static plugins don't need runtime unloading
@@ -360,7 +339,6 @@ impl PluginLoader {
                 })?;
                 runtime.call_tool(plugin_id, handler, args)
             }
-            #[cfg(feature = "plugin-wasm")]
             PluginKind::Wasm => {
                 let runtime = self.wasm_runtime.as_mut().ok_or_else(|| {
                     ExtensionError::Runtime("WASM runtime not initialized".to_string())
@@ -378,10 +356,6 @@ impl PluginLoader {
                     ))
                 }
             }
-            #[cfg(not(feature = "plugin-wasm"))]
-            PluginKind::Wasm => Err(ExtensionError::Runtime(
-                "WASM runtime not enabled".to_string(),
-            )),
             PluginKind::Static => Err(ExtensionError::Runtime(format!(
                 "Plugin kind {:?} does not support tool calls",
                 kind
@@ -419,17 +393,12 @@ impl PluginLoader {
                 })?;
                 runtime.execute_hook(plugin_id, handler, event_data)
             }
-            #[cfg(feature = "plugin-wasm")]
             PluginKind::Wasm => {
                 // WASM hooks not yet implemented
                 Err(ExtensionError::Runtime(
                     "WASM hooks not yet implemented".to_string(),
                 ))
             }
-            #[cfg(not(feature = "plugin-wasm"))]
-            PluginKind::Wasm => Err(ExtensionError::Runtime(
-                "WASM runtime not enabled".to_string(),
-            )),
             PluginKind::Static => Err(ExtensionError::Runtime(format!(
                 "Plugin kind {:?} does not support hooks",
                 kind
@@ -482,7 +451,6 @@ impl PluginLoader {
                     DirectCommandResult::success("Command executed")
                 }))
             }
-            #[cfg(feature = "plugin-wasm")]
             PluginKind::Wasm => {
                 let runtime = self.wasm_runtime.as_mut().ok_or_else(|| {
                     ExtensionError::Runtime("WASM runtime not initialized".to_string())
@@ -506,10 +474,6 @@ impl PluginLoader {
                     ))
                 }
             }
-            #[cfg(not(feature = "plugin-wasm"))]
-            PluginKind::Wasm => Err(ExtensionError::Runtime(
-                "WASM runtime not enabled".to_string(),
-            )),
             PluginKind::Static => Err(ExtensionError::Runtime(
                 "Static plugins cannot have direct commands".to_string(),
             )),
@@ -544,15 +508,8 @@ impl PluginLoader {
     }
 
     /// Check if WASM runtime is initialized.
-    #[cfg(feature = "plugin-wasm")]
     pub fn is_wasm_runtime_active(&self) -> bool {
         self.wasm_runtime.is_some()
-    }
-
-    /// Check if WASM runtime is initialized (stub for non-wasm builds).
-    #[cfg(not(feature = "plugin-wasm"))]
-    pub fn is_wasm_runtime_active(&self) -> bool {
-        false
     }
 }
 

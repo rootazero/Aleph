@@ -215,30 +215,17 @@ pub async fn handle_list_guilds(
         }
     };
 
-    #[cfg(feature = "discord")]
-    {
-        let http = serenity::http::Http::new(&token);
-        match api::list_guilds(&http).await {
-            Ok(guilds) => {
-                let value = serde_json::to_value(&guilds).unwrap_or(json!([]));
-                JsonRpcResponse::success(request.id, json!({ "guilds": value }))
-            }
-            Err(e) => JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to list guilds: {}", e),
-            ),
+    let http = serenity::http::Http::new(&token);
+    match api::list_guilds(&http).await {
+        Ok(guilds) => {
+            let value = serde_json::to_value(&guilds).unwrap_or(json!([]));
+            JsonRpcResponse::success(request.id, json!({ "guilds": value }))
         }
-    }
-
-    #[cfg(not(feature = "discord"))]
-    {
-        let _ = token;
-        JsonRpcResponse::error(
+        Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            "Discord feature not enabled",
-        )
+            format!("Failed to list guilds: {}", e),
+        ),
     }
 }
 
@@ -299,30 +286,17 @@ pub async fn handle_list_channels(
         }
     };
 
-    #[cfg(feature = "discord")]
-    {
-        let http = serenity::http::Http::new(&token);
-        match api::list_channels(&http, guild_id).await {
-            Ok(channels) => {
-                let value = serde_json::to_value(&channels).unwrap_or(json!([]));
-                JsonRpcResponse::success(request.id, json!({ "channels": value }))
-            }
-            Err(e) => JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to list channels: {}", e),
-            ),
+    let http = serenity::http::Http::new(&token);
+    match api::list_channels(&http, guild_id).await {
+        Ok(channels) => {
+            let value = serde_json::to_value(&channels).unwrap_or(json!([]));
+            JsonRpcResponse::success(request.id, json!({ "channels": value }))
         }
-    }
-
-    #[cfg(not(feature = "discord"))]
-    {
-        let _ = (token, guild_id);
-        JsonRpcResponse::error(
+        Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            "Discord feature not enabled",
-        )
+            format!("Failed to list channels: {}", e),
+        ),
     }
 }
 
@@ -383,30 +357,17 @@ pub async fn handle_audit_permissions(
         }
     };
 
-    #[cfg(feature = "discord")]
-    {
-        let http = serenity::http::Http::new(&token);
-        match api::audit_guild_permissions(&http, guild_id).await {
-            Ok(audit) => {
-                let value = serde_json::to_value(&audit).unwrap_or(json!({}));
-                JsonRpcResponse::success(request.id, value)
-            }
-            Err(e) => JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to audit permissions: {}", e),
-            ),
+    let http = serenity::http::Http::new(&token);
+    match api::audit_guild_permissions(&http, guild_id).await {
+        Ok(audit) => {
+            let value = serde_json::to_value(&audit).unwrap_or(json!({}));
+            JsonRpcResponse::success(request.id, value)
         }
-    }
-
-    #[cfg(not(feature = "discord"))]
-    {
-        let _ = (token, guild_id);
-        JsonRpcResponse::error(
+        Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            "Discord feature not enabled",
-        )
+            format!("Failed to audit permissions: {}", e),
+        ),
     }
 }
 

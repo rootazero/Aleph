@@ -1,7 +1,6 @@
 //! Device management command handlers
 
 /// Handle devices list command
-#[cfg(feature = "gateway")]
 pub fn handle_devices_list() -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::device_store::DeviceStore;
 
@@ -34,7 +33,6 @@ pub fn handle_devices_list() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Handle devices revoke command
-#[cfg(feature = "gateway")]
 pub fn handle_devices_revoke(device_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::device_store::DeviceStore;
 

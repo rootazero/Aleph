@@ -274,21 +274,11 @@ impl CronJob {
     }
 
     /// Validate the cron expression
-    #[cfg(feature = "cron")]
     pub fn validate_schedule(&self) -> Result<(), String> {
         use std::str::FromStr;
         cron::Schedule::from_str(&self.schedule)
             .map(|_| ())
             .map_err(|e| format!("Invalid cron expression '{}': {}", self.schedule, e))
-    }
-
-    #[cfg(not(feature = "cron"))]
-    pub fn validate_schedule(&self) -> Result<(), String> {
-        // Basic validation without cron crate
-        if self.schedule.is_empty() {
-            return Err("Schedule cannot be empty".to_string());
-        }
-        Ok(())
     }
 }
 

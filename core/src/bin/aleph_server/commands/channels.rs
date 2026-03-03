@@ -3,7 +3,6 @@
 use crate::cli::ChannelsAction;
 
 /// Handle channels subcommands
-#[cfg(feature = "gateway")]
 pub async fn handle_channels_command(action: ChannelsAction) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::cli::{channels, GatewayClient, OutputFormat};
 

@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 
 /// Handle pairing list command
-#[cfg(feature = "gateway")]
 pub async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::security::{PairingManager, PairingRequest, SecurityStore};
     use std::sync::Arc;
@@ -36,7 +35,6 @@ pub async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Handle pairing approve command
-#[cfg(feature = "gateway")]
 pub async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::security::{DeviceRole, DeviceType, PairingManager, PairingRequest, SecurityStore, TokenManager};
     use alephcore::gateway::device_store::{DeviceStore, ApprovedDevice};
@@ -117,7 +115,6 @@ pub async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error
 }
 
 /// Handle pairing reject command
-#[cfg(feature = "gateway")]
 pub async fn handle_pairing_reject(code: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::security::{PairingManager, SecurityStore};
     use std::sync::Arc;

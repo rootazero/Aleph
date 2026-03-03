@@ -1,7 +1,6 @@
 //! Plugin management command handlers
 
 /// Handle plugins list command
-#[cfg(feature = "gateway")]
 pub async fn handle_plugins_list() -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::ExtensionManager;
 
@@ -43,7 +42,6 @@ pub async fn handle_plugins_list() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Handle plugins install command
-#[cfg(feature = "gateway")]
 pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::{default_plugins_dir, ComponentLoader};
 
@@ -109,7 +107,6 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
 }
 
 /// Handle plugins uninstall command
-#[cfg(feature = "gateway")]
 pub fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::default_plugins_dir;
 
@@ -140,7 +137,6 @@ pub fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::error::Er
 }
 
 /// Handle plugins enable command
-#[cfg(feature = "gateway")]
 pub fn handle_plugins_enable(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::default_plugins_dir;
 
@@ -165,7 +161,6 @@ pub fn handle_plugins_enable(name: &str) -> Result<(), Box<dyn std::error::Error
 }
 
 /// Handle plugins disable command
-#[cfg(feature = "gateway")]
 pub fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::default_plugins_dir;
 

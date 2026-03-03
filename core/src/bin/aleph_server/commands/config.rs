@@ -3,7 +3,6 @@
 use crate::cli::ConfigAction;
 
 /// Handle config subcommands
-#[cfg(feature = "gateway")]
 pub async fn handle_config_command(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::cli::{GatewayClient, OutputFormat, config};
 

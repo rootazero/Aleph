@@ -143,7 +143,6 @@ pub struct DesktopOutput {
 pub struct DesktopTool {
     client: DesktopBridgeClient,
     approval_policy: Option<Arc<dyn ApprovalPolicy>>,
-    #[cfg(feature = "desktop-native")]
     native: Option<Arc<dyn aleph_desktop::DesktopCapability>>,
 }
 
@@ -152,7 +151,6 @@ impl DesktopTool {
         Self {
             client: DesktopBridgeClient::new(),
             approval_policy: None,
-            #[cfg(feature = "desktop-native")]
             native: None,
         }
     }
@@ -164,7 +162,6 @@ impl DesktopTool {
     /// native in-process path instead of IPC to the Desktop Bridge.
     /// Unsupported actions (canvas_*, snapshot, PIM, etc.) fall through
     /// to the IPC bridge automatically.
-    #[cfg(feature = "desktop-native")]
     pub fn with_native(mut self, native: Arc<dyn aleph_desktop::DesktopCapability>) -> Self {
         self.native = Some(native);
         self
@@ -237,7 +234,6 @@ impl Default for DesktopTool {
 }
 
 // ── Native in-process execution path ───────────────────────────────
-#[cfg(feature = "desktop-native")]
 impl DesktopTool {
     /// Execute a desktop action via the native in-process path.
     ///
@@ -681,7 +677,6 @@ Examples:
         // When a native desktop capability is available, try the in-process path
         // first. If the action is not supported natively (call_native returns
         // Ok(None)), fall through to the IPC bridge below.
-        #[cfg(feature = "desktop-native")]
         if let Some(ref native) = self.native {
             if let Some(output) = self.call_native(native, &args).await? {
                 return Ok(output);

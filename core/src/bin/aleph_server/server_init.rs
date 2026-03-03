@@ -6,20 +6,15 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-#[cfg(feature = "gateway")]
 use std::sync::Arc;
 
-#[cfg(feature = "gateway")]
 use alephcore::gateway::event_bus::GatewayEventBus;
-#[cfg(feature = "gateway")]
 use alephcore::gateway::router::AgentRouter;
-#[cfg(feature = "gateway")]
 use alephcore::gateway::{
     ExecutionEngine, GatewayEventEmitter, AgentRegistry,
 };
 
 /// Serve WebChat static files
-#[cfg(feature = "gateway")]
 pub async fn serve_webchat(
     addr: SocketAddr,
     static_dir: PathBuf,
@@ -55,7 +50,6 @@ pub async fn serve_webchat(
 }
 
 /// Handle agent.run with real ExecutionEngine
-#[cfg(feature = "gateway")]
 pub async fn handle_run_with_engine<P, R>(
     request: alephcore::gateway::JsonRpcRequest,
     engine: Arc<ExecutionEngine<P, R>>,
@@ -191,6 +185,130 @@ where
         run_id,
         session_key: session_key_str,
         accepted_at,
+    };
+
+    alephcore::gateway::JsonRpcResponse::success(request.id, json!(result))
+}
+
+/// Handle chat.send with real ExecutionEngine
+///
+/// Same as `handle_run_with_engine` but accepts `chat.send` param format
+/// (message instead of input) and returns chat-friendly response.
+pub async fn handle_chat_send_with_engine<P, R>(
+    request: alephcore::gateway::JsonRpcRequest,
+    engine: Arc<ExecutionEngine<P, R>>,
+    event_bus: Arc<GatewayEventBus>,
+    router: Arc<AgentRouter>,
+    agent_registry: Arc<AgentRegistry>,
+) -> alephcore::gateway::JsonRpcResponse
+where
+    P: alephcore::thinker::ProviderRegistry + 'static,
+    R: alephcore::executor::ToolRegistry + 'static,
+{
+    use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
+    use alephcore::gateway::RunRequest;
+    use alephcore::gateway::handlers::chat::SendParams;
+    use serde::Serialize;
+    use serde_json::{json, Value};
+
+    #[derive(Debug, Clone, Serialize)]
+    struct ChatSendResult {
+        pub run_id: String,
+        pub session_key: String,
+        pub streaming: bool,
+    }
+
+    // Parse params
+    let params: SendParams = match request.params {
+        Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map)) {
+            Ok(p) => p,
+            Err(e) => {
+                return alephcore::gateway::JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid params: {}", e),
+                );
+            }
+        },
+        _ => {
+            return alephcore::gateway::JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing or invalid params object",
+            );
+        }
+    };
+
+    // Validate message
+    if params.message.trim().is_empty() {
+        return alephcore::gateway::JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "Message cannot be empty",
+        );
+    }
+
+    // Generate run ID
+    let run_id = uuid::Uuid::new_v4().to_string();
+
+    // Resolve session key
+    let session_key = router
+        .route(
+            params.session_key.as_deref(),
+            params.channel.as_deref(),
+            None,
+        )
+        .await;
+
+    let session_key_str = session_key.to_key_string();
+
+    // Get default agent
+    let agent = match agent_registry.get_default().await {
+        Some(a) => a,
+        None => {
+            return alephcore::gateway::JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                "No default agent available",
+            );
+        }
+    };
+
+    // Create emitter for streaming events
+    let emitter = Arc::new(GatewayEventEmitter::new(event_bus.clone()));
+
+    // Create run request
+    let run_request = RunRequest {
+        run_id: run_id.clone(),
+        input: params.message.clone(),
+        session_key: session_key.clone(),
+        timeout_secs: None,
+        metadata: std::collections::HashMap::new(),
+    };
+
+    // Spawn execution task
+    let engine_clone = engine.clone();
+    let emitter_clone = emitter.clone();
+    let run_id_clone = run_id.clone();
+    tokio::spawn(async move {
+        match engine_clone
+            .execute(run_request, agent, emitter_clone)
+            .await
+        {
+            Ok(()) => {
+                tracing::info!(run_id = %run_id_clone, "Chat run completed successfully");
+            }
+            Err(e) => {
+                tracing::error!(run_id = %run_id_clone, error = %e, "Chat run failed");
+            }
+        }
+    });
+
+    // Return immediate response
+    let result = ChatSendResult {
+        run_id,
+        session_key: session_key_str,
+        streaming: params.stream,
     };
 
     alephcore::gateway::JsonRpcResponse::success(request.id, json!(result))
