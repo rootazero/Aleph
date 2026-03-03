@@ -6,9 +6,8 @@
 
 ## Server 架构概览
 
-Aleph Server 是一个自包含的 Rust 二进制程序，包含：
-- **Gateway**: WebSocket 服务器 (JSON-RPC 2.0) - 端口 18789
-- **Control Plane**: Web 管理界面 (Leptos WASM) - 端口 18790
+Aleph Server 是一个自包含的 Rust 二进制程序（`aleph`），包含：
+- **Gateway + Control Plane**: HTTP/WebSocket 统一服务 - 端口 18790（WebSocket 路径 `/ws`，Control Plane UI 路径 `/cp`）
 - **Agent Loop**: AI 代理执行引擎
 - **Tool System**: 工具调用和执行
 - **Memory System**: 向量数据库和事实存储
@@ -50,17 +49,14 @@ mkdir -p ~/.aleph
 ### 快速启动（开发模式）
 
 ```bash
-# 1. 不含 UI（最快启动）
-cargo run --bin aleph-server
+# 1. 启动 Server（所有功能始终编译）
+cargo run --bin aleph
 
-# 2. 含 UI（需要先构建 UI）
-cargo run --bin aleph-server --features control-plane
+# 2. 后台运行
+cargo run --bin aleph -- --daemon
 
-# 3. 后台运行
-cargo run --bin aleph-server --features control-plane -- --daemon
-
-# 4. 指定端口
-cargo run --bin aleph-server -- --port 8080
+# 3. 指定端口
+cargo run --bin aleph -- --port 8080
 ```
 
 ### 完整开发流程
@@ -73,10 +69,10 @@ vim core/src/gateway/...
 cargo test
 
 # 3. 构建并运行
-cargo run --bin aleph-server
+cargo run --bin aleph
 
 # 4. 查看日志
-tail -f ~/.aleph/aleph-server.log  # 如果使用 --daemon
+tail -f ~/.aleph/aleph.log  # 如果使用 --daemon
 ```
 
 ## Control Plane UI 开发流程
@@ -107,7 +103,7 @@ npm run build:css  # 编译 styles/tailwind.css -> dist/tailwind.css
 
 # 5. 构建 Server（会自动嵌入 dist/ 中的资源）
 cd ../../..
-cargo build --bin aleph-server --features control-plane
+cargo build --bin aleph
 ```
 
 ### UI 快速重建
@@ -120,7 +116,7 @@ wasm-bindgen --target web --out-dir dist --out-name aleph-dashboard \
   /Volumes/TBU4/Workspace/Aleph/target/wasm32-unknown-unknown/release/aleph_dashboard.wasm && \
 npm run build:css && \
 cd ../../.. && \
-cargo build --bin aleph-server --features control-plane
+cargo build --bin aleph
 ```
 
 ### 资源嵌入机制
@@ -135,7 +131,7 @@ pub struct ControlPlaneAssets;
 
 **关键特性**：
 - 编译时嵌入：所有 HTML/CSS/JS/WASM 文件打包进二进制
-- 单文件分发：只需分发 `aleph-server` 可执行文件
+- 单文件分发：只需分发 `aleph` 可执行文件
 - 零运行时依赖：不需要额外的静态文件目录
 - 自动跳过构建：如果 `dist/` 存在，`build.rs` 会跳过 UI 构建
 
@@ -206,7 +202,7 @@ cd apps/macos-native && xcodebuild -scheme Aleph -configuration Debug test -dest
 curl -fsSL https://raw.githubusercontent.com/user/aleph/main/scripts/install.sh | bash
 
 # Or build from source
-cargo build --bin aleph-server --release
+cargo build --bin aleph --release
 ```
 
 ## 发布流程
@@ -225,29 +221,24 @@ ls core/ui/control_plane/dist/
 ### 2. 构建 Release 版本
 
 ```bash
-# 不含 UI（最小二进制）
-cargo build --bin aleph-server --release
-
-# 含 UI（完整功能）
-cargo build --bin aleph-server --features control-plane --release
+# 构建 Release（所有功能始终编译）
+cargo build --bin aleph --release
 
 # 查看二进制大小
-ls -lh target/release/aleph-server
-# 不含 UI: ~40MB
-# 含 UI: ~48MB
+ls -lh target/release/aleph
 ```
 
 ### 3. 验证构建
 
 ```bash
 # 验证二进制可执行
-./target/release/aleph-server --version
+./target/release/aleph --version
 
-# 验证嵌入的资源（如果含 UI）
-strings target/release/aleph-server | grep "index.html"
+# 验证嵌入的资源
+strings target/release/aleph | grep "index.html"
 
 # 测试运行
-./target/release/aleph-server --help
+./target/release/aleph --help
 ```
 
 ### 4. 分发方式
@@ -255,18 +246,18 @@ strings target/release/aleph-server | grep "index.html"
 **方式 1: 直接分发二进制**
 ```bash
 # 复制到系统路径
-sudo cp target/release/aleph-server /usr/local/bin/
+sudo cp target/release/aleph /usr/local/bin/
 
 # 或创建符号链接
-sudo ln -s $(pwd)/target/release/aleph-server /usr/local/bin/aleph-server
+sudo ln -s $(pwd)/target/release/aleph /usr/local/bin/aleph
 ```
 
 **方式 2: 使用 cargo install**
 ```bash
 # 从本地路径安装
-cargo install --path core --bin aleph-server --features control-plane
+cargo install --path core --bin aleph
 
-# 安装后位置：~/.cargo/bin/aleph-server
+# 安装后位置：~/.cargo/bin/aleph
 ```
 
 **方式 3: 发布到 crates.io**
@@ -280,7 +271,7 @@ cargo publish --dry-run  # 预检查
 cargo publish            # 正式发布
 
 # 3. 用户安装
-cargo install alephcore --bin aleph-server --features control-plane
+cargo install alephcore --bin aleph
 ```
 
 **方式 4: 创建安装包**
@@ -304,9 +295,6 @@ model = "claude-sonnet-4-20250514"
 
 [gateway]
 bind = "127.0.0.1"
-port = 18789
-
-[control_plane]
 port = 18790
 EOF
 
@@ -314,7 +302,7 @@ EOF
 export ANTHROPIC_API_KEY="your-api-key"
 
 # 启动服务
-aleph-server --daemon --log-file ~/.aleph/server.log
+aleph --daemon --log-file ~/.aleph/server.log
 ```
 
 ### 6. 系统服务配置
@@ -330,7 +318,7 @@ aleph-server --daemon --log-file ~/.aleph/server.log
     <string>com.aleph.server</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/aleph-server</string>
+        <string>/usr/local/bin/aleph</string>
         <string>--daemon</string>
     </array>
     <key>RunAtLoad</key>
@@ -354,7 +342,7 @@ launchctl list | grep aleph
 
 **Linux (systemd)**
 ```ini
-# /etc/systemd/system/aleph-server.service
+# /etc/systemd/system/aleph.service
 [Unit]
 Description=Aleph AI Server
 After=network.target
@@ -362,7 +350,7 @@ After=network.target
 [Service]
 Type=simple
 User=aleph
-ExecStart=/usr/local/bin/aleph-server
+ExecStart=/usr/local/bin/aleph
 Restart=on-failure
 Environment="ANTHROPIC_API_KEY=your-api-key"
 
@@ -375,13 +363,13 @@ WantedBy=multi-user.target
 sudo systemctl daemon-reload
 
 # 启动服务
-sudo systemctl start aleph-server
+sudo systemctl start aleph
 
 # 开机自启
-sudo systemctl enable aleph-server
+sudo systemctl enable aleph
 
 # 查看状态
-sudo systemctl status aleph-server
+sudo systemctl status aleph
 ```
 
 ## 故障排查
@@ -414,14 +402,13 @@ sudo systemctl status aleph-server
 **问题：端口被占用**
 ```bash
 # 查找占用进程
-lsof -i :18789
 lsof -i :18790
 
 # 杀死进程
 kill -9 <PID>
 
 # 或使用不同端口
-aleph-server --port 8080
+aleph --port 8080
 ```
 
 **问题：API 密钥未配置**
@@ -443,7 +430,7 @@ mv ~/.aleph/sessions.db ~/.aleph/sessions.db.bak
 mv ~/.aleph/memory.db ~/.aleph/memory.db.bak
 
 # 重启 Server（会自动创建新数据库）
-aleph-server
+aleph
 ```
 
 ## 性能优化
@@ -464,9 +451,9 @@ panic = "abort"
 
 ```bash
 # 增加 Tokio 线程数
-TOKIO_WORKER_THREADS=8 aleph-server
+TOKIO_WORKER_THREADS=8 aleph
 
 # 调整日志级别
-RUST_LOG=info aleph-server  # 生产环境
-RUST_LOG=debug aleph-server # 调试模式
+RUST_LOG=info aleph  # 生产环境
+RUST_LOG=debug aleph # 调试模式
 ```

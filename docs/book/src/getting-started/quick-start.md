@@ -26,7 +26,7 @@ aleph gateway run
 aleph gateway run --daemon
 ```
 
-The gateway listens on `ws://127.0.0.1:18789` by default.
+The gateway listens on `ws://127.0.0.1:18790/ws` by default.
 
 ## 3. Chat with Aleph
 

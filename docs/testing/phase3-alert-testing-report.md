@@ -89,7 +89,7 @@ This document provides a comprehensive testing report for the Phase 3 alert syst
 
 ### ✅ Server Build
 
-**Command**: `cargo build --bin aleph-server --features control-plane`
+**Command**: `cargo build --bin aleph`
 
 **Result**: SUCCESS
 
@@ -104,10 +104,10 @@ This document provides a comprehensive testing report for the Phase 3 alert syst
 ### ✅ Server Status
 
 **Ports**:
-- Gateway WebSocket: `ws://127.0.0.1:18789` ✅ LISTENING
-- Control Plane UI: `http://127.0.0.1:18790` ✅ LISTENING
+- Gateway WebSocket: `ws://127.0.0.1:18790/ws` ✅ LISTENING
+- Control Plane UI: `http://127.0.0.1:18790/cp` ✅ LISTENING
 
-**Process**: `aleph-server` (PID: 57567) ✅ RUNNING
+**Process**: `aleph` (PID: 57567) ✅ RUNNING
 
 ### ✅ UI Accessibility
 
@@ -248,7 +248,7 @@ This document provides a comprehensive testing report for the Phase 3 alert syst
 **Test Steps**:
 1. Open browser DevTools Network tab
 2. Filter for WebSocket connections
-3. Verify connection to `ws://127.0.0.1:18789`
+3. Verify connection to `ws://127.0.0.1:18790/ws`
 4. Check connection status (open/closed)
 5. Simulate disconnect (stop server)
 6. Verify reconnection attempt
@@ -321,7 +321,7 @@ This document provides a comprehensive testing report for the Phase 3 alert syst
 
 ### Prerequisites
 
-1. **Server Running**: `cargo run --bin aleph-server --features control-plane`
+1. **Server Running**: `cargo run --bin aleph`
 2. **Browser**: Chrome/Firefox with DevTools
 3. **Network Tab**: Open to monitor WebSocket
 4. **Console Tab**: Open to view logs
