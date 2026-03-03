@@ -250,7 +250,7 @@ impl CronService {
             if let Err(e) = conn.execute_batch(&sql) {
                 let msg = e.to_string();
                 if !msg.contains("duplicate column name") {
-                    return Err(e);
+                    return Err(CronError::Database(e));
                 }
             }
         }
@@ -267,7 +267,7 @@ impl CronService {
             if let Err(e) = conn.execute_batch(&sql) {
                 let msg = e.to_string();
                 if !msg.contains("duplicate column name") {
-                    return Err(e);
+                    return Err(CronError::Database(e));
                 }
             }
         }
