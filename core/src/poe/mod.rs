@@ -109,6 +109,7 @@ pub mod contract_store;
 pub mod crystallization;
 pub mod handler_types;
 pub mod interceptor;
+pub mod lazy_evaluator;
 pub mod manager;
 pub mod manifest;
 pub mod meta_cognition;
@@ -129,6 +130,9 @@ mod proptest_budget;
 mod proptest_types;
 
 // Re-exports for convenient access
+// Lazy evaluator (lightweight POE without full manifest)
+pub use lazy_evaluator::{LazyPoeEvaluator, LightManifest};
+
 // Interceptor directives
 pub use interceptor::{PoeLoopCallback, StepDirective, StepEvaluator};
 
