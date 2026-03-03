@@ -509,19 +509,17 @@ fn ProviderDetailPanel(
                     form_temperature.set(String::new());
                 }
             } else {
-                // Existing provider
+                // Existing provider — populate form with actual values
                 if let Some(provider) = providers.get().iter().find(|p| p.name == sel) {
                     form_name.set(provider.name.clone());
                     form_protocol.set(provider.provider_type.clone().unwrap_or_else(|| "openai".to_string()));
                     form_model.set(provider.model.clone());
-                    form_api_key.set(String::new()); // Not returned for security
+                    form_api_key.set(provider.api_key.clone().unwrap_or_default());
                     form_enabled.set(provider.enabled);
-                    // Restore base_url from preset if available
-                    if let Some(preset) = find_preset(&provider.name) {
-                        form_base_url.set(preset.base_url.to_string());
-                    } else {
-                        form_base_url.set(String::new());
-                    }
+                    form_base_url.set(provider.base_url.clone().unwrap_or_default());
+                    form_timeout.set(provider.timeout_seconds);
+                    form_max_tokens.set(provider.max_tokens.map(|v| v.to_string()).unwrap_or_default());
+                    form_temperature.set(provider.temperature.map(|v| v.to_string()).unwrap_or_default());
                 }
             }
         }
@@ -761,7 +759,9 @@ fn ProviderDetailPanel(
                                         prop:value=move || form_model.get()
                                         on:input=move |ev| form_model.set(event_target_value(&ev))
                                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                        placeholder="model-name"
+                                        placeholder=move || {
+                                            preset_info.map(|p| format!("Default: {}", p.model)).unwrap_or_else(|| "model-name".to_string())
+                                        }
                                     />
                                 </div>
 
@@ -781,10 +781,6 @@ fn ProviderDetailPanel(
                                         view! {
                                             <p class="mt-1 text-xs text-text-tertiary">"Not required for local providers"</p>
                                         }.into_any()
-                                    } else if !is_new() {
-                                        view! {
-                                            <p class="mt-1 text-xs text-text-tertiary">"Leave empty to keep existing key"</p>
-                                        }.into_any()
                                     } else {
                                         view! { <span></span> }.into_any()
                                     }}
@@ -798,7 +794,9 @@ fn ProviderDetailPanel(
                                         prop:value=move || form_base_url.get()
                                         on:input=move |ev| form_base_url.set(event_target_value(&ev))
                                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                        placeholder="https://api.example.com/v1"
+                                        placeholder=move || {
+                                            preset_info.map(|p| format!("Default: {}", p.base_url)).unwrap_or_else(|| "https://api.example.com/v1".to_string())
+                                        }
                                     />
                                 </div>
 
@@ -856,18 +854,18 @@ fn ProviderDetailPanel(
                             <div class="space-y-2">
                                 <div class="flex gap-2">
                                     <button
+                                        on:click=on_test
+                                        prop:disabled=move || testing.get() || saving.get()
+                                        class="flex-1 px-4 py-2.5 bg-info text-white text-sm font-medium rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50"
+                                    >
+                                        {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                                    </button>
+                                    <button
                                         on:click=on_save
                                         prop:disabled=move || saving.get()
                                         class="flex-1 px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
                                     >
                                         {move || if saving.get() { "Saving..." } else { "Save" }}
-                                    </button>
-                                    <button
-                                        on:click=on_test
-                                        prop:disabled=move || testing.get() || saving.get()
-                                        class="flex-1 px-4 py-2.5 bg-surface-raised border border-border hover:border-primary/40 text-text-secondary text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-                                    >
-                                        {move || if testing.get() { "Testing..." } else { "Test" }}
                                     </button>
                                 </div>
 

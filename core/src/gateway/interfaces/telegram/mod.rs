@@ -454,37 +454,45 @@ impl Channel for TelegramChannel {
             let _ = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing).await;
         }
 
-        // Build and send message
-        let mut request = bot.send_message(chat_id, &message.text);
-
-        // Set parse mode for Markdown support
-        request = request.parse_mode(ParseMode::MarkdownV2);
-
-        // Set reply-to if specified
-        if let Some(reply_to) = &message.reply_to {
-            if let Ok(msg_id) = reply_to.as_str().parse::<i32>() {
-                request = request.reply_parameters(teloxide::types::ReplyParameters::new(
-                    teloxide::types::MessageId(msg_id),
-                ));
+        // Helper to build a SendMessage request with optional reply-to and inline keyboard
+        let build_request = |parse_mode: Option<ParseMode>| {
+            let mut req = bot.send_message(chat_id, &message.text);
+            if let Some(mode) = parse_mode {
+                req = req.parse_mode(mode);
             }
-        }
-
-        // Add inline keyboard if present
-        if let Some(ref keyboard) = message.inline_keyboard {
-            let markup = InlineKeyboardMarkup::new(
-                keyboard.rows.iter().map(|row| {
-                    row.iter().map(|btn| {
-                        InlineKeyboardButton::callback(&btn.text, &btn.callback_data)
+            if let Some(reply_to) = &message.reply_to {
+                if let Ok(msg_id) = reply_to.as_str().parse::<i32>() {
+                    req = req.reply_parameters(teloxide::types::ReplyParameters::new(
+                        teloxide::types::MessageId(msg_id),
+                    ));
+                }
+            }
+            if let Some(ref keyboard) = message.inline_keyboard {
+                let markup = InlineKeyboardMarkup::new(
+                    keyboard.rows.iter().map(|row| {
+                        row.iter().map(|btn| {
+                            InlineKeyboardButton::callback(&btn.text, &btn.callback_data)
+                        }).collect::<Vec<_>>()
                     }).collect::<Vec<_>>()
-                }).collect::<Vec<_>>()
-            );
-            request = request.reply_markup(markup);
-        }
+                );
+                req = req.reply_markup(markup);
+            }
+            req
+        };
 
-        // Send the message
-        let sent = request
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("Telegram send error: {}", e)))?;
+        // Try MarkdownV2 first, fall back to plain text if parsing fails
+        let sent = match build_request(Some(ParseMode::MarkdownV2)).await {
+            Ok(msg) => msg,
+            Err(md_err) => {
+                tracing::warn!(
+                    "MarkdownV2 send failed, retrying as plain text: {}",
+                    md_err
+                );
+                build_request(None)
+                    .await
+                    .map_err(|e| ChannelError::SendFailed(format!("Telegram send error: {}", e)))?
+            }
+        };
 
         // Send attachments if any
         for attachment in &message.attachments {

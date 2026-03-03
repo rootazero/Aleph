@@ -28,20 +28,28 @@ pub fn ChatView() -> impl IntoView {
     // Subscribe to run.* events directly (no Effect — this is a one-shot mount action)
     let sub_id = subscribe_run_events(&dashboard, chat);
 
-    // Tell the Gateway to start forwarding run.* events
+    // Tell the Gateway to start forwarding stream.* events
+    // (backend publishes events with method "stream.run_accepted", "stream.response_chunk", etc.)
+    // Wait until connected before subscribing, since ChatView may mount before WebSocket is ready.
+    let dash_for_sub = dashboard;
     spawn_local(async move {
-        let dashboard = expect_context::<DashboardState>();
-        if let Err(e) = dashboard.subscribe_topic("run.*").await {
-            web_sys::console::error_1(&format!("Failed to subscribe run events: {e}").into());
+        // Poll until connected (max ~5s)
+        for _ in 0..50 {
+            if dash_for_sub.is_connected.get_untracked() { break; }
+            gloo_timers::future::TimeoutFuture::new(100).await;
+        }
+        if let Err(e) = dash_for_sub.subscribe_topic("stream.*").await {
+            web_sys::console::error_1(&format!("Failed to subscribe stream events: {e}").into());
         }
     });
 
+    let dash_for_cleanup = dashboard;
     on_cleanup(move || {
-        dashboard.unsubscribe_events(sub_id);
-        // Tell the Gateway to stop forwarding run.* events
+        dash_for_cleanup.unsubscribe_events(sub_id);
+        // Tell the Gateway to stop forwarding stream.* events
+        let dash = dash_for_cleanup;
         spawn_local(async move {
-            let dashboard = expect_context::<DashboardState>();
-            let _ = dashboard.unsubscribe_topic("run.*").await;
+            let _ = dash.unsubscribe_topic("stream.*").await;
         });
     });
 
@@ -64,7 +72,7 @@ fn MessageList() -> impl IntoView {
         <div class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
             <For
                 each=move || chat.messages.get()
-                key=|msg| msg.id.clone()
+                key=|msg| format!("{}:{}:{}:{}", msg.id, msg.content.len(), msg.is_streaming, msg.tool_calls.len())
                 children=move |msg| {
                     view! { <MessageBubble message=msg /> }
                 }
@@ -182,6 +190,7 @@ fn format_size(bytes: u64) -> String {
 /// Text input area with send button and file attachments.
 #[component]
 fn InputArea() -> impl IntoView {
+    let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
     let input_text = RwSignal::new(String::new());
     let is_sending = RwSignal::new(false);
@@ -213,11 +222,10 @@ fn InputArea() -> impl IntoView {
             .collect();
 
         let session_key = chat.session_key.get();
+        let dash = dashboard;
         spawn_local(async move {
-            let dashboard = expect_context::<DashboardState>();
-            let chat = expect_context::<ChatState>();
             let sk = session_key.as_deref();
-            match ChatApi::send(&dashboard, &text, sk, api_attachments).await {
+            match ChatApi::send(&dash, &text, sk, api_attachments).await {
                 Ok(resp) => {
                     chat.session_key.set(Some(resp.session_key));
                 }
@@ -319,9 +327,9 @@ fn InputArea() -> impl IntoView {
     // Abort button handler
     let on_abort = move |_: web_sys::MouseEvent| {
         if let Some(run_id) = chat.active_run_id.get() {
+            let dash = dashboard;
             spawn_local(async move {
-                let dashboard = expect_context::<DashboardState>();
-                let _ = ChatApi::abort(&dashboard, &run_id).await;
+                let _ = ChatApi::abort(&dash, &run_id).await;
             });
         }
     };

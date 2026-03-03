@@ -123,6 +123,11 @@ pub struct SearchBackendConfig {
     #[schemars(skip)]
     pub api_key: Option<String>,
 
+    /// Secret vault name for encrypted API key storage (optional)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub secret_name: Option<String>,
+
     /// Base URL (required for SearXNG, optional for others)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,

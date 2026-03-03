@@ -58,6 +58,8 @@ pub mod pim;
 pub mod browser;
 pub mod config_read;
 pub mod config_update;
+pub mod profile_update;
+pub mod scratchpad;
 pub mod soul_update;
 pub mod vision;
 
@@ -90,6 +92,8 @@ pub use pim::{PimArgs, PimOutput, PimTool};
 pub use browser::{BrowserAction, BrowserArgs, BrowserOutput, BrowserTool};
 pub use config_read::{ConfigReadArgs, ConfigReadOutput, ConfigReadTool};
 pub use config_update::{ConfigUpdateArgs, ConfigUpdateOutput, ConfigUpdateTool};
+pub use profile_update::{ProfileField, ProfileOperation, ProfileUpdateArgs, ProfileUpdateOutput, ProfileUpdateTool};
+pub use scratchpad::{ScratchpadAction, ScratchpadArgs, ScratchpadOutput, ScratchpadTool};
 pub use soul_update::{SoulField, SoulOperation, SoulUpdateArgs, SoulUpdateOutput, SoulUpdateTool};
 pub use vision::{VisionAction, VisionArgs, VisionOutput, VisionTool};
 

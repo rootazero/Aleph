@@ -109,14 +109,21 @@ fn build_generation_provider_for_persistence(
     let api_key = normalize_optional_string(config.api_key.clone());
     let requested_secret_name = normalize_optional_string(config.secret_name.clone());
 
-    let secret_name = if let Some(ref api_key_value) = api_key {
-        Some(store_generation_provider_api_key(
-            provider_name,
-            api_key_value,
-            requested_secret_name.as_deref(),
-        )?)
+    // Only use SecretVault when user explicitly provides a secret_name.
+    // Otherwise store api_key directly in config.toml (plaintext).
+    let (persisted_api_key, secret_name) = if let Some(ref sn) = requested_secret_name {
+        if let Some(ref api_key_value) = api_key {
+            let stored_name = store_generation_provider_api_key(
+                provider_name,
+                api_key_value,
+                Some(sn.as_str()),
+            )?;
+            (None, Some(stored_name))
+        } else {
+            (None, Some(sn.clone()))
+        }
     } else {
-        requested_secret_name
+        (api_key, None)
     };
 
     // Restore preset defaults for empty base_url / model (merged with user overrides)
@@ -141,7 +148,7 @@ fn build_generation_provider_for_persistence(
 
     Ok(GenerationProviderConfig {
         secret_name,
-        api_key: None,
+        api_key: persisted_api_key,
         base_url,
         model,
         ..config

@@ -290,7 +290,7 @@ fn PresetGrid(
                                             } else if backend_verified {
                                                 view! {
                                                     <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                        "Active"
+                                                        "Verified"
                                                     </span>
                                                 }.into_any()
                                             } else {
@@ -396,6 +396,7 @@ fn ProviderDetailPanel(
     let save_success = RwSignal::new(false);
     let testing = RwSignal::new(false);
     let test_success = RwSignal::new(Option::<bool>::None);
+    let deleting = RwSignal::new(false);
 
     // Sync form when config or selection changes
     Effect::new(move || {
@@ -572,6 +573,31 @@ fn ProviderDetailPanel(
         });
     };
 
+    let on_delete = move |_| {
+        let sel = selected.get();
+        if sel.is_none() { return; }
+        let provider_name = sel.unwrap();
+
+        deleting.set(true);
+        error.set(None);
+
+        spawn_local(async move {
+            match SearchConfigApi::delete_backend(&state, &provider_name).await {
+                Ok(()) => {
+                    // Refresh config
+                    if let Ok(new_cfg) = SearchConfigApi::get(&state).await {
+                        config.set(new_cfg);
+                    }
+                    selected.set(None);
+                }
+                Err(e) => {
+                    error.set(Some(format!("Delete failed: {}", e)));
+                }
+            }
+            deleting.set(false);
+        });
+    };
+
     view! {
         <div class="flex flex-col h-full">
             {move || {
@@ -635,7 +661,7 @@ fn ProviderDetailPanel(
                                         {if is_verified {
                                             view! {
                                                 <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded">
-                                                    "Active"
+                                                    "Verified"
                                                 </span>
                                             }.into_any()
                                         } else {
@@ -880,20 +906,42 @@ fn ProviderDetailPanel(
                                         prop:disabled=move || saving.get()
                                         class="flex-1 px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
                                     >
-                                        {move || if saving.get() { "Saving..." } else { "Save Settings" }}
+                                        {move || if saving.get() { "Saving..." } else { "Save" }}
                                     </button>
                                 </div>
 
-                                {move || {
-                                    if !is_active {
+                                {let sel_name_for_row2 = sel_name.clone(); move || {
+                                    let has_backend = config.get().backends.iter().any(|b| b.name == sel_name_for_row2);
+                                    if has_backend {
                                         view! {
-                                            <button
-                                                on:click=on_set_active
-                                                prop:disabled=move || saving.get()
-                                                class="w-full px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
-                                            >
-                                                "Set as Default"
-                                            </button>
+                                            <div class="flex flex-row gap-3">
+                                                {if !is_active {
+                                                    Some(view! {
+                                                        <button
+                                                            on:click=on_set_active
+                                                            prop:disabled=move || saving.get()
+                                                            class="flex-1 px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
+                                                        >
+                                                            "Set as Default"
+                                                        </button>
+                                                    })
+                                                } else {
+                                                    None
+                                                }}
+                                                {if !is_active {
+                                                    Some(view! {
+                                                        <button
+                                                            on:click=on_delete
+                                                            prop:disabled=move || deleting.get()
+                                                            class="flex-1 px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
+                                                        >
+                                                            {move || if deleting.get() { "Deleting..." } else { "Delete" }}
+                                                        </button>
+                                                    })
+                                                } else {
+                                                    None
+                                                }}
+                                            </div>
                                         }.into_any()
                                     } else {
                                         view! { <div></div> }.into_any()

@@ -25,6 +25,16 @@ pub struct ProviderInfo {
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    pub color: String,
+    pub timeout_seconds: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
     pub is_default: bool,
     pub verified: bool,
 }
@@ -56,6 +66,12 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -
             enabled: cfg.enabled,
             model: cfg.model.clone(),
             provider_type: Some(cfg.protocol()),
+            base_url: cfg.base_url.clone(),
+            color: cfg.color.clone(),
+            timeout_seconds: cfg.timeout_seconds,
+            max_tokens: cfg.max_tokens,
+            temperature: cfg.temperature,
+            api_key: cfg.api_key.clone(),
             is_default: default_provider.as_ref() == Some(name),
             verified: cfg.verified,
         })
@@ -90,6 +106,12 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
                 enabled: cfg.enabled,
                 model: cfg.model.clone(),
                 provider_type: Some(cfg.protocol()),
+                base_url: cfg.base_url.clone(),
+                color: cfg.color.clone(),
+                timeout_seconds: cfg.timeout_seconds,
+                max_tokens: cfg.max_tokens,
+                temperature: cfg.temperature,
+                api_key: cfg.api_key.clone(),
                 is_default: default_provider.as_ref() == Some(&params.name),
                 verified: cfg.verified,
             };
@@ -238,14 +260,23 @@ fn build_provider_config_for_persistence(
     let api_key = normalize_optional_string(params.api_key);
     let requested_secret_name = normalize_optional_string(params.secret_name);
 
-    let secret_name = if let Some(ref api_key_value) = api_key {
-        Some(store_provider_api_key(
-            provider_name,
-            api_key_value,
-            requested_secret_name.as_deref(),
-        )?)
+    // Only use SecretVault when user explicitly provides a secret_name.
+    // Otherwise store api_key directly in config.toml (plaintext).
+    let (persisted_api_key, secret_name) = if let Some(ref sn) = requested_secret_name {
+        // User wants encrypted storage — requires ALEPH_MASTER_KEY
+        if let Some(ref api_key_value) = api_key {
+            let stored_name = store_provider_api_key(
+                provider_name,
+                api_key_value,
+                Some(sn.as_str()),
+            )?;
+            (None, Some(stored_name))
+        } else {
+            (None, Some(sn.clone()))
+        }
     } else {
-        requested_secret_name
+        // No secret_name — store api_key directly in config
+        (api_key, None)
     };
 
     // Restore preset defaults for empty base_url / model (merged with user overrides)
@@ -271,7 +302,7 @@ fn build_provider_config_for_persistence(
 
     Ok(ProviderConfig {
         protocol: params.protocol,
-        api_key: None,
+        api_key: persisted_api_key,
         secret_name,
         model,
         base_url,
@@ -318,7 +349,7 @@ pub async fn handle_update(
         }
 
         // Convert JSON config to ProviderConfig and move plaintext api_key into vault
-        let provider_config = match build_provider_config_for_persistence(
+        let mut provider_config = match build_provider_config_for_persistence(
             &params.name,
             params.config,
             &cfg.presets_override,
@@ -333,8 +364,15 @@ pub async fn handle_update(
             }
         };
 
+        // If no new credentials were provided, preserve the existing ones
+        if provider_config.api_key.is_none() && provider_config.secret_name.is_none() {
+            if let Some(existing) = cfg.providers.get(&params.name) {
+                provider_config.api_key = existing.api_key.clone();
+                provider_config.secret_name = existing.secret_name.clone();
+            }
+        }
+
         // Update provider — config change resets verified status
-        let mut provider_config = provider_config;
         provider_config.verified = false;
         cfg.providers.insert(params.name.clone(), provider_config);
 
@@ -553,7 +591,28 @@ pub async fn handle_test(request: JsonRpcRequest, config_store: Arc<RwLock<Confi
 
     let provider_name = params.name;
     let config = params.config;
-    let test_api_key = match resolve_test_api_key(config.api_key.clone(), config.secret_name.clone()) {
+
+    // If no api_key/secret_name in request, fall back to stored credentials
+    let (effective_api_key, effective_secret_name) = {
+        let inline_key = normalize_optional_string(config.api_key.clone());
+        let inline_secret = normalize_optional_string(config.secret_name.clone());
+        if inline_key.is_none() && inline_secret.is_none() {
+            if let Some(ref name) = provider_name {
+                let cfg = config_store.read().await;
+                if let Some(existing) = cfg.providers.get(name) {
+                    (existing.api_key.clone(), existing.secret_name.clone())
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            }
+        } else {
+            (inline_key, inline_secret)
+        }
+    };
+
+    let test_api_key = match resolve_test_api_key(effective_api_key, effective_secret_name) {
         Ok(value) => value,
         Err(e) => {
             return JsonRpcResponse::success(

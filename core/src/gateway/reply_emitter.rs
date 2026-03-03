@@ -26,7 +26,7 @@
 //! ```
 
 use async_trait::async_trait;
-use crate::sync_primitives::{AtomicU64, Ordering};
+use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
 use crate::sync_primitives::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, warn};
@@ -77,6 +77,9 @@ pub struct ReplyEmitter {
     /// Sequence counter for events
     seq_counter: AtomicU64,
 
+    /// Whether content has been sent to the channel (to avoid duplicate sends)
+    has_sent: AtomicBool,
+
     /// Run ID for this execution
     run_id: String,
 }
@@ -94,6 +97,7 @@ impl ReplyEmitter {
             config: ReplyEmitterConfig::default(),
             buffer: Mutex::new(String::new()),
             seq_counter: AtomicU64::new(0),
+            has_sent: AtomicBool::new(false),
             run_id,
         }
     }
@@ -111,6 +115,7 @@ impl ReplyEmitter {
             config,
             buffer: Mutex::new(String::new()),
             seq_counter: AtomicU64::new(0),
+            has_sent: AtomicBool::new(false),
             run_id,
         }
     }
@@ -158,6 +163,7 @@ impl ReplyEmitter {
         if content.is_empty() {
             return;
         }
+        self.has_sent.store(true, Ordering::SeqCst);
 
         let message = OutboundMessage {
             conversation_id: self.route.conversation_id.clone(),
@@ -213,23 +219,21 @@ impl EventEmitter for ReplyEmitter {
             }
 
             StreamEvent::RunComplete { summary, .. } => {
-                // Flush any remaining buffer
+                // Flush any remaining buffer (from ResponseChunk events)
                 self.flush().await;
 
-                // If there's a final response in the summary that wasn't streamed,
-                // send it now (this handles non-streaming mode)
-                if let Some(final_response) = summary.final_response {
-                    // Check if buffer was empty (meaning response wasn't streamed)
-                    let buffer = self.buffer.lock().await;
-                    if buffer.is_empty() {
-                        drop(buffer);
-                        // Only send if we haven't already sent something
-                        // The final_response might duplicate what was in ResponseChunks
-                        debug!(
-                            "Run {} complete with final_response length: {}",
-                            self.run_id,
-                            final_response.len()
-                        );
+                // If nothing was sent yet (no ResponseChunks or AskUser events
+                // produced output), send the final_response as a fallback.
+                if !self.has_sent.load(Ordering::SeqCst) {
+                    if let Some(ref final_response) = summary.final_response {
+                        if !final_response.is_empty() {
+                            debug!(
+                                "Run {} complete, sending final_response as fallback (length: {})",
+                                self.run_id,
+                                final_response.len()
+                            );
+                            self.send_to_channel(final_response).await;
+                        }
                     }
                 }
             }

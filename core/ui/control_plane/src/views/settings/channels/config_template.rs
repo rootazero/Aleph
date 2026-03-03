@@ -120,15 +120,21 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
         let section = config_section.to_string();
 
         spawn_local(async move {
-            // Build a flat patch map: "channels.{id}.{key}" -> value
-            let mut patch = serde_json::Map::new();
+            // Build PatchRequest: { path, patch }
+            // All fields (including secrets like bot_token) go into patch directly.
+            // secret_fields is only used when a vault is configured (e.g. provider api_keys).
+            let mut patch_obj = serde_json::Map::new();
             for (key, value) in values.iter() {
-                let full_key = format!("{}.{}", section, key);
-                patch.insert(full_key, value.clone());
+                patch_obj.insert(key.clone(), value.clone());
             }
 
+            let params = json!({
+                "path": section,
+                "patch": Value::Object(patch_obj),
+            });
+
             match state
-                .rpc_call("config.patch", Value::Object(patch))
+                .rpc_call("config.patch", params)
                 .await
             {
                 Ok(_) => {

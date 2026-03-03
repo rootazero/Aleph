@@ -247,10 +247,18 @@ fn create_provider_registry_from_config(
     }
 }
 
+/// Result from registering agent handlers — includes optional execution support
+/// for use by InboundMessageRouter.
+struct AgentHandlersResult {
+    _run_manager: Arc<AgentRunManager>,
+    execution_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>>,
+    agent_registry: Option<Arc<AgentRegistry>>,
+}
+
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
 /// Selects real ExecutionEngine when an API key is available (env or config),
 /// otherwise uses the simulated AgentRunManager.
-/// Returns the shared AgentRunManager (needed for status/cancel regardless of mode).
+/// Returns execution support components for inbound routing.
 async fn register_agent_handlers(
     server: &mut GatewayServer,
     session_manager: Arc<SessionManager>,
@@ -260,8 +268,10 @@ async fn register_agent_handlers(
     app_config: &alephcore::Config,
     memory_db: &alephcore::memory::store::MemoryBackend,
     daemon: bool,
-) -> Arc<AgentRunManager> {
+) -> AgentHandlersResult {
     let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
+    let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
+    let mut agent_reg: Option<Arc<AgentRegistry>> = None;
 
     // Try to create provider: env vars first, then app config
     let provider_registry = if can_create_provider_from_env() {
@@ -375,6 +385,10 @@ async fn register_agent_handlers(
                 handle_chat_send_with_engine(req, engine, event_bus, router, agent_registry).await
             }
         });
+
+        // Capture for inbound router
+        exec_adapter = Some(engine as Arc<dyn alephcore::gateway::ExecutionAdapter>);
+        agent_reg = Some(agent_registry);
     } else {
         if !daemon {
             println!("  Mode: Simulated (set ANTHROPIC_API_KEY or OPENAI_API_KEY for real execution)");
@@ -437,7 +451,11 @@ async fn register_agent_handlers(
         println!();
     }
 
-    run_manager
+    AgentHandlersResult {
+        _run_manager: run_manager,
+        execution_adapter: exec_adapter,
+        agent_registry: agent_reg,
+    }
 }
 
 /// Register POE (Principle-Operation-Evaluation) handlers when an Anthropic
@@ -840,31 +858,49 @@ async fn initialize_channels(
 
 /// Initialize InboundMessageRouter and start it.
 /// Connects the channel registry to the agent router for unified routing.
+/// When execution support is available, messages trigger real agent execution.
 async fn initialize_inbound_router(
     channel_registry: Arc<ChannelRegistry>,
     router: Arc<AgentRouter>,
+    execution_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>>,
+    agent_registry: Option<Arc<AgentRegistry>>,
+    pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore>,
     daemon: bool,
 ) {
-    let pairing_store_path = alephcore::utils::paths::get_pairing_db_path()
-        .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_pairing.db"));
-
-    let pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore> = Arc::new(
-        SqlitePairingStore::new(&pairing_store_path)
-            .unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to create pairing store: {}. Using in-memory.", e);
-                SqlitePairingStore::in_memory().expect("Failed to create in-memory pairing store")
-            })
-    );
-
     let routing_config = RoutingConfig::default();
-    let inbound_router = Arc::new(
-        InboundMessageRouter::new(
-            channel_registry.clone(),
-            pairing_store.clone(),
-            routing_config,
-        )
-        .with_agent_router(router.clone())
-    );
+
+    // Use full execution support when available, otherwise basic routing
+    let inbound_router = match (execution_adapter, agent_registry) {
+        (Some(ea), Some(ar)) => {
+            if !daemon {
+                println!("  Inbound router: execution support enabled");
+            }
+            InboundMessageRouter::with_unified_routing(
+                channel_registry.clone(),
+                pairing_store.clone(),
+                routing_config,
+                ar,
+                ea,
+                router.clone(),
+            )
+        }
+        _ => {
+            if !daemon {
+                println!("  Inbound router: routing only (no execution support)");
+            }
+            InboundMessageRouter::new(
+                channel_registry.clone(),
+                pairing_store.clone(),
+                routing_config,
+            )
+            .with_agent_router(router.clone())
+        }
+    };
+
+    // Default DM policy is Pairing — owner must approve each sender.
+    // Channel-specific overrides can be registered here if needed.
+
+    let inbound_router = Arc::new(inbound_router);
 
     let _inbound_router_handle = inbound_router.clone().start().await;
     if !daemon {
@@ -948,7 +984,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Load app config early so agent handlers can use configured providers
     let loaded_app_config = load_app_config().await;
 
-    let _run_manager = register_agent_handlers(
+    let agent_result = register_agent_handlers(
         &mut server, session_manager.clone(), event_bus.clone(),
         router.clone(), &full_config, &loaded_app_config, &memory_db, args.daemon,
     ).await;
@@ -1009,9 +1045,72 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
     }
 
+    // Create channel pairing store (shared between InboundMessageRouter and RPC handlers)
+    let channel_pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore> = {
+        let pairing_store_path = alephcore::utils::paths::get_pairing_db_path()
+            .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_pairing.db"));
+        Arc::new(
+            SqlitePairingStore::new(&pairing_store_path)
+                .unwrap_or_else(|e| {
+                    eprintln!("Warning: Failed to create pairing store: {}. Using in-memory.", e);
+                    SqlitePairingStore::in_memory().expect("Failed to create in-memory pairing store")
+                })
+        )
+    };
+
+    // Register channel pairing RPC handlers (uses same store as InboundMessageRouter)
+    {
+        use alephcore::gateway::handlers::pairing as pairing_handlers;
+
+        let store = channel_pairing_store.clone();
+        server.handlers_mut().register("channel.pairing.list", move |req| {
+            let store = store.clone();
+            async move { pairing_handlers::handle_list(req, store).await }
+        });
+
+        let store = channel_pairing_store.clone();
+        server.handlers_mut().register("channel.pairing.approve", move |req| {
+            let store = store.clone();
+            async move { pairing_handlers::handle_approve(req, store).await }
+        });
+
+        let store = channel_pairing_store.clone();
+        server.handlers_mut().register("channel.pairing.reject", move |req| {
+            let store = store.clone();
+            async move { pairing_handlers::handle_reject(req, store).await }
+        });
+
+        let store = channel_pairing_store.clone();
+        server.handlers_mut().register("channel.pairing.approved", move |req| {
+            let store = store.clone();
+            async move { pairing_handlers::handle_approved_list(req, store).await }
+        });
+
+        let store = channel_pairing_store.clone();
+        server.handlers_mut().register("channel.pairing.revoke", move |req| {
+            let store = store.clone();
+            async move { pairing_handlers::handle_revoke(req, store).await }
+        });
+
+        if !args.daemon {
+            println!("Channel pairing methods:");
+            println!("  - channel.pairing.list     : List pending channel pairing requests");
+            println!("  - channel.pairing.approve  : Approve a channel sender");
+            println!("  - channel.pairing.reject   : Reject a channel sender");
+            println!("  - channel.pairing.approved : List approved channel senders");
+            println!("  - channel.pairing.revoke   : Revoke a channel sender");
+            println!();
+        }
+    }
+
     let app_config_snapshot = app_config_for_channels.read().await.clone();
     let channel_registry = initialize_channels(&mut server, &full_config, &app_config_snapshot, &app_config_for_channels, args.daemon).await;
-    initialize_inbound_router(channel_registry, router, args.daemon).await;
+    initialize_inbound_router(
+        channel_registry, router,
+        agent_result.execution_adapter, agent_result.agent_registry,
+        channel_pairing_store,
+        args.daemon,
+    ).await;
 
     let config_path = args.config.clone()
         .map(|p| expand_path(&p.to_string_lossy()))
