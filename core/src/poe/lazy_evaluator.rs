@@ -913,4 +913,107 @@ mod tests {
         let hint = eval.validate_completion("any text").await;
         assert!(hint.is_none());
     }
+
+    // --- Integration tests: full lazy POE flow ---
+
+    #[tokio::test]
+    async fn integration_full_lazy_poe_flow() {
+        // Simulate: user asks for research, agent uses tools, completes
+        let eval = LazyPoeEvaluator::new("帮我查一下比特币最新价格");
+
+        // 1. Evaluator starts inactive
+        assert!(!eval.is_active().await);
+
+        // 2. Agent decides to use a tool → activate
+        eval.activate().await;
+        assert!(eval.is_active().await);
+
+        // 3. Tool executes with good result
+        let action = Action::ToolCall {
+            tool_name: "web_search".to_string(),
+            arguments: json!({"query": "bitcoin price"}),
+        };
+        let result = ActionResult::ToolSuccess {
+            output: json!({"price": "67000", "source": "coinbase"}),
+            duration_ms: 500,
+        };
+        eval.record_tool_result("web_search", true).await;
+
+        // 4. Step evaluation — should continue (good result)
+        let directive = eval.evaluate_step(&action, &result).await;
+        assert!(matches!(directive, StepDirective::Continue));
+
+        // 5. Completion with valid summary — should pass
+        let hint = eval
+            .validate_completion("根据搜索结果，比特币当前价格为 $67,000")
+            .await;
+        assert!(hint.is_none());
+    }
+
+    #[tokio::test]
+    async fn integration_hallucination_retry_flow() {
+        let eval = LazyPoeEvaluator::new("生成一份PDF报告");
+        eval.activate().await;
+
+        // Agent completes without calling pdf_generate → hallucination
+        let hint1 = eval.validate_completion("PDF已生成，请查收").await;
+        assert!(hint1.is_some()); // First retry consumed
+
+        // Second attempt, still no tool called
+        let hint2 = eval.validate_completion("PDF已生成").await;
+        assert!(hint2.is_some()); // Second retry consumed
+
+        // Third attempt — budget exhausted, accepted (best effort)
+        let hint3 = eval.validate_completion("PDF已生成").await;
+        assert!(hint3.is_none()); // Accepted despite hallucination
+    }
+
+    #[tokio::test]
+    async fn integration_step_hints_preserve_completion_budget() {
+        // Step-level hints should NOT consume retry budget
+        let eval = LazyPoeEvaluator::new("search for data");
+        eval.activate().await;
+
+        let action = Action::ToolCall {
+            tool_name: "search".to_string(),
+            arguments: json!({}),
+        };
+
+        // Multiple tool errors at step level — should always hint, never exhaust budget
+        for _ in 0..5 {
+            let result = ActionResult::ToolError {
+                error: "timeout".to_string(),
+                retryable: true,
+            };
+            let directive = eval.evaluate_step(&action, &result).await;
+            assert!(matches!(directive, StepDirective::ContinueWithHint { .. }));
+        }
+
+        // Completion validation should still have full retry budget (2 retries)
+        let hint1 = eval.validate_completion("Here is the data from my search").await;
+        assert!(hint1.is_some()); // No tools recorded → first retry
+
+        eval.record_tool_result("search", true).await;
+        let hint2 = eval.validate_completion("Here is the data from my search").await;
+        assert!(hint2.is_none()); // Now clean — tool recorded, relevant response
+    }
+
+    #[tokio::test]
+    async fn integration_set_query_after_construction() {
+        // Simulates the EventEmittingCallback pattern: new("") then set_query()
+        let eval = LazyPoeEvaluator::new("");
+        eval.set_query("帮我生成PDF报告").await;
+        eval.activate().await;
+
+        // First completion fails: no tools invoked
+        let hint1 = eval.validate_completion("PDF已生成").await;
+        assert!(hint1.is_some());
+        assert!(hint1.unwrap().contains("tools"));
+
+        // Record a non-PDF tool — should still catch hallucination
+        eval.record_tool_result("text_editor", true).await;
+        let hint2 = eval.validate_completion("PDF已生成").await;
+        assert!(hint2.is_some());
+        assert!(hint2.unwrap().contains("Hallucination"));
+    }
 }
