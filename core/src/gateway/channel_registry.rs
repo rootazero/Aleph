@@ -137,7 +137,9 @@ impl ChannelRegistry {
 
         for channel_arc in channels.values() {
             let channel = channel_arc.read().await;
-            infos.push(channel.info().clone());
+            let mut info = channel.info().clone();
+            info.status = channel.status(); // override with live status
+            infos.push(info);
         }
 
         infos
@@ -151,7 +153,9 @@ impl ChannelRegistry {
         for channel_arc in channels.values() {
             let channel = channel_arc.read().await;
             if channel.channel_type() == channel_type {
-                infos.push(channel.info().clone());
+                let mut info = channel.info().clone();
+                info.status = channel.status();
+                infos.push(info);
             }
         }
 
@@ -230,9 +234,9 @@ impl ChannelRegistry {
             .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {}", channel_id)))?;
 
         let channel = channel_arc.read().await;
-        if channel.status() != ChannelStatus::Connected {
+        if channel.status() == ChannelStatus::Disabled {
             return Err(ChannelError::NotConnected(format!(
-                "Channel {} is not connected",
+                "Channel {} is disabled",
                 channel_id
             )));
         }
@@ -247,7 +251,7 @@ impl ChannelRegistry {
 
         for (channel_id, channel_arc) in channels.iter() {
             let channel = channel_arc.read().await;
-            if channel.status() == ChannelStatus::Connected {
+            if channel.status() != ChannelStatus::Disabled {
                 let result = channel.send(message.clone()).await;
                 results.push((channel_id.clone(), result));
             }
