@@ -117,10 +117,8 @@ impl Channel for NostrChannel {
         // Validate configuration
         self.config.validate().map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "nostr")]
-        {
-            self.channel_state.set_status(ChannelStatus::Connecting).await;
-            tracing::info!("Starting Nostr channel...");
+        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        tracing::info!("Starting Nostr channel...");
 
         // Derive public key
         let own_pubkey = message_ops::derive_pubkey(&self.config.private_key)
@@ -141,11 +139,11 @@ impl Channel for NostrChannel {
         let (write_tx, write_rx) = mpsc::channel(100);
         self.write_tx = Some(write_tx);
 
-            // Spawn relay connection loop
-            let config = self.config.clone();
-            let channel_id = self.info.id.clone();
-            let inbound_tx = self.channel_state.sender();
-            let status = self.channel_state.status_handle();
+        // Spawn relay connection loop
+        let config = self.config.clone();
+        let channel_id = self.info.id.clone();
+        let inbound_tx = self.channel_state.sender();
+        let status = self.channel_state.status_handle();
 
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
@@ -163,10 +161,8 @@ impl Channel for NostrChannel {
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-            self.channel_state.set_status(ChannelStatus::Connected).await;
-            Ok(())
-        }
-
+        self.channel_state.set_status(ChannelStatus::Connected).await;
+        Ok(())
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {

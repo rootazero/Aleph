@@ -84,7 +84,6 @@ impl TelegramChannel {
             callback_tx,
             callback_rx: Some(callback_rx),
             shutdown_tx: None,
-            #[cfg(feature = "telegram")]
             bot: None,
         }
     }
@@ -331,10 +330,10 @@ impl Channel for TelegramChannel {
         self.shutdown_tx = Some(shutdown_tx);
 
         // Start message polling
-        let inbound_tx = self.inbound_tx.clone();
+        let inbound_tx = self.channel_state.sender();
         let callback_tx = self.callback_tx.clone();
         let config = self.config.clone();
-        let status = self.status.clone();
+        let status = self.channel_state.status_handle();
 
         tokio::spawn(async move {
             tracing::info!("Starting Telegram long-polling...");
@@ -418,108 +417,8 @@ impl Channel for TelegramChannel {
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-            // Create shutdown channel
-            let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
-            self.shutdown_tx = Some(shutdown_tx);
-
-            // Start message polling
-            let inbound_tx = self.channel_state.sender();
-            let callback_tx = self.callback_tx.clone();
-            let config = self.config.clone();
-            let status = self.channel_state.status_handle();
-
-            tokio::spawn(async move {
-                tracing::info!("Starting Telegram long-polling...");
-                *status.write().await = ChannelStatus::Connected;
-
-                // Message handler
-                let message_handler = Update::filter_message().endpoint(
-                    move |_bot: Bot, msg: teloxide::types::Message| {
-                        let inbound_tx = inbound_tx.clone();
-                        let config = config.clone();
-                        async move {
-                            if let Some(inbound) = TelegramChannel::convert_message(&msg, &config) {
-                                if let Err(e) = inbound_tx.send(inbound).await {
-                                    tracing::error!("Failed to send inbound message: {}", e);
-                                }
-                            }
-                            Ok::<(), std::convert::Infallible>(())
-                        }
-                    },
-                );
-
-                // Callback query handler
-                let callback_handler = Update::filter_callback_query().endpoint(
-                    move |bot: Bot, q: TgCallbackQuery| {
-                        let tx = callback_tx.clone();
-                        async move {
-                            if let Some(data) = q.data.clone() {
-                                let chat_id = q
-                                    .message
-                                    .as_ref()
-                                    .map(|m| m.chat().id.to_string())
-                                    .unwrap_or_default();
-                                let msg_id = q
-                                    .message
-                                    .as_ref()
-                                    .map(|m| m.id().to_string())
-                                    .unwrap_or_default();
-
-                                let query = CallbackQuery {
-                                    id: q.id.clone(),
-                                    user_id: UserId::new(q.from.id.to_string()),
-                                    chat_id: ConversationId::new(chat_id),
-                                    message_id: MessageId::new(msg_id),
-                                    data,
-                                };
-
-                                if let Err(e) = tx.send(query).await {
-                                    tracing::error!("Failed to send callback query: {}", e);
-                                }
-                            }
-
-                            // Answer callback to remove loading indicator
-                            if let Err(e) = bot.answer_callback_query(&q.id).await {
-                                tracing::warn!("Failed to answer callback query: {}", e);
-                            }
-
-                            Ok::<(), std::convert::Infallible>(())
-                        }
-                    },
-                );
-
-                // Combine handlers
-                let handler = dptree::entry()
-                    .branch(message_handler)
-                    .branch(callback_handler);
-
-                let mut dispatcher = Dispatcher::builder(bot, handler)
-                    .enable_ctrlc_handler()
-                    .build();
-
-                tokio::select! {
-                    _ = dispatcher.dispatch() => {
-                        tracing::info!("Telegram dispatcher stopped");
-                    }
-                    _ = &mut shutdown_rx => {
-                        tracing::info!("Telegram channel shutdown requested");
-                        // Dispatcher will stop when this task ends
-                    }
-                }
-
-                *status.write().await = ChannelStatus::Disconnected;
-            });
-
-            self.set_status(ChannelStatus::Connected).await;
-            Ok(())
-        }
-
-        #[cfg(not(feature = "telegram"))]
-        {
-            Err(ChannelError::UnsupportedFeature(
-                "Telegram support not compiled (enable 'telegram' feature)".to_string(),
-            ))
-        }
+        self.set_status(ChannelStatus::Connected).await;
+        Ok(())
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
