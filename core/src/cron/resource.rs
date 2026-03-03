@@ -28,7 +28,6 @@ pub fn resolve_effective_concurrency(
 }
 
 /// Get current CPU usage as a fraction (0.0 - 1.0).
-#[cfg(feature = "cron")]
 fn get_cpu_usage() -> f64 {
     use sysinfo::System;
 
@@ -47,11 +46,6 @@ fn get_cpu_usage() -> f64 {
         / 100.0;
 
     usage.clamp(0.0, 1.0)
-}
-
-#[cfg(not(feature = "cron"))]
-fn get_cpu_usage() -> f64 {
-    0.0
 }
 
 #[cfg(test)]

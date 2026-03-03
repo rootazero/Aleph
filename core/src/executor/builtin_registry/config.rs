@@ -10,7 +10,6 @@ use crate::dispatcher::ToolRegistry as DispatcherToolRegistry;
 use crate::generation::GenerationProviderRegistry;
 use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
-#[cfg(feature = "gateway")]
 use crate::gateway::context::GatewayContext;
 
 /// Configuration for builtin tools
@@ -33,7 +32,5 @@ pub struct BuiltinToolConfig {
     /// Embedding provider for semantic memory search
     pub embedder: Option<Arc<dyn EmbeddingProvider>>,
     /// Gateway context for sessions tools (sessions_list, sessions_send)
-    /// Requires the "gateway" feature to be enabled.
-    #[cfg(feature = "gateway")]
     pub gateway_context: Option<Arc<GatewayContext>>,
 }

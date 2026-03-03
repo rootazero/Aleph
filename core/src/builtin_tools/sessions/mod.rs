@@ -67,28 +67,22 @@
 //! ```
 
 pub mod helpers;
-#[cfg(feature = "gateway")]
 pub mod list_tool;
-#[cfg(feature = "gateway")]
 pub mod send_tool;
-#[cfg(feature = "gateway")]
 pub mod spawn_tool;
 
 pub use helpers::{
     classify_session_kind, derive_channel, parse_session_key, resolve_display_key, SessionKind,
 };
 
-#[cfg(feature = "gateway")]
 pub use list_tool::{
     SessionListRow, SessionsListArgs, SessionsListOutput, SessionsListTool,
 };
 
-#[cfg(feature = "gateway")]
 pub use send_tool::{
     SessionsSendArgs, SessionsSendOutput, SessionsSendStatus, SessionsSendTool,
 };
 
-#[cfg(feature = "gateway")]
 pub use spawn_tool::{
     CleanupPolicy, SessionsSpawnArgs, SessionsSpawnOutput, SessionsSpawnTool, SpawnStatus,
 };

@@ -8,21 +8,7 @@ use serde::{Deserialize, Serialize};
 
 // Re-export CleanupPolicy from the spawn_tool module for use in config
 // This avoids duplicating the enum definition
-#[cfg(feature = "gateway")]
 pub use crate::builtin_tools::sessions::spawn_tool::CleanupPolicy;
-
-// When gateway feature is not enabled, we need a local definition
-// to allow config parsing to work
-#[cfg(not(feature = "gateway"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum CleanupPolicy {
-    /// Session is cleaned up after the run completes (default)
-    #[default]
-    Ephemeral,
-    /// Session persists after run completion
-    Persistent,
-}
 
 // =============================================================================
 // SubagentsConfigToml

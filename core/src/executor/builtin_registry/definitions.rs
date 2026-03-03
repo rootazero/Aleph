@@ -120,13 +120,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Browse personal memory via hierarchical VFS navigation (ls, read, glob on aleph:// paths)",
         requires_config: true, // Requires memory_db
     },
-    #[cfg(feature = "gateway")]
     BuiltinToolDefinition {
         name: "sessions_list",
         description: "List sessions accessible to this agent for cross-session communication",
         requires_config: true, // Requires gateway_context
     },
-    #[cfg(feature = "gateway")]
     BuiltinToolDefinition {
         name: "sessions_send",
         description: "Send messages to other sessions (same or different agent)",
@@ -196,7 +194,6 @@ pub fn create_tool_boxed(
         // Sessions tools require gateway_context and caller_agent_id at runtime,
         // so they cannot be created via create_tool_boxed. They are created
         // dynamically in BuiltinToolRegistry::execute_tool().
-        #[cfg(feature = "gateway")]
         "sessions_list" | "sessions_send" => None,
         _ => None,
     }
@@ -238,7 +235,6 @@ mod tests {
         assert!(names.contains(&"list_skills".to_string()));
     }
 
-    #[cfg(feature = "gateway")]
     #[test]
     fn test_sessions_tools_defined() {
         let names = get_builtin_tool_names();
@@ -248,7 +244,6 @@ mod tests {
         assert!(names.contains(&"sessions_send".to_string()));
     }
 
-    #[cfg(feature = "gateway")]
     #[test]
     fn test_sessions_tools_require_config() {
         // Sessions tools require gateway_context (dynamic creation)
@@ -265,7 +260,6 @@ mod tests {
         assert!(!is_builtin_tool("mcp:filesystem"));
     }
 
-    #[cfg(feature = "gateway")]
     #[test]
     fn test_is_builtin_tool_sessions() {
         assert!(is_builtin_tool("sessions_list"));

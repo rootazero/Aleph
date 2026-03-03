@@ -6,23 +6,18 @@
 //! - workspace_read(path) -> JSON string — read workspace files
 //! - secret_exists(name) -> "true"/"false" — check secret availability
 
-#[cfg(feature = "plugin-wasm")]
 use crate::sync_primitives::Arc;
 
-#[cfg(feature = "plugin-wasm")]
 use extism::host_fn;
 
-#[cfg(feature = "plugin-wasm")]
 use super::capability_kernel::WasmCapabilityKernel;
 
 /// Shared state passed to all host functions via Extism UserData
-#[cfg(feature = "plugin-wasm")]
 pub struct HostState {
     pub kernel: Arc<WasmCapabilityKernel>,
     pub workspace_root: std::path::PathBuf,
 }
 
-#[cfg(feature = "plugin-wasm")]
 host_fn!(pub host_log(state: HostState; level: String, message: String) {
     let state = state.get()?;
     let state = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -30,14 +25,12 @@ host_fn!(pub host_log(state: HostState; level: String, message: String) {
     Ok(())
 });
 
-#[cfg(feature = "plugin-wasm")]
 host_fn!(pub host_now_millis(state: HostState;) -> u64 {
     let state = state.get()?;
     let state = state.lock().unwrap_or_else(|e| e.into_inner());
     Ok(state.kernel.now_millis())
 });
 
-#[cfg(feature = "plugin-wasm")]
 host_fn!(pub host_workspace_read(state: HostState; path: String) -> String {
     let state = state.get()?;
     let state = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -55,7 +48,6 @@ host_fn!(pub host_workspace_read(state: HostState; path: String) -> String {
     }
 });
 
-#[cfg(feature = "plugin-wasm")]
 host_fn!(pub host_secret_exists(state: HostState; name: String) -> String {
     let state = state.get()?;
     let state = state.lock().unwrap_or_else(|e| e.into_inner());

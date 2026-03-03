@@ -21,19 +21,15 @@ pub use credential_injector::{inject_credential, CredentialError};
 pub use limits::WasmResourceLimits;
 pub use permissions::PermissionChecker;
 
-#[cfg(feature = "plugin-wasm")]
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "plugin-wasm")]
 use tracing::{debug, info};
 
 use crate::extension::error::ExtensionError;
 use crate::extension::manifest::PluginManifest;
 
-#[cfg(feature = "plugin-wasm")]
 use crate::sync_primitives::Arc;
 
-#[cfg(feature = "plugin-wasm")]
 use extism::{Manifest as ExtismManifest, PluginBuilder, UserData, Wasm, PTR};
 
 /// Input for WASM tool calls
@@ -54,13 +50,9 @@ pub struct WasmToolOutput {
 /// WASM plugin runtime manager
 #[derive(Default)]
 pub struct WasmRuntime {
-    #[cfg(feature = "plugin-wasm")]
     plugins: HashMap<String, LoadedWasmPlugin>,
-    #[cfg(not(feature = "plugin-wasm"))]
-    _phantom: std::marker::PhantomData<()>,
 }
 
-#[cfg(feature = "plugin-wasm")]
 struct LoadedWasmPlugin {
     plugin: extism::Plugin,
     #[allow(dead_code)]
@@ -76,7 +68,6 @@ impl WasmRuntime {
     }
 
     /// Load a WASM plugin
-    #[cfg(feature = "plugin-wasm")]
     pub fn load_plugin(&mut self, manifest: &PluginManifest) -> Result<(), ExtensionError> {
         let wasm_path = manifest.entry_path()?;
 
@@ -152,41 +143,17 @@ impl WasmRuntime {
         Ok(())
     }
 
-    #[cfg(not(feature = "plugin-wasm"))]
-    pub fn load_plugin(&mut self, _manifest: &PluginManifest) -> Result<(), ExtensionError> {
-        Err(ExtensionError::Runtime(
-            "WASM runtime not enabled. Compile with --features plugin-wasm".to_string(),
-        ))
-    }
-
     /// Unload a plugin
     pub fn unload_plugin(&mut self, plugin_id: &str) -> bool {
-        #[cfg(feature = "plugin-wasm")]
-        {
-            self.plugins.remove(plugin_id).is_some()
-        }
-        #[cfg(not(feature = "plugin-wasm"))]
-        {
-            let _ = plugin_id;
-            false
-        }
+        self.plugins.remove(plugin_id).is_some()
     }
 
     /// Check if a plugin is loaded
     pub fn is_loaded(&self, plugin_id: &str) -> bool {
-        #[cfg(feature = "plugin-wasm")]
-        {
-            self.plugins.contains_key(plugin_id)
-        }
-        #[cfg(not(feature = "plugin-wasm"))]
-        {
-            let _ = plugin_id;
-            false
-        }
+        self.plugins.contains_key(plugin_id)
     }
 
     /// Call a tool handler in a WASM plugin
-    #[cfg(feature = "plugin-wasm")]
     pub fn call_tool(
         &mut self,
         plugin_id: &str,
@@ -217,32 +184,13 @@ impl WasmRuntime {
         Ok(output)
     }
 
-    #[cfg(not(feature = "plugin-wasm"))]
-    pub fn call_tool(
-        &mut self,
-        _plugin_id: &str,
-        _handler: &str,
-        _input: WasmToolInput,
-    ) -> Result<WasmToolOutput, ExtensionError> {
-        Err(ExtensionError::Runtime(
-            "WASM runtime not enabled".to_string(),
-        ))
-    }
-
     /// Get list of loaded plugin IDs
     pub fn loaded_plugins(&self) -> Vec<String> {
-        #[cfg(feature = "plugin-wasm")]
-        {
-            self.plugins.keys().cloned().collect()
-        }
-        #[cfg(not(feature = "plugin-wasm"))]
-        {
-            Vec::new()
-        }
+        self.plugins.keys().cloned().collect()
     }
 }
 
-#[cfg(all(test, feature = "plugin-wasm"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::extension::types::PluginKind;
@@ -273,14 +221,9 @@ mod tests {
         let result = runtime.call_tool("nonexistent", "handler", input);
         assert!(result.is_err());
     }
-}
-
-#[cfg(all(test, not(feature = "plugin-wasm")))]
-mod tests {
-    use super::*;
 
     #[test]
-    fn test_wasm_runtime_disabled() {
+    fn test_wasm_runtime_loaded_plugins_empty() {
         let runtime = WasmRuntime::new();
         assert!(runtime.loaded_plugins().is_empty());
     }

@@ -76,7 +76,6 @@ mod traits;
 #[allow(clippy::module_inception)]
 mod agent_loop;
 
-#[cfg(feature = "cli")]
 pub mod callback_cli;
 
 #[cfg(test)]
@@ -118,6 +117,5 @@ pub use traits::{ActionExecutor, CompressedHistory, CompressorTrait, ThinkerTrai
 // Re-export main agent loop
 pub use agent_loop::{AgentLoop, RunContext};
 
-// Re-export CLI callback (when cli feature is enabled)
-#[cfg(feature = "cli")]
+// Re-export CLI callback
 pub use callback_cli::CliLoopCallback;

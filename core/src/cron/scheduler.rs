@@ -29,7 +29,6 @@ pub fn compute_backoff_ms(consecutive_failures: u32) -> u64 {
 
 /// Compute next run time for a job based on its schedule kind.
 /// Returns millisecond timestamp or None if the job should not run again.
-#[cfg(feature = "cron")]
 pub fn compute_next_run_at(job: &CronJob, from: DateTime<Utc>) -> Option<i64> {
     let from_ms = from.timestamp_millis();
 
@@ -61,23 +60,6 @@ pub fn compute_next_run_at(job: &CronJob, from: DateTime<Utc>) -> Option<i64> {
             let target = job.at_time?;
             if target > from_ms { Some(target) } else { None }
         }
-    }
-}
-
-#[cfg(not(feature = "cron"))]
-pub fn compute_next_run_at(job: &CronJob, from: DateTime<Utc>) -> Option<i64> {
-    let from_ms = from.timestamp_millis();
-    match job.schedule_kind {
-        ScheduleKind::Every => {
-            let interval = job.every_ms?;
-            if interval <= 0 { return None; }
-            Some(from_ms + interval)
-        }
-        ScheduleKind::At => {
-            let target = job.at_time?;
-            if target > from_ms { Some(target) } else { None }
-        }
-        _ => None,
     }
 }
 
@@ -148,7 +130,6 @@ mod tests {
         assert!(!is_completed_oneshot(&job));
     }
 
-    #[cfg(feature = "cron")]
     #[test]
     fn test_next_run_cron_expression() {
         let job = CronJob::new("T", "0 0 * * * *", "main", "p");

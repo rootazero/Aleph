@@ -181,7 +181,6 @@ mod tests {
     // Sessions Tools Tests (gateway feature only)
     // ========================================================================
 
-    #[cfg(feature = "gateway")]
     mod sessions_tests {
         use super::*;
         use crate::gateway::a2a_policy::AgentToAgentPolicy;

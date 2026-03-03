@@ -14,9 +14,7 @@ use crate::generation::GenerationProviderRegistry;
 use crate::builtin_tools::{BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PimTool, ProfileUpdateTool, ScratchpadTool, SearchTool, SoulUpdateTool, WebFetchTool, YouTubeTool};
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::builtin_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillListTool};
-#[cfg(feature = "gateway")]
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
-#[cfg(feature = "gateway")]
 use crate::gateway::context::GatewayContext;
 // TODO: Capability system will be reimplemented following OpenClaw's sandbox/tool-policy pattern
 // See: /Volumes/TBU4/Workspace/openclaw/src/agents/sandbox/
@@ -78,7 +76,6 @@ pub struct BuiltinToolRegistry {
     /// Sub-agent dispatcher for delegation (smart tool discovery)
     pub(crate) sub_agent_dispatcher: Option<Arc<RwLock<SubAgentDispatcher>>>,
     /// Gateway context for sessions tools (sessions_list, sessions_send)
-    #[cfg(feature = "gateway")]
     pub(crate) gateway_context: Option<Arc<GatewayContext>>,
     /// Tool metadata for lookup
     tools: HashMap<String, UnifiedTool>,
@@ -112,15 +109,12 @@ impl BuiltinToolRegistry {
         let read_skill_tool = ReadSkillTool::default();
         let list_skills_tool = SkillListTool::default();
 
-        // Desktop bridge tool — use native in-process path when desktop-native feature is enabled,
-        // otherwise fall back to IPC bridge (macOS App required at runtime)
-        #[cfg(feature = "desktop-native")]
+        // Desktop bridge tool — use native in-process path,
+        // with fallback to IPC bridge for unsupported actions
         let desktop_tool = {
             let native = std::sync::Arc::new(aleph_desktop::NativeDesktop::new());
             DesktopTool::new().with_native(native)
         };
-        #[cfg(not(feature = "desktop-native"))]
-        let desktop_tool = DesktopTool::new();
 
         // PIM tool (Calendar, Reminders, Notes, Contacts via Desktop Bridge)
         let pim_tool = PimTool::new();
@@ -460,9 +454,7 @@ impl BuiltinToolRegistry {
         }
 
         // Add sessions tools (if gateway_context is provided)
-        #[cfg(feature = "gateway")]
         let gateway_context = config.gateway_context.clone();
-        #[cfg(feature = "gateway")]
         if gateway_context.is_some() {
             tools.insert(
                 "sessions_list".to_string(),
@@ -511,7 +503,6 @@ impl BuiltinToolRegistry {
             generation_registry,
             dispatcher_registry,
             sub_agent_dispatcher,
-            #[cfg(feature = "gateway")]
             gateway_context,
             tools,
         }
@@ -642,8 +633,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
-            // Sessions tools for cross-session communication (requires gateway feature)
-            #[cfg(feature = "gateway")]
+            // Sessions tools for cross-session communication
             "sessions_list" => Box::pin(async move {
                 let context = self.gateway_context.as_ref().ok_or_else(|| {
                     AlephError::tool("sessions_list not available: no gateway context configured")
@@ -653,7 +643,6 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let tool = SessionsListTool::new(Arc::clone(context), "main");
                 tool.call_json(arguments).await
             }),
-            #[cfg(feature = "gateway")]
             "sessions_send" => Box::pin(async move {
                 let context = self.gateway_context.as_ref().ok_or_else(|| {
                     AlephError::tool("sessions_send not available: no gateway context configured")

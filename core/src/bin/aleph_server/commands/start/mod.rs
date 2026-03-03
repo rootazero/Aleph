@@ -8,22 +8,16 @@ use std::path::PathBuf;
 use crate::cli::Args;
 use crate::daemon::{expand_path, remove_pid_file, daemonize};
 
-#[cfg(feature = "gateway")]
 use std::sync::Arc;
 
-#[cfg(feature = "gateway")]
 use alephcore::gateway::GatewayServer;
-#[cfg(feature = "gateway")]
 use alephcore::gateway::bridge::DesktopBridgeManager;
-#[cfg(feature = "gateway")]
 use alephcore::gateway::router::AgentRouter;
-#[cfg(feature = "gateway")]
 use alephcore::gateway::handlers::agent::{
     AgentRunManager, handle_run,
     handle_status as handle_agent_status,
     handle_cancel as handle_agent_cancel,
 };
-#[cfg(feature = "gateway")]
 use alephcore::gateway::{
     can_create_provider_from_env, create_provider_registry_from_env,
     ExecutionEngine, ExecutionEngineConfig, AgentRegistry,
@@ -31,42 +25,29 @@ use alephcore::gateway::{
     SessionManager, SessionManagerConfig,
     ChannelRegistry, InboundMessageRouter, RoutingConfig,
 };
-#[cfg(feature = "gateway")]
 use alephcore::gateway::pairing_store::SqlitePairingStore;
-#[cfg(all(feature = "gateway", feature = "discord"))]
 use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
-#[cfg(feature = "gateway")]
 use alephcore::gateway::handlers::chat as chat_handlers;
-#[cfg(feature = "gateway")]
 use alephcore::gateway::handlers::auth as auth_handlers;
-#[cfg(feature = "gateway")]
 use alephcore::gateway::security::{TokenManager, PairingManager};
-#[cfg(feature = "gateway")]
 use alephcore::gateway::device_store::DeviceStore;
-#[cfg(all(feature = "gateway", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 use alephcore::gateway::interfaces::{IMessageChannel, IMessageConfig};
-#[cfg(feature = "telegram")]
 use alephcore::gateway::interfaces::{TelegramChannel, TelegramConfig};
-#[cfg(feature = "discord")]
 use alephcore::gateway::interfaces::{DiscordChannel, DiscordConfig};
-#[cfg(feature = "whatsapp")]
 use alephcore::gateway::interfaces::{WhatsAppChannel, WhatsAppConfig};
-#[cfg(feature = "gateway")]
 use alephcore::executor::BuiltinToolRegistry;
-#[cfg(feature = "gateway")]
 use alephcore::gateway::handlers::poe::{
     handle_run as handle_poe_run, handle_status as handle_poe_status,
     handle_cancel as handle_poe_cancel, handle_list as handle_poe_list,
     handle_prepare, handle_sign, handle_reject, handle_pending,
 };
-#[cfg(feature = "gateway")]
 use alephcore::poe::{
     CompositeValidator, GatewayAgentLoopWorker, ManifestBuilder, PoeConfig,
     create_gateway_worker,
     // Service layer
     PoeRunManager, PoeContractService, WorkerFactory, ValidatorFactory,
 };
-#[cfg(feature = "gateway")]
 use alephcore::gateway::{
     create_claude_provider_from_env, available_provider_from_env,
 };
@@ -74,9 +55,7 @@ use alephcore::gateway::{
 use crate::cli::DEFAULT_LOG_FILE;
 use crate::server_init::{handle_run_with_engine, handle_chat_send_with_engine};
 
-#[cfg(feature = "gateway")]
 mod builder;
-#[cfg(feature = "gateway")]
 use builder::*;
 
 // ── Subsystem initializer functions ──────────────────────────────────────────
@@ -84,7 +63,6 @@ use builder::*;
 // start_server() to keep the orchestrator function under 100 lines.
 
 /// Validate that the bind address is available, or exit if not.
-#[cfg(feature = "gateway")]
 fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = format!("{}:{}", args.bind, args.port)
         .parse()
@@ -100,7 +78,6 @@ fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::error::Error>> 
 }
 
 /// Print the startup banner and available method list to stdout.
-#[cfg(feature = "gateway")]
 fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayConfig) {
     println!("PII filtering engine initialized (enabled: {})", full_config.privacy.pii_filtering);
     println!("╔═══════════════════════════════════════════════╗");
@@ -121,7 +98,6 @@ fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayConfig) {
 }
 
 /// Initialize the tracing subscriber with log level from CLI args.
-#[cfg(feature = "gateway")]
 fn initialize_tracing(args: &Args) {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
     let filter = format!("aleph_server={},alephcore::gateway={}", args.log_level, args.log_level);
@@ -138,7 +114,6 @@ fn initialize_tracing(args: &Args) {
 
 /// Load gateway configuration, apply CLI overrides, and return resolved values.
 /// Returns (full_config, final_bind, final_port, final_max_connections).
-#[cfg(feature = "gateway")]
 fn load_gateway_config(args: &Args) -> (FullGatewayConfig, String, u16, usize) {
     let full_config = match &args.config {
         Some(config_path) => {
@@ -191,7 +166,6 @@ fn load_gateway_config(args: &Args) -> (FullGatewayConfig, String, u16, usize) {
 
 /// Initialize the SessionManager with SQLite persistence, falling back to a
 /// temporary path on error.
-#[cfg(feature = "gateway")]
 async fn initialize_session_manager(daemon: bool) -> Arc<SessionManager> {
     match SessionManager::with_defaults() {
         Ok(sm) => {
@@ -218,7 +192,6 @@ async fn initialize_session_manager(daemon: bool) -> Arc<SessionManager> {
 }
 
 /// Initialize the ExtensionManager for the plugin system.
-#[cfg(feature = "gateway")]
 async fn initialize_extension_manager(daemon: bool) {
     match alephcore::extension::ExtensionManager::with_defaults().await {
         Ok(extension_manager) => {
@@ -241,7 +214,6 @@ async fn initialize_extension_manager(daemon: bool) {
 
 /// Try to create a provider registry from app config (Settings UI configured providers).
 /// Returns None if no usable provider is found.
-#[cfg(feature = "gateway")]
 fn create_provider_registry_from_config(
     app_config: &alephcore::Config,
 ) -> Option<Arc<alephcore::thinker::SingleProviderRegistry>> {
@@ -280,7 +252,6 @@ fn create_provider_registry_from_config(
 /// Selects real ExecutionEngine when an API key is available (env or config),
 /// otherwise uses the simulated AgentRunManager.
 /// Returns the shared AgentRunManager (needed for status/cancel regardless of mode).
-#[cfg(feature = "gateway")]
 async fn register_agent_handlers(
     server: &mut GatewayServer,
     session_manager: Arc<SessionManager>,
@@ -472,7 +443,6 @@ async fn register_agent_handlers(
 
 /// Register POE (Principle-Operation-Evaluation) handlers when an Anthropic
 /// API key is available. Skips silently (with a note) if the key is absent.
-#[cfg(feature = "gateway")]
 async fn register_poe_handlers(
     server: &mut GatewayServer,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
@@ -575,7 +545,6 @@ async fn register_poe_handlers(
 }
 
 /// Return type for initialize_auth: all security objects needed by the caller.
-#[cfg(feature = "gateway")]
 struct AuthBundle {
     device_store: Arc<DeviceStore>,
     auth_ctx: Arc<auth_handlers::AuthContext>,
@@ -586,7 +555,6 @@ struct AuthBundle {
 
 /// Initialize authentication and security subsystems (construction only).
 /// Does NOT register handlers — the orchestrator layer is responsible for that.
-#[cfg(feature = "gateway")]
 fn initialize_auth(
     port: u16,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
@@ -659,7 +627,6 @@ fn initialize_auth(
 }
 
 /// Load and return the application config, running secrets vault migration if needed.
-#[cfg(feature = "gateway")]
 async fn load_app_config() -> alephcore::Config {
     use tracing::{info, warn, debug};
     use alephcore::secrets::{SecretVault, resolve_master_key};
@@ -748,7 +715,6 @@ async fn load_app_config() -> alephcore::Config {
 }
 
 /// Spawn Ctrl-C and SIGTERM handlers; return the oneshot receiver for run_until_shutdown.
-#[cfg(feature = "gateway")]
 fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Receiver<()> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let pid_file = args.pid_file.clone();
@@ -781,8 +747,11 @@ fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Receiver<()> {
 /// Register all messaging channels (iMessage, Telegram, Discord, WhatsApp)
 /// and the LinkManager for external bridge plugins.
 /// Returns the populated ChannelRegistry.
-#[cfg(feature = "gateway")]
-async fn initialize_channels(server: &mut GatewayServer, daemon: bool) -> Arc<ChannelRegistry> {
+async fn initialize_channels(
+    server: &mut GatewayServer,
+    gateway_config: &FullGatewayConfig,
+    daemon: bool,
+) -> Arc<ChannelRegistry> {
     let channel_registry = Arc::new(ChannelRegistry::new());
 
     #[cfg(target_os = "macos")]
@@ -798,9 +767,16 @@ async fn initialize_channels(server: &mut GatewayServer, daemon: bool) -> Arc<Ch
         }
     }
 
-    #[cfg(feature = "telegram")]
     {
-        let telegram_config = TelegramConfig::default();
+        // Read token from gateway config ([channels.telegram] in aleph.toml)
+        // or fall back to TELEGRAM_BOT_TOKEN env var, then default (empty)
+        let telegram_config = if let Some(ref gw_tg) = gateway_config.channels.telegram {
+            let mut cfg = TelegramConfig::default();
+            cfg.bot_token = gw_tg.token.clone();
+            cfg
+        } else {
+            TelegramConfig::from_env().unwrap_or_default()
+        };
         let telegram_channel = TelegramChannel::new("telegram", telegram_config);
         let channel_id = channel_registry.register(Box::new(telegram_channel)).await;
         if !daemon {
@@ -808,7 +784,6 @@ async fn initialize_channels(server: &mut GatewayServer, daemon: bool) -> Arc<Ch
         }
     }
 
-    #[cfg(feature = "discord")]
     {
         let discord_config = DiscordConfig::default();
         let discord_channel = DiscordChannel::new("discord", discord_config);
@@ -818,7 +793,6 @@ async fn initialize_channels(server: &mut GatewayServer, daemon: bool) -> Arc<Ch
         }
     }
 
-    #[cfg(feature = "whatsapp")]
     {
         let whatsapp_config = WhatsAppConfig::default();
         let whatsapp_channel = WhatsAppChannel::new("whatsapp", whatsapp_config);
@@ -861,7 +835,6 @@ async fn initialize_channels(server: &mut GatewayServer, daemon: bool) -> Arc<Ch
 
 /// Initialize InboundMessageRouter and start it.
 /// Connects the channel registry to the agent router for unified routing.
-#[cfg(feature = "gateway")]
 async fn initialize_inbound_router(
     channel_registry: Arc<ChannelRegistry>,
     router: Arc<AgentRouter>,
@@ -898,7 +871,6 @@ async fn initialize_inbound_router(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Start the gateway server
-#[cfg(feature = "gateway")]
 pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::server::GatewayConfig as ServerConfig;
 
@@ -943,13 +915,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     initialize_extension_manager(args.daemon).await;
 
     // Log desktop capability mode
-    #[cfg(feature = "desktop-native")]
     if !args.daemon {
         println!("Desktop capabilities: in-process (native)");
-    }
-    #[cfg(not(feature = "desktop-native"))]
-    if !args.daemon {
-        println!("Desktop capabilities: IPC bridge (external)");
     }
 
     // Initialize memory backend (LanceDB)
@@ -1036,7 +1003,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
     }
 
-    let channel_registry = initialize_channels(&mut server, args.daemon).await;
+    let channel_registry = initialize_channels(&mut server, &full_config, args.daemon).await;
     initialize_inbound_router(channel_registry, router, args.daemon).await;
 
     let config_path = args.config.clone()
@@ -1046,7 +1013,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     start_webchat_server(args, &final_bind, final_port).await;
 
-    #[cfg(feature = "control-plane")]
     start_control_plane_server(&final_bind, final_port, args.daemon).await;
 
     // Start desktop bridge (non-blocking — server runs headless if bridge not found)
