@@ -332,14 +332,12 @@ impl LazyPoeEvaluator {
         }
 
         // Check 1: No tools invoked despite active POE
-        if manifest.tools_invoked.is_empty() {
-            if manifest.consume_retry() {
-                return Some(
-                    "[POE-Lazy] You are about to complete without having used any tools. \
-                     Please verify your answer by using appropriate tools before concluding."
-                        .to_string(),
-                );
-            }
+        if manifest.tools_invoked.is_empty() && manifest.consume_retry() {
+            return Some(
+                "[POE-Lazy] You are about to complete without having used any tools. \
+                 Please verify your answer by using appropriate tools before concluding."
+                    .to_string(),
+            );
         }
 
         // Check 2: Hallucination detection
