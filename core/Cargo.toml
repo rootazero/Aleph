@@ -10,7 +10,7 @@ name = "alephcore"
 
 [features]
 # Default: Gateway-only architecture (no FFI)
-default = ["gateway"]
+default = ["gateway", "control-plane"]
 # Gateway: WebSocket control plane for Moltbot-style architecture
 gateway = ["dep:tokio-tungstenite", "dep:futures-util", "dep:clap", "dep:tower-http", "dep:axum", "dep:tower", "dep:mime_guess", "dep:mdns-sd", "dep:sysinfo"]
 # ControlPlane: Embedded web UI for configuration management
