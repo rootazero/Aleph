@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build macOS Aleph.app with embedded aleph-server
+# Build macOS Aleph.app with embedded aleph
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -7,22 +7,22 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 MACOS_DIR="$PROJECT_ROOT/apps/macos-native"
 BUILD_DIR="$PROJECT_ROOT/target/macos-app"
 
-echo "=== Building aleph-server (universal binary) ==="
+echo "=== Building aleph (universal binary) ==="
 
-cargo build --bin aleph-server --features control-plane --release --target aarch64-apple-darwin
-cargo build --bin aleph-server --features control-plane --release --target x86_64-apple-darwin
+cargo build --bin aleph --features control-plane --release --target aarch64-apple-darwin
+cargo build --bin aleph --features control-plane --release --target x86_64-apple-darwin
 
 mkdir -p "$BUILD_DIR"
 lipo -create \
-    "$PROJECT_ROOT/target/aarch64-apple-darwin/release/aleph-server" \
-    "$PROJECT_ROOT/target/x86_64-apple-darwin/release/aleph-server" \
-    -output "$BUILD_DIR/aleph-server"
+    "$PROJECT_ROOT/target/aarch64-apple-darwin/release/aleph" \
+    "$PROJECT_ROOT/target/x86_64-apple-darwin/release/aleph" \
+    -output "$BUILD_DIR/aleph"
 
-echo "=== Universal binary created ($(du -h "$BUILD_DIR/aleph-server" | cut -f1)) ==="
+echo "=== Universal binary created ($(du -h "$BUILD_DIR/aleph" | cut -f1)) ==="
 
 # Copy to Xcode project resources
 mkdir -p "$MACOS_DIR/Aleph/Resources"
-cp "$BUILD_DIR/aleph-server" "$MACOS_DIR/Aleph/Resources/"
+cp "$BUILD_DIR/aleph" "$MACOS_DIR/Aleph/Resources/"
 
 echo "=== Regenerating Xcode project ==="
 cd "$MACOS_DIR" && xcodegen generate

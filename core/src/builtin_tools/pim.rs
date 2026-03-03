@@ -322,7 +322,7 @@ Contacts:
                 message: Some(
                     "Desktop bridge not connected. PIM operations require the Aleph Desktop \
                      Bridge for Calendar, Reminders, Notes, and Contacts access. It starts \
-                     automatically with aleph-server, or can be run standalone via aleph-tauri."
+                     automatically with aleph, or can be run standalone via aleph-tauri."
                         .to_string(),
                 ),
             });

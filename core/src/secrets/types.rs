@@ -92,7 +92,7 @@ pub enum SecretError {
     NotFound(String),
 
     #[error(
-        "Master key not configured. Set ALEPH_MASTER_KEY env var or run `aleph-server secret init`"
+        "Master key not configured. Set ALEPH_MASTER_KEY env var or run `aleph secret init`"
     )]
     MasterKeyMissing,
 

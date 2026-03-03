@@ -57,7 +57,7 @@ test-helpers = []
 loom = ["dep:loom"]
 # Native desktop capabilities (in-process, no IPC)
 desktop-native = ["dep:aleph-desktop"]
-# Server-friendly alias: `cargo build --bin aleph-server --features desktop`
+# Server-friendly alias: `cargo build --bin aleph --features desktop`
 desktop = ["desktop-native"]
 
 [dependencies]
@@ -239,8 +239,8 @@ aleph-desktop = { path = "../crates/desktop", optional = true }
 # No build dependencies - using Gateway WebSocket architecture
 
 [[bin]]
-name = "aleph-server"
-path = "src/bin/aleph_server/main.rs"
+name = "aleph"
+path = "src/bin/aleph/main.rs"
 required-features = ["gateway"]
 
 [dev-dependencies]

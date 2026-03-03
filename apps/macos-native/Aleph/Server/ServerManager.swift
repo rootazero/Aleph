@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-/// Manages the lifecycle of the embedded aleph-server process.
+/// Manages the lifecycle of the embedded aleph process.
 @MainActor
 final class ServerManager: ObservableObject {
 
@@ -31,13 +31,13 @@ final class ServerManager: ObservableObject {
         self.socketPath = socketPath ?? ServerPaths.bridgeSocket
     }
 
-    /// Start aleph-server, or reuse existing instance.
+    /// Start aleph, or reuse existing instance.
     func start() async throws {
         guard state != .running else { throw Error.alreadyRunning }
 
         // Check for existing server
         if checkExistingServer() {
-            logger.info("Reusing existing aleph-server")
+            logger.info("Reusing existing aleph instance")
             state = .running
             return
         }

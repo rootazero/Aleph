@@ -11,7 +11,7 @@ import (
 
 // ─── JSON-RPC 2.0 Wire Types ───────────────────────────────────────────────
 
-// RpcRequest represents a JSON-RPC 2.0 request from the Rust aleph-server.
+// RpcRequest represents a JSON-RPC 2.0 request from the Rust aleph server.
 type RpcRequest struct {
 	Jsonrpc string           `json:"jsonrpc"`
 	ID      *uint64          `json:"id"`
@@ -46,7 +46,7 @@ type SendParams struct {
 
 // ─── Connection Handler ─────────────────────────────────────────────────────
 
-// HandleConnection processes a single JSON-RPC connection from aleph-server.
+// HandleConnection processes a single JSON-RPC connection from aleph.
 // It reads newline-delimited JSON requests, dispatches them, and writes
 // responses. A background goroutine forwards events from the WAClient as
 // JSON-RPC notifications.

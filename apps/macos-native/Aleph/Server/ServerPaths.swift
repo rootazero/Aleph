@@ -2,7 +2,7 @@ import Foundation
 
 /// Filesystem path constants for the Aleph server layout.
 ///
-/// These paths mirror the conventions used by `aleph-server` and the Tauri bridge:
+/// These paths mirror the conventions used by `aleph` and the Tauri bridge:
 /// - `~/.aleph/`                          data directory
 /// - `~/.aleph/bridge.sock`               UDS socket (server <-> bridge)
 /// - `~/Library/Application Support/aleph/` config (macOS)
@@ -19,9 +19,9 @@ enum ServerPaths {
         alephHome.appendingPathComponent("bridge.sock")
     }
 
-    /// Path to aleph-server binary in app bundle
+    /// Path to aleph binary in app bundle
     static var serverBinary: URL? {
-        Bundle.main.url(forResource: "aleph-server", withExtension: nil)
+        Bundle.main.url(forResource: "aleph", withExtension: nil)
     }
 
     /// ~/Library/Application Support/aleph/ or ~/.config/aleph/

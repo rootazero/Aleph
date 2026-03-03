@@ -47,7 +47,7 @@ set in `ALEPH_SOCKET_PATH`).
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ALEPH_SOCKET_PATH` | `~/.aleph/desktop.sock` | Bridge UDS socket path |
-| `ALEPH_SERVER_BIN` | (none) | Path to `aleph-server` binary (required for E2E tests) |
+| `ALEPH_SERVER_BIN` | (none) | Path to `aleph` binary (required for E2E tests) |
 | `STABILITY_LONG_RUN_SECS` | `300` | Duration for S1 memory leak check |
 | `STABILITY_HOTKEY_CYCLES` | `100` | Cycles for S2 hotkey test |
 | `STABILITY_UDS_CYCLES` | `10` | Cycles for S3 connection cycling |
