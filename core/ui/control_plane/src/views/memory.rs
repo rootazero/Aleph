@@ -18,12 +18,14 @@ pub fn Memory() -> impl IntoView {
     let search_query = RwSignal::new(String::new());
     let search_results = RwSignal::new(Vec::<MemoryFact>::new());
     let is_searching = RwSignal::new(false);
+    let has_loaded = RwSignal::new(false);
 
-    // Fetch stats when connected
+    // Fetch stats and recent memories when connected
     Effect::new(move || {
         if state.is_connected.get() {
             let state = state.clone();
             leptos::task::spawn_local(async move {
+                // Fetch stats
                 match MemoryApi::stats(&state).await {
                     Ok(s) => {
                         stats.set(Some(s));
@@ -32,19 +34,29 @@ pub fn Memory() -> impl IntoView {
                         web_sys::console::error_1(&format!("Failed to fetch memory stats: {}", e).into());
                     }
                 }
+
+                // Load recent memories (empty query = return recent)
+                match MemoryApi::search(&state, String::new(), Some(20)).await {
+                    Ok(results) => {
+                        search_results.set(results);
+                    }
+                    Err(e) => {
+                        web_sys::console::error_1(&format!("Failed to load recent memories: {}", e).into());
+                    }
+                }
+                has_loaded.set(true);
             });
         } else {
             stats.set(None);
+            search_results.set(Vec::new());
+            has_loaded.set(false);
         }
     });
 
     // Search handler
-    let handle_search = move |_| {
+    let do_search = move || {
         let query = search_query.get();
-        if query.is_empty() {
-            return;
-        }
-
+        // Allow empty query — backend returns recent memories
         let state = state.clone();
         leptos::task::spawn_local(async move {
             is_searching.set(true);
@@ -59,6 +71,28 @@ pub fn Memory() -> impl IntoView {
             }
 
             is_searching.set(false);
+        });
+    };
+
+    // Delete handler
+    let on_delete = move |memory_id: String| {
+        let state = state.clone();
+        leptos::task::spawn_local(async move {
+            match MemoryApi::delete(&state, memory_id).await {
+                Ok(()) => {
+                    // Refresh stats and results
+                    if let Ok(s) = MemoryApi::stats(&state).await {
+                        stats.set(Some(s));
+                    }
+                    let q = search_query.get_untracked();
+                    if let Ok(results) = MemoryApi::search(&state, q, Some(20)).await {
+                        search_results.set(results);
+                    }
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Delete failed: {}", e).into());
+                }
+            }
         });
     };
 
@@ -93,14 +127,15 @@ pub fn Memory() -> impl IntoView {
                             }
                             on:keydown=move |ev| {
                                 if ev.key() == "Enter" {
-                                    handle_search(());
+                                    do_search();
                                 }
                             }
                         />
                     </div>
-                    <Button variant=ButtonVariant::Secondary size=ButtonSize::Sm class="p-2 h-auto rounded-xl".to_string() disabled=is_disabled>
+                    <Button variant=ButtonVariant::Secondary size=ButtonSize::Sm class="p-2 h-auto rounded-xl".to_string() disabled=is_disabled on:click=move |_| do_search()>
                         <svg width="20" height="20" attr:class="w-5 h-5 text-text-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+                            <circle cx="11" cy="11" r="8" />
+                            <line x1="21" y1="21" x2="16.65" y2="16.65" />
                         </svg>
                     </Button>
                 </div>
@@ -135,7 +170,7 @@ pub fn Memory() -> impl IntoView {
                         {move || {
                             stats.get()
                                 .map(|s| s.total_facts.to_string())
-                                .unwrap_or_else(|| "—".to_string())
+                                .unwrap_or_else(|| "\u{2014}".to_string())
                         }}
                     </span>
                  </Card>
@@ -145,7 +180,7 @@ pub fn Memory() -> impl IntoView {
                         {move || {
                             stats.get()
                                 .map(|s| s.total_memories.to_string())
-                                .unwrap_or_else(|| "—".to_string())
+                                .unwrap_or_else(|| "\u{2014}".to_string())
                         }}
                     </span>
                  </Card>
@@ -155,7 +190,7 @@ pub fn Memory() -> impl IntoView {
                         {move || {
                             stats.get()
                                 .map(|s| s.total_graph_nodes.to_string())
-                                .unwrap_or_else(|| "—".to_string())
+                                .unwrap_or_else(|| "\u{2014}".to_string())
                         }}
                     </span>
                  </Card>
@@ -190,15 +225,24 @@ pub fn Memory() -> impl IntoView {
                                         </td>
                                     </tr>
                                 }.into_any()
+                            } else if !has_loaded.get() {
+                                view! {
+                                    <tr>
+                                        <td colspan="4" class="p-8 text-center text-text-tertiary">
+                                            "Loading..."
+                                        </td>
+                                    </tr>
+                                }.into_any()
                             } else if search_results.get().is_empty() {
                                 view! {
                                     <tr>
                                         <td colspan="4" class="p-8 text-center text-text-tertiary">
-                                            "No facts found. Try searching for something."
+                                            "No memories stored yet. Chat with Aleph to start building memory."
                                         </td>
                                     </tr>
                                 }.into_any()
                             } else {
+                                let on_delete = on_delete.clone();
                                 view! {
                                     <For
                                         each=move || search_results.get()
@@ -206,11 +250,14 @@ pub fn Memory() -> impl IntoView {
                                         children=move |fact| {
                                             let created_at = fact.created_at.clone().unwrap_or_else(|| "Unknown".to_string());
                                             let source = fact.source.clone().unwrap_or_else(|| "Memory".to_string());
+                                            let fact_id = fact.id.clone();
+                                            let on_delete = on_delete.clone();
                                             view! {
                                                 <MemoryRow
                                                     content=fact.content
                                                     source=source
                                                     date=created_at
+                                                    on_delete=move |_| on_delete(fact_id.clone())
                                                 />
                                             }
                                         }
@@ -230,6 +277,7 @@ fn MemoryRow(
     content: String,
     source: String,
     date: String,
+    on_delete: impl Fn(()) + 'static,
 ) -> impl IntoView {
     view! {
         <tr class="group hover:bg-surface-sunken transition-colors">
@@ -254,14 +302,7 @@ fn MemoryRow(
             </td>
             <td class="p-4 pr-8 text-right">
                 <div class="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button variant=ButtonVariant::Ghost size=ButtonSize::Sm class="p-1.5 h-auto".to_string()>
-                        <svg width="16" height="16" attr:class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                            <polyline points="15 3 21 3 21 9" />
-                            <line x1="10" y1="14" x2="21" y2="3" />
-                        </svg>
-                    </Button>
-                    <Button variant=ButtonVariant::Destructive size=ButtonSize::Sm class="p-1.5 h-auto".to_string()>
+                    <Button variant=ButtonVariant::Destructive size=ButtonSize::Sm class="p-1.5 h-auto".to_string() on:click=move |_| on_delete(())>
                         <svg width="16" height="16" attr:class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polyline points="3 6 5 6 21 6" />
                             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />

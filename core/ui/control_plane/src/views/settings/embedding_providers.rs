@@ -222,7 +222,7 @@ fn EmbeddingProviderCard(
                     {if provider.verified {
                         view! {
                             <span class="px-2 py-1 text-xs font-medium bg-success-subtle text-success rounded">
-                                "Active"
+                                "Verified"
                             </span>
                         }.into_any()
                     } else {
@@ -435,7 +435,7 @@ fn ProviderDetailPanel(
                         {if provider.verified {
                             view! {
                                 <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-success-subtle text-success">
-                                    "Active"
+                                    "Verified"
                                 </span>
                             }.into_any()
                         } else {
@@ -461,6 +461,15 @@ fn ProviderDetailPanel(
                         type="text"
                         value=move || api_base.get()
                         on:input=move |ev| api_base.set(event_target_value(&ev))
+                        placeholder={
+                            let default_base = match provider_preset.as_str() {
+                                "silicon_flow" => "Default: https://api.siliconflow.cn/v1",
+                                "open_ai" => "Default: https://api.openai.com/v1",
+                                "ollama" => "Default: http://localhost:11434/v1",
+                                _ => "https://api.example.com/v1",
+                            };
+                            default_base
+                        }
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
@@ -493,6 +502,15 @@ fn ProviderDetailPanel(
                         type="text"
                         value=move || model.get()
                         on:input=move |ev| model.set(event_target_value(&ev))
+                        placeholder={
+                            let default_model = match provider_preset.as_str() {
+                                "silicon_flow" => "Default: BAAI/bge-m3",
+                                "open_ai" => "Default: text-embedding-3-small",
+                                "ollama" => "Default: nomic-embed-text",
+                                _ => "model-name",
+                            };
+                            default_model
+                        }
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
@@ -546,7 +564,7 @@ fn ProviderDetailPanel(
                 <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">{e}</div>
             })}
 
-            // Actions
+            // Actions — Row 1: Test + Save
             <div class="flex flex-row gap-3 pt-2">
                 <button
                     on:click=handle_test
@@ -561,44 +579,42 @@ fn ProviderDetailPanel(
                     disabled=move || saving.get()
                     class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if saving.get() { "Saving..." } else { "Save Changes" }}
+                    {move || if saving.get() { "Saving..." } else { "Save" }}
                 </button>
             </div>
 
-            // Set as active (only for non-active providers)
-            {if !is_active {
+            // Actions — Row 2: Set as Default + Delete (only for existing providers)
+            {if !is_active || is_custom {
                 Some(view! {
-                    <button
-                        on:click=handle_activate
-                        disabled=move || activating.get()
-                        class="w-full px-4 py-2.5 bg-surface-raised text-text-secondary rounded-lg hover:bg-surface-sunken disabled:opacity-50 transition-colors font-medium"
-                    >
-                        {move || if activating.get() { "Setting default..." } else { "Set as Default" }}
-                    </button>
-                })
-            } else {
-                None
-            }}
-
-            // Delete button (only for custom providers, disabled for active provider)
-            {if is_custom {
-                Some(view! {
-                    <button
-                        on:click=handle_delete
-                        disabled=move || deleting.get() || is_active
-                        class="w-full px-4 py-2.5 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors font-medium"
-                        title=move || if is_active { "Cannot delete the active provider" } else { "" }
-                    >
-                        {move || {
-                            if deleting.get() {
-                                "Deleting..."
-                            } else if is_active {
-                                "Delete (switch active first)"
-                            } else {
-                                "Delete Provider"
-                            }
+                    <div class="flex flex-row gap-3">
+                        {if !is_active {
+                            Some(view! {
+                                <button
+                                    on:click=handle_activate
+                                    disabled=move || activating.get()
+                                    class="flex-1 px-4 py-2.5 bg-success-subtle border border-success/20 text-success rounded-lg hover:bg-success-subtle/80 disabled:opacity-50 transition-colors font-medium"
+                                >
+                                    {move || if activating.get() { "Setting default..." } else { "Set as Default" }}
+                                </button>
+                            })
+                        } else {
+                            None
                         }}
-                    </button>
+                        {if is_custom {
+                            Some(view! {
+                                <button
+                                    on:click=handle_delete
+                                    disabled=move || deleting.get() || is_active
+                                    class="flex-1 px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50 transition-colors font-medium"
+                                    title=move || if is_active { "Cannot delete the active provider" } else { "" }
+                                >
+                                    {move || if deleting.get() { "Deleting..." } else { "Delete" }}
+                                </button>
+                            })
+                        } else {
+                            None
+                        }}
+                    </div>
                 })
             } else {
                 None

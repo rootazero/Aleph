@@ -80,6 +80,13 @@ Learn about the person you'll be helping:
 2. What's your timezone?
 3. What are you working on?
 
+As you learn about the user, use the `profile_update` tool to save their information:
+- `profile_update(field='name', operation='set', value='...')` for their name
+- `profile_update(field='preferred_name', operation='set', value='...')` for nickname
+- `profile_update(field='timezone', operation='set', value='...')` for timezone
+- `profile_update(field='language', operation='set', value='...')` for language preference
+- `profile_update(field='context_notes', operation='append', value='...')` for context
+
 ### Phase: Calibration
 Have a short natural conversation to calibrate your tone.
 Then use the `soul_update` tool to persist your discovered identity.
@@ -135,5 +142,14 @@ mod tests {
         let detector = BootstrapDetector::new(soul_path);
         let prompt = detector.bootstrap_prompt().unwrap();
         assert!(prompt.contains("soul_update"));
+    }
+
+    #[test]
+    fn test_bootstrap_prompt_contains_profile_update() {
+        let tmp = TempDir::new().unwrap();
+        let soul_path = tmp.path().join("soul.md");
+        let detector = BootstrapDetector::new(soul_path);
+        let prompt = detector.bootstrap_prompt().unwrap();
+        assert!(prompt.contains("profile_update"));
     }
 }

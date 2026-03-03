@@ -136,6 +136,23 @@ impl UserProfile {
     pub fn is_empty(&self) -> bool {
         self.name.is_empty()
     }
+
+    /// Save user profile to a markdown file with YAML frontmatter.
+    ///
+    /// Creates parent directories if they don't exist.
+    pub fn save_to_file(&self, path: &Path) -> std::io::Result<()> {
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+
+        let yaml = serde_yaml::to_string(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let content = format!("---\n{}---\n", yaml);
+        std::fs::write(path, content)
+    }
 }
 
 #[cfg(test)]

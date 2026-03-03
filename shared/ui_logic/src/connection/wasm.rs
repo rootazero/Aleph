@@ -1,12 +1,13 @@
 use super::connector::{AlephConnector, ConnectionError};
 use async_trait::async_trait;
 use futures::Stream;
+use futures::channel::{mpsc, oneshot};
 use serde_json::Value;
+use std::cell::RefCell;
 use std::pin::Pin;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{ErrorEvent, MessageEvent, WebSocket};
-use futures::channel::mpsc;
 
 #[derive(Default)]
 pub struct WasmConnector {
@@ -28,7 +29,18 @@ impl AlephConnector for WasmConnector {
         ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
 
         let (tx, rx) = mpsc::unbounded();
-        
+
+        // OnOpen — signal readiness via oneshot channel
+        let (open_tx, open_rx) = oneshot::channel::<()>();
+        let open_tx = RefCell::new(Some(open_tx));
+        let onopen_callback = Closure::wrap(Box::new(move |_: JsValue| {
+            if let Some(tx) = open_tx.borrow_mut().take() {
+                let _ = tx.send(());
+            }
+        }) as Box<dyn FnMut(JsValue)>);
+        ws.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
+        onopen_callback.forget();
+
         // OnMessage
         let onmessage_callback = Closure::wrap(Box::new(move |e: MessageEvent| {
             if let Some(txt) = e.data().as_string() {
@@ -49,6 +61,12 @@ impl AlephConnector for WasmConnector {
 
         self.ws = Some(ws);
         self.receiver = Some(rx);
+
+        // Wait for WebSocket to reach OPEN state before returning
+        open_rx.await.map_err(|_| ConnectionError::ConnectFailed(
+            "WebSocket onopen signal dropped".to_string(),
+        ))?;
+
         self.is_connected = true;
         Ok(())
     }

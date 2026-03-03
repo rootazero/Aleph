@@ -288,19 +288,23 @@ impl ChannelRegistry {
             drop(channel);
 
             if let Some(mut rx) = receiver {
+                info!("[Forwarder] Channel {} forwarder started — receiver obtained", channel_id);
                 while let Some(message) = rx.recv().await {
-                    debug!(
-                        "Forwarding message from channel {} to unified stream",
-                        channel_id
+                    info!(
+                        "[Forwarder] Forwarding message from channel {} (text: {:?})",
+                        channel_id,
+                        message.text.get(..50).unwrap_or(&message.text)
                     );
                     if let Err(e) = inbound_tx.send(message).await {
                         error!("Failed to forward message: {}", e);
                         break;
                     }
                 }
+            } else {
+                warn!("[Forwarder] Channel {} inbound_receiver() returned None! Forwarder NOT started.", channel_id);
             }
 
-            debug!("Message forwarder for channel {} stopped", channel_id);
+            info!("[Forwarder] Channel {} forwarder stopped", channel_id);
         });
     }
 

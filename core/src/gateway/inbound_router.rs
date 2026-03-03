@@ -268,8 +268,8 @@ impl InboundMessageRouter {
     /// Handle a single inbound message
     pub async fn handle_message(&self, msg: InboundMessage) -> Result<(), RoutingError> {
         let channel_id = msg.channel_id.as_str();
-        debug!(
-            "Handling message from {}:{} - {}",
+        info!(
+            "[Router] Handling message from {}:{} - {}",
             channel_id,
             msg.sender_id.as_str(),
             msg.text.chars().take(50).collect::<String>()
@@ -283,9 +283,12 @@ impl InboundMessageRouter {
 
         // Check permissions
         let ctx = match self.check_permission(ctx).await {
-            Ok(ctx) => ctx,
+            Ok(ctx) => {
+                info!("[Router] Permission granted for {}:{}", channel_id, ctx.sender_normalized);
+                ctx
+            }
             Err(e) => {
-                debug!("Permission check failed: {}", e);
+                info!("[Router] Permission denied for {}:{} — {}", channel_id, msg.sender_id.as_str(), e);
                 return Ok(()); // Not an error, just filtered
             }
         };
@@ -552,6 +555,9 @@ impl InboundMessageRouter {
     }
 
     /// Send pairing request to unknown sender
+    ///
+    /// Always sends the pairing code message, even if the request already exists
+    /// (the initial delivery may have failed due to channel not being connected).
     async fn send_pairing_request(&self, ctx: &InboundContext) -> Result<(), RoutingError> {
         let channel_id = ctx.message.channel_id.as_str();
         let sender_id = &ctx.sender_normalized;
@@ -565,30 +571,35 @@ impl InboundMessageRouter {
             .await?;
 
         if created {
-            // Send pairing message
-            let message = format!(
-                "Hi! I'm Aleph, a personal AI assistant.\n\n\
-                To chat with me, please have my owner approve your access.\n\n\
-                Your ID: {}\n\
-                Pairing code: {}\n\n\
-                Once approved, just send me a message!",
-                sender_id, code
-            );
+            info!("Created new pairing request for {}:{} with code {}", channel_id, sender_id, code);
+        } else {
+            info!("Resending existing pairing code for {}:{}", channel_id, sender_id);
+        }
 
-            let outbound = OutboundMessage::text(
-                ctx.reply_route.conversation_id.as_str(),
-                message,
-            );
+        // Always send the pairing message (not just on first create)
+        // because the initial delivery may have failed.
+        let message = format!(
+            "Hi! I'm Aleph, a personal AI assistant.\n\n\
+            To chat with me, please have my owner approve your access.\n\n\
+            Your ID: {}\n\
+            Pairing code: {}\n\n\
+            Once approved, just send me a message!",
+            sender_id, code
+        );
 
-            if let Err(e) = self
-                .channel_registry
-                .send(&ctx.reply_route.channel_id, outbound)
-                .await
-            {
-                warn!("Failed to send pairing message: {}", e);
-            } else {
-                info!("Sent pairing request to {} with code {}", sender_id, code);
-            }
+        let outbound = OutboundMessage::text(
+            ctx.reply_route.conversation_id.as_str(),
+            message,
+        );
+
+        if let Err(e) = self
+            .channel_registry
+            .send(&ctx.reply_route.channel_id, outbound)
+            .await
+        {
+            warn!("Failed to send pairing message to {}:{}: {}", channel_id, sender_id, e);
+        } else {
+            info!("Sent pairing code {} to {}:{}", code, channel_id, sender_id);
         }
 
         Ok(())

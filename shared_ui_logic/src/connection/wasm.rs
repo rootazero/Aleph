@@ -77,9 +77,14 @@ impl AlephConnector for WasmConnector {
             let ws_clone = ws.clone();
             let recv_tx_clone = recv_tx.clone();
 
-            // onopen handler
+            // onopen handler — signal readiness via oneshot channel
+            let (open_tx, open_rx) = futures::channel::oneshot::channel::<()>();
+            let open_tx = std::cell::RefCell::new(Some(open_tx));
             let onopen_callback = Closure::wrap(Box::new(move |_| {
                 web_sys::console::log_1(&"WebSocket connected".into());
+                if let Some(tx) = open_tx.borrow_mut().take() {
+                    let _ = tx.send(());
+                }
             }) as Box<dyn FnMut(JsValue)>);
             ws.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
             onopen_callback.forget();
@@ -122,8 +127,18 @@ impl AlephConnector for WasmConnector {
             onclose_callback.forget();
 
             // Spawn task to handle outgoing messages
+            // Wait for WebSocket OPEN state (readyState == 1) before each send
             let ws_send = ws_clone.clone();
             wasm_bindgen_futures::spawn_local(async move {
+                // Wait for the WebSocket to reach OPEN state before processing messages
+                while ws_send.ready_state() != 1 {
+                    let promise = js_sys::Promise::new(&mut |resolve, _| {
+                        let _ = web_sys::window().unwrap()
+                            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 50);
+                    });
+                    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+                }
+
                 while let Some(msg) = send_rx.recv().await {
                     if let Ok(text) = serde_json::to_string(&msg) {
                         if let Err(e) = ws_send.send_with_str(&text) {
@@ -139,6 +154,12 @@ impl AlephConnector for WasmConnector {
             *self.ws.lock().await = Some(ws);
             self.send_tx = Some(send_tx);
             *self.recv_rx.lock().await = Some(recv_rx);
+
+            // Wait for WebSocket to reach OPEN state before returning
+            open_rx.await.map_err(|_| ConnectionError::ConnectionFailed(
+                "WebSocket onopen callback was dropped".to_string(),
+            ))?;
+
             self.is_connected = true;
 
             Ok(())

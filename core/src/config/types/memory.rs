@@ -177,6 +177,10 @@ pub struct EmbeddingProviderConfig {
     /// Direct API key (for settings UI; prefer api_key_env in production)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Secret vault name for encrypted API key storage (optional)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub secret_name: Option<String>,
     /// Model name (e.g., "BAAI/bge-m3")
     pub model: String,
     /// Output vector dimensions
@@ -202,6 +206,7 @@ impl EmbeddingProviderConfig {
             api_base: "https://api.siliconflow.cn/v1".to_string(),
             api_key_env: Some("SILICONFLOW_API_KEY".to_string()),
             api_key: None,
+            secret_name: None,
             model: "BAAI/bge-m3".to_string(),
             dimensions: 1024,
             batch_size: default_embedding_batch_size(),
@@ -219,6 +224,7 @@ impl EmbeddingProviderConfig {
             api_base: "https://api.openai.com/v1".to_string(),
             api_key_env: Some("OPENAI_API_KEY".to_string()),
             api_key: None,
+            secret_name: None,
             model: "text-embedding-3-small".to_string(),
             dimensions: 1536,
             batch_size: default_embedding_batch_size(),
@@ -236,6 +242,7 @@ impl EmbeddingProviderConfig {
             api_base: "http://localhost:11434/v1".to_string(),
             api_key_env: None,
             api_key: None,
+            secret_name: None,
             model: "nomic-embed-text".to_string(),
             dimensions: 768,
             batch_size: default_embedding_batch_size(),
