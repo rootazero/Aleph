@@ -12,7 +12,7 @@
 | **Compilation** | ✅ PASS | 68 warnings (deprecations), 0 errors |
 | **WASM Build** | ✅ PASS | 3.6 MB, 11.75s build time |
 | **Server Build** | ✅ PASS | control-plane feature enabled |
-| **Server Running** | ✅ RUNNING | Ports 18789 (WS) & 18790 (UI) |
+| **Server Running** | ✅ RUNNING | Port 18790 (HTTP + WS unified) |
 | **UI Accessible** | ✅ ACCESSIBLE | http://127.0.0.1:18790 |
 | **Manual Testing** | ⏳ PENDING | Requires browser testing |
 
@@ -29,8 +29,8 @@
 
 ### ✅ Runtime Verification
 - Server process running (PID: 57567)
-- WebSocket listening on port 18789
-- Control Plane UI serving on port 18790
+- WebSocket listening on port 18790 at path `/ws`
+- Control Plane UI serving on port 18790 at path `/cp`
 - HTML/CSS/JS/WASM assets loading correctly
 
 ### ✅ Code Review
@@ -141,10 +141,10 @@ npm run build:css
 
 # Build server
 cd /Volumes/TBU4/Workspace/Aleph
-cargo build --bin aleph-server --features control-plane
+cargo build --bin aleph
 
 # Run server
-cargo run --bin aleph-server --features control-plane
+cargo run --bin aleph
 
 # Test in browser
 open http://127.0.0.1:18790

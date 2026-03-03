@@ -119,7 +119,7 @@ async fn main() {
     let mut connector = create_connector();
 
     // 连接到 Gateway
-    connector.connect("ws://127.0.0.1:18789").await.unwrap();
+    connector.connect("ws://127.0.0.1:18790/ws").await.unwrap();
 
     // 发送消息
     connector.send(json!({"type": "req"})).await.unwrap();

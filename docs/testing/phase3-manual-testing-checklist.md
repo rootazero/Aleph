@@ -6,7 +6,7 @@
 
 ## Pre-Testing Setup
 
-- [ ] Server is running: `cargo run --bin aleph-server --features control-plane`
+- [ ] Server is running: `cargo run --bin aleph`
 - [ ] Browser DevTools open (Console + Network tabs)
 - [ ] URL accessible: http://127.0.0.1:18790
 
@@ -22,7 +22,7 @@
    - [ ] "WebSocket connection established" or similar
    - [ ] No JavaScript errors
 3. [ ] Check DevTools Network tab:
-   - [ ] WebSocket connection to ws://127.0.0.1:18789
+   - [ ] WebSocket connection to ws://127.0.0.1:18790/ws
    - [ ] Connection status: "open" (green)
 4. [ ] Verify UI loads:
    - [ ] Sidebar visible (wide mode)
@@ -134,7 +134,7 @@
 ### Steps
 1. [ ] Open DevTools Network tab
 2. [ ] Filter for "WS" (WebSocket)
-3. [ ] Find connection to ws://127.0.0.1:18789
+3. [ ] Find connection to ws://127.0.0.1:18790/ws
 4. [ ] Click on WebSocket connection
 5. [ ] Check "Messages" tab
 6. [ ] Verify messages:
@@ -204,11 +204,11 @@
 **Goal**: Verify graceful error handling
 
 ### Steps
-1. [ ] Stop aleph-server
+1. [ ] Stop aleph
 2. [ ] Observe UI behavior:
    - [ ] Connection error message (if implemented)
    - [ ] Reconnection attempts
-3. [ ] Restart aleph-server
+3. [ ] Restart aleph
 4. [ ] Verify:
    - [ ] UI reconnects automatically
    - [ ] Alert states reload

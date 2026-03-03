@@ -31,7 +31,7 @@ cargo run -p alephcore --features gateway --bin aleph-gateway -- start --daemon
 cargo run -p alephcore --features gateway --bin aleph-gateway -- status
 ```
 
-**Default Gateway Address**: `ws://127.0.0.1:18789`
+**Default Gateway Address**: `ws://127.0.0.1:18790/ws`
 
 ### 2. Configuration
 
@@ -414,7 +414,7 @@ pnpm build
 **Solution**:
 ```bash
 # Find and kill process
-lsof -ti:18789 | xargs kill -9
+lsof -ti:18790 | xargs kill -9
 
 # Or use Gateway stop command
 cargo run -p alephcore --features gateway --bin aleph-gateway -- stop

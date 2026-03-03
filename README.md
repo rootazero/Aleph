@@ -135,7 +135,7 @@ Aleph uses a **server-centric architecture** where the Server is the brain and h
 │   macOS App │ Tauri App │ CLI │ Telegram │ Discord │ WebChat   │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │ WebSocket (JSON-RPC 2.0)
-                                │ ws://127.0.0.1:18789
+                                │ ws://127.0.0.1:18790/ws
 ┌───────────────────────────────┴─────────────────────────────────┐
 │                         GATEWAY LAYER                            │
 │  Router │ Session Manager │ Event Bus │ Interfaces │ Hot Reload │
