@@ -749,6 +749,8 @@ fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Receiver<()> {
 async fn initialize_channels(
     server: &mut GatewayServer,
     gateway_config: &FullGatewayConfig,
+    app_config: &alephcore::Config,
+    app_config_arc: &Arc<tokio::sync::RwLock<alephcore::Config>>,
     daemon: bool,
 ) -> Arc<ChannelRegistry> {
     let channel_registry = Arc::new(ChannelRegistry::new());
@@ -767,9 +769,13 @@ async fn initialize_channels(
     }
 
     {
-        // Read token from gateway config ([channels.telegram] in aleph.toml)
-        // or fall back to TELEGRAM_BOT_TOKEN env var, then default (empty)
-        let telegram_config = if let Some(ref gw_tg) = gateway_config.channels.telegram {
+        // Priority: app config (config.toml, set by Panel UI) > gateway config (aleph.toml) > env var
+        let telegram_config = if let Some(app_tg) = app_config.channels.get("telegram") {
+            serde_json::from_value::<TelegramConfig>(app_tg.clone()).unwrap_or_else(|e| {
+                tracing::warn!("Failed to parse telegram config from app config: {}, falling back", e);
+                TelegramConfig::from_env().unwrap_or_default()
+            })
+        } else if let Some(ref gw_tg) = gateway_config.channels.telegram {
             let mut cfg = TelegramConfig::default();
             cfg.bot_token = gw_tg.token.clone();
             cfg
@@ -801,7 +807,7 @@ async fn initialize_channels(
         }
     }
 
-    register_channel_handlers(server, &channel_registry);
+    register_channel_handlers(server, &channel_registry, app_config_arc);
 
     if !daemon {
         println!("Channel methods:");
@@ -973,6 +979,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             backup,
         ))
     };
+    let app_config_for_channels = app_config.clone();
     let app_config_for_reload = app_config.clone();
     register_config_handlers(&mut server, app_config, config_patcher, event_bus.clone(), auth_bundle.device_store.clone());
 
@@ -1002,7 +1009,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
     }
 
-    let channel_registry = initialize_channels(&mut server, &full_config, args.daemon).await;
+    let app_config_snapshot = app_config_for_channels.read().await.clone();
+    let channel_registry = initialize_channels(&mut server, &full_config, &app_config_snapshot, &app_config_for_channels, args.daemon).await;
     initialize_inbound_router(channel_registry, router, args.daemon).await;
 
     let config_path = args.config.clone()

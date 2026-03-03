@@ -101,6 +101,11 @@ pub struct Config {
     /// Top-level secrets subsystem settings
     #[serde(default)]
     pub secrets_config: SecretsConfig,
+    /// Channel configurations (runtime channel control)
+    /// Each key is a channel name (e.g. "telegram", "discord"), value is channel-specific config.
+    /// This uses opaque JSON values since each channel has a different schema.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub channels: HashMap<String, serde_json::Value>,
     /// Presets override loaded from ~/.aleph/presets.toml
     /// Not serialized to config.toml — lives in its own file
     #[serde(skip)]
@@ -204,6 +209,7 @@ impl Default for Config {
             secret_providers: HashMap::new(),
             secrets: HashMap::new(),
             secrets_config: SecretsConfig::default(),
+            channels: HashMap::new(),
             presets_override: crate::config::presets_override::PresetsOverride::default(),
             prompts_override: crate::config::prompts_override::PromptsOverride::default(),
             defaults_override: crate::config::defaults_override::DefaultsOverride::default(),

@@ -440,7 +440,7 @@ pub async fn handle_get_full_config(
 ) -> JsonRpcResponse {
     let config_snapshot = config.read().await.clone();
 
-    // Convert Config to JSON (Tier 1/2 fields only)
+    // Convert Config to JSON
     let config_json = match serde_json::to_value(&config_snapshot) {
         Ok(v) => v,
         Err(e) => {
@@ -452,12 +452,23 @@ pub async fn handle_get_full_config(
         }
     };
 
-    JsonRpcResponse::success(
-        req.id,
-        json!({
-            "config": config_json
-        }),
-    )
+    // If a specific section is requested, return just that section
+    let section = req.params
+        .as_ref()
+        .and_then(|p| p.get("section"))
+        .and_then(|v| v.as_str());
+
+    if let Some(section) = section {
+        let section_value = config_json.get(section).cloned().unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+        JsonRpcResponse::success(req.id, section_value)
+    } else {
+        JsonRpcResponse::success(
+            req.id,
+            json!({
+                "config": config_json
+            }),
+        )
+    }
 }
 
 // ============================================================================

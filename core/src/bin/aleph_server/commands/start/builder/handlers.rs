@@ -116,10 +116,11 @@ pub(in crate::commands::start) fn register_session_handlers(
 pub(in crate::commands::start) fn register_channel_handlers(
     server: &mut GatewayServer,
     channel_registry: &Arc<ChannelRegistry>,
+    app_config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
 ) {
     register_handler!(server, "channels.list", channel_handlers::handle_list, channel_registry);
     register_handler!(server, "channels.status", channel_handlers::handle_status, channel_registry);
-    register_handler!(server, "channel.start", channel_handlers::handle_start, channel_registry);
+    register_handler!(server, "channel.start", channel_handlers::handle_start, channel_registry, app_config);
     register_handler!(server, "channel.stop", channel_handlers::handle_stop, channel_registry);
     register_handler!(server, "channel.pairing_data", channel_handlers::handle_pairing_data, channel_registry);
     register_handler!(server, "channel.send", channel_handlers::handle_send, channel_registry);
