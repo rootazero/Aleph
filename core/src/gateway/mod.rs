@@ -53,7 +53,6 @@ pub mod handlers;
 pub mod mdns_broadcaster;
 
 // ControlPlane: Embedded web UI
-#[cfg(feature = "control-plane")]
 pub mod control_plane;
 
 // Phase 4: Multi-Agent & Dispatcher

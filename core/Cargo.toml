@@ -10,11 +10,11 @@ name = "alephcore"
 
 [features]
 # Default: Gateway-only architecture (no FFI)
-default = ["gateway", "control-plane"]
+default = ["gateway"]
 # Gateway: WebSocket control plane for Moltbot-style architecture
 gateway = ["dep:tokio-tungstenite", "dep:futures-util", "dep:clap", "dep:tower-http", "dep:axum", "dep:tower", "dep:mime_guess", "dep:mdns-sd", "dep:sysinfo"]
 # ControlPlane: Embedded web UI for configuration management
-control-plane = ["gateway", "dep:rust-embed"]
+control-plane = ["gateway"]
 # Telegram channel support
 telegram = ["dep:teloxide", "gateway"]
 # Discord channel support
@@ -208,8 +208,8 @@ tower = { version = "0.5", optional = true }
 mime_guess = { version = "2.0", optional = true }
 mdns-sd = { workspace = true, optional = true }
 
-# ControlPlane dependencies (optional)
-rust-embed = { version = "8.0", features = ["compression"], optional = true }
+# ControlPlane dependencies
+rust-embed = { version = "8.0", features = ["compression"] }
 
 # Channel dependencies (optional)
 teloxide = { version = "0.13", features = ["macros"], optional = true }
