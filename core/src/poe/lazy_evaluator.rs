@@ -254,34 +254,30 @@ impl LazyPoeEvaluator {
     ///
     /// # Validation Rules
     ///
-    /// - `ToolError { retryable: true }` -> `ContinueWithHint` if retry budget available
-    /// - `ToolSuccess` with empty output -> `ContinueWithHint`
+    /// - `ToolError { retryable: true }` -> `ContinueWithHint` (advisory, does NOT consume retry budget)
+    /// - `ToolSuccess` with empty output -> `ContinueWithHint` (advisory)
     /// - All other cases -> `Continue`
+    ///
+    /// Note: Step-level hints are advisory and do NOT consume the retry budget.
+    /// Only completion validation (`validate_completion`) consumes retries.
     pub async fn evaluate_step(&self, action: &Action, result: &ActionResult) -> StepDirective {
-        let mut manifest = self.manifest.lock().await;
+        let manifest = self.manifest.lock().await;
 
         if !manifest.is_active() {
             return StepDirective::Continue;
         }
 
         match result {
-            // Retryable tool error: suggest a retry if budget allows
+            // Retryable tool error: suggest a retry (advisory — no budget consumed)
             ActionResult::ToolError { retryable: true, error } => {
-                if manifest.can_retry() {
-                    manifest.consume_retry();
-                    let tool_name = extract_tool_name(action);
-                    StepDirective::ContinueWithHint {
-                        hint: format!(
-                            "[POE-Lazy] Tool '{}' failed with retryable error: {}. \
-                             Please retry with adjusted parameters. (retry {}/{})",
-                            tool_name,
-                            truncate(error, 100),
-                            manifest.retry_count(),
-                            DEFAULT_MAX_RETRIES,
-                        ),
-                    }
-                } else {
-                    StepDirective::Continue
+                let tool_name = extract_tool_name(action);
+                StepDirective::ContinueWithHint {
+                    hint: format!(
+                        "[POE-Lazy] Tool '{}' failed with retryable error: {}. \
+                         Please retry with adjusted parameters.",
+                        tool_name,
+                        truncate(error, 100),
+                    ),
                 }
             }
 
@@ -786,7 +782,6 @@ mod tests {
             StepDirective::ContinueWithHint { hint } => {
                 assert!(hint.contains("web_search"));
                 assert!(hint.contains("timeout"));
-                assert!(hint.contains("retry 1/2"));
             }
             other => panic!("Expected ContinueWithHint, got {:?}", other),
         }
@@ -835,7 +830,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evaluator_retry_budget_exhaustion() {
+    async fn evaluator_step_hints_do_not_consume_retry_budget() {
         let eval = LazyPoeEvaluator::new("test query");
         eval.activate().await;
 
@@ -848,17 +843,21 @@ mod tests {
             retryable: true,
         };
 
-        // First retry
+        // Step hints are advisory — they never exhaust the retry budget
         let d1 = eval.evaluate_step(&action, &result).await;
         assert!(matches!(d1, StepDirective::ContinueWithHint { .. }));
 
-        // Second retry
         let d2 = eval.evaluate_step(&action, &result).await;
         assert!(matches!(d2, StepDirective::ContinueWithHint { .. }));
 
-        // Budget exhausted - should just Continue
+        // Third call still hints (budget not consumed by step evaluation)
         let d3 = eval.evaluate_step(&action, &result).await;
-        assert!(matches!(d3, StepDirective::Continue));
+        assert!(matches!(d3, StepDirective::ContinueWithHint { .. }));
+
+        // Completion validation should still have full retry budget
+        eval.record_tool_result("search", false).await;
+        let hint = eval.validate_completion("PDF已生成").await;
+        assert!(hint.is_some()); // First completion retry consumed
     }
 
     #[tokio::test]
