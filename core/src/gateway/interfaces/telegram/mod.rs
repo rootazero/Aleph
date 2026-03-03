@@ -31,13 +31,12 @@ pub use message_ops::TelegramMessageOps;
 
 use crate::gateway::channel::{
     Attachment, CallbackQuery, Channel, ChannelCapabilities, ChannelError, ChannelFactory,
-    ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId, InboundMessage,
-    InlineKeyboard, MessageId, OutboundMessage, SendResult, UserId,
+    ChannelId, ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId,
+    InboundMessage, InlineKeyboard, MessageId, OutboundMessage, SendResult, UserId,
 };
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
-use crate::sync_primitives::Arc;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{mpsc, oneshot};
 
 #[cfg(feature = "telegram")]
 use teloxide::{
@@ -54,18 +53,14 @@ pub struct TelegramChannel {
     info: ChannelInfo,
     /// Configuration
     config: TelegramConfig,
-    /// Inbound message sender
-    inbound_tx: mpsc::Sender<InboundMessage>,
-    /// Inbound message receiver (taken on first call)
-    inbound_rx: Option<mpsc::Receiver<InboundMessage>>,
+    /// Unified channel state (status + inbound sender/receiver)
+    channel_state: ChannelState,
     /// Callback query sender
     callback_tx: mpsc::Sender<CallbackQuery>,
     /// Callback query receiver (taken on first call)
     callback_rx: Option<mpsc::Receiver<CallbackQuery>>,
     /// Shutdown signal sender
     shutdown_tx: Option<oneshot::Sender<()>>,
-    /// Current status
-    status: Arc<RwLock<ChannelStatus>>,
     /// Teloxide bot instance
     #[cfg(feature = "telegram")]
     bot: Option<Bot>,
@@ -74,7 +69,6 @@ pub struct TelegramChannel {
 impl TelegramChannel {
     /// Create a new Telegram channel
     pub fn new(id: impl Into<String>, config: TelegramConfig) -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::channel(100);
         let (callback_tx, callback_rx) = mpsc::channel(100);
 
         let info = ChannelInfo {
@@ -88,12 +82,10 @@ impl TelegramChannel {
         Self {
             info,
             config,
-            inbound_tx,
-            inbound_rx: Some(inbound_rx),
+            channel_state: ChannelState::new(100),
             callback_tx,
             callback_rx: Some(callback_rx),
             shutdown_tx: None,
-            status: Arc::new(RwLock::new(ChannelStatus::Disconnected)),
             #[cfg(feature = "telegram")]
             bot: None,
         }
@@ -291,7 +283,7 @@ impl TelegramChannel {
 
     /// Update internal status
     async fn set_status(&self, status: ChannelStatus) {
-        *self.status.write().await = status;
+        self.channel_state.set_status(status).await;
     }
 }
 
@@ -301,10 +293,8 @@ impl Channel for TelegramChannel {
         &self.info
     }
 
-    fn status(&self) -> ChannelStatus {
-        // Return cached status synchronously
-        // The actual status is updated by the polling/webhook task
-        self.info.status
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
@@ -347,10 +337,10 @@ impl Channel for TelegramChannel {
             self.shutdown_tx = Some(shutdown_tx);
 
             // Start message polling
-            let inbound_tx = self.inbound_tx.clone();
+            let inbound_tx = self.channel_state.sender();
             let callback_tx = self.callback_tx.clone();
             let config = self.config.clone();
-            let status = self.status.clone();
+            let status = self.channel_state.status_handle();
 
             tokio::spawn(async move {
                 tracing::info!("Starting Telegram long-polling...");
@@ -536,10 +526,6 @@ impl Channel for TelegramChannel {
         }
     }
 
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        None // Already taken during construction or via take_receiver
-    }
-
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
         #[cfg(feature = "telegram")]
         {
@@ -612,11 +598,6 @@ impl Channel for TelegramChannel {
 }
 
 impl TelegramChannel {
-    /// Take the inbound receiver (can only be called once)
-    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<InboundMessage>> {
-        self.inbound_rx.take()
-    }
-
     /// Take the callback receiver (can only be called once)
     pub fn take_callback_receiver(&mut self) -> Option<mpsc::Receiver<CallbackQuery>> {
         self.callback_rx.take()
