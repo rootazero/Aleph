@@ -3,9 +3,10 @@
 //! Consumes the ChannelRegistry's inbound message stream and routes
 //! messages to the appropriate Agent/Session.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 use crate::sync_primitives::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -70,6 +71,79 @@ pub enum RoutingError {
     Pairing(#[from] PairingError),
 }
 
+/// Time window for inbound message deduplication (5 minutes)
+const DEDUP_WINDOW: Duration = Duration::from_secs(300);
+
+/// Maximum dedup entries before forced cleanup
+const DEDUP_MAX_ENTRIES: usize = 10_000;
+
+/// Tracks recently processed inbound message IDs to prevent duplicate execution
+struct InboundDedupTracker {
+    /// Set of "channel_id:message_id" keys
+    seen: HashSet<String>,
+    /// Ordered list of (key, timestamp) for expiry
+    entries: Vec<(String, Instant)>,
+}
+
+impl InboundDedupTracker {
+    fn new() -> Self {
+        Self {
+            seen: HashSet::new(),
+            entries: Vec::new(),
+        }
+    }
+
+    /// Check if message was already processed. If not, mark it as seen.
+    /// Returns true if this is a NEW message (not a duplicate).
+    fn check_and_record(&mut self, key: &str) -> bool {
+        // Expire old entries first
+        self.expire();
+
+        if self.seen.contains(key) {
+            return false; // Duplicate
+        }
+
+        self.seen.insert(key.to_string());
+        self.entries.push((key.to_string(), Instant::now()));
+        true
+    }
+
+    /// Remove entries older than DEDUP_WINDOW
+    fn expire(&mut self) {
+        let cutoff = Instant::now() - DEDUP_WINDOW;
+        let before = self.entries.len();
+
+        self.entries.retain(|(key, ts)| {
+            if *ts < cutoff {
+                self.seen.remove(key);
+                false
+            } else {
+                true
+            }
+        });
+
+        if before > self.entries.len() {
+            debug!(
+                "Dedup tracker: expired {} entries, {} remaining",
+                before - self.entries.len(),
+                self.entries.len()
+            );
+        }
+
+        // Safety cap: if somehow we accumulate too many, drop oldest half
+        if self.entries.len() > DEDUP_MAX_ENTRIES {
+            let drain_count = self.entries.len() / 2;
+            for (key, _) in self.entries.drain(..drain_count) {
+                self.seen.remove(&key);
+            }
+            warn!(
+                "Dedup tracker hit max entries, forcibly dropped {} entries",
+                drain_count
+            );
+        }
+    }
+}
+
 /// Inbound message router
 pub struct InboundMessageRouter {
     channel_registry: Arc<ChannelRegistry>,
@@ -83,6 +157,8 @@ pub struct InboundMessageRouter {
     execution_adapter: Option<Arc<dyn ExecutionAdapter>>,
     /// Agent router for binding-based agent selection (unified with WS routing)
     agent_router: Option<Arc<AgentRouter>>,
+    /// Inbound message deduplication tracker
+    dedup_tracker: Mutex<InboundDedupTracker>,
 }
 
 /// Unified channel config for permission checking
@@ -172,6 +248,7 @@ impl InboundMessageRouter {
             agent_registry: None,
             execution_adapter: None,
             agent_router: None,
+            dedup_tracker: Mutex::new(InboundDedupTracker::new()),
         }
     }
 
@@ -194,6 +271,7 @@ impl InboundMessageRouter {
             agent_registry: Some(agent_registry),
             execution_adapter: Some(execution_adapter),
             agent_router: None,
+            dedup_tracker: Mutex::new(InboundDedupTracker::new()),
         }
     }
 
@@ -218,6 +296,7 @@ impl InboundMessageRouter {
             agent_registry: Some(agent_registry),
             execution_adapter: Some(execution_adapter),
             agent_router: Some(agent_router),
+            dedup_tracker: Mutex::new(InboundDedupTracker::new()),
         }
     }
 
@@ -254,6 +333,19 @@ impl InboundMessageRouter {
         info!("InboundMessageRouter started");
 
         while let Some(msg) = rx.recv().await {
+            // Deduplication check: skip if we've already processed this message
+            let dedup_key = format!("{}:{}", msg.channel_id.as_str(), msg.id.as_str());
+            {
+                let mut tracker = self.dedup_tracker.lock().await;
+                if !tracker.check_and_record(&dedup_key) {
+                    warn!(
+                        "Duplicate message detected and dropped: {} from {}:{}",
+                        dedup_key, msg.channel_id.as_str(), msg.sender_id.as_str()
+                    );
+                    continue;
+                }
+            }
+
             let router = self.clone();
             tokio::spawn(async move {
                 if let Err(e) = router.handle_message(msg).await {
@@ -606,4 +698,48 @@ impl InboundMessageRouter {
     }
 }
 
-// Tests migrated to BDD: core/tests/features/gateway/inbound_router.feature
+// BDD tests: core/tests/features/gateway/inbound_router.feature
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dedup_tracker_new_message() {
+        let mut tracker = InboundDedupTracker::new();
+        assert!(tracker.check_and_record("telegram:123"));
+        assert_eq!(tracker.seen.len(), 1);
+    }
+
+    #[test]
+    fn test_dedup_tracker_duplicate_blocked() {
+        let mut tracker = InboundDedupTracker::new();
+        assert!(tracker.check_and_record("telegram:123"));
+        assert!(!tracker.check_and_record("telegram:123")); // duplicate
+    }
+
+    #[test]
+    fn test_dedup_tracker_different_messages_allowed() {
+        let mut tracker = InboundDedupTracker::new();
+        assert!(tracker.check_and_record("telegram:123"));
+        assert!(tracker.check_and_record("telegram:124"));
+        assert!(tracker.check_and_record("discord:123")); // same msg_id, different channel
+        assert_eq!(tracker.seen.len(), 3);
+    }
+
+    #[test]
+    fn test_dedup_tracker_expire() {
+        let mut tracker = InboundDedupTracker::new();
+        // Insert an entry with a past timestamp
+        let old_key = "telegram:old".to_string();
+        tracker.seen.insert(old_key.clone());
+        tracker.entries.push((old_key, Instant::now() - Duration::from_secs(600)));
+
+        // Insert a fresh entry
+        assert!(tracker.check_and_record("telegram:new"));
+
+        // After expire, old entry should be gone
+        assert_eq!(tracker.seen.len(), 1); // only "new" remains
+        assert_eq!(tracker.entries.len(), 1);
+    }
+}

@@ -65,13 +65,17 @@ pub fn parse_bridge_args() -> Option<BridgeModeConfig> {
 // ── Application entry point ────────────────────────────────────────
 
 pub fn run() {
-    let _ = tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "aleph_tauri=debug,tauri=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .try_init();
+    if let Err(e) = aleph_logging::init_component_logging("tauri", 7, "aleph_tauri=debug,tauri=info") {
+        eprintln!("Failed to init file logging: {e}");
+        // Fallback to console-only
+        let _ = tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "aleph_tauri=debug,tauri=info".into()),
+            )
+            .with(tracing_subscriber::fmt::layer())
+            .try_init();
+    }
 
     // Parse bridge-mode CLI flags before anything else
     let bridge_config = parse_bridge_args();

@@ -116,6 +116,11 @@ impl DecisionParser {
             return Ok(thinking);
         }
 
+        // Try to recover from truncated JSON (LLM hit max_tokens mid-response)
+        if let Some(thinking) = self.try_recover_truncated_json(response) {
+            return Ok(thinking);
+        }
+
         // Try to extract tool call from response
         if let Some(thinking) = self.try_extract_tool_call(response) {
             return Ok(thinking);
@@ -458,6 +463,87 @@ impl DecisionParser {
         } else {
             None
         }
+    }
+
+    /// Try to recover from truncated JSON (LLM hit max_tokens mid-response).
+    ///
+    /// When the LLM generates a very long reasoning field, the JSON may be truncated
+    /// before the action field is reached. Instead of failing, we extract the partial
+    /// reasoning and return a Complete decision with a summary derived from the context.
+    fn try_recover_truncated_json(&self, response: &str) -> Option<Thinking> {
+        let trimmed = response.trim();
+
+        // Must look like truncated JSON: starts with code-block or `{`, has "reasoning" but no matching `}`
+        let json_content = if let Some(start) = trimmed.find("```json") {
+            let content_start = start + 7;
+            // No closing ``` — truncated code block
+            if trimmed[content_start..].contains("```") {
+                return None; // Code block is properly closed, not truncated
+            }
+            trimmed[content_start..].trim()
+        } else if trimmed.starts_with('{') {
+            trimmed
+        } else {
+            return None;
+        };
+
+        // Check it has "reasoning" but the JSON is incomplete (unmatched braces)
+        if !json_content.contains("\"reasoning\"") {
+            return None;
+        }
+        let open_braces = json_content.chars().filter(|&c| c == '{').count();
+        let close_braces = json_content.chars().filter(|&c| c == '}').count();
+        if close_braces >= open_braces {
+            return None; // Braces are balanced, not truncated
+        }
+
+        tracing::warn!(
+            response_len = response.len(),
+            open_braces,
+            close_braces,
+            "Detected truncated JSON response (likely max_tokens exceeded), recovering"
+        );
+
+        // Extract partial reasoning text
+        let reasoning_text = if let Some(start) = json_content.find("\"reasoning\"") {
+            let after_key = &json_content[start + 11..]; // skip `"reasoning"`
+            // Find the value start (skip `: "` or `:"`)
+            if let Some(quote_pos) = after_key.find('"') {
+                let value_start = quote_pos + 1;
+                let value_content = &after_key[value_start..];
+                // Take content up to the end (since JSON is truncated, there's no closing quote)
+                // Try to find a clean end point
+                let clean_text = value_content
+                    .replace("\\n", "\n")
+                    .replace("\\\"", "\"")
+                    .replace("\\\\", "\\");
+                Some(clean_text)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Build a Complete decision from the partial reasoning
+        let summary = if let Some(ref text) = reasoning_text {
+            // Use the reasoning as the response since the LLM was clearly
+            // trying to generate a final answer (it had all the data)
+            let truncated: String = text.chars().take(4000).collect();
+            truncated
+        } else {
+            "Response was truncated. Please try again with a simpler request.".to_string()
+        };
+
+        let reasoning = reasoning_text.or_else(|| Some(response.to_string()));
+        let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
+
+        Some(Thinking {
+            reasoning,
+            decision: Decision::Complete { summary },
+            structured,
+            tokens_used: None,
+        })
     }
 
     /// Try to extract a tool call from non-JSON response
@@ -994,5 +1080,51 @@ Now I need to write these to a file:
         assert!(result.is_ok());
         let thinking = result.unwrap();
         assert!(matches!(thinking.decision, Decision::HeartbeatOk));
+    }
+
+    #[test]
+    fn test_recover_truncated_json_in_code_block() {
+        let parser = DecisionParser::new();
+
+        // Simulate truncated JSON in code block (LLM hit max_tokens)
+        let response = "```json\n{\n  \"reasoning\": \"用户想要比特币分析报告。根据搜索结果，当前价格约67000美元，最近一个月涨幅明显。关键数据：上证指数突破4000点，成交额3万亿\",\n  \"action\": {\n    \"type\": \"complete\",\n    \"summary\": \"## 比特币分析报告";
+
+        let thinking = parser.parse_with_fallback(response).unwrap();
+        assert!(
+            matches!(thinking.decision, Decision::Complete { .. }),
+            "Truncated JSON should recover as Complete, got {:?}",
+            thinking.decision
+        );
+        if let Decision::Complete { summary } = &thinking.decision {
+            assert!(summary.contains("比特币"), "Summary should contain extracted reasoning");
+        }
+    }
+
+    #[test]
+    fn test_recover_truncated_json_raw() {
+        let parser = DecisionParser::new();
+
+        // Truncated raw JSON (reasoning field cut off, no action field)
+        let response = "{\n  \"reasoning\": \"I collected data from 3 searches. The market shows strong momentum with volume exceeding 3 trillion. Key support at 4000, resistance at 4150. MACD shows bullish crossov";
+
+        let thinking = parser.parse_with_fallback(response).unwrap();
+        assert!(
+            matches!(thinking.decision, Decision::Complete { .. }),
+            "Truncated raw JSON should recover as Complete, got {:?}",
+            thinking.decision
+        );
+    }
+
+    #[test]
+    fn test_no_recovery_for_complete_json() {
+        let parser = DecisionParser::new();
+
+        // Complete (non-truncated) JSON should NOT trigger recovery
+        let response = r#"{"reasoning": "test", "action": {"type": "complete", "summary": "done"}}"#;
+        let thinking = parser.parse(response).unwrap();
+        assert!(matches!(thinking.decision, Decision::Complete { .. }));
+        if let Decision::Complete { summary } = &thinking.decision {
+            assert_eq!(summary, "done");
+        }
     }
 }

@@ -152,30 +152,47 @@ Examples:\n\
         }
     }
 
+    /// Check if a character is CJK (Chinese, Japanese, Korean) or full-width
+    fn is_cjk(c: char) -> bool {
+        matches!(c,
+            '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
+            | '\u{3400}'..='\u{4DBF}' // CJK Unified Ideographs Extension A
+            | '\u{F900}'..='\u{FAFF}' // CJK Compatibility Ideographs
+            | '\u{2E80}'..='\u{2EFF}' // CJK Radicals Supplement
+            | '\u{3000}'..='\u{303F}' // CJK Symbols and Punctuation
+            | '\u{FF00}'..='\u{FFEF}' // Fullwidth Forms
+            | '\u{3040}'..='\u{309F}' // Hiragana
+            | '\u{30A0}'..='\u{30FF}' // Katakana
+            | '\u{AC00}'..='\u{D7AF}' // Hangul Syllables
+            | '\u{1100}'..='\u{11FF}' // Hangul Jamo
+        )
+    }
+
     /// Find a suitable font for text rendering
     fn find_system_font() -> Option<PathBuf> {
-        // Try common font locations
+        // Try common font locations — CJK-capable fonts FIRST
+        // (PingFang/Hiragino/STHeiti support both Latin AND CJK characters)
         let font_paths = if cfg!(target_os = "macos") {
             vec![
-                // macOS system fonts - prefer fonts with good Unicode coverage
-                "/System/Library/Fonts/Helvetica.ttc",
-                "/System/Library/Fonts/Times.ttc",
-                "/System/Library/Fonts/PingFang.ttc", // Chinese support
-                "/System/Library/Fonts/Supplemental/Arial.ttf",
-                "/Library/Fonts/Arial.ttf",
+                "/System/Library/Fonts/PingFang.ttc",            // macOS 10.11+ (may be absent on some versions)
+                "/System/Library/Fonts/Hiragino Sans GB.ttc",    // CJK sans-serif, widely available
+                "/System/Library/Fonts/STHeiti Medium.ttc",      // STHeiti CJK
+                "/System/Library/Fonts/Supplemental/Songti.ttc", // CJK serif fallback
+                "/System/Library/Fonts/Helvetica.ttc",           // Latin-only last resort
             ]
         } else if cfg!(target_os = "windows") {
             vec![
+                "C:\\Windows\\Fonts\\msyh.ttc", // Microsoft YaHei — CJK + Latin
+                "C:\\Windows\\Fonts\\simsun.ttc", // SimSun — CJK fallback
                 "C:\\Windows\\Fonts\\arial.ttf",
-                "C:\\Windows\\Fonts\\times.ttf",
-                "C:\\Windows\\Fonts\\msyh.ttc", // Chinese support
             ]
         } else {
             // Linux
             vec![
+                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", // CJK + Latin
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                 "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", // Chinese
             ]
         };
 
@@ -550,30 +567,41 @@ Examples:\n\
         })
     }
 
-    /// Simple word wrapping (approximate)
+    /// Text wrapping that handles both Latin (word-boundary) and CJK (character-boundary)
     fn wrap_text(text: &str, max_width_mm: f32, font_size: f32) -> Vec<String> {
-        // Approximate characters per line based on font size and width
-        // This is a rough estimate - printpdf doesn't provide text metrics easily
-        let chars_per_mm = 0.4 / (font_size / 12.0); // Rough approximation
-        let max_chars = (max_width_mm * chars_per_mm) as usize;
+        // Approximate column units per mm (CJK char = 2 units, Latin char = 1 unit)
+        let units_per_mm = 0.4 / (font_size / 12.0);
+        let max_units = (max_width_mm * units_per_mm) as usize;
 
-        if max_chars == 0 || text.len() <= max_chars {
+        if max_units == 0 {
+            return vec![text.to_string()];
+        }
+
+        // Quick check: calculate display width
+        let display_width: usize = text
+            .chars()
+            .map(|c| if Self::is_cjk(c) { 2 } else { 1 })
+            .sum();
+        if display_width <= max_units {
             return vec![text.to_string()];
         }
 
         let mut lines = Vec::new();
         let mut current_line = String::new();
+        let mut current_width: usize = 0;
 
-        for word in text.split_whitespace() {
-            if current_line.is_empty() {
-                current_line = word.to_string();
-            } else if current_line.len() + 1 + word.len() <= max_chars {
-                current_line.push(' ');
-                current_line.push_str(word);
-            } else {
+        for c in text.chars() {
+            let char_width = if Self::is_cjk(c) { 2 } else { 1 };
+
+            // If adding this char would overflow, start a new line
+            if current_width + char_width > max_units && !current_line.is_empty() {
                 lines.push(current_line);
-                current_line = word.to_string();
+                current_line = String::new();
+                current_width = 0;
             }
+
+            current_line.push(c);
+            current_width += char_width;
         }
 
         if !current_line.is_empty() {
@@ -757,5 +785,64 @@ code block
 
         // Cleanup
         let _ = fs::remove_file(&output_path);
+    }
+
+    #[tokio::test]
+    async fn test_chinese_pdf_generation() {
+        let tool = PdfGenerateTool::new();
+        let temp_dir = std::env::temp_dir();
+        let output_path = temp_dir.join("test_chinese.pdf");
+
+        let content = "# 比特币价格报告\n\n\
+            ## 市场概览\n\n\
+            当前比特币价格约为 67,284 美元，折合人民币约 464,274 元。\n\n\
+            ## 趋势分析\n\n\
+            - 24小时涨幅：+2.3%\n\
+            - 7天涨幅：+5.1%\n\
+            - 30天涨幅：+12.8%\n\n\
+            市场整体呈现上涨趋势，投资者情绪积极。";
+
+        let args = PdfGenerateArgs {
+            content: content.to_string(),
+            output_path: output_path.to_string_lossy().to_string(),
+            format: ContentFormat::Markdown,
+            page_size: PageSize::A4,
+            title: Some("比特币交易报告".to_string()),
+            font_size: 12.0,
+            line_spacing: 1.5,
+            margin_mm: 20.0,
+        };
+
+        let result = tool.call(args).await;
+        assert!(result.is_ok());
+
+        let output = result.unwrap();
+        assert!(output.success);
+        assert!(output.pages >= 1);
+
+        // Verify the file is non-trivial (CJK content should produce reasonable size)
+        let metadata = fs::metadata(&output_path).unwrap();
+        assert!(metadata.len() > 1000, "PDF should have substantial content");
+
+        // Cleanup
+        let _ = fs::remove_file(&output_path);
+    }
+
+    #[test]
+    fn test_wrap_text_cjk() {
+        // CJK characters should be counted as 2 units wide
+        let chinese = "这是一段测试中文文本，用于验证换行功能";
+        let wrapped = PdfGenerateTool::wrap_text(chinese, 30.0, 12.0);
+        // With ~30mm at 12pt, about 10 units, CJK chars are 2 units each → ~5 chars/line
+        assert!(wrapped.len() > 1, "Chinese text should wrap to multiple lines");
+    }
+
+    #[test]
+    fn test_is_cjk() {
+        assert!(PdfGenerateTool::is_cjk('中'));
+        assert!(PdfGenerateTool::is_cjk('の'));
+        assert!(PdfGenerateTool::is_cjk('한'));
+        assert!(!PdfGenerateTool::is_cjk('A'));
+        assert!(!PdfGenerateTool::is_cjk('1'));
     }
 }

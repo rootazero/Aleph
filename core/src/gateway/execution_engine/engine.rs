@@ -570,6 +570,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .cloned()
             .collect();
 
+        debug!(
+            run_id = run_id,
+            total_tools = self.tools.len(),
+            allowed_tools = allowed_tools.len(),
+            "Tool availability for agent loop"
+        );
+
         // Run the loop (history_summary as Option<String>)
         let initial_history = if history_summary.is_empty() {
             None

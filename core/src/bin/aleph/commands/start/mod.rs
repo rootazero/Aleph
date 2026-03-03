@@ -303,10 +303,18 @@ async fn register_agent_handlers(
             }
         };
 
-        // Build tool config with memory backend and embedder
+        // Extract Tavily API key from search config
+        let tavily_api_key = app_config
+            .search
+            .as_ref()
+            .and_then(|s| s.backends.get(&s.default_provider))
+            .and_then(|b| b.api_key.clone());
+
+        // Build tool config with memory backend, embedder, and search API key
         let tool_config = alephcore::executor::BuiltinToolConfig {
             memory_db: Some(memory_db.clone()),
             embedder,
+            tavily_api_key,
             ..Default::default()
         };
         let tool_registry = Arc::new(BuiltinToolRegistry::with_config(tool_config));

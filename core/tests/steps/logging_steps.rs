@@ -142,7 +142,7 @@ async fn when_run_cleanup(w: &mut AlephWorld, retention_days: i32) {
     let ctx = w.logging.as_mut().expect("Logging context not initialized");
     let log_dir = ctx.log_dir.as_ref().expect("Log directory not set");
 
-    let result = cleanup_old_logs(log_dir, retention_days as u32);
+    let result = cleanup_old_logs(log_dir, retention_days as u32, None);
     ctx.cleanup_result = Some(result.map_err(|e| e.to_string()));
 }
 
@@ -358,7 +358,7 @@ async fn when_cleanup_nonexistent(w: &mut AlephWorld, retention_days: i32) {
     let ctx = w.logging.as_mut().expect("Logging context not initialized");
     let log_dir = ctx.log_dir.as_ref().expect("Log directory not set");
 
-    let result = cleanup_old_logs(log_dir, retention_days as u32);
+    let result = cleanup_old_logs(log_dir, retention_days as u32, None);
     ctx.cleanup_result = Some(result.map_err(|e| e.to_string()));
 }
 

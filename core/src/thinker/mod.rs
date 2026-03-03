@@ -417,6 +417,12 @@ impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
         // 2. Filter tools based on context
         let filtered_tools = self.filter_tools(tools, &initial_observation);
 
+        tracing::debug!(
+            input_tools = tools.len(),
+            filtered_tools = filtered_tools.len(),
+            "Thinker tool filtering"
+        );
+
         // 3. Rebuild observation with filtered tools
         let observation = self.build_observation(state, &filtered_tools);
 
