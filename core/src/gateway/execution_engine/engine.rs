@@ -246,6 +246,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         total_duration_ms: duration_ms,
                     })
                     .await;
+
+                // Notify UI that the session was updated
+                let _ = emitter
+                    .emit(StreamEvent::SessionUpdated {
+                        session_key: request.session_key.to_key_string(),
+                    })
+                    .await;
                 Ok(())
             }
             Err(e) => {

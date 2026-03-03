@@ -126,6 +126,14 @@ pub enum StreamEvent {
         /// Suggested action for handling the uncertainty
         suggested_action: UncertaintyAction,
     },
+
+    /// Session was updated (new messages added)
+    ///
+    /// Emitted after a run completes so that UI sidebars can refresh
+    /// their session list without polling.
+    SessionUpdated {
+        session_key: String,
+    },
 }
 
 /// Suggested action for handling AI uncertainty
@@ -688,6 +696,7 @@ fn event_method(event: &StreamEvent) -> &'static str {
         StreamEvent::AskUser { .. } => "stream.ask_user",
         StreamEvent::ReasoningBlock { .. } => "stream.reasoning_block",
         StreamEvent::UncertaintySignal { .. } => "stream.uncertainty_signal",
+        StreamEvent::SessionUpdated { .. } => "stream.session_updated",
     }
 }
 
