@@ -125,17 +125,20 @@ enum SessionAction {
 async fn main() -> CliResult<()> {
     let cli = Cli::parse();
 
-    // Initialize logging
-    let filter = if cli.verbose {
-        EnvFilter::new("debug")
-    } else {
-        EnvFilter::new("info")
-    };
-
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(filter)
-        .init();
+    // Initialize logging with unified file + console output
+    let default_filter = if cli.verbose { "debug" } else { "info" };
+    if let Err(e) = aleph_logging::init_component_logging("cli", 7, default_filter) {
+        eprintln!("Failed to init file logging: {e}");
+        // Fallback to console-only
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(if cli.verbose {
+                EnvFilter::new("debug")
+            } else {
+                EnvFilter::new("info")
+            })
+            .init();
+    }
 
     // Load configuration
     let config = CliConfig::load(cli.config.as_deref())?;

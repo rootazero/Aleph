@@ -39,8 +39,10 @@ pub const MAX_STDOUT_SIZE: usize = 10 * 1024 * 1024;
 pub const MAX_STDERR_SIZE: usize = 1024 * 1024;
 
 // AI model defaults
-/// Default max tokens for AI model responses
-pub const DEFAULT_MAX_TOKENS: u32 = 4096;
+/// Default max tokens for AI model responses.
+/// Agent responses need room for reasoning + action JSON + tool arguments.
+/// 4096 is too small for complex multi-step tasks with CJK content.
+pub const DEFAULT_MAX_TOKENS: u32 = 16384;
 
 // Retry defaults
 /// Default maximum retry attempts for operations

@@ -2,7 +2,7 @@
 ///
 /// This layer intercepts tracing events and scrubs PII before they are
 /// written to log files or console output.
-use crate::utils::pii::scrub_pii;
+use aleph_logging::scrub_pii;
 use tracing::{field::Visit, Event, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 

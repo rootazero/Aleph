@@ -107,6 +107,7 @@ dependencies = [
 name = "aleph-cli"
 version = "0.1.0"
 dependencies = [
+ "aleph-logging",
  "aleph-protocol",
  "anyhow",
  "async-trait",
@@ -186,6 +187,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "aleph-logging"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dirs 5.0.1",
+ "filetime",
+ "regex",
+ "tempfile",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "aleph-protocol"
 version = "0.1.0"
 dependencies = [
@@ -211,6 +226,7 @@ dependencies = [
 name = "aleph-tauri"
 version = "0.1.0"
 dependencies = [
+ "aleph-logging",
  "aleph-protocol",
  "base64 0.22.1",
  "dirs 6.0.0",
@@ -267,6 +283,7 @@ dependencies = [
  "aes-gcm",
  "aho-corasick",
  "aleph-desktop",
+ "aleph-logging",
  "aleph-protocol",
  "aleph-sdk",
  "anyhow",

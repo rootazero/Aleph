@@ -187,6 +187,9 @@ inquire = "0.7"
 # Loom concurrency testing (optional, activated via --features loom)
 loom = { version = "0.7", optional = true }
 
+# Shared logging infrastructure
+aleph-logging = { path = "../crates/logging" }
+
 # Native desktop capabilities (in-process alternative to IPC bridge)
 aleph-desktop = { path = "../crates/desktop" }
 

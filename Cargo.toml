@@ -7,6 +7,7 @@ members = [
     "core",
     "core/ui/control_plane",
     "crates/desktop",
+    "crates/logging",
     "shared/protocol",
     "shared/ui_logic",
     "shared_ui_logic",
