@@ -391,6 +391,15 @@ impl ChannelState {
     pub fn sender(&self) -> mpsc::Sender<InboundMessage> {
         self.inbound_tx.clone()
     }
+
+    /// Clone the internal status Arc for use in spawned tasks.
+    ///
+    /// When a channel's `start()` method spawns background tasks that need
+    /// to update status (e.g., `Connected` → `Disconnected`), they can't
+    /// reference `self.channel_state`. Clone this Arc before the spawn.
+    pub fn status_handle(&self) -> Arc<tokio::sync::RwLock<ChannelStatus>> {
+        self.status.clone()
+    }
 }
 
 /// Pairing data for a channel
