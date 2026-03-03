@@ -264,7 +264,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     let sk = request.session_key.to_key_string();
                     let ui = request.input.clone();
                     let ao = response.clone();
-                    tokio::spawn(async move {
+                    let _ = tokio::spawn(async move {
                         write_conversation_memory(mb, sk, ui, ao).await;
                     });
                 }

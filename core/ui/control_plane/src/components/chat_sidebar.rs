@@ -143,7 +143,7 @@ pub fn ChatSidebar() -> impl IntoView {
             <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1">
                 {move || {
                     let list = sessions.get();
-                    let active_key = chat.session_key.get();
+                    let _active_key = chat.session_key.get();
                     if is_loading.get() {
                         view! {
                             <p class="text-xs text-text-tertiary px-3 py-4 text-center">
