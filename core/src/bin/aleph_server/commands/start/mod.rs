@@ -349,6 +349,7 @@ async fn register_agent_handlers(
             tool_registry,
             tools,
             session_manager.clone(),
+            Some(memory_db.clone()),
         ));
 
         let agent_registry = Arc::new(AgentRegistry::new());
