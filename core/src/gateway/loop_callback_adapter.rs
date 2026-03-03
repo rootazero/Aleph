@@ -258,19 +258,19 @@ impl<E: EventEmitter + Send + Sync + 'static> LoopCallback for EventEmittingCall
         question: &str,
         options: Option<&[String]>,
     ) -> String {
-        // Emit AskUser event
-        let _ = self
-            .emitter
-            .emit(StreamEvent::AskUser {
-                run_id: self.run_id.clone(),
-                seq: self.next_seq(),
-                question: question.to_string(),
-                options: options.map(|o| o.to_vec()).unwrap_or_default(),
-            })
-            .await;
-
-        // If we have a channel to send questions, use it
+        // If we have an interactive response channel (WebSocket UI), use it
         if let Some(ref tx) = self.user_question_tx {
+            // Emit AskUser event to UI
+            let _ = self
+                .emitter
+                .emit(StreamEvent::AskUser {
+                    run_id: self.run_id.clone(),
+                    seq: self.next_seq(),
+                    question: question.to_string(),
+                    options: options.map(|o| o.to_vec()).unwrap_or_default(),
+                })
+                .await;
+
             let (response_tx, response_rx) = tokio::sync::oneshot::channel();
             let user_question = UserQuestion {
                 question: question.to_string(),
@@ -286,13 +286,15 @@ impl<E: EventEmitter + Send + Sync + 'static> LoopCallback for EventEmittingCall
             }
         }
 
-        // Default response if no channel or error
-        tracing::warn!(
+        // No interactive response channel (e.g. Telegram/Discord bot mode).
+        // Do NOT emit AskUser event — it would send an extra message to the channel.
+        // Silently auto-accept so the agent produces a single final response.
+        tracing::info!(
             run_id = %self.run_id,
             question = %question,
-            "User input required but no response channel, using default"
+            "Non-interactive mode: auto-accepting user question"
         );
-        "continue".to_string()
+        "[User is in non-interactive channel mode. Do NOT ask further questions. Accept defaults and proceed.]".to_string()
     }
 
     /// Called when multi-group user input is required

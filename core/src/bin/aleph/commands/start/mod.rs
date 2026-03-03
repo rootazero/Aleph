@@ -827,6 +827,19 @@ async fn initialize_channels(
 
     register_channel_handlers(server, &channel_registry, app_config_arc);
 
+    // Auto-start all registered channels
+    let start_results = channel_registry.start_all().await;
+    for (ch_id, result) in &start_results {
+        match result {
+            Ok(()) => println!("  ✓ Channel {} started", ch_id),
+            Err(e) => eprintln!("  ✗ Channel {} failed: {}", ch_id, e),
+        }
+    }
+    if !daemon {
+        let ok_count = start_results.iter().filter(|(_, r)| r.is_ok()).count();
+        println!("Auto-started {}/{} channels", ok_count, start_results.len());
+    }
+
     if !daemon {
         println!("Channel methods:");
         println!("  - channels.list   : List all channels");
