@@ -21,36 +21,23 @@ default:
 
 # ─── Daily Development ───
 
-# Run server with Panel UI (debug)
+# Run server (debug)
 dev:
-    cargo run --bin {{server_bin}} --features control-plane
-
-# Run server with Panel + native desktop (debug)
-dev-desktop:
-    cargo run --bin {{server_bin}} --features control-plane,desktop
-
-# Run server without Panel UI (debug)
-dev-headless:
     cargo run --bin {{server_bin}}
 
 # ─── Full Builds ───
 
-# Full build: WASM → Server (with desktop) → macOS App (release)
+# Full build: WASM → Server → macOS App (release)
 build: server macos
 
-# Build server with Panel + native desktop (release)
+# Build server (release)
 server: wasm
-    cargo build --bin {{server_bin}} --features control-plane,desktop --release
-    @echo "✓ Server: {{release_dir}}/{{server_bin}} (panel + desktop)"
-
-# Build server with Panel only, no native desktop (release)
-server-light: wasm
-    cargo build --bin {{server_bin}} --features control-plane --release
-    @echo "✓ Server: {{release_dir}}/{{server_bin}} (panel only, IPC desktop)"
+    cargo build --bin {{server_bin}} --release
+    @echo "✓ Server: {{release_dir}}/{{server_bin}}"
 
 # Build server (debug, faster compile)
 server-debug: wasm
-    cargo build --bin {{server_bin}} --features control-plane,desktop
+    cargo build --bin {{server_bin}}
     @echo "✓ Server (debug): {{debug_dir}}/{{server_bin}}"
 
 # Build macOS native app (release)
@@ -118,9 +105,9 @@ xcode:
 check:
     cargo check -p alephcore
 
-# Quick check: core + desktop compiles
+# Quick check: desktop crate compiles
 check-desktop:
-    cargo check -p alephcore --features desktop-native
+    cargo check -p aleph-desktop
 
 # Run core tests
 test:
@@ -130,9 +117,9 @@ test:
 test-desktop:
     cargo test -p aleph-desktop --lib
 
-# Run desktop integration tests (core with native feature)
+# Run desktop integration tests
 test-desktop-integration:
-    cargo test -p alephcore --lib builtin_tools::desktop --features desktop-native
+    cargo test -p alephcore --lib builtin_tools::desktop
 
 # Run all desktop-related tests
 test-desktop-all: test-desktop test-desktop-integration
@@ -153,14 +140,13 @@ test-all: test test-desktop-all test-proptest
 
 # ─── Lint ───
 
-# Clippy on core (default features)
+# Clippy on core
 clippy:
     cargo clippy -p alephcore -- -D warnings
 
-# Clippy on core + desktop
+# Clippy on desktop crate
 clippy-desktop:
     cargo clippy -p aleph-desktop -- -D warnings
-    cargo clippy -p alephcore --features desktop-native -- -D warnings
 
 # Clippy everything
 clippy-all: clippy clippy-desktop
