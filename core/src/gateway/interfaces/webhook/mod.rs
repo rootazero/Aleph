@@ -33,14 +33,13 @@ pub use message_ops::WebhookMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelStatus, InboundMessage, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, InboundMessage, OutboundMessage, SendResult,
 };
 use crate::gateway::webhook_receiver::{WebhookHandler, WebhookReceiver};
 use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::http::HeaderMap;
 use crate::sync_primitives::Arc;
-use tokio::sync::{mpsc, RwLock};
 
 /// Generic webhook channel implementation.
 ///
@@ -51,12 +50,8 @@ pub struct WebhookChannel {
     info: ChannelInfo,
     /// Configuration
     config: WebhookChannelConfig,
-    /// Inbound message sender (used by the WebhookHandler)
-    inbound_tx: mpsc::Sender<InboundMessage>,
-    /// Inbound message receiver (taken on first call)
-    inbound_rx: Option<mpsc::Receiver<InboundMessage>>,
-    /// Current status
-    status: Arc<RwLock<ChannelStatus>>,
+    /// Shared mutable state (status + inbound channel)
+    channel_state: ChannelState,
     /// HTTP client for outbound requests
     client: reqwest::Client,
     /// The webhook handler (created on start, shared with WebhookReceiver)
@@ -66,8 +61,6 @@ pub struct WebhookChannel {
 impl WebhookChannel {
     /// Create a new generic webhook channel
     pub fn new(id: impl Into<String>, config: WebhookChannelConfig) -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::channel(100);
-
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "Webhook".to_string(),
@@ -79,9 +72,7 @@ impl WebhookChannel {
         Self {
             info,
             config,
-            inbound_tx,
-            inbound_rx: Some(inbound_rx),
-            status: Arc::new(RwLock::new(ChannelStatus::Disconnected)),
+            channel_state: ChannelState::new(100),
             client: reqwest::Client::new(),
             handler: None,
         }
@@ -110,17 +101,12 @@ impl WebhookChannel {
         }
     }
 
-    /// Take the inbound receiver (can only be called once)
-    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<InboundMessage>> {
-        self.inbound_rx.take()
-    }
-
     /// Get a clone of the inbound message sender.
     ///
     /// This sender should be passed to `WebhookReceiver::start()` so that
     /// incoming webhook messages are forwarded into the channel's inbound queue.
-    pub fn inbound_sender(&self) -> mpsc::Sender<InboundMessage> {
-        self.inbound_tx.clone()
+    pub fn inbound_sender(&self) -> tokio::sync::mpsc::Sender<InboundMessage> {
+        self.channel_state.sender()
     }
 
     /// Get the webhook handler for registration with WebhookReceiver.
@@ -132,7 +118,7 @@ impl WebhookChannel {
 
     /// Update internal status
     async fn set_status(&self, status: ChannelStatus) {
-        *self.status.write().await = status;
+        self.channel_state.set_status(status).await;
     }
 }
 
@@ -142,8 +128,8 @@ impl Channel for WebhookChannel {
         &self.info
     }
 
-    fn status(&self) -> ChannelStatus {
-        self.info.status
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
@@ -192,9 +178,6 @@ impl Channel for WebhookChannel {
         .await
     }
 
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        None // Already taken during construction or via take_receiver
-    }
 }
 
 /// WebhookHandler implementation for the generic webhook channel.
@@ -316,13 +299,13 @@ mod tests {
     #[test]
     fn test_take_receiver() {
         let config = WebhookChannelConfig::default();
-        let mut channel = WebhookChannel::new("webhook", config);
+        let channel = WebhookChannel::new("webhook", config);
 
-        // First take should succeed
-        assert!(channel.take_receiver().is_some());
+        // First take should succeed (via Channel trait default → ChannelState)
+        assert!(channel.inbound_receiver().is_some());
 
         // Second take should return None
-        assert!(channel.take_receiver().is_none());
+        assert!(channel.inbound_receiver().is_none());
     }
 
     #[test]

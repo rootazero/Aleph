@@ -35,7 +35,7 @@ pub use message_ops::{NostrEvent, NostrMessageOps};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelStatus, InboundMessage, MessageId, OutboundMessage,
+    ChannelResult, ChannelState, ChannelStatus, InboundMessage, MessageId, OutboundMessage,
     SendResult,
 };
 use async_trait::async_trait;
@@ -48,16 +48,12 @@ pub struct NostrChannel {
     info: ChannelInfo,
     /// Configuration
     config: NostrConfig,
-    /// Inbound message sender
-    inbound_tx: mpsc::Sender<InboundMessage>,
-    /// Inbound message receiver (taken on first call)
-    inbound_rx: Option<mpsc::Receiver<InboundMessage>>,
+    /// Shared mutable state (status + inbound channel)
+    channel_state: ChannelState,
     /// Outbound write command sender (sends raw JSON to relay)
     write_tx: Option<mpsc::Sender<String>>,
     /// Shutdown signal sender
     shutdown_tx: Option<watch::Sender<bool>>,
-    /// Current status
-    status: Arc<RwLock<ChannelStatus>>,
     /// Our own public key (derived from private key)
     own_pubkey: String,
 }
@@ -65,8 +61,6 @@ pub struct NostrChannel {
 impl NostrChannel {
     /// Create a new Nostr channel
     pub fn new(id: impl Into<String>, config: NostrConfig) -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::channel(100);
-
         // Derive public key from private key (best-effort at construction)
         let own_pubkey = message_ops::derive_pubkey(&config.private_key).unwrap_or_default();
 
@@ -81,11 +75,9 @@ impl NostrChannel {
         Self {
             info,
             config,
-            inbound_tx,
-            inbound_rx: Some(inbound_rx),
+            channel_state: ChannelState::new(100),
             write_tx: None,
             shutdown_tx: None,
-            status: Arc::new(RwLock::new(ChannelStatus::Disconnected)),
             own_pubkey,
         }
     }
@@ -109,15 +101,6 @@ impl NostrChannel {
         }
     }
 
-    /// Take the inbound receiver (can only be called once)
-    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<InboundMessage>> {
-        self.inbound_rx.take()
-    }
-
-    /// Update internal status
-    async fn set_status(&self, status: ChannelStatus) {
-        *self.status.write().await = status;
-    }
 }
 
 #[async_trait]
@@ -126,8 +109,8 @@ impl Channel for NostrChannel {
         &self.info
     }
 
-    fn status(&self) -> ChannelStatus {
-        self.info.status
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
@@ -136,7 +119,7 @@ impl Channel for NostrChannel {
 
         #[cfg(feature = "nostr")]
         {
-            self.set_status(ChannelStatus::Connecting).await;
+            self.channel_state.set_status(ChannelStatus::Connecting).await;
             tracing::info!("Starting Nostr channel...");
 
             // Derive public key
@@ -161,8 +144,8 @@ impl Channel for NostrChannel {
             // Spawn relay connection loop
             let config = self.config.clone();
             let channel_id = self.info.id.clone();
-            let inbound_tx = self.inbound_tx.clone();
-            let status = self.status.clone();
+            let inbound_tx = self.channel_state.sender();
+            let status = self.channel_state.status_handle();
 
             tokio::spawn(async move {
                 *status.write().await = ChannelStatus::Connected;
@@ -180,7 +163,7 @@ impl Channel for NostrChannel {
                 *status.write().await = ChannelStatus::Disconnected;
             });
 
-            self.set_status(ChannelStatus::Connected).await;
+            self.channel_state.set_status(ChannelStatus::Connected).await;
             Ok(())
         }
 
@@ -200,7 +183,7 @@ impl Channel for NostrChannel {
         }
 
         self.write_tx = None;
-        self.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state.set_status(ChannelStatus::Disconnected).await;
         Ok(())
     }
 
@@ -252,10 +235,6 @@ impl Channel for NostrChannel {
                 "Nostr support not compiled".to_string(),
             ))
         }
-    }
-
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        None // Already taken during construction or via take_receiver
     }
 
     async fn react(&self, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
@@ -370,13 +349,13 @@ mod tests {
     #[test]
     fn test_take_receiver() {
         let config = NostrConfig::default();
-        let mut channel = NostrChannel::new("nostr", config);
+        let channel = NostrChannel::new("nostr", config);
 
         // First take should succeed
-        assert!(channel.take_receiver().is_some());
+        assert!(channel.state().take_receiver().is_some());
 
         // Second take should return None
-        assert!(channel.take_receiver().is_none());
+        assert!(channel.state().take_receiver().is_none());
     }
 
     #[tokio::test]
