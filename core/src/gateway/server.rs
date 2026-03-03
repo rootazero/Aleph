@@ -6,11 +6,16 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use crate::sync_primitives::Arc;
-use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
-use tokio_tungstenite::{accept_async, tungstenite::Message};
 use futures_util::{StreamExt, SinkExt};
 use tracing::{info, warn, error, debug};
+use axum::{
+    Router,
+    routing::get,
+    extract::{State, ConnectInfo, ws::{WebSocket, WebSocketUpgrade, Message as WsMessage}},
+    response::IntoResponse,
+};
+use super::control_plane::create_control_plane_router;
 
 use super::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, PARSE_ERROR};
 use super::event_bus::GatewayEventBus;
@@ -66,6 +71,18 @@ impl ConnectionState {
         self.device_id = Some(device_id);
         self.permissions = permissions;
     }
+}
+
+/// Shared state for the unified axum server (WebSocket + ControlPlane)
+#[derive(Clone)]
+pub struct GatewaySharedState {
+    pub handlers: Arc<HandlerRegistry>,
+    pub event_bus: Arc<GatewayEventBus>,
+    pub connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
+    pub subscription_manager: Arc<SubscriptionManager>,
+    pub guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
+    pub require_auth: bool,
+    pub max_connections: usize,
 }
 
 /// Configuration for the Gateway server
@@ -205,49 +222,44 @@ impl GatewayServer {
         self.connections.read().await.len()
     }
 
+    /// Build a unified axum Router with WebSocket + ControlPlane UI routes.
+    /// WebSocket connections are handled at `/ws`, everything else serves the Panel UI.
+    pub fn build_router(&self) -> Router {
+        let shared = Arc::new(GatewaySharedState {
+            handlers: self.handlers.clone(),
+            event_bus: self.event_bus.clone(),
+            connections: self.connections.clone(),
+            subscription_manager: self.subscription_manager.clone(),
+            guest_session_manager: self.guest_session_manager.clone(),
+            require_auth: self.config.require_auth,
+            max_connections: self.config.max_connections,
+        });
+
+        let control_plane = create_control_plane_router();
+
+        Router::new()
+            .route("/ws", get(ws_upgrade_handler))
+            .fallback_service(control_plane)
+            .with_state(shared)
+    }
+
     /// Run the Gateway server
     ///
     /// This method runs indefinitely, accepting new connections and
     /// processing messages. Each connection is handled in its own task.
     pub async fn run(&self) -> Result<(), GatewayError> {
-        let listener = TcpListener::bind(&self.addr).await.map_err(|e| {
-            GatewayError::BindFailed {
-                addr: self.addr,
-                source: e,
-            }
+        let router = self.build_router();
+        let listener = tokio::net::TcpListener::bind(&self.addr).await.map_err(|e| {
+            GatewayError::BindFailed { addr: self.addr, source: e }
         })?;
-
-        info!("Gateway listening on ws://{}", self.addr);
-
-        loop {
-            match listener.accept().await {
-                Ok((stream, peer_addr)) => {
-                    // Check connection limit
-                    if self.connections.read().await.len() >= self.config.max_connections {
-                        warn!("Connection limit reached, rejecting {}", peer_addr);
-                        continue;
-                    }
-
-                    let conn_ctx = ConnectionContext {
-                        handlers: self.handlers.clone(),
-                        event_bus: self.event_bus.clone(),
-                        connections: self.connections.clone(),
-                        subscription_manager: self.subscription_manager.clone(),
-                        guest_session_manager: self.guest_session_manager.clone(),
-                        require_auth: self.config.require_auth,
-                    };
-
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_connection(stream, peer_addr, conn_ctx).await {
-                            error!("Connection error from {}: {}", peer_addr, e);
-                        }
-                    });
-                }
-                Err(e) => {
-                    error!("Failed to accept connection: {}", e);
-                }
-            }
-        }
+        info!("Aleph listening on http://{}", self.addr);
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
+        Ok(())
     }
 
     /// Run the server with graceful shutdown support
@@ -255,53 +267,21 @@ impl GatewayServer {
         &self,
         shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> Result<(), GatewayError> {
-        let listener = TcpListener::bind(&self.addr).await.map_err(|e| {
-            GatewayError::BindFailed {
-                addr: self.addr,
-                source: e,
-            }
+        let router = self.build_router();
+        let listener = tokio::net::TcpListener::bind(&self.addr).await.map_err(|e| {
+            GatewayError::BindFailed { addr: self.addr, source: e }
         })?;
-
-        info!("Gateway listening on ws://{}", self.addr);
-
-        tokio::select! {
-            result = self.accept_loop(&listener) => result,
-            _ = shutdown => {
-                info!("Shutdown signal received, stopping gateway");
-                Ok(())
-            }
-        }
-    }
-
-    async fn accept_loop(&self, listener: &TcpListener) -> Result<(), GatewayError> {
-        loop {
-            match listener.accept().await {
-                Ok((stream, peer_addr)) => {
-                    if self.connections.read().await.len() >= self.config.max_connections {
-                        warn!("Connection limit reached, rejecting {}", peer_addr);
-                        continue;
-                    }
-
-                    let conn_ctx = ConnectionContext {
-                        handlers: self.handlers.clone(),
-                        event_bus: self.event_bus.clone(),
-                        connections: self.connections.clone(),
-                        subscription_manager: self.subscription_manager.clone(),
-                        guest_session_manager: self.guest_session_manager.clone(),
-                        require_auth: self.config.require_auth,
-                    };
-
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_connection(stream, peer_addr, conn_ctx).await {
-                            error!("Connection error from {}: {}", peer_addr, e);
-                        }
-                    });
-                }
-                Err(e) => {
-                    error!("Failed to accept connection: {}", e);
-                }
-            }
-        }
+        info!("Aleph listening on http://{}", self.addr);
+        info!("  WebSocket: ws://{}/ws", self.addr);
+        info!("  Panel UI:  http://{}/", self.addr);
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async { let _ = shutdown.await; })
+        .await
+        .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
+        Ok(())
     }
 }
 
@@ -315,14 +295,41 @@ struct ConnectionContext {
     require_auth: bool,
 }
 
+/// axum handler: upgrade HTTP connection to WebSocket at `/ws`
+async fn ws_upgrade_handler(
+    ws: WebSocketUpgrade,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<GatewaySharedState>>,
+) -> axum::response::Response {
+    // Check connection limit before upgrading
+    let current = state.connections.read().await.len();
+    if current >= state.max_connections {
+        warn!("Connection limit reached, rejecting {}", peer_addr);
+        return (axum::http::StatusCode::SERVICE_UNAVAILABLE, "Connection limit reached").into_response();
+    }
+
+    ws.on_upgrade(move |socket| async move {
+        let ctx = ConnectionContext {
+            handlers: state.handlers.clone(),
+            event_bus: state.event_bus.clone(),
+            connections: state.connections.clone(),
+            subscription_manager: state.subscription_manager.clone(),
+            guest_session_manager: state.guest_session_manager.clone(),
+            require_auth: state.require_auth,
+        };
+        if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
+            error!("Connection error from {}: {}", peer_addr, e);
+        }
+    })
+}
+
 /// Handle a single WebSocket connection
 async fn handle_connection(
-    stream: TcpStream,
+    socket: WebSocket,
     peer_addr: SocketAddr,
     ctx: ConnectionContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let ws_stream = accept_async(stream).await?;
-    let (mut write, mut read) = ws_stream.split();
+    let (mut write, mut read) = socket.split();
     let conn_id = format!("{}", peer_addr);
 
     info!("New WebSocket connection: {}", conn_id);
@@ -341,7 +348,7 @@ async fn handle_connection(
             // Handle incoming messages
             msg = read.next() => {
                 match msg {
-                    Some(Ok(Message::Text(text))) => {
+                    Some(Ok(WsMessage::Text(text))) => {
                         let preview_end = text.char_indices().take_while(|(i, _)| *i < 200).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(text.len());
                         debug!("Received from {}: {}", conn_id, &text[..preview_end]);
 
@@ -374,7 +381,7 @@ async fn handle_connection(
                                             "Authentication required: first request must be 'connect'",
                                         );
                                         let response_str = serde_json::to_string(&response).unwrap_or_default();
-                                        let _ = write.send(Message::Text(response_str.into())).await;
+                                        let _ = write.send(WsMessage::Text(response_str.into())).await;
                                         // Close connection after auth failure
                                         break;
                                     }
@@ -469,7 +476,7 @@ async fn handle_connection(
                                                             "Too many failed authentication attempts",
                                                         )).unwrap_or_default();
                                                         drop(conns);
-                                                        let _ = write.send(Message::Text(response_str.into())).await;
+                                                        let _ = write.send(WsMessage::Text(response_str.into())).await;
                                                         break;
                                                     }
                                                 }
@@ -574,31 +581,28 @@ async fn handle_connection(
                             }
                         };
 
-                        if let Err(e) = write.send(Message::Text(response.into())).await {
+                        if let Err(e) = write.send(WsMessage::Text(response.into())).await {
                             error!("Failed to send response to {}: {}", conn_id, e);
                             break;
                         }
                     }
-                    Some(Ok(Message::Binary(data))) => {
+                    Some(Ok(WsMessage::Binary(data))) => {
                         // Binary messages are not supported in JSON-RPC
                         warn!("Received unexpected binary message from {}: {} bytes", conn_id, data.len());
                     }
-                    Some(Ok(Message::Ping(data))) => {
+                    Some(Ok(WsMessage::Ping(data))) => {
                         debug!("Received ping from {}", conn_id);
-                        if let Err(e) = write.send(Message::Pong(data)).await {
+                        if let Err(e) = write.send(WsMessage::Pong(data)).await {
                             error!("Failed to send pong: {}", e);
                             break;
                         }
                     }
-                    Some(Ok(Message::Pong(_))) => {
+                    Some(Ok(WsMessage::Pong(_))) => {
                         debug!("Received pong from {}", conn_id);
                     }
-                    Some(Ok(Message::Close(frame))) => {
+                    Some(Ok(WsMessage::Close(frame))) => {
                         info!("Connection closed by {}: {:?}", conn_id, frame);
                         break;
-                    }
-                    Some(Ok(Message::Frame(_))) => {
-                        // Raw frames, usually not seen at this level
                     }
                     Some(Err(e)) => {
                         error!("WebSocket error from {}: {}", conn_id, e);
@@ -631,7 +635,7 @@ async fn handle_connection(
 
                         if should_forward {
                             debug!("Forwarding event to {}", conn_id);
-                            if let Err(e) = write.send(Message::Text(event_json.into())).await {
+                            if let Err(e) = write.send(WsMessage::Text(event_json.into())).await {
                                 error!("Failed to send event to {}: {}", conn_id, e);
                                 break;
                             }
