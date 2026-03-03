@@ -56,17 +56,15 @@ pub struct ChannelSummary {
 }
 
 // ---------------------------------------------------------------------------
-// API functions (discord feature enabled)
+// API functions
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "discord")]
 use serenity::{all::GuildId, http::Http};
 
 /// Validate a Discord bot token by calling the Discord API.
 ///
 /// Creates a temporary `Http` client, fetches the current user, and returns
 /// a [`BotIdentity`] on success.
-#[cfg(feature = "discord")]
 pub async fn validate_token(token: &str) -> Result<BotIdentity, String> {
     let http = Http::new(token);
 
@@ -104,7 +102,6 @@ pub async fn validate_token(token: &str) -> Result<BotIdentity, String> {
 ///
 /// Fetches guilds via pagination (up to 200 at a time) and enriches each
 /// entry with the bot's permission bitfield from the `GuildInfo` response.
-#[cfg(feature = "discord")]
 pub async fn list_guilds(http: &Http) -> Result<Vec<GuildSummary>, String> {
     // Fetch guilds using pagination. GuildInfo already includes permissions.
     let guild_infos = http
@@ -146,7 +143,6 @@ pub async fn list_guilds(http: &Http) -> Result<Vec<GuildSummary>, String> {
 }
 
 /// List all channels in a guild.
-#[cfg(feature = "discord")]
 pub async fn list_channels(http: &Http, guild_id: u64) -> Result<Vec<ChannelSummary>, String> {
     let gid = GuildId::new(guild_id);
 
@@ -173,7 +169,6 @@ pub async fn list_channels(http: &Http, guild_id: u64) -> Result<Vec<ChannelSumm
 /// Fetches the bot's member record, collects all assigned role permissions,
 /// and delegates to [`permissions::audit_permissions`] for the traffic-light
 /// analysis.
-#[cfg(feature = "discord")]
 pub async fn audit_guild_permissions(
     http: &Http,
     guild_id: u64,
@@ -219,37 +214,6 @@ pub async fn audit_guild_permissions(
         &guild.name,
         combined_perms,
     ))
-}
-
-// ---------------------------------------------------------------------------
-// Stubs (discord feature disabled)
-// ---------------------------------------------------------------------------
-
-/// Validate a Discord bot token (stub when discord feature is disabled).
-#[cfg(not(feature = "discord"))]
-pub async fn validate_token(_token: &str) -> Result<BotIdentity, String> {
-    Err("Discord feature not enabled".to_string())
-}
-
-/// List guilds (stub when discord feature is disabled).
-#[cfg(not(feature = "discord"))]
-pub async fn list_guilds(_http: &()) -> Result<Vec<GuildSummary>, String> {
-    Err("Discord feature not enabled".to_string())
-}
-
-/// List channels (stub when discord feature is disabled).
-#[cfg(not(feature = "discord"))]
-pub async fn list_channels(_http: &(), _guild_id: u64) -> Result<Vec<ChannelSummary>, String> {
-    Err("Discord feature not enabled".to_string())
-}
-
-/// Audit guild permissions (stub when discord feature is disabled).
-#[cfg(not(feature = "discord"))]
-pub async fn audit_guild_permissions(
-    _http: &(),
-    _guild_id: u64,
-) -> Result<PermissionAudit, String> {
-    Err("Discord feature not enabled".to_string())
 }
 
 // ---------------------------------------------------------------------------

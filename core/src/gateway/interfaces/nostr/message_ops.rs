@@ -310,7 +310,6 @@ pub fn derive_pubkey(private_key_hex: &str) -> Result<String, String> {
 /// The event ID is already a SHA-256 hash (32 bytes), so we use `sign_raw`
 /// (prehash signing) to sign the raw hash bytes directly, matching the
 /// Nostr/BIP-340 specification.
-#[cfg(feature = "nostr")]
 pub fn sign_event(event: &mut NostrEvent, private_key_hex: &str) -> Result<(), String> {
     use k256::schnorr::SigningKey;
 
@@ -420,7 +419,6 @@ impl NostrMessageOps {
     /// 5. Handles EOSE (end of stored events) and NOTICE messages
     /// 6. Sends CLOSE on shutdown
     /// 7. Reconnects with exponential backoff on disconnection
-    #[cfg(feature = "nostr")]
     pub async fn run_relay_loop(
         config: super::config::NostrConfig,
         own_pubkey: String,

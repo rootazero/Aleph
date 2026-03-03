@@ -128,51 +128,42 @@ impl Channel for EmailChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "email")]
-        {
-            self.set_status(ChannelStatus::Connecting).await;
-            tracing::info!(
-                "Starting Email channel (IMAP: {}:{}, SMTP: {}:{})...",
-                self.config.imap_host,
-                self.config.imap_port,
-                self.config.smtp_host,
-                self.config.smtp_port,
-            );
+        self.set_status(ChannelStatus::Connecting).await;
+        tracing::info!(
+            "Starting Email channel (IMAP: {}:{}, SMTP: {}:{})...",
+            self.config.imap_host,
+            self.config.imap_port,
+            self.config.smtp_host,
+            self.config.smtp_port,
+        );
 
-            // Create shutdown channel
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            self.shutdown_tx = Some(shutdown_tx);
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        self.shutdown_tx = Some(shutdown_tx);
 
-            // Spawn IMAP polling loop
-            let config = self.config.clone();
-            let channel_id = self.info.id.clone();
-            let inbound_tx = self.inbound_tx.clone();
-            let status = self.status.clone();
+        // Spawn IMAP polling loop
+        let config = self.config.clone();
+        let channel_id = self.info.id.clone();
+        let inbound_tx = self.inbound_tx.clone();
+        let status = self.status.clone();
 
-            tokio::spawn(async move {
-                *status.write().await = ChannelStatus::Connected;
+        tokio::spawn(async move {
+            *status.write().await = ChannelStatus::Connected;
 
-                EmailMessageOps::run_imap_poll_loop(
-                    config,
-                    inbound_tx,
-                    channel_id,
-                    shutdown_rx,
-                )
-                .await;
+            EmailMessageOps::run_imap_poll_loop(
+                config,
+                inbound_tx,
+                channel_id,
+                shutdown_rx,
+            )
+            .await;
 
-                *status.write().await = ChannelStatus::Disconnected;
-            });
+            *status.write().await = ChannelStatus::Disconnected;
+        });
 
-            self.set_status(ChannelStatus::Connected).await;
-            Ok(())
-        }
+        self.set_status(ChannelStatus::Connected).await;
+        Ok(())
 
-        #[cfg(not(feature = "email"))]
-        {
-            Err(ChannelError::UnsupportedFeature(
-                "Email support not compiled (enable 'email' feature)".to_string(),
-            ))
-        }
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
@@ -187,28 +178,18 @@ impl Channel for EmailChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        #[cfg(feature = "email")]
-        {
-            // conversation_id is the recipient email address
-            let to = message.conversation_id.as_str();
+        // conversation_id is the recipient email address
+        let to = message.conversation_id.as_str();
 
-            // Use subject from metadata if provided, otherwise default
-            let subject = message
-                .metadata
-                .get("subject")
-                .cloned()
-                .unwrap_or_else(|| "Message from Aleph".to_string());
+        // Use subject from metadata if provided, otherwise default
+        let subject = message
+            .metadata
+            .get("subject")
+            .cloned()
+            .unwrap_or_else(|| "Message from Aleph".to_string());
 
-            EmailMessageOps::send_email(&self.config, to, &subject, &message.text).await
-        }
+        EmailMessageOps::send_email(&self.config, to, &subject, &message.text).await
 
-        #[cfg(not(feature = "email"))]
-        {
-            let _ = message;
-            Err(ChannelError::UnsupportedFeature(
-                "Email support not compiled".to_string(),
-            ))
-        }
     }
 
     fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {

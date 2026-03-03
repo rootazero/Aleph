@@ -130,63 +130,54 @@ impl Channel for SlackChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "slack")]
-        {
-            self.set_status(ChannelStatus::Connecting).await;
-            tracing::info!("Starting Slack channel...");
+        self.set_status(ChannelStatus::Connecting).await;
+        tracing::info!("Starting Slack channel...");
 
-            // Validate bot token via auth.test
-            match SlackMessageOps::validate_bot_token(&self.client, &self.config.bot_token).await {
-                Ok(user_id) => {
-                    tracing::info!("Slack bot authenticated (user_id: {user_id})");
-                    *self.bot_user_id.write().await = Some(user_id);
-                }
-                Err(e) => {
-                    self.set_status(ChannelStatus::Error).await;
-                    return Err(e);
-                }
+        // Validate bot token via auth.test
+        match SlackMessageOps::validate_bot_token(&self.client, &self.config.bot_token).await {
+            Ok(user_id) => {
+                tracing::info!("Slack bot authenticated (user_id: {user_id})");
+                *self.bot_user_id.write().await = Some(user_id);
             }
-
-            // Create shutdown channel
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            self.shutdown_tx = Some(shutdown_tx);
-
-            // Spawn Socket Mode WebSocket loop
-            let client = self.client.clone();
-            let app_token = self.config.app_token.clone();
-            let bot_user_id = self.bot_user_id.clone();
-            let channel_id = self.info.id.clone();
-            let config = self.config.clone();
-            let inbound_tx = self.inbound_tx.clone();
-            let status = self.status.clone();
-
-            tokio::spawn(async move {
-                *status.write().await = ChannelStatus::Connected;
-
-                SlackMessageOps::run_socket_mode_loop(
-                    client,
-                    app_token,
-                    bot_user_id,
-                    channel_id,
-                    config,
-                    inbound_tx,
-                    shutdown_rx,
-                )
-                .await;
-
-                *status.write().await = ChannelStatus::Disconnected;
-            });
-
-            self.set_status(ChannelStatus::Connected).await;
-            Ok(())
+            Err(e) => {
+                self.set_status(ChannelStatus::Error).await;
+                return Err(e);
+            }
         }
 
-        #[cfg(not(feature = "slack"))]
-        {
-            Err(ChannelError::UnsupportedFeature(
-                "Slack support not compiled (enable 'slack' feature)".to_string(),
-            ))
-        }
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        self.shutdown_tx = Some(shutdown_tx);
+
+        // Spawn Socket Mode WebSocket loop
+        let client = self.client.clone();
+        let app_token = self.config.app_token.clone();
+        let bot_user_id = self.bot_user_id.clone();
+        let channel_id = self.info.id.clone();
+        let config = self.config.clone();
+        let inbound_tx = self.inbound_tx.clone();
+        let status = self.status.clone();
+
+        tokio::spawn(async move {
+            *status.write().await = ChannelStatus::Connected;
+
+            SlackMessageOps::run_socket_mode_loop(
+                client,
+                app_token,
+                bot_user_id,
+                channel_id,
+                config,
+                inbound_tx,
+                shutdown_rx,
+            )
+            .await;
+
+            *status.write().await = ChannelStatus::Disconnected;
+        });
+
+        self.set_status(ChannelStatus::Connected).await;
+        Ok(())
+
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
@@ -201,34 +192,24 @@ impl Channel for SlackChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        #[cfg(feature = "slack")]
-        {
-            // Extract thread_ts from reply_to for threading
-            let thread_ts = message.reply_to.as_ref().map(|id| id.as_str().to_string());
+        // Extract thread_ts from reply_to for threading
+        let thread_ts = message.reply_to.as_ref().map(|id| id.as_str().to_string());
 
-            // Send typing indicator if enabled
-            if self.config.send_typing {
-                // Slack doesn't have a dedicated typing API for bots in channels,
-                // but we respect the config flag for potential future use.
-            }
-
-            SlackMessageOps::send_message(
-                &self.client,
-                &self.config.bot_token,
-                message.conversation_id.as_str(),
-                &message.text,
-                thread_ts.as_deref(),
-            )
-            .await
+        // Send typing indicator if enabled
+        if self.config.send_typing {
+            // Slack doesn't have a dedicated typing API for bots in channels,
+            // but we respect the config flag for potential future use.
         }
 
-        #[cfg(not(feature = "slack"))]
-        {
-            let _ = message;
-            Err(ChannelError::UnsupportedFeature(
-                "Slack support not compiled".to_string(),
-            ))
-        }
+        SlackMessageOps::send_message(
+            &self.client,
+            &self.config.bot_token,
+            message.conversation_id.as_str(),
+            &message.text,
+            thread_ts.as_deref(),
+        )
+        .await
+
     }
 
     fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
@@ -244,61 +225,31 @@ impl Channel for SlackChannel {
     }
 
     async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
-        #[cfg(feature = "slack")]
-        {
-            // Note: Editing requires both message ts and channel ID
-            // which we don't have in this interface signature.
-            let _ = (message_id, new_text);
-            Err(ChannelError::UnsupportedFeature(
-                "Message editing requires channel context (conversation_id + ts)".to_string(),
-            ))
-        }
+        // Note: Editing requires both message ts and channel ID
+        // which we don't have in this interface signature.
+        let _ = (message_id, new_text);
+        Err(ChannelError::UnsupportedFeature(
+            "Message editing requires channel context (conversation_id + ts)".to_string(),
+        ))
 
-        #[cfg(not(feature = "slack"))]
-        {
-            let _ = (message_id, new_text);
-            Err(ChannelError::UnsupportedFeature(
-                "Slack support not compiled".to_string(),
-            ))
-        }
     }
 
     async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
-        #[cfg(feature = "slack")]
-        {
-            // Note: Deleting requires both message ts and channel ID
-            let _ = message_id;
-            Err(ChannelError::UnsupportedFeature(
-                "Message deletion requires channel context (conversation_id + ts)".to_string(),
-            ))
-        }
+        // Note: Deleting requires both message ts and channel ID
+        let _ = message_id;
+        Err(ChannelError::UnsupportedFeature(
+            "Message deletion requires channel context (conversation_id + ts)".to_string(),
+        ))
 
-        #[cfg(not(feature = "slack"))]
-        {
-            let _ = message_id;
-            Err(ChannelError::UnsupportedFeature(
-                "Slack support not compiled".to_string(),
-            ))
-        }
     }
 
     async fn react(&self, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
-        #[cfg(feature = "slack")]
-        {
-            // Note: Reacting requires channel ID + timestamp
-            let _ = (message_id, reaction);
-            Err(ChannelError::UnsupportedFeature(
-                "Reactions require channel context (conversation_id + ts)".to_string(),
-            ))
-        }
+        // Note: Reacting requires channel ID + timestamp
+        let _ = (message_id, reaction);
+        Err(ChannelError::UnsupportedFeature(
+            "Reactions require channel context (conversation_id + ts)".to_string(),
+        ))
 
-        #[cfg(not(feature = "slack"))]
-        {
-            let _ = (message_id, reaction);
-            Err(ChannelError::UnsupportedFeature(
-                "Slack support not compiled".to_string(),
-            ))
-        }
     }
 }
 

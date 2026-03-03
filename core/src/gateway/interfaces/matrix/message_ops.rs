@@ -260,7 +260,6 @@ impl MatrixMessageOps {
     /// - Processing m.room.message events
     /// - Updating since_token from next_batch
     /// - Exponential backoff on errors
-    #[cfg(feature = "matrix")]
     pub async fn run_sync_loop(
         client: reqwest::Client,
         config: MatrixConfig,

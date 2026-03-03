@@ -134,62 +134,53 @@ impl Channel for NostrChannel {
         // Validate configuration
         self.config.validate().map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "nostr")]
-        {
-            self.set_status(ChannelStatus::Connecting).await;
-            tracing::info!("Starting Nostr channel...");
+        self.set_status(ChannelStatus::Connecting).await;
+        tracing::info!("Starting Nostr channel...");
 
-            // Derive public key
-            let own_pubkey = message_ops::derive_pubkey(&self.config.private_key)
-                .map_err(|e| ChannelError::ConfigError(format!("invalid private key: {e}")))?;
-            self.own_pubkey = own_pubkey.clone();
+        // Derive public key
+        let own_pubkey = message_ops::derive_pubkey(&self.config.private_key)
+            .map_err(|e| ChannelError::ConfigError(format!("invalid private key: {e}")))?;
+        self.own_pubkey = own_pubkey.clone();
 
-            tracing::info!(
-                "Nostr identity: {}...{}",
-                &own_pubkey[..8.min(own_pubkey.len())],
-                &own_pubkey[own_pubkey.len().saturating_sub(8)..]
-            );
+        tracing::info!(
+            "Nostr identity: {}...{}",
+            &own_pubkey[..8.min(own_pubkey.len())],
+            &own_pubkey[own_pubkey.len().saturating_sub(8)..]
+        );
 
-            // Create shutdown channel
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            self.shutdown_tx = Some(shutdown_tx);
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        self.shutdown_tx = Some(shutdown_tx);
 
-            // Create write command channel for outbound messages
-            let (write_tx, write_rx) = mpsc::channel(100);
-            self.write_tx = Some(write_tx);
+        // Create write command channel for outbound messages
+        let (write_tx, write_rx) = mpsc::channel(100);
+        self.write_tx = Some(write_tx);
 
-            // Spawn relay connection loop
-            let config = self.config.clone();
-            let channel_id = self.info.id.clone();
-            let inbound_tx = self.inbound_tx.clone();
-            let status = self.status.clone();
+        // Spawn relay connection loop
+        let config = self.config.clone();
+        let channel_id = self.info.id.clone();
+        let inbound_tx = self.inbound_tx.clone();
+        let status = self.status.clone();
 
-            tokio::spawn(async move {
-                *status.write().await = ChannelStatus::Connected;
+        tokio::spawn(async move {
+            *status.write().await = ChannelStatus::Connected;
 
-                NostrMessageOps::run_relay_loop(
-                    config,
-                    own_pubkey,
-                    channel_id,
-                    inbound_tx,
-                    write_rx,
-                    shutdown_rx,
-                )
-                .await;
+            NostrMessageOps::run_relay_loop(
+                config,
+                own_pubkey,
+                channel_id,
+                inbound_tx,
+                write_rx,
+                shutdown_rx,
+            )
+            .await;
 
-                *status.write().await = ChannelStatus::Disconnected;
-            });
+            *status.write().await = ChannelStatus::Disconnected;
+        });
 
-            self.set_status(ChannelStatus::Connected).await;
-            Ok(())
-        }
+        self.set_status(ChannelStatus::Connected).await;
+        Ok(())
 
-        #[cfg(not(feature = "nostr"))]
-        {
-            Err(ChannelError::UnsupportedFeature(
-                "Nostr support not compiled (enable 'nostr' feature)".to_string(),
-            ))
-        }
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
@@ -205,53 +196,43 @@ impl Channel for NostrChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        #[cfg(feature = "nostr")]
-        {
-            let write_tx = self
-                .write_tx
-                .as_ref()
-                .ok_or_else(|| ChannelError::NotConnected("Nostr channel not started".to_string()))?;
+        let write_tx = self
+            .write_tx
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("Nostr channel not started".to_string()))?;
 
-            // Determine if this is a DM or public note based on conversation_id
-            let recipient_pubkey = if message.conversation_id.as_str() != "public" {
-                Some(message.conversation_id.as_str().to_string())
-            } else {
-                None
-            };
+        // Determine if this is a DM or public note based on conversation_id
+        let recipient_pubkey = if message.conversation_id.as_str() != "public" {
+            Some(message.conversation_id.as_str().to_string())
+        } else {
+            None
+        };
 
-            // Build the event
-            let mut event = if let Some(ref recipient) = recipient_pubkey {
-                message_ops::build_dm(&message.text, &self.own_pubkey, recipient)
-            } else {
-                message_ops::build_text_note(&message.text, &self.own_pubkey)
-            };
+        // Build the event
+        let mut event = if let Some(ref recipient) = recipient_pubkey {
+            message_ops::build_dm(&message.text, &self.own_pubkey, recipient)
+        } else {
+            message_ops::build_text_note(&message.text, &self.own_pubkey)
+        };
 
-            // Sign the event
-            message_ops::sign_event(&mut event, &self.config.private_key)
-                .map_err(|e| ChannelError::SendFailed(format!("failed to sign event: {e}")))?;
+        // Sign the event
+        message_ops::sign_event(&mut event, &self.config.private_key)
+            .map_err(|e| ChannelError::SendFailed(format!("failed to sign event: {e}")))?;
 
-            let event_id = event.id.clone();
+        let event_id = event.id.clone();
 
-            // Build and send the EVENT message
-            let event_msg = message_ops::build_event_message(&event);
-            write_tx
-                .send(event_msg)
-                .await
-                .map_err(|e| ChannelError::SendFailed(format!("write channel closed: {e}")))?;
+        // Build and send the EVENT message
+        let event_msg = message_ops::build_event_message(&event);
+        write_tx
+            .send(event_msg)
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("write channel closed: {e}")))?;
 
-            Ok(SendResult {
-                message_id: MessageId::new(event_id),
-                timestamp: chrono::Utc::now(),
-            })
-        }
+        Ok(SendResult {
+            message_id: MessageId::new(event_id),
+            timestamp: chrono::Utc::now(),
+        })
 
-        #[cfg(not(feature = "nostr"))]
-        {
-            let _ = message;
-            Err(ChannelError::UnsupportedFeature(
-                "Nostr support not compiled".to_string(),
-            ))
-        }
     }
 
     fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
@@ -259,43 +240,33 @@ impl Channel for NostrChannel {
     }
 
     async fn react(&self, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
-        #[cfg(feature = "nostr")]
-        {
-            let write_tx = self
-                .write_tx
-                .as_ref()
-                .ok_or_else(|| ChannelError::NotConnected("Nostr channel not started".to_string()))?;
+        let write_tx = self
+            .write_tx
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("Nostr channel not started".to_string()))?;
 
-            // Build a kind-7 reaction event
-            // We don't know the original event's author pubkey, use empty string
-            // (relays typically don't validate this for reactions)
-            let mut event = message_ops::build_reaction(
-                reaction,
-                message_id.as_str(),
-                "", // original author pubkey unknown
-                &self.own_pubkey,
-            );
+        // Build a kind-7 reaction event
+        // We don't know the original event's author pubkey, use empty string
+        // (relays typically don't validate this for reactions)
+        let mut event = message_ops::build_reaction(
+            reaction,
+            message_id.as_str(),
+            "", // original author pubkey unknown
+            &self.own_pubkey,
+        );
 
-            // Sign the event
-            message_ops::sign_event(&mut event, &self.config.private_key)
-                .map_err(|e| ChannelError::SendFailed(format!("failed to sign reaction: {e}")))?;
+        // Sign the event
+        message_ops::sign_event(&mut event, &self.config.private_key)
+            .map_err(|e| ChannelError::SendFailed(format!("failed to sign reaction: {e}")))?;
 
-            let event_msg = message_ops::build_event_message(&event);
-            write_tx
-                .send(event_msg)
-                .await
-                .map_err(|e| ChannelError::SendFailed(format!("write channel closed: {e}")))?;
+        let event_msg = message_ops::build_event_message(&event);
+        write_tx
+            .send(event_msg)
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("write channel closed: {e}")))?;
 
-            Ok(())
-        }
+        Ok(())
 
-        #[cfg(not(feature = "nostr"))]
-        {
-            let _ = (message_id, reaction);
-            Err(ChannelError::UnsupportedFeature(
-                "Nostr support not compiled".to_string(),
-            ))
-        }
     }
 }
 

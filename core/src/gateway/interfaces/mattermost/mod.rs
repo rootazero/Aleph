@@ -130,70 +130,61 @@ impl Channel for MattermostChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "mattermost")]
-        {
-            self.set_status(ChannelStatus::Connecting).await;
-            tracing::info!("Starting Mattermost channel...");
+        self.set_status(ChannelStatus::Connecting).await;
+        tracing::info!("Starting Mattermost channel...");
 
-            // Validate bot token via /api/v4/users/me
-            let server = self.config.server_url_trimmed().to_string();
-            match MattermostMessageOps::get_me(&self.client, &server, &self.config.bot_token).await
-            {
-                Ok((user_id, username)) => {
-                    tracing::info!(
-                        "Mattermost bot authenticated as {username} (user_id: {user_id})"
-                    );
-                    *self.bot_user_id.write().await = Some(user_id);
-                }
-                Err(e) => {
-                    self.set_status(ChannelStatus::Error).await;
-                    return Err(e);
-                }
+        // Validate bot token via /api/v4/users/me
+        let server = self.config.server_url_trimmed().to_string();
+        match MattermostMessageOps::get_me(&self.client, &server, &self.config.bot_token).await
+        {
+            Ok((user_id, username)) => {
+                tracing::info!(
+                    "Mattermost bot authenticated as {username} (user_id: {user_id})"
+                );
+                *self.bot_user_id.write().await = Some(user_id);
             }
-
-            // Create shutdown channel
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            self.shutdown_tx = Some(shutdown_tx);
-
-            // Spawn WebSocket event loop
-            let client = self.client.clone();
-            let config = self.config.clone();
-            let bot_user_id = self.bot_user_id.clone();
-            let channel_id = self.info.id.clone();
-            let inbound_tx = self.inbound_tx.clone();
-            let status = self.status.clone();
-
-            tokio::spawn(async move {
-                *status.write().await = ChannelStatus::Connected;
-
-                let uid = {
-                    let guard = bot_user_id.read().await;
-                    guard.as_deref().unwrap_or("").to_string()
-                };
-
-                MattermostMessageOps::run_ws_loop(
-                    client,
-                    config,
-                    uid,
-                    channel_id,
-                    inbound_tx,
-                    shutdown_rx,
-                )
-                .await;
-
-                *status.write().await = ChannelStatus::Disconnected;
-            });
-
-            self.set_status(ChannelStatus::Connected).await;
-            Ok(())
+            Err(e) => {
+                self.set_status(ChannelStatus::Error).await;
+                return Err(e);
+            }
         }
 
-        #[cfg(not(feature = "mattermost"))]
-        {
-            Err(ChannelError::UnsupportedFeature(
-                "Mattermost support not compiled (enable 'mattermost' feature)".to_string(),
-            ))
-        }
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        self.shutdown_tx = Some(shutdown_tx);
+
+        // Spawn WebSocket event loop
+        let client = self.client.clone();
+        let config = self.config.clone();
+        let bot_user_id = self.bot_user_id.clone();
+        let channel_id = self.info.id.clone();
+        let inbound_tx = self.inbound_tx.clone();
+        let status = self.status.clone();
+
+        tokio::spawn(async move {
+            *status.write().await = ChannelStatus::Connected;
+
+            let uid = {
+                let guard = bot_user_id.read().await;
+                guard.as_deref().unwrap_or("").to_string()
+            };
+
+            MattermostMessageOps::run_ws_loop(
+                client,
+                config,
+                uid,
+                channel_id,
+                inbound_tx,
+                shutdown_rx,
+            )
+            .await;
+
+            *status.write().await = ChannelStatus::Disconnected;
+        });
+
+        self.set_status(ChannelStatus::Connected).await;
+        Ok(())
+
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
@@ -208,42 +199,32 @@ impl Channel for MattermostChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        #[cfg(feature = "mattermost")]
-        {
-            // Extract root_id from reply_to for threading
-            let root_id = message.reply_to.as_ref().map(|id| id.as_str().to_string());
+        // Extract root_id from reply_to for threading
+        let root_id = message.reply_to.as_ref().map(|id| id.as_str().to_string());
 
-            let server = self.config.server_url_trimmed().to_string();
+        let server = self.config.server_url_trimmed().to_string();
 
-            // Send typing indicator if enabled
-            if self.config.send_typing {
-                let _ = MattermostMessageOps::send_typing(
-                    &self.client,
-                    &server,
-                    &self.config.bot_token,
-                    message.conversation_id.as_str(),
-                )
-                .await;
-            }
-
-            MattermostMessageOps::send_message(
+        // Send typing indicator if enabled
+        if self.config.send_typing {
+            let _ = MattermostMessageOps::send_typing(
                 &self.client,
                 &server,
                 &self.config.bot_token,
                 message.conversation_id.as_str(),
-                &message.text,
-                root_id.as_deref(),
             )
-            .await
+            .await;
         }
 
-        #[cfg(not(feature = "mattermost"))]
-        {
-            let _ = message;
-            Err(ChannelError::UnsupportedFeature(
-                "Mattermost support not compiled".to_string(),
-            ))
-        }
+        MattermostMessageOps::send_message(
+            &self.client,
+            &server,
+            &self.config.bot_token,
+            message.conversation_id.as_str(),
+            &message.text,
+            root_id.as_deref(),
+        )
+        .await
+
     }
 
     fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
@@ -251,152 +232,112 @@ impl Channel for MattermostChannel {
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        #[cfg(feature = "mattermost")]
-        {
-            if self.config.send_typing {
-                let server = self.config.server_url_trimmed().to_string();
-                MattermostMessageOps::send_typing(
-                    &self.client,
-                    &server,
-                    &self.config.bot_token,
-                    conversation_id.as_str(),
-                )
-                .await
-            } else {
-                Ok(())
-            }
+        if self.config.send_typing {
+            let server = self.config.server_url_trimmed().to_string();
+            MattermostMessageOps::send_typing(
+                &self.client,
+                &server,
+                &self.config.bot_token,
+                conversation_id.as_str(),
+            )
+            .await
+        } else {
+            Ok(())
         }
 
-        #[cfg(not(feature = "mattermost"))]
-        {
-            let _ = conversation_id;
-            Err(ChannelError::UnsupportedFeature(
-                "Mattermost support not compiled".to_string(),
-            ))
-        }
     }
 
     async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
-        #[cfg(feature = "mattermost")]
-        {
-            // Mattermost edit requires PUT /api/v4/posts/{post_id}
-            let server = self.config.server_url_trimmed().to_string();
-            let url = format!("{server}/api/v4/posts/{}", message_id.as_str());
+        // Mattermost edit requires PUT /api/v4/posts/{post_id}
+        let server = self.config.server_url_trimmed().to_string();
+        let url = format!("{server}/api/v4/posts/{}", message_id.as_str());
 
-            let body = serde_json::json!({
-                "id": message_id.as_str(),
-                "message": new_text,
-            });
+        let body = serde_json::json!({
+            "id": message_id.as_str(),
+            "message": new_text,
+        });
 
-            let resp = self
-                .client
-                .put(&url)
-                .bearer_auth(&self.config.bot_token)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| ChannelError::SendFailed(format!("edit request failed: {e}")))?;
+        let resp = self
+            .client
+            .put(&url)
+            .bearer_auth(&self.config.bot_token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("edit request failed: {e}")))?;
 
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let resp_body = resp.text().await.unwrap_or_default();
-                return Err(ChannelError::SendFailed(format!(
-                    "Mattermost edit failed {status}: {resp_body}"
-                )));
-            }
-
-            Ok(())
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let resp_body = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::SendFailed(format!(
+                "Mattermost edit failed {status}: {resp_body}"
+            )));
         }
 
-        #[cfg(not(feature = "mattermost"))]
-        {
-            let _ = (message_id, new_text);
-            Err(ChannelError::UnsupportedFeature(
-                "Mattermost support not compiled".to_string(),
-            ))
-        }
+        Ok(())
+
     }
 
     async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
-        #[cfg(feature = "mattermost")]
-        {
-            // Mattermost delete: DELETE /api/v4/posts/{post_id}
-            let server = self.config.server_url_trimmed().to_string();
-            let url = format!("{server}/api/v4/posts/{}", message_id.as_str());
+        // Mattermost delete: DELETE /api/v4/posts/{post_id}
+        let server = self.config.server_url_trimmed().to_string();
+        let url = format!("{server}/api/v4/posts/{}", message_id.as_str());
 
-            let resp = self
-                .client
-                .delete(&url)
-                .bearer_auth(&self.config.bot_token)
-                .send()
-                .await
-                .map_err(|e| ChannelError::SendFailed(format!("delete request failed: {e}")))?;
+        let resp = self
+            .client
+            .delete(&url)
+            .bearer_auth(&self.config.bot_token)
+            .send()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("delete request failed: {e}")))?;
 
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let resp_body = resp.text().await.unwrap_or_default();
-                return Err(ChannelError::SendFailed(format!(
-                    "Mattermost delete failed {status}: {resp_body}"
-                )));
-            }
-
-            Ok(())
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let resp_body = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::SendFailed(format!(
+                "Mattermost delete failed {status}: {resp_body}"
+            )));
         }
 
-        #[cfg(not(feature = "mattermost"))]
-        {
-            let _ = message_id;
-            Err(ChannelError::UnsupportedFeature(
-                "Mattermost support not compiled".to_string(),
-            ))
-        }
+        Ok(())
+
     }
 
     async fn react(&self, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
-        #[cfg(feature = "mattermost")]
-        {
-            // Mattermost reaction: POST /api/v4/reactions
-            let server = self.config.server_url_trimmed().to_string();
-            let url = format!("{server}/api/v4/reactions");
+        // Mattermost reaction: POST /api/v4/reactions
+        let server = self.config.server_url_trimmed().to_string();
+        let url = format!("{server}/api/v4/reactions");
 
-            let user_id = {
-                let guard = self.bot_user_id.read().await;
-                guard.as_deref().unwrap_or("").to_string()
-            };
+        let user_id = {
+            let guard = self.bot_user_id.read().await;
+            guard.as_deref().unwrap_or("").to_string()
+        };
 
-            let body = serde_json::json!({
-                "user_id": user_id,
-                "post_id": message_id.as_str(),
-                "emoji_name": reaction,
-            });
+        let body = serde_json::json!({
+            "user_id": user_id,
+            "post_id": message_id.as_str(),
+            "emoji_name": reaction,
+        });
 
-            let resp = self
-                .client
-                .post(&url)
-                .bearer_auth(&self.config.bot_token)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| ChannelError::SendFailed(format!("react request failed: {e}")))?;
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.config.bot_token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("react request failed: {e}")))?;
 
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let resp_body = resp.text().await.unwrap_or_default();
-                return Err(ChannelError::SendFailed(format!(
-                    "Mattermost reaction failed {status}: {resp_body}"
-                )));
-            }
-
-            Ok(())
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let resp_body = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::SendFailed(format!(
+                "Mattermost reaction failed {status}: {resp_body}"
+            )));
         }
 
-        #[cfg(not(feature = "mattermost"))]
-        {
-            let _ = (message_id, reaction);
-            Err(ChannelError::UnsupportedFeature(
-                "Mattermost support not compiled".to_string(),
-            ))
-        }
+        Ok(())
+
     }
 }
 

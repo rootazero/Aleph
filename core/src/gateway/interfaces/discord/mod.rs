@@ -43,7 +43,6 @@ use chrono::{TimeZone, Utc};
 use crate::sync_primitives::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
-#[cfg(feature = "discord")]
 use serenity::{
     all::{
         ChannelId as SerenityChannelId, Context, CreateAttachment, CreateMessage,
@@ -67,7 +66,6 @@ pub struct DiscordChannel {
     /// Current status
     status: Arc<RwLock<ChannelStatus>>,
     /// HTTP client for sending messages (serenity's Http)
-    #[cfg(feature = "discord")]
     http: Option<Arc<serenity::http::Http>>,
 }
 
@@ -91,7 +89,6 @@ impl DiscordChannel {
             inbound_rx: Some(inbound_rx),
             shutdown_tx: None,
             status: Arc::new(RwLock::new(ChannelStatus::Disconnected)),
-            #[cfg(feature = "discord")]
             http: None,
         }
     }
@@ -127,7 +124,6 @@ impl DiscordChannel {
 }
 
 /// Event handler for Discord gateway events
-#[cfg(feature = "discord")]
 struct Handler {
     inbound_tx: mpsc::Sender<InboundMessage>,
     config: DiscordConfig,
@@ -135,7 +131,6 @@ struct Handler {
     bot_user_id: Arc<RwLock<Option<u64>>>,
 }
 
-#[cfg(feature = "discord")]
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, _ctx: Context, ready: Ready) {
@@ -298,83 +293,73 @@ impl Channel for DiscordChannel {
             .validate()
             .map_err(ChannelError::ConfigError)?;
 
-        #[cfg(feature = "discord")]
-        {
-            self.set_status(ChannelStatus::Connecting).await;
-            tracing::info!("Starting Discord channel...");
+        self.set_status(ChannelStatus::Connecting).await;
+        tracing::info!("Starting Discord channel...");
 
-            // Build gateway intents
-            let mut intents = GatewayIntents::empty();
-            if self.config.intents.guild_messages {
-                intents |= GatewayIntents::GUILD_MESSAGES;
-            }
-            if self.config.intents.direct_messages {
-                intents |= GatewayIntents::DIRECT_MESSAGES;
-            }
-            if self.config.intents.message_content {
-                intents |= GatewayIntents::MESSAGE_CONTENT;
-            }
-            if self.config.intents.guild_members {
-                intents |= GatewayIntents::GUILD_MEMBERS;
-            }
+        // Build gateway intents
+        let mut intents = GatewayIntents::empty();
+        if self.config.intents.guild_messages {
+            intents |= GatewayIntents::GUILD_MESSAGES;
+        }
+        if self.config.intents.direct_messages {
+            intents |= GatewayIntents::DIRECT_MESSAGES;
+        }
+        if self.config.intents.message_content {
+            intents |= GatewayIntents::MESSAGE_CONTENT;
+        }
+        if self.config.intents.guild_members {
+            intents |= GatewayIntents::GUILD_MEMBERS;
+        }
 
-            // Create event handler
-            let handler = Handler {
-                inbound_tx: self.inbound_tx.clone(),
-                config: self.config.clone(),
-                status: self.status.clone(),
-                bot_user_id: Arc::new(RwLock::new(None)),
-            };
+        // Create event handler
+        let handler = Handler {
+            inbound_tx: self.inbound_tx.clone(),
+            config: self.config.clone(),
+            status: self.status.clone(),
+            bot_user_id: Arc::new(RwLock::new(None)),
+        };
 
-            // Build client
-            let mut client = Client::builder(&self.config.bot_token, intents)
-                .event_handler(handler)
-                .await
-                .map_err(|e| ChannelError::ConfigError(format!("Failed to create Discord client: {}", e)))?;
+        // Build client
+        let mut client = Client::builder(&self.config.bot_token, intents)
+            .event_handler(handler)
+            .await
+            .map_err(|e| ChannelError::ConfigError(format!("Failed to create Discord client: {}", e)))?;
 
-            // Store HTTP client for sending messages
-            self.http = Some(client.http.clone());
+        // Store HTTP client for sending messages
+        self.http = Some(client.http.clone());
 
-            // Create shutdown channel
-            let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
-            self.shutdown_tx = Some(shutdown_tx);
+        // Create shutdown channel
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+        self.shutdown_tx = Some(shutdown_tx);
 
-            let status = self.status.clone();
+        let status = self.status.clone();
 
-            // Start the client in a background task
-            tokio::spawn(async move {
-                tokio::select! {
-                    result = client.start() => {
-                        match result {
-                            Ok(()) => {
-                                tracing::info!("Discord client stopped");
-                            }
-                            Err(e) => {
-                                tracing::error!("Discord client error: {}", e);
-                                *status.write().await = ChannelStatus::Error;
-                            }
+        // Start the client in a background task
+        tokio::spawn(async move {
+            tokio::select! {
+                result = client.start() => {
+                    match result {
+                        Ok(()) => {
+                            tracing::info!("Discord client stopped");
+                        }
+                        Err(e) => {
+                            tracing::error!("Discord client error: {}", e);
+                            *status.write().await = ChannelStatus::Error;
                         }
                     }
-                    _ = &mut shutdown_rx => {
-                        tracing::info!("Discord channel shutdown requested");
-                        client.shard_manager.shutdown_all().await;
-                    }
                 }
-                *status.write().await = ChannelStatus::Disconnected;
-            });
+                _ = &mut shutdown_rx => {
+                    tracing::info!("Discord channel shutdown requested");
+                    client.shard_manager.shutdown_all().await;
+                }
+            }
+            *status.write().await = ChannelStatus::Disconnected;
+        });
 
-            // Wait a moment for connection
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        // Wait a moment for connection
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-            Ok(())
-        }
-
-        #[cfg(not(feature = "discord"))]
-        {
-            Err(ChannelError::UnsupportedFeature(
-                "Discord support not compiled (enable 'discord' feature)".to_string(),
-            ))
-        }
+        Ok(())
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
@@ -386,97 +371,83 @@ impl Channel for DiscordChannel {
 
         self.set_status(ChannelStatus::Disconnected).await;
 
-        #[cfg(feature = "discord")]
-        {
-            self.http = None;
-        }
+        self.http = None;
 
         Ok(())
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        #[cfg(feature = "discord")]
-        {
-            let http = self
-                .http
-                .as_ref()
-                .ok_or_else(|| ChannelError::NotConnected("HTTP client not initialized".to_string()))?;
+        let http = self
+            .http
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("HTTP client not initialized".to_string()))?;
 
-            // Parse channel ID from conversation_id
-            // Handle both "dm:user_id" and direct channel IDs
-            let channel_id = if message.conversation_id.as_str().starts_with("dm:") {
-                // For DMs, we need to create a DM channel first
-                let user_id: u64 = message
+        // Parse channel ID from conversation_id
+        // Handle both "dm:user_id" and direct channel IDs
+        let channel_id = if message.conversation_id.as_str().starts_with("dm:") {
+            // For DMs, we need to create a DM channel first
+            let user_id: u64 = message
+                .conversation_id
+                .as_str()
+                .strip_prefix("dm:")
+                .unwrap()
+                .parse()
+                .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {}", e)))?;
+
+            let user = serenity::all::UserId::new(user_id);
+            let dm_channel = user
+                .create_dm_channel(http)
+                .await
+                .map_err(|e| ChannelError::SendFailed(format!("Failed to create DM channel: {}", e)))?;
+
+            dm_channel.id
+        } else {
+            SerenityChannelId::new(
+                message
                     .conversation_id
                     .as_str()
-                    .strip_prefix("dm:")
-                    .unwrap()
                     .parse()
-                    .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {}", e)))?;
+                    .map_err(|e| ChannelError::SendFailed(format!("Invalid channel ID: {}", e)))?,
+            )
+        };
 
-                let user = serenity::all::UserId::new(user_id);
-                let dm_channel = user
-                    .create_dm_channel(http)
-                    .await
-                    .map_err(|e| ChannelError::SendFailed(format!("Failed to create DM channel: {}", e)))?;
+        // Build message
+        let mut builder = CreateMessage::new().content(&message.text);
 
-                dm_channel.id
-            } else {
-                SerenityChannelId::new(
-                    message
-                        .conversation_id
-                        .as_str()
-                        .parse()
-                        .map_err(|e| ChannelError::SendFailed(format!("Invalid channel ID: {}", e)))?,
-                )
-            };
-
-            // Build message
-            let mut builder = CreateMessage::new().content(&message.text);
-
-            // Add reply reference if specified
-            if let Some(reply_to) = &message.reply_to {
-                if let Ok(msg_id) = reply_to.as_str().parse::<u64>() {
-                    builder = builder.reference_message(serenity::all::MessageReference::from((
-                        channel_id,
-                        serenity::all::MessageId::new(msg_id),
-                    )));
-                }
+        // Add reply reference if specified
+        if let Some(reply_to) = &message.reply_to {
+            if let Ok(msg_id) = reply_to.as_str().parse::<u64>() {
+                builder = builder.reference_message(serenity::all::MessageReference::from((
+                    channel_id,
+                    serenity::all::MessageId::new(msg_id),
+                )));
             }
-
-            // Add attachments
-            for attachment in &message.attachments {
-                if let Some(data) = &attachment.data {
-                    let filename = attachment
-                        .filename
-                        .clone()
-                        .unwrap_or_else(|| "attachment".to_string());
-                    builder = builder.add_file(CreateAttachment::bytes(data.clone(), filename));
-                }
-            }
-
-            // Send the message
-            let sent = channel_id
-                .send_message(http, builder)
-                .await
-                .map_err(|e| ChannelError::SendFailed(format!("Discord send error: {}", e)))?;
-
-            Ok(SendResult {
-                message_id: MessageId::new(sent.id.to_string()),
-                timestamp: Utc
-                    .timestamp_opt(sent.timestamp.unix_timestamp(), 0)
-                    .single()
-                    .unwrap_or_else(Utc::now),
-            })
         }
 
-        #[cfg(not(feature = "discord"))]
-        {
-            let _ = message;
-            Err(ChannelError::UnsupportedFeature(
-                "Discord support not compiled".to_string(),
-            ))
+        // Add attachments
+        for attachment in &message.attachments {
+            if let Some(data) = &attachment.data {
+                let filename = attachment
+                    .filename
+                    .clone()
+                    .unwrap_or_else(|| "attachment".to_string());
+                builder = builder.add_file(CreateAttachment::bytes(data.clone(), filename));
+            }
         }
+
+        // Send the message
+        let sent = channel_id
+            .send_message(http, builder)
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Discord send error: {}", e)))?;
+
+        Ok(SendResult {
+            message_id: MessageId::new(sent.id.to_string()),
+            timestamp: Utc
+                .timestamp_opt(sent.timestamp.unix_timestamp(), 0)
+                .single()
+                .unwrap_or_else(Utc::now),
+        })
     }
 
     fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
@@ -484,101 +455,57 @@ impl Channel for DiscordChannel {
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        #[cfg(feature = "discord")]
-        {
-            let http = self
-                .http
-                .as_ref()
-                .ok_or_else(|| ChannelError::NotConnected("HTTP client not initialized".to_string()))?;
+        let http = self
+            .http
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("HTTP client not initialized".to_string()))?;
 
-            // Parse channel ID
-            let channel_id_str = if conversation_id.as_str().starts_with("dm:") {
-                return Err(ChannelError::UnsupportedFeature(
-                    "Typing indicator for DMs requires creating DM channel first".to_string(),
-                ));
-            } else {
-                conversation_id.as_str()
-            };
+        // Parse channel ID
+        let channel_id_str = if conversation_id.as_str().starts_with("dm:") {
+            return Err(ChannelError::UnsupportedFeature(
+                "Typing indicator for DMs requires creating DM channel first".to_string(),
+            ));
+        } else {
+            conversation_id.as_str()
+        };
 
-            let channel_id = SerenityChannelId::new(
-                channel_id_str
-                    .parse()
-                    .map_err(|e| ChannelError::Internal(format!("Invalid channel ID: {}", e)))?,
-            );
+        let channel_id = SerenityChannelId::new(
+            channel_id_str
+                .parse()
+                .map_err(|e| ChannelError::Internal(format!("Invalid channel ID: {}", e)))?,
+        );
 
-            channel_id
-                .broadcast_typing(http)
-                .await
-                .map_err(|e| ChannelError::Internal(format!("Failed to send typing: {}", e)))?;
+        channel_id
+            .broadcast_typing(http)
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Failed to send typing: {}", e)))?;
 
-            Ok(())
-        }
-
-        #[cfg(not(feature = "discord"))]
-        {
-            let _ = conversation_id;
-            Err(ChannelError::UnsupportedFeature(
-                "Discord support not compiled".to_string(),
-            ))
-        }
+        Ok(())
     }
 
     async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
-        #[cfg(feature = "discord")]
-        {
-            // Note: Editing requires channel_id which we don't have in this interface
-            // Would need to track message_id -> channel_id mapping
-            let _ = (message_id, new_text);
-            Err(ChannelError::UnsupportedFeature(
-                "Message editing requires channel context".to_string(),
-            ))
-        }
-
-        #[cfg(not(feature = "discord"))]
-        {
-            let _ = (message_id, new_text);
-            Err(ChannelError::UnsupportedFeature(
-                "Discord support not compiled".to_string(),
-            ))
-        }
+        // Note: Editing requires channel_id which we don't have in this interface
+        // Would need to track message_id -> channel_id mapping
+        let _ = (message_id, new_text);
+        Err(ChannelError::UnsupportedFeature(
+            "Message editing requires channel context".to_string(),
+        ))
     }
 
     async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
-        #[cfg(feature = "discord")]
-        {
-            // Note: Deleting requires channel_id which we don't have in this interface
-            let _ = message_id;
-            Err(ChannelError::UnsupportedFeature(
-                "Message deletion requires channel context".to_string(),
-            ))
-        }
-
-        #[cfg(not(feature = "discord"))]
-        {
-            let _ = message_id;
-            Err(ChannelError::UnsupportedFeature(
-                "Discord support not compiled".to_string(),
-            ))
-        }
+        // Note: Deleting requires channel_id which we don't have in this interface
+        let _ = message_id;
+        Err(ChannelError::UnsupportedFeature(
+            "Message deletion requires channel context".to_string(),
+        ))
     }
 
     async fn react(&self, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
-        #[cfg(feature = "discord")]
-        {
-            // Note: Reacting requires channel_id which we don't have in this interface
-            let _ = (message_id, reaction);
-            Err(ChannelError::UnsupportedFeature(
-                "Reactions require channel context".to_string(),
-            ))
-        }
-
-        #[cfg(not(feature = "discord"))]
-        {
-            let _ = (message_id, reaction);
-            Err(ChannelError::UnsupportedFeature(
-                "Discord support not compiled".to_string(),
-            ))
-        }
+        // Note: Reacting requires channel_id which we don't have in this interface
+        let _ = (message_id, reaction);
+        Err(ChannelError::UnsupportedFeature(
+            "Reactions require channel context".to_string(),
+        ))
     }
 }
 
