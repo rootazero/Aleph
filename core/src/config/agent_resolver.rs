@@ -10,7 +10,7 @@
 //! - Workspace initialization (directory creation + template files)
 //! - Loading SOUL.md, AGENTS.md, MEMORY.md from workspaces
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -104,18 +104,38 @@ impl AgentDefinitionResolver {
         config: &AgentsConfig,
         profiles: &HashMap<String, ProfileConfig>,
     ) -> Vec<ResolvedAgent> {
-        let config = if config.list.is_empty() {
-            let mut cloned = config.clone();
-            cloned.ensure_default();
-            cloned
+        // Only clone if we need to inject a default agent
+        let owned;
+        let effective = if config.list.is_empty() {
+            owned = {
+                let mut c = config.clone();
+                c.ensure_default();
+                c
+            };
+            &owned
         } else {
-            config.clone()
+            config
         };
 
-        config
+        // Validate: warn on duplicate IDs and multiple defaults
+        let mut seen_ids = HashSet::new();
+        let default_count = effective.list.iter().filter(|a| a.default).count();
+        if default_count > 1 {
+            tracing::warn!("Multiple agents marked as default, using the first one");
+        }
+
+        effective
             .list
             .iter()
-            .map(|agent_def| self.resolve_one(agent_def, &config.defaults, profiles))
+            .filter(|agent_def| {
+                if seen_ids.insert(&agent_def.id) {
+                    true
+                } else {
+                    tracing::warn!(agent_id = %agent_def.id, "Duplicate agent ID, skipping");
+                    false
+                }
+            })
+            .map(|agent_def| self.resolve_one(agent_def, &effective.defaults, profiles))
             .collect()
     }
 
@@ -192,9 +212,12 @@ impl AgentDefinitionResolver {
         // 6. Load SOUL.md, AGENTS.md, MEMORY.md from workspace
         let soul = self.workspace_loader.load_soul(&workspace_path);
         let agents_md = self.workspace_loader.load_agents_md(&workspace_path);
+        let max_chars = defaults
+            .bootstrap_max_chars
+            .unwrap_or(DEFAULT_BOOTSTRAP_MAX_CHARS);
         let memory_md = self
             .workspace_loader
-            .load_memory_md(&workspace_path, DEFAULT_BOOTSTRAP_MAX_CHARS);
+            .load_memory_md(&workspace_path, max_chars);
 
         // 7. Build ResolvedAgent
         let name = agent
