@@ -36,7 +36,7 @@ impl PromptPipeline {
         output
     }
 
-    /// Create a pipeline pre-loaded with the 22 default layers.
+    /// Create a pipeline pre-loaded with the 23 default layers.
     ///
     /// Layer order (by priority):
     ///   50  SoulLayer
@@ -49,6 +49,7 @@ impl PromptPipeline {
     ///  505  PoePromptLayer
     ///  600  SecurityLayer
     ///  700  ProtocolTokensLayer
+    ///  710  HeartbeatLayer
     ///  800  OperationalGuidelinesLayer
     ///  900  CitationStandardsLayer
     /// 1000  GenerationModelsLayer
@@ -73,6 +74,7 @@ impl PromptPipeline {
             Box::new(crate::poe::PoePromptLayer),
             Box::new(SecurityLayer),
             Box::new(ProtocolTokensLayer),
+            Box::new(HeartbeatLayer),
             Box::new(OperationalGuidelinesLayer),
             Box::new(CitationStandardsLayer),
             Box::new(GenerationModelsLayer),
@@ -181,7 +183,7 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        assert_eq!(pipeline.layer_count(), 22);
+        assert_eq!(pipeline.layer_count(), 23);
     }
 
     #[test]
