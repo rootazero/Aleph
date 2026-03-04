@@ -4,12 +4,14 @@
 
 pub mod channel;
 pub mod coordinator;
+pub mod executor;
 pub mod orchestrator;
 pub mod persona;
 pub mod protocol;
 pub mod session;
 
 pub use channel::{GroupChatCommandParser, GroupChatRenderer};
+pub use executor::GroupChatExecutor;
 pub use orchestrator::GroupChatOrchestrator;
 pub use persona::PersonaRegistry;
 pub use protocol::*;
