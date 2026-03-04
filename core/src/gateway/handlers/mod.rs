@@ -51,6 +51,7 @@ pub mod behavior_config;
 pub mod generation_config;
 pub mod search_config;
 pub mod session;
+pub mod session_usage;
 pub mod auth;
 pub mod events;
 pub mod channel;
@@ -234,6 +235,15 @@ impl HandlerRegistry {
                 req.id,
                 INTERNAL_ERROR,
                 "chat.clear requires Gateway runtime - use Gateway::new()".to_string(),
+            )
+        });
+
+        // Session usage (requires SessionStore -- placeholder)
+        registry.register("session.usage", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "session.usage requires SessionStore — wire in Gateway startup".to_string(),
             )
         });
 
