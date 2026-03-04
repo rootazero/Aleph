@@ -15,7 +15,7 @@ use crate::tui::theme::DEFAULT_THEME;
 /// Render the confirmation dialog as a centered overlay.
 pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
     // Calculate dialog dimensions
-    let dialog_width = area.width.min(50).max(20);
+    let dialog_width = area.width.clamp(20, 50);
     let option_count = dialog.options.len() as u16;
     // Height: 2 borders + 1 blank + question lines (estimate 2) + 1 blank + options + 1 hint
     let dialog_height = (option_count.saturating_add(7)).min(area.height);

@@ -260,12 +260,6 @@ async fn main_loop(
                 state.close_overlay();
             }
 
-            // -- Settings --
-            Action::ToggleVerbose => {
-                state.toggle_verbose();
-                let mode = if state.verbose { "on" } else { "off" };
-                state.add_system_message(format!("Verbose mode: {}", mode));
-            }
         }
 
         // Check quit flag
@@ -289,7 +283,7 @@ fn handle_terminal_event(
 ) -> Action {
     match event {
         event::TermEvent::Key(key) => handle_key_event(state, textarea, key),
-        event::TermEvent::Resize(_, _) => {
+        event::TermEvent::Resize => {
             // Terminal resize is handled automatically by ratatui
             Action::None
         }

@@ -13,8 +13,8 @@ use tokio::sync::mpsc;
 pub enum TermEvent {
     /// A keyboard event
     Key(KeyEvent),
-    /// Terminal was resized to (columns, rows)
-    Resize(u16, u16),
+    /// Terminal was resized
+    Resize,
 }
 
 /// Spawn a blocking task that polls crossterm events and sends them
@@ -36,7 +36,7 @@ pub fn spawn_event_collector() -> mpsc::Receiver<TermEvent> {
                     if let Ok(ev) = event::read() {
                         let term_event = match ev {
                             Event::Key(key) => Some(TermEvent::Key(key)),
-                            Event::Resize(cols, rows) => Some(TermEvent::Resize(cols, rows)),
+                            Event::Resize(_, _) => Some(TermEvent::Resize),
                             _ => None,
                         };
                         if let Some(te) = term_event {

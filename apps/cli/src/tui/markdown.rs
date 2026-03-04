@@ -271,23 +271,13 @@ fn flush_plain(
 
 /// Find a single closing marker character, returning the char index (not byte index).
 fn find_single_marker(chars: &[(usize, char)], from: usize, marker: char) -> Option<usize> {
-    for idx in from..chars.len() {
-        if chars[idx].1 == marker {
-            return Some(idx);
-        }
-    }
-    None
+    (from..chars.len()).find(|&idx| chars[idx].1 == marker)
 }
 
 /// Find a double closing marker (e.g., **), returning the char index of the first char.
 fn find_double_marker(chars: &[(usize, char)], from: usize, marker: char) -> Option<usize> {
     let len = chars.len();
-    for idx in from..len.saturating_sub(1) {
-        if chars[idx].1 == marker && chars[idx + 1].1 == marker {
-            return Some(idx);
-        }
-    }
-    None
+    (from..len.saturating_sub(1)).find(|&idx| chars[idx].1 == marker && chars[idx + 1].1 == marker)
 }
 
 /// Parse a markdown link: [text](url). Returns (link_text, char_index_after_closing_paren).
