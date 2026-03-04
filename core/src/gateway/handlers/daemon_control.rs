@@ -10,7 +10,6 @@ use std::time::Instant;
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::logging::get_log_directory;
-use crate::sync_primitives::Arc;
 
 /// Handle daemon.status — return server runtime information
 pub async fn handle_status(request: JsonRpcRequest, start_time: Instant) -> JsonRpcResponse {
@@ -27,22 +26,27 @@ pub async fn handle_status(request: JsonRpcRequest, start_time: Instant) -> Json
     )
 }
 
-/// Handle daemon.shutdown — initiate graceful shutdown
-pub async fn handle_shutdown(
-    request: JsonRpcRequest,
-    shutdown_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
-) -> JsonRpcResponse {
-    let mut guard = shutdown_tx.lock().await;
-    if let Some(tx) = guard.take() {
-        let _ = tx.send(());
-        JsonRpcResponse::success(request.id, json!({ "status": "shutting_down" }))
-    } else {
-        JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            "Shutdown already in progress".to_string(),
-        )
-    }
+/// Handle daemon.shutdown — initiate graceful shutdown via SIGTERM to self.
+///
+/// Sends the response first, then schedules a SIGTERM after a brief delay
+/// to allow the response to be flushed to the client. This mirrors the
+/// approach used by the daemon IPC server.
+pub async fn handle_shutdown(request: JsonRpcRequest) -> JsonRpcResponse {
+    tracing::info!("Graceful shutdown requested via RPC");
+
+    // Schedule SIGTERM after response is sent
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        tracing::info!("Initiating graceful shutdown via SIGTERM");
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(libc::getpid(), libc::SIGTERM);
+        }
+        #[cfg(not(unix))]
+        std::process::exit(0);
+    });
+
+    JsonRpcResponse::success(request.id, json!({ "status": "shutting_down" }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,7 +130,7 @@ fn log_directory() -> PathBuf {
 }
 
 /// Find the most recent log file in the directory
-fn find_latest_log(dir: &PathBuf) -> Option<PathBuf> {
+fn find_latest_log(dir: &std::path::Path) -> Option<PathBuf> {
     std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok())

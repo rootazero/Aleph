@@ -1,10 +1,19 @@
 //! Daemon (Gateway server) management commands
 
 use serde_json::Value;
+use std::path::PathBuf;
 use std::process::Command;
 
 use crate::client::AlephClient;
 use crate::error::CliResult;
+
+/// Path to the PID file used for daemon process tracking
+fn pid_file_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".aleph")
+        .join("aleph.pid")
+}
 
 /// Show Gateway server status
 pub async fn status(server_url: &str) -> CliResult<()> {
@@ -39,10 +48,7 @@ pub async fn status(server_url: &str) -> CliResult<()> {
             println!("URL:         {}", server_url);
 
             // Check for stale PID file
-            let pid_file = dirs::home_dir()
-                .unwrap_or_default()
-                .join(".aleph")
-                .join("aleph.pid");
+            let pid_file = pid_file_path();
             if pid_file.exists() {
                 if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
                     println!("Stale PID:   {} (process not responding)", pid_str.trim());
@@ -62,10 +68,7 @@ pub fn start() -> CliResult<()> {
     match Command::new("aleph").arg("serve").spawn() {
         Ok(child) => {
             // Write PID file
-            let pid_file = dirs::home_dir()
-                .unwrap_or_default()
-                .join(".aleph")
-                .join("aleph.pid");
+            let pid_file = pid_file_path();
             if let Some(parent) = pid_file.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -91,20 +94,14 @@ pub async fn stop(server_url: &str) -> CliResult<()> {
             println!("Gateway shutdown initiated.");
 
             // Clean up PID file
-            let pid_file = dirs::home_dir()
-                .unwrap_or_default()
-                .join(".aleph")
-                .join("aleph.pid");
+            let pid_file = pid_file_path();
             let _ = std::fs::remove_file(&pid_file);
 
             Ok(())
         }
         Err(_) => {
             // Fallback: try to kill via PID file
-            let pid_file = dirs::home_dir()
-                .unwrap_or_default()
-                .join(".aleph")
-                .join("aleph.pid");
+            let pid_file = pid_file_path();
 
             if pid_file.exists() {
                 if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {

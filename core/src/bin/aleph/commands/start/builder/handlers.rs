@@ -502,6 +502,9 @@ pub(in crate::commands::start) fn register_daemon_handlers(
         async move { daemon_control::handle_status(req, st).await }
     });
 
+    // Wire daemon.shutdown (stateless — sends SIGTERM to self)
+    register_handler!(server, "daemon.shutdown", daemon_control::handle_shutdown);
+
     if !daemon {
         println!("Daemon methods:");
         println!("  - daemon.status   : Server runtime status");
