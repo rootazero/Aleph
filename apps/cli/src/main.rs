@@ -162,6 +162,12 @@ enum Commands {
         action: WorkspaceAction,
     },
 
+    /// Log management
+    Logs {
+        #[command(subcommand)]
+        action: LogsAction,
+    },
+
     /// Generate shell completion script
     Completion {
         /// Shell type (bash, zsh, fish, elvish, powershell)
@@ -362,6 +368,19 @@ enum WorkspaceAction {
         /// Workspace name to archive
         name: String,
     },
+}
+
+#[derive(Subcommand)]
+enum LogsAction {
+    /// Get current log level
+    Level,
+    /// Set log level (trace, debug, info, warn, error)
+    SetLevel {
+        /// Log level to set
+        level: String,
+    },
+    /// Show log directory path
+    Dir,
 }
 
 #[tokio::main]
@@ -586,6 +605,17 @@ async fn main() -> CliResult<()> {
             GatewayAction::Call { method, params } => {
                 commands::gateway_cmd::call(&server_url, &method, params.as_deref(), cli.json)
                     .await?
+            }
+        },
+        Some(Commands::Logs { action }) => match action {
+            LogsAction::Level => {
+                commands::logs_cmd::level(&server_url, cli.json).await?;
+            }
+            LogsAction::SetLevel { level } => {
+                commands::logs_cmd::set_level(&server_url, &level, cli.json).await?;
+            }
+            LogsAction::Dir => {
+                commands::logs_cmd::dir(&server_url, cli.json).await?;
             }
         },
         Some(Commands::Completion { shell }) => {

@@ -9,6 +9,7 @@ pub mod gateway_cmd;
 pub mod daemon;
 pub mod guests;
 pub mod health;
+pub mod logs_cmd;
 pub mod info;
 pub mod memory_cmd;
 pub mod models_cmd;
