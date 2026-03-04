@@ -552,6 +552,44 @@ pub async fn handle_usage_db(
     }
 }
 
+/// Handle session.create RPC request with database backend
+///
+/// Creates a new session and returns the session key and optional name.
+pub async fn handle_create_db(
+    request: JsonRpcRequest,
+    manager: Arc<SessionManager>,
+) -> JsonRpcResponse {
+    let name = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("name"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Generate a unique session key based on timestamp
+    let ts = chrono::Utc::now().timestamp_millis();
+    let session_key_str = format!("session_{}", ts);
+    let session_key = SessionKey::Main {
+        agent_id: name.clone().unwrap_or_else(|| "main".to_string()),
+        main_key: session_key_str.clone(),
+    };
+
+    match manager.get_or_create(&session_key).await {
+        Ok(_meta) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "session_key": session_key.to_key_string(),
+                "name": name.unwrap_or_else(|| session_key_str),
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to create session: {}", e),
+        ),
+    }
+}
+
 /// Handle session.compact RPC request with database backend
 pub async fn handle_compact_db(
     request: JsonRpcRequest,
