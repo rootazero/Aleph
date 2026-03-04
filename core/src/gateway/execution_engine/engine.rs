@@ -535,7 +535,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         }
         // Inject workspace files from agent's workspace directory
         let agent_workspace_dir = agent.config().workspace.clone();
-        {
+        let workspace_soul_candidate = {
             let mut loader = self.workspace_loader.lock().unwrap_or_else(|e| e.into_inner());
 
             // Inject AGENTS.md as agent-specific instructions
@@ -561,7 +561,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .join("\n\n");
                 extra_instructions.push(format!("## Recent Activity\n\n{}", daily));
             }
-        }
+
+            // Load soul candidate from workspace (applied after soul variable is created)
+            loader.load_soul(&agent_workspace_dir)
+        };
 
         let custom_instructions = if extra_instructions.is_empty() {
             None
@@ -577,11 +580,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         };
 
         // Override soul manifest if workspace has SOUL.md
-        {
-            let mut loader = self.workspace_loader.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(workspace_soul) = loader.load_soul(&agent_workspace_dir) {
-                soul = Some(workspace_soul);
-            }
+        if let Some(workspace_soul) = workspace_soul_candidate {
+            soul = Some(workspace_soul);
         }
 
         let thinker_config = ThinkerConfig {
@@ -686,8 +686,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             LoopResult::Completed { summary, .. } => {
                 info!(run_id = %run_id, "Agent loop completed successfully");
 
-                // Append session summary to daily memory log
-                {
+                // Append session summary to daily memory log (only for real workspaces)
+                if agent_workspace_dir.is_absolute() {
                     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
                     let time = chrono::Local::now().format("%H:%M").to_string();
                     let truncated_summary = if summary.len() > 500 {
