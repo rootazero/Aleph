@@ -107,20 +107,11 @@ fn is_list_item(line: &str) -> bool {
 /// Strip the list marker from a line, returning the content after `- ` or `* `
 fn strip_list_marker(line: &str) -> String {
     let trimmed = line.trim_start();
-    if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
-        // Use char_indices for UTF-8 safety
-        let mut chars = trimmed.char_indices();
-        chars.next(); // skip marker char
-        chars.next(); // skip space
-        if let Some((idx, _)) = chars.next() {
-            trimmed.get(idx..).unwrap_or("").to_string()
-        } else {
-            // marker + space only, no content after
-            trimmed.get(2..).unwrap_or("").to_string()
-        }
-    } else {
-        trimmed.to_string()
-    }
+    trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+        .unwrap_or(trimmed)
+        .to_string()
 }
 
 /// Parse heading lines. Returns None if the line isn't actually a heading.
