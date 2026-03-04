@@ -308,4 +308,42 @@ mod tests {
         let adapter = ChatGptProtocol::new(Client::new());
         assert_eq!(adapter.name(), "chatgpt");
     }
+
+    #[test]
+    fn test_create_chatgpt_provider_via_factory() {
+        use crate::config::ProviderConfig;
+        use crate::providers::create_provider;
+
+        let config = ProviderConfig {
+            protocol: Some("chatgpt".to_string()),
+            model: "gpt-4o".to_string(),
+            api_key: Some("test_token".to_string()),
+            base_url: Some("https://chatgpt.com".to_string()),
+            enabled: true,
+            ..ProviderConfig::test_config("gpt-4o")
+        };
+
+        let provider = create_provider("chatgpt-sub", config);
+        assert!(
+            provider.is_ok(),
+            "Should create chatgpt provider: {:?}",
+            provider.err()
+        );
+
+        let p = provider.unwrap();
+        assert_eq!(p.name(), "chatgpt-sub");
+    }
+
+    #[test]
+    fn test_chatgpt_preset_applied() {
+        use crate::providers::presets::get_preset;
+
+        let preset = get_preset("chatgpt");
+        assert!(preset.is_some(), "chatgpt preset should exist");
+
+        let p = preset.unwrap();
+        assert_eq!(p.protocol, "chatgpt");
+        assert_eq!(p.base_url, "https://chatgpt.com");
+        assert_eq!(p.default_model, "gpt-4o");
+    }
 }
