@@ -5,6 +5,7 @@
 
 use super::layers::*;
 use super::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use super::prompt_mode::PromptMode;
 
 /// Composable prompt assembly engine.
 ///
@@ -30,6 +31,22 @@ impl PromptPipeline {
         let mut output = String::with_capacity(16384);
         for layer in &self.layers {
             if layer.paths().contains(&path) {
+                layer.inject(&mut output, input);
+            }
+        }
+        output
+    }
+
+    /// Execute pipeline with mode filtering (path + mode).
+    pub fn execute_with_mode(
+        &self,
+        path: AssemblyPath,
+        input: &LayerInput,
+        mode: PromptMode,
+    ) -> String {
+        let mut output = String::with_capacity(16384);
+        for layer in &self.layers {
+            if layer.paths().contains(&path) && layer.supports_mode(mode) {
                 layer.inject(&mut output, input);
             }
         }
@@ -202,5 +219,99 @@ mod tests {
         let input = LayerInput::basic(&config, &tools);
 
         assert_eq!(pipeline.execute(AssemblyPath::Basic, &input), "");
+    }
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::*;
+    use crate::thinker::prompt_builder::PromptConfig;
+    use crate::thinker::prompt_mode::PromptMode;
+
+    #[test]
+    fn full_mode_includes_all_layers() {
+        let pipeline = PromptPipeline::default_layers();
+        for layer in &pipeline.layers {
+            assert!(
+                layer.supports_mode(PromptMode::Full),
+                "Layer '{}' should support Full mode",
+                layer.name()
+            );
+        }
+    }
+
+    #[test]
+    fn compact_mode_excludes_heavy_layers() {
+        let pipeline = PromptPipeline::default_layers();
+        let excluded_in_compact = [
+            "runtime_context",
+            "environment",
+            "runtime_capabilities",
+            "poe_success_criteria",
+            "protocol_tokens",
+            "operational_guidelines",
+            "citation_standards",
+            "generation_models",
+            "skill_instructions",
+            "special_actions",
+            "guidelines",
+            "thinking_guidance",
+            "skill_mode",
+        ];
+        for layer in &pipeline.layers {
+            if excluded_in_compact.contains(&layer.name()) {
+                assert!(
+                    !layer.supports_mode(PromptMode::Compact),
+                    "Layer '{}' should NOT support Compact mode",
+                    layer.name()
+                );
+            } else {
+                assert!(
+                    layer.supports_mode(PromptMode::Compact),
+                    "Layer '{}' SHOULD support Compact mode",
+                    layer.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn minimal_mode_only_core_layers() {
+        let pipeline = PromptPipeline::default_layers();
+        let included_in_minimal = ["soul", "tools", "hydrated_tools", "response_format", "language"];
+        for layer in &pipeline.layers {
+            if included_in_minimal.contains(&layer.name()) {
+                assert!(
+                    layer.supports_mode(PromptMode::Minimal),
+                    "Layer '{}' SHOULD support Minimal mode",
+                    layer.name()
+                );
+            } else {
+                assert!(
+                    !layer.supports_mode(PromptMode::Minimal),
+                    "Layer '{}' should NOT support Minimal mode",
+                    layer.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn execute_with_mode_filters_layers() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+
+        let full = pipeline.execute_with_mode(AssemblyPath::Basic, &input, PromptMode::Full);
+        let compact = pipeline.execute_with_mode(AssemblyPath::Basic, &input, PromptMode::Compact);
+        let minimal = pipeline.execute_with_mode(AssemblyPath::Basic, &input, PromptMode::Minimal);
+
+        // Full should be longest
+        assert!(full.len() > compact.len(), "Full ({}) should be longer than Compact ({})", full.len(), compact.len());
+        // Compact should be longer than Minimal
+        assert!(compact.len() > minimal.len(), "Compact ({}) should be longer than Minimal ({})", compact.len(), minimal.len());
+        // Minimal should still have some content (response format, language)
+        assert!(!minimal.is_empty(), "Minimal should not be empty");
     }
 }

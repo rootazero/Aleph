@@ -1,12 +1,16 @@
 //! CitationStandardsLayer — memory citation standards (priority 900)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 
 pub struct CitationStandardsLayer;
 
 impl PromptLayer for CitationStandardsLayer {
     fn name(&self) -> &'static str { "citation_standards" }
     fn priority(&self) -> u32 { 900 }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        matches!(mode, PromptMode::Full)
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Soul, AssemblyPath::Context]
     }
