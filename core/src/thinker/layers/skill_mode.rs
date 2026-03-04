@@ -1,12 +1,16 @@
 //! SkillModeLayer — strict skill execution mode (priority 1400)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 
 pub struct SkillModeLayer;
 
 impl PromptLayer for SkillModeLayer {
     fn name(&self) -> &'static str { "skill_mode" }
     fn priority(&self) -> u32 { 1400 }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        matches!(mode, PromptMode::Full)
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[
             AssemblyPath::Basic,

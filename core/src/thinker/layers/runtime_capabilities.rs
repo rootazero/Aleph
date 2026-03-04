@@ -1,6 +1,7 @@
 //! RuntimeCapabilitiesLayer — available runtime environments (priority 400)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 
 pub struct RuntimeCapabilitiesLayer;
@@ -8,6 +9,9 @@ pub struct RuntimeCapabilitiesLayer;
 impl PromptLayer for RuntimeCapabilitiesLayer {
     fn name(&self) -> &'static str { "runtime_capabilities" }
     fn priority(&self) -> u32 { 400 }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        matches!(mode, PromptMode::Full)
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[
             AssemblyPath::Basic,

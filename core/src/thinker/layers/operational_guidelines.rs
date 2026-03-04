@@ -2,12 +2,16 @@
 
 use crate::thinker::interaction::InteractionParadigm;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 
 pub struct OperationalGuidelinesLayer;
 
 impl PromptLayer for OperationalGuidelinesLayer {
     fn name(&self) -> &'static str { "operational_guidelines" }
     fn priority(&self) -> u32 { 800 }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        matches!(mode, PromptMode::Full)
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Context]
     }
