@@ -413,7 +413,7 @@ async fn main() -> CliResult<()> {
             commands::health::run(&server_url).await?;
         }
         Some(Commands::Info) => {
-            commands::info::run(&server_url).await?;
+            commands::info::run(&server_url, cli.json).await?;
         }
         Some(Commands::Tools { category }) => {
             commands::tools::run(&server_url, category.as_deref()).await?;
