@@ -114,6 +114,8 @@ pub struct ThinkerConfig {
     /// When set, provides workspace-specific overrides (model, temperature,
     /// tool whitelist, system_prompt) resolved from the user's active workspace.
     pub active_profile: Option<crate::config::ProfileConfig>,
+    /// Workspace root for bootstrap file loading. When set, enables BootstrapLayer.
+    pub bootstrap_workspace: Option<std::path::PathBuf>,
 }
 
 
