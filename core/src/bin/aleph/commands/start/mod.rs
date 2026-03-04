@@ -37,6 +37,9 @@ use alephcore::gateway::interfaces::{TelegramChannel, TelegramConfig};
 use alephcore::gateway::interfaces::{DiscordChannel, DiscordConfig};
 use alephcore::gateway::interfaces::{WhatsAppChannel, WhatsAppConfig};
 use alephcore::executor::BuiltinToolRegistry;
+use alephcore::cron::CronService;
+use alephcore::group_chat::{GroupChatExecutor, GroupChatOrchestrator};
+use alephcore::ProviderRegistry;
 use alephcore::gateway::handlers::poe::{
     handle_run as handle_poe_run, handle_status as handle_poe_status,
     handle_cancel as handle_poe_cancel, handle_list as handle_poe_list,
@@ -1156,6 +1159,68 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         )
     );
     register_identity_handlers(&mut server, &identity_resolver);
+
+    // Initialize CronService
+    {
+        let app_cfg = app_config_for_channels.read().await;
+        let cron_config = app_cfg.cron.clone();
+        drop(app_cfg);
+
+        match CronService::new(cron_config) {
+            Ok(mut cron_service) => {
+                // Wire JobExecutor using the provider registry (if available)
+                if can_create_provider_from_env() {
+                    if let Ok(provider_reg) = create_provider_registry_from_env() {
+                        let provider = provider_reg.default_provider();
+                        let executor: alephcore::cron::JobExecutor = Arc::new(move |_agent_id, prompt, _job_id| {
+                            let provider = provider.clone();
+                            Box::pin(async move {
+                                provider.process(&prompt, None).await.map_err(|e| format!("{e}"))
+                            }) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send>>
+                        });
+                        cron_service.set_executor(executor);
+                    }
+                }
+
+                let shared_cron: alephcore::gateway::handlers::cron::SharedCronService =
+                    Arc::new(tokio::sync::Mutex::new(cron_service));
+                register_cron_handlers(&mut server, &shared_cron, args.daemon);
+            }
+            Err(e) => {
+                if !args.daemon {
+                    eprintln!("Warning: Failed to initialize CronService: {}. Cron stubs remain.", e);
+                }
+            }
+        }
+    }
+
+    // Initialize GroupChat Orchestrator + Executor
+    {
+        let app_cfg = app_config_for_channels.read().await;
+        let gc_config = app_cfg.group_chat.clone();
+        let persona_configs = app_cfg.personas.clone();
+        drop(app_cfg);
+
+        let orchestrator = GroupChatOrchestrator::new(gc_config, &persona_configs);
+        let shared_orch: alephcore::gateway::handlers::group_chat::SharedOrchestrator =
+            Arc::new(tokio::sync::Mutex::new(orchestrator));
+
+        // Create executor with default provider (if available)
+        let gc_executor = if can_create_provider_from_env() {
+            create_provider_registry_from_env()
+                .ok()
+                .map(|reg| Arc::new(GroupChatExecutor::new(reg.default_provider())))
+        } else {
+            None
+        };
+
+        if let Some(executor) = gc_executor {
+            register_group_chat_handlers(&mut server, &shared_orch, &executor, args.daemon);
+        } else if !args.daemon {
+            println!("Group Chat: Disabled (requires ANTHROPIC_API_KEY or OPENAI_API_KEY)");
+            println!();
+        }
+    }
 
     // Create channel pairing store (shared between InboundMessageRouter and RPC handlers)
     let channel_pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore> = {
