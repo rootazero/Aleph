@@ -16,7 +16,9 @@
 //! - Configurable page size, margins, and fonts
 
 pub mod args;
+mod browser_engine;
 pub mod native_engine;
+mod styles;
 
 #[cfg(test)]
 mod tests;
@@ -24,6 +26,7 @@ mod tests;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use tracing::{info, warn};
 
 use super::error::ToolError;
 use crate::error::Result;
@@ -126,7 +129,30 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let output_path = self.resolve_output_path(&args.output_path)?;
-        // For now, always dispatch to native engine (browser engine added in Task 3)
-        native_engine::generate(&args, &output_path).map_err(Into::into)
+
+        let result = match args.render_engine {
+            RenderEngine::Browser => {
+                browser_engine::generate(&args, &output_path).await
+            }
+            RenderEngine::Native => {
+                native_engine::generate(&args, &output_path)
+            }
+            RenderEngine::Auto => {
+                if browser_engine::is_chrome_available() {
+                    match browser_engine::generate(&args, &output_path).await {
+                        Ok(output) => Ok(output),
+                        Err(e) => {
+                            warn!(error = %e, "Browser engine failed, falling back to native");
+                            native_engine::generate(&args, &output_path)
+                        }
+                    }
+                } else {
+                    info!("Chrome not available, using native PDF engine");
+                    native_engine::generate(&args, &output_path)
+                }
+            }
+        };
+
+        result.map_err(Into::into)
     }
 }
