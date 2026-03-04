@@ -20,6 +20,10 @@ impl PromptLayer for ToolsLayer {
         ]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
+        if input.config.native_tools_enabled {
+            return; // Tools passed via API native tool_use, not system prompt
+        }
+
         // Context path: use available_tools from ResolvedContext
         let tools = if let Some(ctx) = input.context {
             &ctx.available_tools[..]
@@ -195,5 +199,26 @@ mod tests {
         layer.inject(&mut out, &input);
 
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_tools_skipped_when_native_tools_enabled() {
+        let layer = ToolsLayer;
+        let config = PromptConfig {
+            native_tools_enabled: true,
+            ..Default::default()
+        };
+        let tools = vec![ToolInfo {
+            name: "bash".to_string(),
+            description: "Run shell commands".to_string(),
+            parameters_schema: "{\"command\": \"string\"}".to_string(),
+            category: None,
+        }];
+        let input = LayerInput::basic(&config, &tools);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        // Output should be empty when native tools enabled
+        assert!(out.is_empty(), "ToolsLayer should skip when native_tools_enabled=true");
     }
 }
