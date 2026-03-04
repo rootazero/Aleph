@@ -26,6 +26,7 @@ pub mod ui_hints;
 pub mod defaults_override;
 pub mod presets_override;
 pub mod prompts_override;
+pub mod agent_resolver;
 
 // Re-export main types
 pub use structs::{Config, FullConfig};
