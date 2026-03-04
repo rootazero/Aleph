@@ -37,6 +37,7 @@ async-trait = "0.1"
 
 # CLI interface
 clap = { version = "4.4", features = ["derive"] }
+clap_complete = "4"
 
 # Terminal UI
 crossterm = "0.28"

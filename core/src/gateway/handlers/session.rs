@@ -15,7 +15,7 @@ use tracing::debug;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, INTERNAL_ERROR};
 use super::super::router::SessionKey;
-use super::super::session_manager::SessionManager;
+use super::super::session_manager::{SessionManager, StoredMessage};
 
 /// Session information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -485,6 +485,242 @@ pub async fn handle_delete_db(
         }
         None => JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key"),
     }
+}
+
+/// Handle session.usage RPC request with database backend
+pub async fn handle_usage_db(
+    request: JsonRpcRequest,
+    manager: Arc<SessionManager>,
+) -> JsonRpcResponse {
+    let session_key = match request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("session_key"))
+        .and_then(|v| v.as_str())
+    {
+        Some(k) => k.to_string(),
+        None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key"),
+    };
+
+    let key = match SessionKey::from_key_string(&session_key) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
+        }
+    };
+
+    // Get session metadata for timestamps
+    match manager.list_sessions(None).await {
+        Ok(sessions) => {
+            let session_meta = sessions.iter().find(|s| s.key == session_key);
+
+            // Get history for token estimation
+            let messages = manager.get_history(&key, None).await.unwrap_or_default();
+            let (input_tokens, output_tokens) = estimate_db_tokens(&messages);
+            let total = input_tokens + output_tokens;
+
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "session_key": session_key,
+                    "tokens": total,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "messages": messages.len(),
+                    "created_at": session_meta.map(|s| {
+                        chrono::DateTime::from_timestamp(s.created_at, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_default()
+                    }),
+                    "last_active_at": session_meta.map(|s| {
+                        chrono::DateTime::from_timestamp(s.last_active_at, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_default()
+                    }),
+                }),
+            )
+        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to query sessions: {}", e),
+        ),
+    }
+}
+
+/// Handle session.compact RPC request with database backend
+pub async fn handle_compact_db(
+    request: JsonRpcRequest,
+    manager: Arc<SessionManager>,
+) -> JsonRpcResponse {
+    let session_key = match request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("session_key"))
+        .and_then(|v| v.as_str())
+    {
+        Some(k) => k.to_string(),
+        None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key"),
+    };
+
+    let key = match SessionKey::from_key_string(&session_key) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
+        }
+    };
+
+    // Get message count before compact
+    let before_msgs = manager
+        .get_history(&key, None)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    match manager.compact_session(&key).await {
+        Ok(deleted) => {
+            let after_msgs = before_msgs.saturating_sub(deleted);
+            let tokens_saved = deleted * 50; // rough estimate per message
+
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "message": if deleted > 0 {
+                        format!("Compacted {} messages.", deleted)
+                    } else {
+                        "Session is already compact.".to_string()
+                    },
+                    "before_messages": before_msgs,
+                    "after_messages": after_msgs,
+                    "tokens_saved": tokens_saved,
+                }),
+            )
+        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Compact failed: {}", e),
+        ),
+    }
+}
+
+/// Estimate tokens from StoredMessage history
+fn estimate_db_tokens(messages: &[StoredMessage]) -> (u64, u64) {
+    let mut input = 0u64;
+    let mut output = 0u64;
+    for msg in messages {
+        let tokens = (msg.content.len() as u64) / 3;
+        match msg.role.as_str() {
+            "user" => input += tokens,
+            "assistant" => output += tokens,
+            _ => input += tokens,
+        }
+    }
+    (input, output)
+}
+
+/// Handle session.compact — compress session history by summarizing older messages
+pub async fn handle_compact(
+    request: JsonRpcRequest,
+    store: Arc<SessionStore>,
+) -> JsonRpcResponse {
+    #[derive(Deserialize)]
+    struct CompactParams {
+        session_key: String,
+    }
+
+    let params: CompactParams = match super::parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let history = store.get_history(&params.session_key, None).await;
+    let messages = match history {
+        Some(msgs) => msgs,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                -32001,
+                format!("Session '{}' not found", params.session_key),
+            );
+        }
+    };
+
+    let before_count = messages.len();
+    let keep_count = 20;
+
+    if before_count <= keep_count {
+        return JsonRpcResponse::success(
+            request.id,
+            json!({
+                "message": "Session is already compact.",
+                "before_messages": before_count,
+                "after_messages": before_count,
+                "tokens_saved": 0,
+            }),
+        );
+    }
+
+    // Build summary of compacted messages
+    let compacted = &messages[..before_count - keep_count];
+    let summary = build_compact_summary(compacted);
+
+    // Reset session and re-add summary + recent messages
+    store.reset(&params.session_key).await;
+    store.add_message(&params.session_key, "system", &summary).await;
+    for msg in &messages[before_count - keep_count..] {
+        store.add_message(&params.session_key, &msg.role, &msg.content).await;
+    }
+
+    let after_count = keep_count + 1; // kept messages + summary
+    let chars_removed: usize = compacted.iter().map(|m| m.content.len()).sum();
+    let tokens_saved = chars_removed / 3;
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "message": format!("Compacted {} messages into summary.", compacted.len()),
+            "before_messages": before_count,
+            "after_messages": after_count,
+            "tokens_saved": tokens_saved,
+        }),
+    )
+}
+
+/// Build a brief summary of compacted messages
+fn build_compact_summary(messages: &[HistoryMessage]) -> String {
+    let user_topics: Vec<&str> = messages
+        .iter()
+        .filter(|m| m.role == "user")
+        .map(|m| {
+            // Take first 80 chars of each user message as topic
+            let s = m.content.as_str();
+            if s.len() > 80 {
+                &s[..s.char_indices().nth(80).map(|(i, _)| i).unwrap_or(s.len())]
+            } else {
+                s
+            }
+        })
+        .take(5)
+        .collect();
+
+    format!(
+        "[Session summary: {} earlier messages compacted. Topics discussed: {}]",
+        messages.len(),
+        if user_topics.is_empty() {
+            "general conversation".to_string()
+        } else {
+            user_topics.join("; ")
+        }
+    )
 }
 
 #[cfg(test)]
