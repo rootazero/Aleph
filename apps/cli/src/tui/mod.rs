@@ -61,9 +61,48 @@ pub async fn run(
         original_hook(info);
     }));
 
-    // 3. Create AppState and TextArea
-    // TODO: Fetch actual model name from gateway via RPC (e.g. agent.info)
-    let model_name = "claude-3".to_string();
+    // 3. Fetch model name from gateway, then create AppState and TextArea
+    let model_name = match client.call::<_, Value>("models.list", None::<()>).await {
+        Ok(result) => {
+            // Try array format: [{"name": "..."}, ...] or ["model-name", ...]
+            result
+                .as_array()
+                .and_then(|arr| arr.first())
+                .and_then(|first| {
+                    first
+                        .as_str()
+                        .map(|s| s.to_string())
+                        .or_else(|| {
+                            first
+                                .get("name")
+                                .or_else(|| first.get("id"))
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        })
+                })
+                // Also try object format: {"models": [...]}
+                .or_else(|| {
+                    result
+                        .get("models")
+                        .and_then(|v| v.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|first| {
+                            first
+                                .as_str()
+                                .map(|s| s.to_string())
+                                .or_else(|| {
+                                    first
+                                        .get("name")
+                                        .or_else(|| first.get("id"))
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string())
+                                })
+                        })
+                })
+                .unwrap_or_else(|| "unknown".to_string())
+        }
+        Err(_) => "unknown".to_string(),
+    };
 
     let mut state = AppState::new(session_key, model_name);
     let mut textarea = TextArea::default();
@@ -246,7 +285,7 @@ async fn main_loop(
                     "response": choice,
                 });
                 match client
-                    .call::<_, Value>("agent.respond", Some(params))
+                    .call::<_, Value>("agent.respondToInput", Some(params))
                     .await
                 {
                     Ok(_) => {}
