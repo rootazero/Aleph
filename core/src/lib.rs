@@ -299,6 +299,18 @@ pub use crate::generation::{GenerationProvider, GenerationProviderRegistry, Gene
 pub use crate::conversation::{ConversationManager, ConversationSession, ConversationTurn};
 
 // =============================================================================
+// Group Chat Exports
+// =============================================================================
+
+pub use crate::group_chat::{
+    GroupChatOrchestrator, GroupChatSession, PersonaRegistry,
+    GroupChatCommandParser, GroupChatRenderer,
+    GroupChatError, GroupChatMessage, GroupChatRequest, GroupChatStatus,
+    Persona, PersonaSource, Speaker, RenderedContent, ContentFormat,
+    CoordinatorPlan, RespondentPlan,
+};
+
+// =============================================================================
 // Provider Exports
 // =============================================================================
 
