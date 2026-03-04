@@ -481,6 +481,7 @@ impl<P: ProviderRegistry> Thinker<P> {
                 decision,
                 structured: None,
                 tokens_used,
+                tool_call_id: Some(tc.id.clone()),
             })
         } else if let Some(ref text) = response.text {
             // Fallback: no tool calls, try DecisionParser on text
@@ -1177,6 +1178,7 @@ mod tests {
         let thinking = thinker.build_thinking_from_native_response(response).unwrap();
         assert_eq!(thinking.reasoning.as_deref(), Some("I need to list files"));
         assert_eq!(thinking.tokens_used, Some(150));
+        assert_eq!(thinking.tool_call_id.as_deref(), Some("call_5"));
         assert!(matches!(
             thinking.decision,
             crate::agent_loop::Decision::UseTool { .. }

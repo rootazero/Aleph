@@ -13,6 +13,8 @@ use super::PromptBuilder;
 pub struct Message {
     pub role: MessageRole,
     pub content: String,
+    /// Native tool call ID (for protocol-aware tool result formatting in Phase 2)
+    pub tool_call_id: Option<String>,
 }
 
 /// Message role
@@ -29,6 +31,7 @@ impl Message {
         Self {
             role: MessageRole::User,
             content: content.into(),
+            tool_call_id: None,
         }
     }
 
@@ -37,6 +40,7 @@ impl Message {
         Self {
             role: MessageRole::Assistant,
             content: content.into(),
+            tool_call_id: None,
         }
     }
 
@@ -45,6 +49,16 @@ impl Message {
         Self {
             role: MessageRole::Tool,
             content: format!("[{}]\n{}", tool_name, result),
+            tool_call_id: None,
+        }
+    }
+
+    /// Create a native tool result message with call ID
+    pub fn native_tool_result(tool_call_id: &str, tool_name: &str, result: &str) -> Self {
+        Self {
+            role: MessageRole::Tool,
+            content: format!("[{}]\n{}", tool_name, result),
+            tool_call_id: Some(tool_call_id.to_string()),
         }
     }
 }
@@ -145,6 +159,13 @@ impl PromptBuilder {
             if step.action_type == "ask_user" {
                 // User's response to a question - use User role
                 messages.push(Message::user(step.result_output.clone()));
+            } else if let Some(ref call_id) = step.tool_call_id {
+                // Native tool result with ID reference for LLM context
+                messages.push(Message::native_tool_result(
+                    call_id,
+                    &step.action_type,
+                    &step.result_output,
+                ));
             } else {
                 // Tool result - use full output to ensure LLM sees complete data
                 // (e.g., full file paths, complete JSON output)

@@ -135,6 +135,9 @@ pub struct Thinking {
     /// Token usage from this thinking step (populated from provider response)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens_used: Option<usize>,
+    /// Native tool call ID from provider (for tool result passback)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 /// Request context containing attachments and environment info from UI layer
@@ -246,6 +249,9 @@ pub struct StepSummary {
     pub result_output: String,
     /// Whether action succeeded
     pub success: bool,
+    /// Native tool call ID (for tool result passback in subsequent LLM calls)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 impl From<&LoopStep> for StepSummary {
@@ -262,6 +268,7 @@ impl From<&LoopStep> for StepSummary {
             result_summary: step.result.summary(),
             result_output: step.result.full_output(),
             success: step.result.is_success(),
+            tool_call_id: step.thinking.tool_call_id.clone(),
         }
     }
 }
@@ -318,6 +325,7 @@ mod tests {
                     },
                     structured: None,
                     tokens_used: None,
+                    tool_call_id: None,
                 },
                 action: Action::Completion {
                     summary: "done".to_string(),
@@ -351,6 +359,7 @@ mod tests {
                     },
                     structured: None,
                     tokens_used: None,
+                    tool_call_id: None,
                 },
                 action: Action::Completion {
                     summary: "done".to_string(),

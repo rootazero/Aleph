@@ -334,6 +334,7 @@ mod tests {
                 },
                 structured: None,
                 tokens_used: None,
+                tool_call_id: None,
             },
             action: Action::ToolCall {
                 tool_name: "search".to_string(),
@@ -498,6 +499,7 @@ mod tests {
                     },
                     structured: None,
                     tokens_used: None,
+                    tool_call_id: None,
                 },
                 action: Action::Completion {
                     summary: format!("Step {} done", i),

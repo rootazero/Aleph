@@ -346,6 +346,7 @@ mod tests {
                 result_summary: "Success".to_string(),
                 result_output: "Success".to_string(),
                 success: true,
+                tool_call_id: None,
             }],
             available_tools: vec![],
             attachments: vec![],
