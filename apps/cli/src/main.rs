@@ -126,6 +126,12 @@ enum Commands {
         action: GatewayAction,
     },
 
+    /// AI provider management
+    Providers {
+        #[command(subcommand)]
+        action: ProvidersAction,
+    },
+
     /// Generate shell completion script
     Completion {
         /// Shell type (bash, zsh, fish, elvish, powershell)
@@ -184,6 +190,33 @@ enum DaemonAction {
         #[arg(short, long)]
         level: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum ProvidersAction {
+    /// List all AI providers
+    List,
+    /// Get provider details
+    Get { name: String },
+    /// Add a new provider
+    Add {
+        name: String,
+        /// Provider type (e.g., openai, anthropic, ollama)
+        #[arg(long)]
+        r#type: String,
+        /// API key
+        #[arg(long)]
+        api_key: String,
+        /// Base URL (optional)
+        #[arg(long)]
+        base_url: Option<String>,
+    },
+    /// Test provider connectivity
+    Test { name: String },
+    /// Set as default provider
+    SetDefault { name: String },
+    /// Remove a provider
+    Remove { name: String },
 }
 
 #[derive(Subcommand)]
@@ -290,6 +323,39 @@ async fn main() -> CliResult<()> {
             }
             DaemonAction::Logs { lines, level } => {
                 commands::daemon::logs(&server_url, lines, level.as_deref()).await?;
+            }
+        },
+        Some(Commands::Providers { action }) => match action {
+            ProvidersAction::List => {
+                commands::providers_cmd::list(&server_url, cli.json).await?;
+            }
+            ProvidersAction::Get { name } => {
+                commands::providers_cmd::get(&server_url, &name, cli.json).await?;
+            }
+            ProvidersAction::Add {
+                name,
+                r#type,
+                api_key,
+                base_url,
+            } => {
+                commands::providers_cmd::add(
+                    &server_url,
+                    &name,
+                    &r#type,
+                    &api_key,
+                    base_url.as_deref(),
+                    cli.json,
+                )
+                .await?;
+            }
+            ProvidersAction::Test { name } => {
+                commands::providers_cmd::test(&server_url, &name, cli.json).await?;
+            }
+            ProvidersAction::SetDefault { name } => {
+                commands::providers_cmd::set_default(&server_url, &name, cli.json).await?;
+            }
+            ProvidersAction::Remove { name } => {
+                commands::providers_cmd::remove(&server_url, &name, cli.json).await?;
             }
         },
         Some(Commands::Gateway { action }) => match action {
