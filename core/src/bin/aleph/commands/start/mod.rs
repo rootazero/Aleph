@@ -1149,6 +1149,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
     }
 
+    // Identity resolver (shared for session-level overrides)
+    let identity_resolver: alephcore::gateway::handlers::identity::SharedIdentityResolver = Arc::new(
+        tokio::sync::RwLock::new(
+            alephcore::thinker::identity::IdentityResolver::with_defaults()
+        )
+    );
+    register_identity_handlers(&mut server, &identity_resolver);
+
     // Create channel pairing store (shared between InboundMessageRouter and RPC handlers)
     let channel_pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore> = {
         let pairing_store_path = alephcore::utils::paths::get_pairing_db_path()

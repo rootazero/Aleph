@@ -17,6 +17,8 @@ use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::handlers::memory as memory_handlers;
 use alephcore::gateway::handlers::models as models_handlers;
 use alephcore::gateway::handlers::workspace as workspace_handlers;
+use alephcore::gateway::handlers::identity as identity_handlers;
+use alephcore::gateway::handlers::identity::SharedIdentityResolver;
 use alephcore::gateway::{
     SessionManager,
     ChannelRegistry,
@@ -585,4 +587,16 @@ pub(in crate::commands::start) fn register_oauth_handlers(
         println!("  - providers.oauthStatus : Check OAuth status");
         println!();
     }
+}
+
+// ─── register_identity_handlers ──────────────────────────────────────────────
+
+pub(in crate::commands::start) fn register_identity_handlers(
+    server: &mut GatewayServer,
+    resolver: &SharedIdentityResolver,
+) {
+    register_handler!(server, "identity.get", identity_handlers::handle_get, resolver);
+    register_handler!(server, "identity.set", identity_handlers::handle_set, resolver);
+    register_handler!(server, "identity.clear", identity_handlers::handle_clear, resolver);
+    register_handler!(server, "identity.list", identity_handlers::handle_list, resolver);
 }
