@@ -186,6 +186,12 @@ enum Commands {
         action: IdentityAction,
     },
 
+    /// Vault key management
+    Vault {
+        #[command(subcommand)]
+        action: VaultAction,
+    },
+
     /// Chat control (send, abort, history, clear)
     #[command(name = "chat-control")]
     ChatControl {
@@ -509,6 +515,18 @@ enum IdentityAction {
     Clear,
     /// List identity sources
     List,
+}
+
+#[derive(Subcommand)]
+enum VaultAction {
+    /// Show vault status
+    Status,
+    /// Store master key (interactive input)
+    Store,
+    /// Delete master key
+    Delete,
+    /// Verify vault integrity
+    Verify,
 }
 
 #[derive(Subcommand)]
@@ -872,6 +890,20 @@ async fn main() -> CliResult<()> {
             }
             IdentityAction::List => {
                 commands::identity_cmd::list(&server_url, cli.json).await?;
+            }
+        },
+        Some(Commands::Vault { action }) => match action {
+            VaultAction::Status => {
+                commands::vault_cmd::status(&server_url, cli.json).await?;
+            }
+            VaultAction::Store => {
+                commands::vault_cmd::store(&server_url, cli.json).await?;
+            }
+            VaultAction::Delete => {
+                commands::vault_cmd::delete(&server_url, cli.json).await?;
+            }
+            VaultAction::Verify => {
+                commands::vault_cmd::verify(&server_url, cli.json).await?;
             }
         },
         Some(Commands::ChatControl { action }) => match action {

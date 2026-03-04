@@ -55,6 +55,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 aleph-logging = { path = "../../crates/logging" }
 
+# Secure password input
+rpassword = "7"
+
 # Utilities
 uuid = { version = "1.7", features = ["v4"] }
 chrono = "0.4"
