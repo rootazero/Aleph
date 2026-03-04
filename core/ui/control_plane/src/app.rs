@@ -9,6 +9,7 @@ use crate::views::system_status::SystemStatus;
 use crate::views::agent_trace::AgentTrace;
 use crate::views::memory::Memory;
 use crate::views::chat::ChatView;
+use crate::views::cron::CronView;
 use crate::views::settings::*;
 use crate::views::settings::channels::config_template::ChannelConfigTemplate;
 use crate::views::settings::channels::definitions;
@@ -178,6 +179,7 @@ fn DashboardRouter() -> impl IntoView {
             "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
             "/dashboard/health" => view! { <SystemStatus /> }.into_any(),
             "/dashboard/memory" => view! { <Memory /> }.into_any(),
+            "/dashboard/cron" => view! { <CronView /> }.into_any(),
             // Not in dashboard mode — render nothing (div is hidden)
             _ => ().into_any(),
         }
@@ -214,6 +216,7 @@ fn SettingsRouter() -> impl IntoView {
             // Security
             "/settings/security" => view! { <SecurityView /> }.into_any(),
             "/settings/policies" => view! { <PoliciesView /> }.into_any(),
+            "/settings/vault" => view! { <VaultView /> }.into_any(),
 
             // Channels
             "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),

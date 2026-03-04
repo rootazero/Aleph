@@ -37,6 +37,10 @@ pub fn DashboardSidebar() -> impl IntoView {
                     <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
                     <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
                 </SidebarItem>
+                <SidebarItem href="/dashboard/cron" label="Scheduled Tasks">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                </SidebarItem>
             </nav>
         </div>
     }
