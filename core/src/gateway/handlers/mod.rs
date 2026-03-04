@@ -38,6 +38,7 @@
 //! | poe | POE (Principle-Operation-Evaluation) task execution |
 //! | identity | Identity/soul management |
 //! | workspace | Workspace isolation management |
+//! | daemon | Daemon status, shutdown, logs |
 //! | guests | Guest invitation management |
 
 pub mod health;
@@ -90,6 +91,7 @@ pub mod guests;
 pub mod workspace;
 pub mod secret_approvals;
 pub mod system_info;
+pub mod daemon_control;
 pub mod discord_panel;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
@@ -435,6 +437,25 @@ impl HandlerRegistry {
                 req.id,
                 INTERNAL_ERROR,
                 "workspace.getActive requires WorkspaceManager - wire Gateway runtime first".to_string(),
+            )
+        });
+
+        // Daemon control handlers
+        // daemon.logs is stateless (reads from filesystem) — register directly
+        registry.register("daemon.logs", daemon_control::handle_logs);
+        // daemon.status and daemon.shutdown need runtime state — placeholders
+        registry.register("daemon.status", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "daemon.status requires runtime state — wire in Gateway startup".to_string(),
+            )
+        });
+        registry.register("daemon.shutdown", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "daemon.shutdown requires runtime state — wire in Gateway startup".to_string(),
             )
         });
 
