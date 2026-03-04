@@ -1,6 +1,6 @@
 //! Bootstrap file injection layer.
 //!
-//! Loads workspace-level context files (CONTEXT.md, INSTRUCTIONS.md, etc.)
+//! Loads workspace-level context files (CONTEXT.md, INSTRUCTIONS.md, USER.md, etc.)
 //! and injects them into the system prompt with truncation management.
 
 use std::path::PathBuf;
@@ -14,6 +14,8 @@ const BOOTSTRAP_FILES: &[&str] = &[
     "INSTRUCTIONS.md",
     "TOOLS.md",
     "MEMORY.md",
+    "USER.md",
+    "AGENTS.md",
 ];
 
 /// Layer that injects workspace bootstrap files into the system prompt.
@@ -190,6 +192,21 @@ mod tests {
 
         // Total should be around 100K, not 160K
         assert!(content.len() <= 110_000);
+    }
+
+    #[test]
+    fn loads_user_and_agents_files() {
+        let dir = tempdir().unwrap();
+        create_bootstrap_file(dir.path(), "USER.md", "# User Profile\nRust developer, prefers Chinese");
+        create_bootstrap_file(dir.path(), "AGENTS.md", "# Operating Manual\nAlways run tests before committing");
+
+        let layer = BootstrapLayer::new(dir.path().to_path_buf());
+        let content = layer.load_files().unwrap();
+
+        assert!(content.contains("### USER.md"));
+        assert!(content.contains("Rust developer"));
+        assert!(content.contains("### AGENTS.md"));
+        assert!(content.contains("Always run tests"));
     }
 
     #[test]
