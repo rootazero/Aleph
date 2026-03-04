@@ -141,9 +141,7 @@ fn parse_suggestion_response(
     metrics: &SkillMetrics,
     sample_contexts: &[String],
 ) -> Result<SolidificationSuggestion> {
-    use crate::spec_driven::spec_writer::extract_json;
-
-    let json_str = extract_json(response);
+    use crate::utils::json_extract::extract_json_robust;
 
     #[derive(serde::Deserialize)]
     struct SuggestionResponse {
@@ -152,7 +150,12 @@ fn parse_suggestion_response(
         instructions_preview: String,
     }
 
-    let parsed: SuggestionResponse = serde_json::from_str(&json_str).map_err(|e| {
+    let json_value = extract_json_robust(response).ok_or_else(|| AlephError::Other {
+        message: "No JSON found in suggestion response".to_string(),
+        suggestion: None,
+    })?;
+
+    let parsed: SuggestionResponse = serde_json::from_value(json_value).map_err(|e| {
         AlephError::Other {
             message: format!("Failed to parse suggestion: {}", e),
             suggestion: None,

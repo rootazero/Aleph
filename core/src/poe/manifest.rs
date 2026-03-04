@@ -31,6 +31,8 @@ use crate::error::Result;
 use crate::poe::types::SuccessManifest;
 use crate::providers::AiProvider;
 use crate::skill_evolution::EvolutionTracker;
+use crate::utils::json_extract::extract_json_robust;
+use tracing::warn;
 
 /// System prompt for the Manifest Builder.
 const MANIFEST_BUILDER_SYSTEM_PROMPT: &str = r#"You are the "First Principles" engine of an advanced AI agent.
@@ -253,44 +255,24 @@ Generate a Success Manifest for this task.",
 
     /// Parse the JSON response from the LLM.
     fn parse_manifest(&self, response: &str) -> Result<SuccessManifest> {
-        let json_str = self.extract_json(response);
-        
-        serde_json::from_str(&json_str).map_err(|e| {
+        let json_value = match extract_json_robust(response) {
+            Some(v) => v,
+            None => {
+                warn!("No JSON found in manifest response, constructing minimal manifest from instruction");
+                // Return a minimal manifest — objective is the first line of the response
+                let objective = response.lines().next().unwrap_or("Unknown task").trim();
+                return Ok(SuccessManifest::new("fallback-task", objective));
+            }
+        };
+
+        serde_json::from_value(json_value).map_err(|e| {
+            warn!("Failed to parse manifest JSON: {}, constructing minimal manifest", e);
             crate::error::AlephError::other(format!(
-                "Failed to parse generated manifest: {}. Raw: {}", 
-                e, 
-                truncate_string(&json_str, 200)
+                "Failed to parse generated manifest: {}. Raw: {}",
+                e,
+                truncate_string(response, 200)
             ))
         })
-    }
-
-    /// Extract JSON from potential markdown wrappers.
-    fn extract_json(&self, response: &str) -> String {
-        let trimmed = response.trim();
-
-        // Handle markdown code blocks
-        if let Some(start) = trimmed.find("```") {
-            if let Some(end) = trimmed.rfind("```") {
-                if end > start {
-                    let inner = &trimmed[start..end];
-                    // Skip the first line (e.g. ```json)
-                    if let Some(newline) = inner.find('\n') {
-                        return inner[newline+1..].trim().to_string();
-                    }
-                }
-            }
-        }
-
-        // Handle raw JSON (find outer braces)
-        if let Some(start) = trimmed.find('{') {
-            if let Some(end) = trimmed.rfind('}') {
-                if end > start {
-                    return trimmed[start..=end].to_string();
-                }
-            }
-        }
-
-        trimmed.to_string()
     }
 
     // ========================================================================
@@ -428,23 +410,32 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_json() {
-        let builder = create_mock_builder("");
-
+    fn test_extract_json_robust_usage() {
         // Pure JSON
-        assert_eq!(builder.extract_json(r#"{"a":1}"#), r#"{"a":1}"#);
+        let result = extract_json_robust(r#"{"a":1}"#);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["a"], 1);
 
         // Markdown
-        assert_eq!(
-            builder.extract_json("```json\n{\"a\":1}\n```"),
-            r#"{"a":1}"#
-        );
+        let result = extract_json_robust("```json\n{\"a\":1}\n```");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["a"], 1);
 
         // Surrounded text
-        assert_eq!(
-            builder.extract_json("Here is JSON:\n{\"a\":1}\nThanks"),
-            r#"{"a":1}"#
-        );
+        let result = extract_json_robust("Here is JSON:\n{\"a\":1}\nThanks");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["a"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_build_manifest_plain_text_fallback() {
+        // Mock LLM returns plain text instead of JSON
+        let builder = create_mock_builder("这是一个纯文本回复，没有JSON内容");
+        let manifest = builder.build("Create a new file", None).await.unwrap();
+
+        // Should get a minimal fallback manifest
+        assert_eq!(manifest.task_id, "fallback-task");
+        assert!(manifest.hard_constraints.is_empty());
     }
 
     #[tokio::test]

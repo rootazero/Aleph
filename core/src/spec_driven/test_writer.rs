@@ -5,12 +5,12 @@
 use crate::sync_primitives::Arc;
 
 use serde::Deserialize;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::providers::AiProvider;
+use crate::utils::json_extract::extract_json_robust;
 
-use super::spec_writer::extract_json;
 use super::types::{AssertionType, Spec, TestCase, TestType};
 
 /// System prompt for test generation
@@ -109,14 +109,21 @@ Target Language: {}
 
     /// Parse LLM response into test cases.
     fn parse_response(&self, response: &str) -> Result<Vec<TestCase>> {
-        let json_str = extract_json(response);
-
-        let parsed: Vec<TestCaseResponse> = serde_json::from_str(&json_str).map_err(|e| {
-            AlephError::Other {
-                message: format!("Failed to parse test cases: {}", e),
-                suggestion: Some("Ensure the LLM returned a valid JSON array".to_string()),
+        let json_value = match extract_json_robust(response) {
+            Some(v) => v,
+            None => {
+                warn!("No JSON found in test writer response, returning empty test list");
+                return Ok(vec![]);
             }
-        })?;
+        };
+
+        let parsed: Vec<TestCaseResponse> = match serde_json::from_value(json_value) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Failed to parse test cases JSON: {}, returning empty test list", e);
+                return Ok(vec![]);
+            }
+        };
 
         let tests = parsed
             .into_iter()

@@ -8,11 +8,11 @@ use crate::sync_primitives::Arc;
 use serde::Deserialize;
 use tracing::{debug, info, warn};
 
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::providers::AiProvider;
 use crate::agents::thinking::ThinkLevel;
+use crate::utils::json_extract::extract_json_robust;
 
-use super::spec_writer::extract_json;
 use super::types::{EvaluationResult, Spec, TestCase, TestResult};
 
 /// System prompt for evaluation
@@ -190,15 +190,29 @@ Evaluate against the acceptance criteria and test results."#,
 
     /// Parse LLM response into evaluation result.
     fn parse_response(&self, response: &str) -> Result<EvaluationResult> {
-        let json_str = extract_json(response);
-
-        let parsed: EvaluationResponse = serde_json::from_str(&json_str).map_err(|e| {
-            warn!(error = %e, response = %response, "Failed to parse evaluation");
-            AlephError::Other {
-                message: format!("Failed to parse evaluation: {}", e),
-                suggestion: Some("Ensure the LLM returned valid JSON".to_string()),
+        let json_value = match extract_json_robust(response) {
+            Some(v) => v,
+            None => {
+                warn!(response = %response, "No JSON found in evaluation response, returning default score");
+                return Ok(EvaluationResult::failing(
+                    0.5,
+                    "Evaluation parse failed — LLM returned non-JSON response",
+                    vec!["Re-run evaluation with structured output".into()],
+                ));
             }
-        })?;
+        };
+
+        let parsed: EvaluationResponse = match serde_json::from_value(json_value) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(error = %e, response = %response, "Failed to parse evaluation JSON");
+                return Ok(EvaluationResult::failing(
+                    0.5,
+                    format!("Evaluation parse failed: {}", e),
+                    vec!["Re-run evaluation with structured output".into()],
+                ));
+            }
+        };
 
         Ok(EvaluationResult {
             score: parsed.score.clamp(0.0, 1.0),

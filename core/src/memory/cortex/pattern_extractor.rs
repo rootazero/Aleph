@@ -4,9 +4,10 @@
 //! raw execution traces into reusable, parameterized patterns.
 
 use crate::error::{AlephError, Result};
+use crate::utils::json_extract::extract_json_robust;
 use crate::memory::cortex::{EnvironmentContext, Experience, ParameterMapping};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Extracted pattern from an experience
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,39 +201,29 @@ Provide ONLY the JSON object, no additional text."#,
 
     /// Parse LLM response into structured data
     fn parse_llm_response(&self, response: &str) -> Result<ExtractedPatternRaw> {
-        // Extract JSON from response (handle markdown code blocks)
-        let json_str = self.extract_json(response)?;
+        // Extract JSON from response using robust extractor
+        let json_value = match extract_json_robust(response) {
+            Some(v) => v,
+            None => {
+                warn!("No JSON found in pattern extraction response, returning default pattern");
+                return Ok(ExtractedPatternRaw {
+                    description: "Pattern extraction failed — raw text response".to_string(),
+                    parameter_mapping: ParameterMapping {
+                        variables: std::collections::HashMap::new(),
+                    },
+                    key_steps: vec![],
+                });
+            }
+        };
 
         // Parse JSON
-        serde_json::from_str(&json_str).map_err(|e| AlephError::Other {
-            message: format!("Failed to parse LLM response: {}", e),
-            suggestion: Some("Check LLM output format".to_string()),
+        serde_json::from_value(json_value).map_err(|e| {
+            warn!("Failed to parse pattern extraction JSON: {}", e);
+            AlephError::Other {
+                message: format!("Failed to parse LLM response: {}", e),
+                suggestion: Some("Check LLM output format".to_string()),
+            }
         })
-    }
-
-    /// Extract JSON from response (handle markdown code blocks)
-    fn extract_json(&self, response: &str) -> Result<String> {
-        let trimmed = response.trim();
-
-        // Check if wrapped in markdown code block
-        if trimmed.starts_with("```json") {
-            let start = trimmed.find('{').ok_or_else(|| AlephError::Other {
-                message: "No JSON object found in response".to_string(),
-                suggestion: None,
-            })?;
-            let end = trimmed.rfind('}').ok_or_else(|| AlephError::Other {
-                message: "No JSON object found in response".to_string(),
-                suggestion: None,
-            })?;
-            Ok(trimmed[start..=end].to_string())
-        } else if trimmed.starts_with('{') {
-            Ok(trimmed.to_string())
-        } else {
-            Err(AlephError::Other {
-                message: "Response does not contain valid JSON".to_string(),
-                suggestion: None,
-            })
-        }
     }
 
     /// Generate pattern hash for deduplication
@@ -268,9 +259,6 @@ mod tests {
 
     #[test]
     fn test_extract_json_from_markdown() {
-        let config = PatternExtractorConfig::default();
-        let extractor = PatternExtractor::new(config);
-
         let response = r#"```json
 {
   "description": "Test pattern",
@@ -281,19 +269,30 @@ mod tests {
 }
 ```"#;
 
-        let json = extractor.extract_json(response).unwrap();
-        assert!(json.contains("Test pattern"));
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["description"], "Test pattern");
     }
 
     #[test]
     fn test_extract_json_plain() {
+        let response = r#"{"description": "Test", "parameter_mapping": {"variables": {}}, "key_steps": []}"#;
+
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["description"], "Test");
+    }
+
+    #[test]
+    fn test_parse_llm_response_plain_text_fallback() {
         let config = PatternExtractorConfig::default();
         let extractor = PatternExtractor::new(config);
 
-        let response = r#"{"description": "Test", "parameter_mapping": {"variables": {}}, "key_steps": []}"#;
-
-        let json = extractor.extract_json(response).unwrap();
-        assert!(json.contains("Test"));
+        // Plain text should return default pattern, not error
+        let result = extractor.parse_llm_response("这是一个纯文本回复");
+        assert!(result.is_ok());
+        let pattern = result.unwrap();
+        assert!(pattern.description.contains("extraction failed"));
     }
 
     #[test]

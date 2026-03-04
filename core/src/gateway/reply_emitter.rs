@@ -158,41 +158,118 @@ impl ReplyEmitter {
         self.send_to_channel(&content).await;
     }
 
-    /// Send content to the channel
+    /// Maximum message length for channel messages.
+    /// Telegram limits to 4096, other channels may vary.
+    /// We use a conservative limit that works for most channels.
+    const MAX_MESSAGE_LENGTH: usize = 4000;
+
+    /// Send content to the channel, splitting into chunks if too long
     async fn send_to_channel(&self, content: &str) {
         if content.is_empty() {
             return;
         }
         self.has_sent.store(true, Ordering::SeqCst);
 
-        let message = OutboundMessage {
-            conversation_id: self.route.conversation_id.clone(),
-            text: content.to_string(),
-            attachments: vec![],
-            reply_to: self.route.reply_to.clone(),
-            inline_keyboard: None,
-            metadata: Default::default(),
-        };
+        let chunks = Self::split_message(content, Self::MAX_MESSAGE_LENGTH);
+        let total_chunks = chunks.len();
 
-        match self
-            .channel_registry
-            .send(&self.route.channel_id, message)
-            .await
-        {
-            Ok(result) => {
-                debug!(
-                    "Sent reply to channel {} (message_id: {})",
-                    self.route.channel_id,
-                    result.message_id.as_str()
-                );
-            }
-            Err(e) => {
-                error!(
-                    "Failed to send reply to channel {}: {}",
-                    self.route.channel_id, e
-                );
+        for (i, chunk) in chunks.into_iter().enumerate() {
+            let message = OutboundMessage {
+                conversation_id: self.route.conversation_id.clone(),
+                text: chunk,
+                attachments: vec![],
+                // Only set reply_to on the first chunk
+                reply_to: if i == 0 {
+                    self.route.reply_to.clone()
+                } else {
+                    None
+                },
+                inline_keyboard: None,
+                metadata: Default::default(),
+            };
+
+            match self
+                .channel_registry
+                .send(&self.route.channel_id, message)
+                .await
+            {
+                Ok(result) => {
+                    debug!(
+                        "Sent reply to channel {} (message_id: {}, chunk {}/{})",
+                        self.route.channel_id,
+                        result.message_id.as_str(),
+                        i + 1,
+                        total_chunks
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to send reply to channel {} (chunk {}/{}): {}",
+                        self.route.channel_id,
+                        i + 1,
+                        total_chunks,
+                        e
+                    );
+                    // Stop sending remaining chunks if one fails
+                    break;
+                }
             }
         }
+    }
+
+    /// Split a message into chunks that fit within the max length.
+    /// Splits at paragraph boundaries (\n\n), then line boundaries (\n),
+    /// then at the max length as a last resort — all UTF-8 safe.
+    fn split_message(content: &str, max_len: usize) -> Vec<String> {
+        if content.len() <= max_len {
+            return vec![content.to_string()];
+        }
+
+        let mut chunks = Vec::new();
+        let mut remaining = content;
+
+        while !remaining.is_empty() {
+            if remaining.len() <= max_len {
+                chunks.push(remaining.to_string());
+                break;
+            }
+
+            // Find the best split point within max_len
+            let split_at = Self::find_split_point(remaining, max_len);
+            let (chunk, rest) = remaining.split_at(split_at);
+            chunks.push(chunk.trim_end().to_string());
+            remaining = rest.trim_start_matches('\n');
+        }
+
+        chunks
+    }
+
+    /// Find the best split point: prefer \n\n, then \n, then char boundary
+    fn find_split_point(text: &str, max_len: usize) -> usize {
+        // Ensure we don't split in the middle of a multi-byte character
+        let mut safe_max = max_len;
+        while safe_max > 0 && !text.is_char_boundary(safe_max) {
+            safe_max -= 1;
+        }
+
+        let search_range = &text[..safe_max];
+
+        // Try to split at paragraph boundary
+        if let Some(pos) = search_range.rfind("\n\n") {
+            if pos > safe_max / 4 {
+                return pos + 1; // Include one \n, the other will be trimmed
+            }
+        }
+
+        // Try to split at line boundary
+        if let Some(pos) = search_range.rfind('\n') {
+            if pos > safe_max / 4 {
+                return pos + 1;
+            }
+        }
+
+        // Last resort: split at char boundary
+        safe_max
     }
 
     /// Send an error message to the user
@@ -361,5 +438,51 @@ mod tests {
         // Check buffer contents
         let buffer = emitter.buffer.lock().await;
         assert_eq!(*buffer, "Hello World!");
+    }
+
+    #[test]
+    fn test_split_message_short() {
+        let chunks = ReplyEmitter::split_message("Hello World", 100);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "Hello World");
+    }
+
+    #[test]
+    fn test_split_message_at_paragraph() {
+        let content = format!("{}\n\n{}", "A".repeat(50), "B".repeat(50));
+        let chunks = ReplyEmitter::split_message(&content, 60);
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[0].starts_with('A'));
+        assert!(chunks[1].starts_with('B'));
+    }
+
+    #[test]
+    fn test_split_message_at_newline() {
+        let content = format!("{}\n{}", "A".repeat(50), "B".repeat(50));
+        let chunks = ReplyEmitter::split_message(&content, 60);
+        assert_eq!(chunks.len(), 2);
+    }
+
+    #[test]
+    fn test_split_message_no_boundary() {
+        // No newlines at all — should force-split at char boundary
+        let content = "A".repeat(200);
+        let chunks = ReplyEmitter::split_message(&content, 100);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), 100);
+        assert_eq!(chunks[1].len(), 100);
+    }
+
+    #[test]
+    fn test_split_message_utf8_safe() {
+        // Chinese characters are 3 bytes each
+        let content = "中".repeat(100); // 300 bytes
+        let chunks = ReplyEmitter::split_message(&content, 150);
+        // Should not panic, and all chunks should be valid UTF-8
+        assert!(chunks.len() >= 2);
+        for chunk in &chunks {
+            assert!(chunk.len() <= 150);
+            // Verify it's valid UTF-8 (implicit — String type guarantees this)
+        }
     }
 }

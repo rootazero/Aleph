@@ -6,10 +6,11 @@
 use crate::sync_primitives::Arc;
 
 use serde::Deserialize;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::providers::AiProvider;
+use crate::utils::json_extract::extract_json_robust;
 
 use super::types::{Spec, SpecMetadata, SpecTarget};
 
@@ -75,15 +76,48 @@ impl SpecWriter {
 
     /// Parse LLM response into a Spec.
     fn parse_response(&self, response: &str, original_requirement: &str) -> Result<Spec> {
-        // Try to extract JSON from response (handle markdown code blocks)
-        let json_str = extract_json(response);
-
-        let parsed: SpecResponse = serde_json::from_str(&json_str).map_err(|e| {
-            AlephError::Other {
-                message: format!("Failed to parse spec response: {}", e),
-                suggestion: Some("Ensure the LLM returned valid JSON".to_string()),
+        // Try to extract JSON from response using robust extractor
+        let json_value = match extract_json_robust(response) {
+            Some(v) => v,
+            None => {
+                warn!("No JSON found in spec response, constructing minimal spec from text");
+                let title = response.lines().next().unwrap_or("Untitled Spec").trim();
+                let id = format!("spec-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+                let mut spec = Spec::new(&id, title, response.trim());
+                spec.metadata = SpecMetadata {
+                    created_at: Some(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                    ),
+                    original_requirement: original_requirement.to_string(),
+                    iteration: 0,
+                };
+                return Ok(spec);
             }
-        })?;
+        };
+
+        let parsed: SpecResponse = match serde_json::from_value(json_value) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Failed to parse spec JSON: {}, constructing minimal spec from text", e);
+                let title = response.lines().next().unwrap_or("Untitled Spec").trim();
+                let id = format!("spec-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+                let mut spec = Spec::new(&id, title, response.trim());
+                spec.metadata = SpecMetadata {
+                    created_at: Some(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                    ),
+                    original_requirement: original_requirement.to_string(),
+                    iteration: 0,
+                };
+                return Ok(spec);
+            }
+        };
 
         // Generate ID
         let id = format!("spec-{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -122,32 +156,6 @@ struct SpecResponse {
     target: Option<SpecTarget>,
 }
 
-/// Extract JSON from response (handles markdown code blocks)
-pub fn extract_json(response: &str) -> String {
-    // Try to find JSON in code block
-    if let Some(start) = response.find("```json") {
-        if let Some(end) = response[start + 7..].find("```") {
-            return response[start + 7..start + 7 + end].trim().to_string();
-        }
-    }
-
-    // Try to find JSON in generic code block
-    if let Some(start) = response.find("```") {
-        let after_start = start + 3;
-        // Skip language identifier if present
-        let content_start = response[after_start..]
-            .find('\n')
-            .map(|i| after_start + i + 1)
-            .unwrap_or(after_start);
-        if let Some(end) = response[content_start..].find("```") {
-            return response[content_start..content_start + end].trim().to_string();
-        }
-    }
-
-    // Assume entire response is JSON
-    response.trim().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,22 +167,31 @@ mod tests {
 {"title": "Test", "description": "A test spec"}
 ```
 "#;
-        let json = extract_json(response);
-        assert!(json.starts_with('{'));
-        assert!(json.contains("Test"));
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["title"], "Test");
     }
 
     #[test]
     fn test_extract_json_plain() {
         let response = r#"{"title": "Test", "description": "A test spec"}"#;
-        let json = extract_json(response);
-        assert_eq!(json, response);
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["title"], "Test");
     }
 
     #[test]
     fn test_extract_json_generic_block() {
         let response = "```\n{\"title\": \"Test\"}\n```";
-        let json = extract_json(response);
-        assert!(json.contains("Test"));
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["title"], "Test");
+    }
+
+    #[test]
+    fn test_extract_json_plain_text_returns_none() {
+        let response = "This is just plain text with no JSON";
+        let result = extract_json_robust(response);
+        assert!(result.is_none());
     }
 }
