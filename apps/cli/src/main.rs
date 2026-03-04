@@ -150,6 +150,12 @@ enum Commands {
         action: PluginsAction,
     },
 
+    /// Skill management (file-based and markdown)
+    Skills {
+        #[command(subcommand)]
+        action: SkillsAction,
+    },
+
     /// Generate shell completion script
     Completion {
         /// Shell type (bash, zsh, fish, elvish, powershell)
@@ -295,6 +301,18 @@ enum PluginsAction {
         /// JSON params (optional)
         params: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum SkillsAction {
+    /// List all skills (file-based and runtime-loaded)
+    List,
+    /// Install a skill from source
+    Install { source: String },
+    /// Reload a markdown skill
+    Reload { name: String },
+    /// Delete/unload a skill
+    Delete { name: String },
 }
 
 #[derive(Subcommand)]
@@ -493,6 +511,20 @@ async fn main() -> CliResult<()> {
                     cli.json,
                 )
                 .await?;
+            }
+        },
+        Some(Commands::Skills { action }) => match action {
+            SkillsAction::List => {
+                commands::skills_cmd::list(&server_url, cli.json).await?;
+            }
+            SkillsAction::Install { source } => {
+                commands::skills_cmd::install(&server_url, &source, cli.json).await?;
+            }
+            SkillsAction::Reload { name } => {
+                commands::skills_cmd::reload(&server_url, &name, cli.json).await?;
+            }
+            SkillsAction::Delete { name } => {
+                commands::skills_cmd::delete(&server_url, &name, cli.json).await?;
             }
         },
         Some(Commands::Gateway { action }) => match action {
