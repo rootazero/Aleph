@@ -304,6 +304,7 @@ pub use crate::conversation::{ConversationManager, ConversationSession, Conversa
 // =============================================================================
 
 pub use crate::group_chat::{
+    GroupChatExecutor,
     GroupChatOrchestrator, GroupChatSession, PersonaRegistry,
     GroupChatCommandParser, GroupChatRenderer,
     GroupChatError, GroupChatMessage, GroupChatRequest, GroupChatStatus,
