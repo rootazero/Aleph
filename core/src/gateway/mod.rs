@@ -106,6 +106,8 @@ pub use channel::{
 pub use channel_registry::{ChannelRegistry, ChannelStatusSummary};
 pub use device_store::{DeviceStore, ApprovedDevice};
 pub use presence::{PresenceTracker, PresenceEntry};
+pub use state_version::{StateVersionTracker, StateVersion};
+pub use hello_snapshot::{HelloSnapshot, ConnectionLimits};
 pub use handlers::auth::{AuthContext, handle_connect, handle_pairing_approve, handle_pairing_reject, handle_pairing_list, handle_devices_list, handle_devices_revoke, create_hello_notification};
 pub use handlers::events::{SubscriptionManager, handle_subscribe, handle_unsubscribe, handle_list as handle_events_list};
 pub use handlers::plugins::{init_extension_manager, is_extension_manager_initialized};
