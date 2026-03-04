@@ -83,7 +83,8 @@ pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
                 // Filter by level if specified
                 if let Some(ref level) = params.level {
                     let level_upper = level.to_uppercase();
-                    lines.retain(|line| line.contains(&level_upper));
+                    let pattern = format!(" {} ", level_upper);
+                    lines.retain(|line| line.contains(&pattern));
                 }
 
                 // Take last N lines
@@ -161,7 +162,7 @@ mod tests {
 
     #[test]
     fn find_latest_log_matches_dated_files() {
-        let dir = std::env::temp_dir().join("aleph_log_test");
+        let dir = std::env::temp_dir().join(format!("aleph_log_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
 
         // Create a file matching real naming: aleph-server.log.2026-03-04
