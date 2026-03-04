@@ -2,10 +2,11 @@
 //!
 //! Configuration types for the scheduled job system.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Cron service configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CronConfig {
     /// Whether the cron service is enabled
     #[serde(default = "default_true")]
