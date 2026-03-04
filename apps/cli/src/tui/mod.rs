@@ -42,7 +42,7 @@ use slash::SlashCommand;
 pub async fn run(
     client: AlephClient,
     mut gateway_events: mpsc::Receiver<StreamEvent>,
-    config: &CliConfig,
+    _config: &CliConfig,
     session_key: String,
 ) -> CliResult<()> {
     // 1. Setup terminal
@@ -57,16 +57,13 @@ pub async fn run(
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
-        let _ = crossterm::cursor::Show;
+        let _ = execute!(io::stdout(), crossterm::cursor::Show);
         original_hook(info);
     }));
 
     // 3. Create AppState and TextArea
-    let model_name = config
-        .default_session
-        .as_deref()
-        .map(|_| "claude-3".to_string())
-        .unwrap_or_else(|| "claude-3".to_string());
+    // TODO: Fetch actual model name from gateway via RPC (e.g. agent.info)
+    let model_name = "claude-3".to_string();
 
     let mut state = AppState::new(session_key, model_name);
     let mut textarea = TextArea::default();

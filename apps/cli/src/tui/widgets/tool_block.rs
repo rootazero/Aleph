@@ -121,16 +121,23 @@ fn format_duration(duration: &Option<std::time::Duration>) -> String {
     }
 }
 
-/// Truncate a string to fit within a given character width.
-/// Uses char_indices for UTF-8 safety.
+/// Truncate a string to fit within a given visual width.
+/// Uses unicode-width for correct CJK/emoji handling.
 fn truncate_to_width(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    use unicode_width::UnicodeWidthStr;
+    if UnicodeWidthStr::width(s) <= max {
         return s.to_string();
     }
-    let end = s
-        .char_indices()
-        .nth(max.saturating_sub(3))
-        .map_or(s.len(), |(i, _)| i);
+    let mut width = 0;
+    let mut end = s.len();
+    for (i, c) in s.char_indices() {
+        let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+        if width + cw > max.saturating_sub(3) {
+            end = i;
+            break;
+        }
+        width += cw;
+    }
     format!("{}...", &s[..end])
 }
 

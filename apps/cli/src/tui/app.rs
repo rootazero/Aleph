@@ -267,14 +267,14 @@ impl AppState {
     }
 
     /// Return a mutable reference to the last assistant message.
-    /// Panics if the last message is not an assistant message.
-    /// Callers should ensure `ensure_assistant_message()` was called first.
+    /// If none exists, defensively creates one first.
     pub fn current_assistant_mut(&mut self) -> &mut ChatMessage {
+        self.ensure_assistant_message();
         self.messages
             .iter_mut()
             .rev()
             .find(|m| matches!(m, ChatMessage::Assistant { .. }))
-            .expect("no assistant message found — call ensure_assistant_message() first")
+            .expect("ensure_assistant_message guarantees this exists")
     }
 
     /// Find a tool execution by tool_id in the last assistant message.
@@ -561,8 +561,9 @@ impl AppState {
 pub fn format_params_brief(params: &Value) -> String {
     match params {
         Value::String(s) => {
-            if s.len() > 80 {
-                format!("{}...", &s[..s.char_indices().nth(77).map_or(s.len(), |(i, _)| i)])
+            if s.chars().count() > 80 {
+                let end = s.char_indices().nth(77).map_or(s.len(), |(i, _)| i);
+                format!("{}...", &s[..end])
             } else {
                 s.clone()
             }
@@ -574,7 +575,7 @@ pub fn format_params_brief(params: &Value) -> String {
                 .map(|(k, v)| {
                     let val = match v {
                         Value::String(s) => {
-                            if s.len() > 40 {
+                            if s.chars().count() > 40 {
                                 let end = s.char_indices().nth(37).map_or(s.len(), |(i, _)| i);
                                 format!("\"{}...\"", &s[..end])
                             } else {
