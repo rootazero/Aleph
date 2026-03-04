@@ -10,5 +10,6 @@ pub mod daemon;
 pub mod guests;
 pub mod health;
 pub mod info;
+pub mod providers_cmd;
 pub mod session;
 pub mod tools;
