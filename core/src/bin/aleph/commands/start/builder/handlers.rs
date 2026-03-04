@@ -19,6 +19,11 @@ use alephcore::gateway::handlers::models as models_handlers;
 use alephcore::gateway::handlers::workspace as workspace_handlers;
 use alephcore::gateway::handlers::identity as identity_handlers;
 use alephcore::gateway::handlers::identity::SharedIdentityResolver;
+use alephcore::gateway::handlers::cron as cron_handlers;
+use alephcore::gateway::handlers::cron::SharedCronService;
+use alephcore::gateway::handlers::group_chat as group_chat_handlers;
+use alephcore::gateway::handlers::group_chat::SharedOrchestrator;
+use alephcore::group_chat::GroupChatExecutor;
 use alephcore::gateway::{
     SessionManager,
     ChannelRegistry,
@@ -599,4 +604,63 @@ pub(in crate::commands::start) fn register_identity_handlers(
     register_handler!(server, "identity.set", identity_handlers::handle_set, resolver);
     register_handler!(server, "identity.clear", identity_handlers::handle_clear, resolver);
     register_handler!(server, "identity.list", identity_handlers::handle_list, resolver);
+}
+
+// ─── register_cron_handlers ─────────────────────────────────────────────────
+
+pub(in crate::commands::start) fn register_cron_handlers(
+    server: &mut GatewayServer,
+    cron_service: &SharedCronService,
+    daemon: bool,
+) {
+    register_handler!(server, "cron.list", cron_handlers::handle_list, cron_service);
+    register_handler!(server, "cron.get", cron_handlers::handle_get, cron_service);
+    register_handler!(server, "cron.create", cron_handlers::handle_create, cron_service);
+    register_handler!(server, "cron.update", cron_handlers::handle_update, cron_service);
+    register_handler!(server, "cron.delete", cron_handlers::handle_delete, cron_service);
+    register_handler!(server, "cron.status", cron_handlers::handle_status, cron_service);
+    register_handler!(server, "cron.run", cron_handlers::handle_run, cron_service);
+    register_handler!(server, "cron.runs", cron_handlers::handle_runs, cron_service);
+    register_handler!(server, "cron.toggle", cron_handlers::handle_toggle, cron_service);
+
+    if !daemon {
+        println!("Cron methods:");
+        println!("  - cron.list   : List all cron jobs");
+        println!("  - cron.get    : Get cron job details");
+        println!("  - cron.create : Create a new cron job");
+        println!("  - cron.update : Update an existing cron job");
+        println!("  - cron.delete : Delete a cron job");
+        println!("  - cron.status : Get cron service status");
+        println!("  - cron.run    : Manually trigger a cron job");
+        println!("  - cron.runs   : Get job execution history");
+        println!("  - cron.toggle : Enable or disable a cron job");
+        println!();
+    }
+}
+
+// ─── register_group_chat_handlers ───────────────────────────────────────────
+
+pub(in crate::commands::start) fn register_group_chat_handlers(
+    server: &mut GatewayServer,
+    orch: &SharedOrchestrator,
+    executor: &Arc<GroupChatExecutor>,
+    daemon: bool,
+) {
+    register_handler!(server, "group_chat.start", group_chat_handlers::handle_start, orch, executor);
+    register_handler!(server, "group_chat.continue", group_chat_handlers::handle_continue, orch, executor);
+    register_handler!(server, "group_chat.mention", group_chat_handlers::handle_mention, orch, executor);
+    register_handler!(server, "group_chat.end", group_chat_handlers::handle_end, orch);
+    register_handler!(server, "group_chat.list", group_chat_handlers::handle_list, orch);
+    register_handler!(server, "group_chat.history", group_chat_handlers::handle_history, orch);
+
+    if !daemon {
+        println!("Group Chat methods:");
+        println!("  - group_chat.start    : Start a new group chat session");
+        println!("  - group_chat.continue : Continue with new message");
+        println!("  - group_chat.mention  : Mention specific personas");
+        println!("  - group_chat.end      : End a session");
+        println!("  - group_chat.list     : List active sessions");
+        println!("  - group_chat.history  : Get conversation history");
+        println!();
+    }
 }
