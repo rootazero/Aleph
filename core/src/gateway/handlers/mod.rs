@@ -247,6 +247,15 @@ impl HandlerRegistry {
             )
         });
 
+        // Session compact (requires SessionStore — placeholder)
+        registry.register("session.compact", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "session.compact requires SessionStore — wire in Gateway startup".to_string(),
+            )
+        });
+
         // POE handlers (placeholders - actual handlers wired with PoeRunManager)
         registry.register("poe.run", |req| async move {
             JsonRpcResponse::error(
