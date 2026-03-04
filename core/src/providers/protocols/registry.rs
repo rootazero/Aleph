@@ -2,7 +2,7 @@
 
 use crate::error::Result;
 use crate::providers::adapter::ProtocolAdapter;
-use crate::providers::protocols::{AnthropicProtocol, GeminiProtocol, OpenAiProtocol};
+use crate::providers::protocols::{AnthropicProtocol, ChatGptProtocol, GeminiProtocol, OpenAiProtocol};
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use std::collections::HashMap;
@@ -56,6 +56,12 @@ impl ProtocolRegistry {
         builtin.insert(
             "gemini".to_string(),
             (|client| Arc::new(GeminiProtocol::new(client)) as Arc<dyn ProtocolAdapter>)
+                as ProtocolFactory,
+        );
+
+        builtin.insert(
+            "chatgpt".to_string(),
+            (|client| Arc::new(ChatGptProtocol::new(client)) as Arc<dyn ProtocolAdapter>)
                 as ProtocolFactory,
         );
     }
@@ -113,6 +119,13 @@ mod tests {
         assert!(registry.get("anthropic").is_some());
         assert!(registry.get("gemini").is_some());
         assert!(registry.get("unknown").is_none());
+    }
+
+    #[test]
+    fn test_chatgpt_protocol_registered() {
+        let registry = ProtocolRegistry::new();
+        registry.register_builtin();
+        assert!(registry.get("chatgpt").is_some(), "chatgpt protocol should be registered");
     }
 
     #[test]
