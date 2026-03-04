@@ -480,6 +480,34 @@ impl StateDatabase {
 
             CREATE INDEX IF NOT EXISTS idx_subagent_sessions_status ON subagent_sessions(status);
             CREATE INDEX IF NOT EXISTS idx_subagent_sessions_parent ON subagent_sessions(parent_session_id);
+
+            -- ================================================================
+            -- Group Chat Tables
+            -- ================================================================
+
+            CREATE TABLE IF NOT EXISTS group_chat_sessions (
+                id TEXT PRIMARY KEY,
+                topic TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                source_channel TEXT NOT NULL,
+                source_session_key TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS group_chat_turns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL REFERENCES group_chat_sessions(id),
+                round INTEGER NOT NULL,
+                sequence INTEGER NOT NULL,
+                speaker_type TEXT NOT NULL,
+                speaker_id TEXT,
+                speaker_name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_gc_turns_session ON group_chat_turns(session_id);
             "#
     }
 
