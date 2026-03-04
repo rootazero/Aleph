@@ -91,8 +91,8 @@ pub struct AgentDefaults {
     pub workspace_root: Option<PathBuf>,
 
     /// Default skills available to all agents
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
 
     /// Default DM (domain model) scope
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,8 +156,8 @@ pub struct AgentDefinition {
     pub model: Option<String>,
 
     /// Skills available to this agent (overrides defaults)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
 
     /// Sub-agent spawning policy
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -229,7 +229,10 @@ mod tests {
             config.defaults.workspace_root,
             Some(PathBuf::from("/home/user/workspaces"))
         );
-        assert_eq!(config.defaults.skills, vec!["search", "code_review"]);
+        assert_eq!(
+            config.defaults.skills,
+            Some(vec!["search".to_string(), "code_review".to_string()])
+        );
         assert_eq!(
             config.defaults.dm_scope,
             Some("workspace".to_string())
@@ -246,7 +249,10 @@ mod tests {
         assert!(main.default);
         assert_eq!(main.name, Some("Main Agent".to_string()));
         assert_eq!(main.model, Some("claude-opus-4".to_string()));
-        assert_eq!(main.skills, vec!["git_*", "fs_*"]);
+        assert_eq!(
+            main.skills,
+            Some(vec!["git_*".to_string(), "fs_*".to_string()])
+        );
         assert!(main.subagents.is_none());
 
         // Second agent
@@ -271,7 +277,7 @@ mod tests {
         // Defaults should all be None/empty
         assert!(config.defaults.model.is_none());
         assert!(config.defaults.workspace_root.is_none());
-        assert!(config.defaults.skills.is_empty());
+        assert!(config.defaults.skills.is_none());
         assert!(config.defaults.dm_scope.is_none());
         assert!(config.defaults.bootstrap_max_chars.is_none());
         assert!(config.defaults.bootstrap_total_max_chars.is_none());
