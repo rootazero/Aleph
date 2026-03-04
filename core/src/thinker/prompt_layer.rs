@@ -111,10 +111,4 @@ pub trait PromptLayer: Send + Sync {
 
     /// Append this layer's content to `output`.
     fn inject(&self, output: &mut String, input: &LayerInput);
-
-    /// Whether this layer participates in the given prompt mode.
-    /// Default: true (all modes). Override to exclude from Compact/Minimal.
-    fn supports_mode(&self, _mode: PromptMode) -> bool {
-        true
-    }
 }
