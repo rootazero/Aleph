@@ -438,6 +438,16 @@ impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
             .get(&model_id)
             .unwrap_or_else(|| self.providers.default_provider());
 
+        tracing::info!(
+            subsystem = "thinker",
+            event = "provider_selected",
+            model = %model_id.as_str(),
+            provider = %provider.name(),
+            think_level = %level,
+            tool_count = filtered_tools.len(),
+            "thinker selected provider for LLM call"
+        );
+
         // 7. Call LLM with specified thinking level
         let response = self
             .call_llm_with_level(provider, &system, &messages, level)
@@ -472,6 +482,16 @@ impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
         let input_chars: usize = system.len() + messages.iter().map(|m| m.content.len()).sum::<usize>();
         let estimated_tokens = (input_chars + response.len()) / 4;
         thinking.tokens_used = Some(estimated_tokens);
+
+        tracing::info!(
+            subsystem = "thinker",
+            event = "response_completed",
+            model = %model_id.as_str(),
+            estimated_tokens = estimated_tokens,
+            response_len = response.len(),
+            decision_type = thinking.decision.decision_type(),
+            "thinker LLM response completed"
+        );
 
         // 10. Validate decision
         self.decision_parser.validate(&thinking.decision)?;

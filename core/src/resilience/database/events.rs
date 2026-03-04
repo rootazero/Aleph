@@ -8,6 +8,9 @@ use crate::resilience::AgentEvent;
 use super::StateDatabase;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+
+static FIRST_EVENT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 impl StateDatabase {
     // =========================================================================
@@ -32,6 +35,16 @@ impl StateDatabase {
             ],
         )
         .map_err(|e| AlephError::config(format!("Failed to insert event: {}", e)))?;
+
+        if !FIRST_EVENT_LOGGED.swap(true, AtomicOrdering::Relaxed) {
+            tracing::info!(
+                subsystem = "resilience",
+                event = "first_event_recorded",
+                event_type = %event.event_type,
+                task_id = %event.task_id,
+                "StateDatabase recorded first event"
+            );
+        }
 
         Ok(conn.last_insert_rowid())
     }

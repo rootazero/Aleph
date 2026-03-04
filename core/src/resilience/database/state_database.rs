@@ -581,6 +581,14 @@ impl StateDatabase {
         )
         .map_err(|e| AlephError::config(format!("Failed to update schema_info: {}", e)))?;
 
+        tracing::info!(
+            subsystem = "resilience",
+            event = "database_initialized",
+            db_path = %db_path.display(),
+            embedding_dim = DEFAULT_EMBEDDING_DIM,
+            "StateDatabase initialized"
+        );
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             db_path,
