@@ -120,6 +120,12 @@ enum Commands {
         action: DaemonAction,
     },
 
+    /// Call any Gateway RPC method directly
+    Gateway {
+        #[command(subcommand)]
+        action: GatewayAction,
+    },
+
     /// Generate shell completion script
     Completion {
         /// Shell type (bash, zsh, fish, elvish, powershell)
@@ -146,6 +152,17 @@ enum ConfigAction {
     },
     /// Validate current configuration
     Validate,
+}
+
+#[derive(Subcommand)]
+enum GatewayAction {
+    /// Call an RPC method
+    Call {
+        /// RPC method name (e.g., "health", "providers.list")
+        method: String,
+        /// JSON params (optional, e.g., '{"section": "general"}')
+        params: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -273,6 +290,12 @@ async fn main() -> CliResult<()> {
             }
             DaemonAction::Logs { lines, level } => {
                 commands::daemon::logs(&server_url, lines, level.as_deref()).await?;
+            }
+        },
+        Some(Commands::Gateway { action }) => match action {
+            GatewayAction::Call { method, params } => {
+                commands::gateway_cmd::call(&server_url, &method, params.as_deref(), cli.json)
+                    .await?
             }
         },
         Some(Commands::Completion { shell }) => {

@@ -5,6 +5,7 @@ pub mod chat;
 pub mod completion;
 pub mod config_cmd;
 pub mod connect;
+pub mod gateway_cmd;
 pub mod daemon;
 pub mod guests;
 pub mod health;
