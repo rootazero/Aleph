@@ -28,12 +28,13 @@ impl ConfigDrivenAuthority {
         Self { policies }
     }
 
-    /// Create from resolved agents, extracting only non-default policies.
+    /// Create from resolved agents, extracting only agents with explicit policy.
     pub fn from_resolved(agents: &[crate::config::agent_resolver::ResolvedAgent]) -> Self {
         let policies = agents
             .iter()
-            .filter(|a| !a.subagent_policy.allow.is_empty())
-            .map(|a| (a.id.clone(), a.subagent_policy.clone()))
+            .filter_map(|a| {
+                a.subagent_policy.as_ref().map(|p| (a.id.clone(), p.clone()))
+            })
             .collect();
         Self { policies }
     }

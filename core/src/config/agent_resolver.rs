@@ -71,7 +71,7 @@ pub struct ResolvedAgent {
     pub skills: Vec<String>,
 
     /// Sub-agent spawning policy
-    pub subagent_policy: SubagentPolicy,
+    pub subagent_policy: Option<SubagentPolicy>,
 }
 
 // =============================================================================
@@ -225,10 +225,7 @@ impl AgentDefinitionResolver {
             .clone()
             .unwrap_or_else(|| agent.id.clone());
 
-        let subagent_policy = agent
-            .subagents
-            .clone()
-            .unwrap_or_default();
+        let subagent_policy = agent.subagents.clone();
 
         ResolvedAgent {
             id: agent.id.clone(),
