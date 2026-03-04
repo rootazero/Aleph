@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use crate::sync_primitives::Arc;
+use crate::routing::config::RouteBinding;
 use tokio::sync::RwLock;
 
 // Re-export new routing types for backward compatibility.
@@ -247,6 +248,47 @@ impl AgentRouter {
         }
     }
 
+    /// Create router from config-driven RouteBinding list.
+    /// Extracts unique agent IDs and converts to internal RoutingBinding format.
+    pub fn from_bindings(bindings: Vec<RouteBinding>, default_agent: impl Into<String>) -> Self {
+        let default = default_agent.into();
+
+        // Extract unique agent IDs
+        let mut agent_ids: Vec<String> = vec![default.clone()];
+        for b in &bindings {
+            if !agent_ids.contains(&b.agent_id) {
+                agent_ids.push(b.agent_id.clone());
+            }
+        }
+
+        // Convert to internal format: use "channel:*" or "channel:team_id" patterns
+        let internal_bindings: Vec<RoutingBinding> = bindings
+            .iter()
+            .filter_map(|b| {
+                let channel = b.match_rule.channel.as_deref()?;
+                let pattern = if channel == "*" {
+                    "*".to_string()
+                } else if let Some(ref team_id) = b.match_rule.team_id {
+                    format!("{}:team:{}", channel, team_id)
+                } else if let Some(ref guild_id) = b.match_rule.guild_id {
+                    format!("{}:guild:{}", channel, guild_id)
+                } else {
+                    format!("{}:*", channel)
+                };
+                Some(RoutingBinding {
+                    pattern,
+                    agent_id: b.agent_id.clone(),
+                })
+            })
+            .collect();
+
+        Self {
+            bindings: Arc::new(RwLock::new(internal_bindings)),
+            default_agent: default,
+            agents: Arc::new(RwLock::new(agent_ids)),
+        }
+    }
+
     /// Add a routing binding
     pub async fn add_binding(&self, pattern: impl Into<String>, agent_id: impl Into<String>) {
         let binding = RoutingBinding {
@@ -418,5 +460,37 @@ mod tests {
         let key = router.route(None, Some("gui:window1"), Some("telegram:123")).await;
 
         assert!(matches!(key, SessionKey::PerPeer { peer_id, .. } if peer_id == "telegram:123"));
+    }
+
+    #[test]
+    fn test_agent_router_from_route_bindings() {
+        use crate::routing::config::{MatchRule, RouteBinding};
+
+        let bindings = vec![
+            RouteBinding {
+                agent_id: "coding".to_string(),
+                match_rule: MatchRule {
+                    channel: Some("slack".to_string()),
+                    account_id: Some("*".to_string()),
+                    team_id: Some("T12345".to_string()),
+                    ..Default::default()
+                },
+            },
+            RouteBinding {
+                agent_id: "main".to_string(),
+                match_rule: MatchRule {
+                    channel: Some("telegram".to_string()),
+                    account_id: Some("*".to_string()),
+                    ..Default::default()
+                },
+            },
+        ];
+
+        let router = AgentRouter::from_bindings(bindings, "main");
+        // Verify agents are registered
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let agents = rt.block_on(router.list_agents());
+        assert!(agents.contains(&"coding".to_string()));
+        assert!(agents.contains(&"main".to_string()));
     }
 }
