@@ -6,7 +6,7 @@ use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload};
 use crate::providers::gemini::{
     Content, GenerateContentRequest, GenerateContentResponse, GenerationConfig, Part,
     ThinkingConfig,
@@ -273,7 +273,7 @@ impl ProtocolAdapter for GeminiProtocol {
             .json(&request_body))
     }
 
-    async fn parse_response(&self, response: reqwest::Response) -> Result<String> {
+    async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse> {
         let status = response.status();
 
         if !status.is_success() {
@@ -325,7 +325,7 @@ impl ProtocolAdapter for GeminiProtocol {
             .text
             .clone();
 
-        Ok(text)
+        Ok(ProviderResponse::text_only(text))
     }
 
     async fn parse_stream(

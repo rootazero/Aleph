@@ -91,7 +91,7 @@ pub use profile_manager::{
 };
 pub use registry::ProviderRegistry;
 pub use retry::retry_with_backoff;
-pub use adapter::{ProtocolAdapter, RequestPayload};
+pub use adapter::{ProtocolAdapter, RequestPayload, ProviderResponse, NativeToolCall, StopReason, TokenUsage};
 pub use http_provider::HttpProvider;
 pub use presets::{get_preset, ProviderPreset, PRESETS};
 pub use protocols::OpenAiProtocol;
@@ -448,6 +448,36 @@ pub trait AiProvider: Send + Sync {
         } else {
             self.process(input, system_prompt)
         }
+    }
+
+    /// Process with full RequestPayload, returning structured ProviderResponse.
+    ///
+    /// This is the native tool_use aware entry point. Providers that support
+    /// native tool_use should override this to pass tools through.
+    ///
+    /// # Default Implementation
+    ///
+    /// Delegates to `process_with_overrides()` and wraps result in `ProviderResponse::text_only()`.
+    fn process_with_payload<'a>(
+        &'a self,
+        payload: adapter::RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        let input = payload.input.to_string();
+        let system = payload.system_prompt.map(|s| s.to_string());
+        let think = payload.think_level.unwrap_or(ThinkLevel::Off);
+        let temp = payload.temperature;
+        let max_tok = payload.max_tokens;
+        Box::pin(async move {
+            let text = self
+                .process_with_overrides(&input, system.as_deref(), think, temp, max_tok)
+                .await?;
+            Ok(ProviderResponse::text_only(text))
+        })
+    }
+
+    /// Whether this provider supports native tool_use
+    fn supports_native_tools(&self) -> bool {
+        false
     }
 }
 

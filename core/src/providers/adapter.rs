@@ -134,8 +134,17 @@ pub trait ProtocolAdapter: Send + Sync {
     /// * `response` - The HTTP response from the API
     ///
     /// # Returns
-    /// The extracted text content from the response
-    async fn parse_response(&self, response: reqwest::Response) -> Result<String>;
+    /// A structured `ProviderResponse` containing text, tool calls, etc.
+    async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse>;
+
+    /// Whether this protocol supports native tool_use
+    ///
+    /// Protocols that support native tool calling (e.g., Anthropic, OpenAI)
+    /// should override this to return `true` once their `parse_response()`
+    /// implementation can extract `NativeToolCall` from the response.
+    fn supports_native_tools(&self) -> bool {
+        false
+    }
 
     /// Parse a streaming response (SSE)
     ///

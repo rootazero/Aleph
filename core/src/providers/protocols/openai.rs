@@ -5,7 +5,7 @@
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload};
 use crate::providers::openai::{
     ChatCompletionResponse, ContentBlock, ImageUrl, Message, MessageContent,
 };
@@ -309,7 +309,7 @@ impl ProtocolAdapter for OpenAiProtocol {
             .json(&body))
     }
 
-    async fn parse_response(&self, response: reqwest::Response) -> Result<String> {
+    async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse> {
         let status = response.status();
 
         if !status.is_success() {
@@ -326,11 +326,13 @@ impl ProtocolAdapter for OpenAiProtocol {
             AlephError::provider(format!("Failed to parse response: {}", e))
         })?;
 
-        completion
+        let text = completion
             .choices
             .first()
             .map(|c| c.message.content.clone())
-            .ok_or_else(|| AlephError::provider("No response choices"))
+            .ok_or_else(|| AlephError::provider("No response choices"))?;
+
+        Ok(ProviderResponse::text_only(text))
     }
 
     async fn parse_stream(

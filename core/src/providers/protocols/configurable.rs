@@ -4,7 +4,7 @@
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload};
 use crate::providers::protocols::{
     extract_value, ProtocolDefinition, ProtocolRegistry, TemplateContext, TemplateRenderer,
 };
@@ -211,7 +211,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
         ))
     }
 
-    async fn parse_response(&self, response: reqwest::Response) -> Result<String> {
+    async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse> {
         // Minimal mode: delegate to base protocol
         if let Some(ref base) = self.base_protocol {
             debug!(
@@ -263,7 +263,7 @@ impl ProtocolAdapter for ConfigurableProtocol {
                 "Successfully parsed custom protocol response"
             );
 
-            Ok(content)
+            Ok(ProviderResponse::text_only(content))
         } else {
             Err(AlephError::invalid_config(
                 "Protocol must either extend a base protocol or provide custom configuration",
