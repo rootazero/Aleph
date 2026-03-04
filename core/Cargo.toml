@@ -209,6 +209,7 @@ serial_test = "3.0"
 aleph-sdk = { path = "../apps/shared" }
 aleph-protocol = { path = "../shared/protocol" }
 proptest = "1.4"
+http-body-util = "0.1"
 
 [[bench]]
 name = "memory_benchmarks_simple"

@@ -17,6 +17,7 @@ use axum::{
     response::IntoResponse,
 };
 use super::control_plane::create_control_plane_router;
+use super::openai_api::routes::{openai_routes, OpenAiApiState};
 
 use super::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, PARSE_ERROR, RATE_LIMITED, INTERNAL_ERROR};
 use super::event_bus::{GatewayEventBus, TopicEvent};
@@ -289,10 +290,17 @@ impl GatewayServer {
 
         let control_plane = create_control_plane_router();
 
+        // OpenAI-compatible API routes (/v1/models, /v1/health, /v1/chat/completions)
+        let openai_state = Arc::new(OpenAiApiState {
+            server_id: format!("aleph-{}", self.addr),
+        });
+        let openai = openai_routes(openai_state);
+
         Router::new()
             .route("/ws", get(ws_upgrade_handler))
             .fallback_service(control_plane)
             .with_state(shared)
+            .merge(openai)
     }
 
     /// Spawn background tasks for rate limiter pruning and tick heartbeat.
