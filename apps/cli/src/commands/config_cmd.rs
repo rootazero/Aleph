@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::client::AlephClient;
 use crate::config::CliConfig;
 use crate::error::CliResult;
+use crate::output;
 
 /// Print the config file path (local, no RPC)
 pub fn file() {
@@ -13,21 +14,36 @@ pub fn file() {
 }
 
 /// Get a config value (no section = show all)
-pub async fn get(server_url: &str, section: Option<&str>, config: &CliConfig) -> CliResult<()> {
+pub async fn get(
+    server_url: &str,
+    section: Option<&str>,
+    config: &CliConfig,
+    json: bool,
+) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
     client.authenticate(config).await?;
 
     let params = section.map(|s| serde_json::json!({ "section": s }));
     let result: Value = client.call("config.get", params).await?;
 
-    println!("{}", serde_json::to_string_pretty(&result)?);
+    if json {
+        output::print_json(&result);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    }
 
     client.close().await?;
     Ok(())
 }
 
 /// Set a config value using config.patch
-pub async fn set(server_url: &str, path: &str, value: &str, config: &CliConfig) -> CliResult<()> {
+pub async fn set(
+    server_url: &str,
+    path: &str,
+    value: &str,
+    config: &CliConfig,
+    json: bool,
+) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
     client.authenticate(config).await?;
 
@@ -45,7 +61,9 @@ pub async fn set(server_url: &str, path: &str, value: &str, config: &CliConfig) 
 
     let result: Value = client.call("config.patch", Some(params)).await?;
 
-    if result.get("success").and_then(|v| v.as_bool()) == Some(true) {
+    if json {
+        output::print_json(&result);
+    } else if result.get("success").and_then(|v| v.as_bool()) == Some(true) {
         println!("Set {} = {}", path, value);
     } else {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -56,26 +74,30 @@ pub async fn set(server_url: &str, path: &str, value: &str, config: &CliConfig) 
 }
 
 /// Validate current configuration
-pub async fn validate(server_url: &str, config: &CliConfig) -> CliResult<()> {
+pub async fn validate(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
     client.authenticate(config).await?;
 
     let result: Value = client.call("config.validate", None::<()>).await?;
 
-    let valid = result
-        .get("valid")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if valid {
-        println!("Configuration is valid.");
+    if json {
+        output::print_json(&result);
     } else {
-        println!("Configuration has errors:");
-        if let Some(error) = result.get("error").and_then(|v| v.as_str()) {
-            println!("  - {}", error);
-        }
-        if let Some(errors) = result.get("errors").and_then(|v| v.as_array()) {
-            for err in errors {
-                println!("  - {}", err.as_str().unwrap_or("unknown error"));
+        let valid = result
+            .get("valid")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if valid {
+            println!("Configuration is valid.");
+        } else {
+            println!("Configuration has errors:");
+            if let Some(error) = result.get("error").and_then(|v| v.as_str()) {
+                println!("  - {}", error);
+            }
+            if let Some(errors) = result.get("errors").and_then(|v| v.as_array()) {
+                for err in errors {
+                    println!("  - {}", err.as_str().unwrap_or("unknown error"));
+                }
             }
         }
     }

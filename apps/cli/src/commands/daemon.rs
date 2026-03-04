@@ -6,6 +6,7 @@ use std::process::Command;
 
 use crate::client::AlephClient;
 use crate::error::CliResult;
+use crate::output;
 
 /// Path to the PID file used for daemon process tracking
 fn pid_file_path() -> PathBuf {
@@ -16,42 +17,50 @@ fn pid_file_path() -> PathBuf {
 }
 
 /// Show Gateway server status
-pub async fn status(server_url: &str) -> CliResult<()> {
+pub async fn status(server_url: &str, json: bool) -> CliResult<()> {
     match AlephClient::connect(server_url).await {
         Ok((client, _events)) => {
             let result: Value = client.call("daemon.status", None::<()>).await?;
 
-            println!("Gateway Status");
-            println!("──────────────");
-            if let Some(true) = result.get("running").and_then(|v| v.as_bool()) {
-                println!("Status:      Running");
+            if json {
+                output::print_json(&result);
             } else {
-                println!("Status:      Unknown");
-            }
-            if let Some(uptime) = result.get("uptime_secs").and_then(|v| v.as_u64()) {
-                println!("Uptime:      {}", format_uptime(uptime));
-            }
-            if let Some(version) = result.get("version").and_then(|v| v.as_str()) {
-                println!("Version:     {}", version);
-            }
-            if let Some(platform) = result.get("platform").and_then(|v| v.as_str()) {
-                println!("Platform:    {}", platform);
+                println!("Gateway Status");
+                println!("──────────────");
+                if let Some(true) = result.get("running").and_then(|v| v.as_bool()) {
+                    println!("Status:      Running");
+                } else {
+                    println!("Status:      Unknown");
+                }
+                if let Some(uptime) = result.get("uptime_secs").and_then(|v| v.as_u64()) {
+                    println!("Uptime:      {}", format_uptime(uptime));
+                }
+                if let Some(version) = result.get("version").and_then(|v| v.as_str()) {
+                    println!("Version:     {}", version);
+                }
+                if let Some(platform) = result.get("platform").and_then(|v| v.as_str()) {
+                    println!("Platform:    {}", platform);
+                }
             }
 
             client.close().await?;
             Ok(())
         }
         Err(_) => {
-            println!("Gateway Status");
-            println!("──────────────");
-            println!("Status:      Not running");
-            println!("URL:         {}", server_url);
+            if json {
+                output::print_json(&serde_json::json!({"status": "not_running"}));
+            } else {
+                println!("Gateway Status");
+                println!("──────────────");
+                println!("Status:      Not running");
+                println!("URL:         {}", server_url);
 
-            // Check for stale PID file
-            let pid_file = pid_file_path();
-            if pid_file.exists() {
-                if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
-                    println!("Stale PID:   {} (process not responding)", pid_str.trim());
+                // Check for stale PID file
+                let pid_file = pid_file_path();
+                if pid_file.exists() {
+                    if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
+                        println!("Stale PID:   {} (process not responding)", pid_str.trim());
+                    }
                 }
             }
 
@@ -86,12 +95,17 @@ pub fn start() -> CliResult<()> {
 }
 
 /// Stop the Gateway server
-pub async fn stop(server_url: &str) -> CliResult<()> {
+pub async fn stop(server_url: &str, json: bool) -> CliResult<()> {
     // Try graceful shutdown via RPC
     match AlephClient::connect(server_url).await {
         Ok((client, _events)) => {
-            let _: Value = client.call("daemon.shutdown", None::<()>).await?;
-            println!("Gateway shutdown initiated.");
+            let result: Value = client.call("daemon.shutdown", None::<()>).await?;
+
+            if json {
+                output::print_json(&result);
+            } else {
+                println!("Gateway shutdown initiated.");
+            }
 
             // Clean up PID file
             let pid_file = pid_file_path();
@@ -106,23 +120,33 @@ pub async fn stop(server_url: &str) -> CliResult<()> {
             if pid_file.exists() {
                 if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
                     let pid = pid_str.trim();
-                    println!("Sending SIGTERM to PID {}...", pid);
+                    if !json {
+                        println!("Sending SIGTERM to PID {}...", pid);
+                    }
                     let _ = Command::new("kill").arg(pid).status();
                     let _ = std::fs::remove_file(&pid_file);
-                    println!("Gateway stopped.");
+                    if json {
+                        output::print_json(&serde_json::json!({"status": "stopped", "method": "sigterm", "pid": pid}));
+                    } else {
+                        println!("Gateway stopped.");
+                    }
                     return Ok(());
                 }
             }
 
-            println!("Gateway is not running.");
+            if json {
+                output::print_json(&serde_json::json!({"status": "not_running"}));
+            } else {
+                println!("Gateway is not running.");
+            }
             Ok(())
         }
     }
 }
 
 /// Restart the Gateway server
-pub async fn restart(server_url: &str) -> CliResult<()> {
-    stop(server_url).await?;
+pub async fn restart(server_url: &str, json: bool) -> CliResult<()> {
+    stop(server_url, json).await?;
     // Brief pause for graceful shutdown
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     start()?;
@@ -130,7 +154,7 @@ pub async fn restart(server_url: &str) -> CliResult<()> {
 }
 
 /// View Gateway logs
-pub async fn logs(server_url: &str, lines: usize, level: Option<&str>) -> CliResult<()> {
+pub async fn logs(server_url: &str, lines: usize, level: Option<&str>, json: bool) -> CliResult<()> {
     match AlephClient::connect(server_url).await {
         Ok((client, _events)) => {
             let mut params = serde_json::json!({ "lines": lines });
@@ -140,19 +164,23 @@ pub async fn logs(server_url: &str, lines: usize, level: Option<&str>) -> CliRes
 
             let result: Value = client.call("daemon.logs", Some(params)).await?;
 
-            if let Some(file) = result.get("file").and_then(|v| v.as_str()) {
-                println!("Log file: {}", file);
-                println!();
-            }
-
-            if let Some(log_lines) = result.get("logs").and_then(|v| v.as_array()) {
-                for line in log_lines {
-                    if let Some(s) = line.as_str() {
-                        println!("{}", s);
-                    }
+            if json {
+                output::print_json(&result);
+            } else {
+                if let Some(file) = result.get("file").and_then(|v| v.as_str()) {
+                    println!("Log file: {}", file);
+                    println!();
                 }
-                if log_lines.is_empty() {
-                    println!("(no log entries found)");
+
+                if let Some(log_lines) = result.get("logs").and_then(|v| v.as_array()) {
+                    for line in log_lines {
+                        if let Some(s) = line.as_str() {
+                            println!("{}", s);
+                        }
+                    }
+                    if log_lines.is_empty() {
+                        println!("(no log entries found)");
+                    }
                 }
             }
 
