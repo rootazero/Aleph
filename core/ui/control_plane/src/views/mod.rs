@@ -4,4 +4,5 @@ pub mod agent_trace;
 pub mod memory;
 pub mod settings;
 pub mod chat;
+pub mod cron;
 
