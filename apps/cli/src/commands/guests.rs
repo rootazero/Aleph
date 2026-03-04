@@ -9,6 +9,7 @@ use aleph_protocol::{GuestScope, Invitation};
 use crate::client::AlephClient;
 use crate::config::CliConfig;
 use crate::error::{CliError, CliResult};
+use crate::output::print_json;
 
 #[derive(Subcommand)]
 pub enum GuestsAction {
@@ -34,18 +35,10 @@ pub enum GuestsAction {
         /// Session expiry in days (e.g., 7 for 7 days from now)
         #[arg(long)]
         expires_days: Option<i64>,
-
-        /// Output format (text or json)
-        #[arg(short, long, default_value = "text")]
-        format: OutputFormat,
     },
 
     /// List pending (non-activated) invitations
-    List {
-        /// Output format (text or json)
-        #[arg(short, long, default_value = "text")]
-        format: OutputFormat,
-    },
+    List,
 
     /// Revoke a guest invitation
     ///
@@ -65,33 +58,11 @@ pub enum GuestsAction {
     ///
     /// Examples:
     ///   aleph guests info 6ba7b810-9dad-11d1-80b4-00c04fd430c8
-    ///   aleph guests info TOKEN_VALUE --format json
+    ///   aleph guests info TOKEN_VALUE --json
     Info {
         /// Guest ID or invitation token
         guest_id: String,
-
-        /// Output format (text or json)
-        #[arg(short, long, default_value = "text")]
-        format: OutputFormat,
     },
-}
-
-#[derive(Clone, Debug)]
-pub enum OutputFormat {
-    Text,
-    Json,
-}
-
-impl std::str::FromStr for OutputFormat {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "text" => Ok(OutputFormat::Text),
-            "json" => Ok(OutputFormat::Json),
-            _ => Err(format!("Invalid format: {}. Use 'text' or 'json'", s)),
-        }
-    }
 }
 
 /// Main entry point for guests command
@@ -99,19 +70,19 @@ pub async fn handle_guests(
     server_url: &str,
     action: GuestsAction,
     config: &CliConfig,
+    json: bool,
 ) -> CliResult<()> {
     match action {
         GuestsAction::Invite {
             name,
             tools,
             expires_days,
-            format,
-        } => handle_invite(server_url, &name, &tools, expires_days, format, config).await,
-        GuestsAction::List { format } => handle_list(server_url, format, config).await,
+        } => handle_invite(server_url, &name, &tools, expires_days, json, config).await,
+        GuestsAction::List => handle_list(server_url, json, config).await,
         GuestsAction::Revoke { guest_id, force } =>
             handle_revoke(server_url, &guest_id, force, config).await,
-        GuestsAction::Info { guest_id, format } =>
-            handle_info(server_url, &guest_id, format, config).await,
+        GuestsAction::Info { guest_id } =>
+            handle_info(server_url, &guest_id, json, config).await,
     }
 }
 
@@ -121,7 +92,7 @@ async fn handle_invite(
     name: &str,
     tools: &str,
     expires_days: Option<i64>,
-    format: OutputFormat,
+    json: bool,
     config: &CliConfig,
 ) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
@@ -166,22 +137,19 @@ async fn handle_invite(
     let response: CreateInvitationResponse =
         client.call("guests.createInvitation", Some(params)).await?;
 
-    match format {
-        OutputFormat::Text => {
-            println!("Guest invitation created");
-            println!();
-            println!("  Guest ID: {}", response.invitation.guest_id);
-            println!("  Token:    {}", response.invitation.token);
-            println!("  URL:      {}", response.invitation.url);
-            if let Some(exp) = response.invitation.expires_at {
-                println!("  Expires:  {}", format_timestamp(exp));
-            }
-            println!();
-            println!("Share this token with the guest to activate their session.");
+    if json {
+        print_json(&serde_json::to_value(&response.invitation)?);
+    } else {
+        println!("Guest invitation created");
+        println!();
+        println!("  Guest ID: {}", response.invitation.guest_id);
+        println!("  Token:    {}", response.invitation.token);
+        println!("  URL:      {}", response.invitation.url);
+        if let Some(exp) = response.invitation.expires_at {
+            println!("  Expires:  {}", format_timestamp(exp));
         }
-        OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&response.invitation)?);
-        }
+        println!();
+        println!("Share this token with the guest to activate their session.");
     }
 
     client.close().await?;
@@ -191,7 +159,7 @@ async fn handle_invite(
 /// Handle listing pending invitations
 async fn handle_list(
     server_url: &str,
-    format: OutputFormat,
+    json: bool,
     config: &CliConfig,
 ) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
@@ -207,27 +175,24 @@ async fn handle_list(
     let response: ListInvitationsResponse =
         client.call("guests.listPending", None::<()>).await?;
 
-    match format {
-        OutputFormat::Text => {
-            println!("=== Pending Invitations ===");
-            println!();
+    if json {
+        print_json(&serde_json::to_value(&response.invitations)?);
+    } else {
+        println!("=== Pending Invitations ===");
+        println!();
 
-            if response.invitations.is_empty() {
-                println!("No pending invitations.");
-            } else {
-                for inv in &response.invitations {
-                    println!("  Guest ID: {}", inv.guest_id);
-                    println!("  Token:    {}", inv.token);
-                    if let Some(exp) = inv.expires_at {
-                        println!("  Expires:  {}", format_timestamp(exp));
-                    }
-                    println!();
+        if response.invitations.is_empty() {
+            println!("No pending invitations.");
+        } else {
+            for inv in &response.invitations {
+                println!("  Guest ID: {}", inv.guest_id);
+                println!("  Token:    {}", inv.token);
+                if let Some(exp) = inv.expires_at {
+                    println!("  Expires:  {}", format_timestamp(exp));
                 }
-                println!("Total: {} pending invitations", response.invitations.len());
+                println!();
             }
-        }
-        OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&response.invitations)?);
+            println!("Total: {} pending invitations", response.invitations.len());
         }
     }
 
@@ -270,7 +235,7 @@ async fn handle_revoke(
 async fn handle_info(
     server_url: &str,
     guest_id: &str,
-    format: OutputFormat,
+    json: bool,
     config: &CliConfig,
 ) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
@@ -304,28 +269,25 @@ async fn handle_info(
     let response: ActivityLogsResponse =
         client.call("guests.getActivityLogs", Some(params)).await?;
 
-    match format {
-        OutputFormat::Text => {
-            println!("=== Activity Logs for Guest: {} ===", guest_id);
-            println!();
+    if json {
+        print_json(&serde_json::to_value(&response)?);
+    } else {
+        println!("=== Activity Logs for Guest: {} ===", guest_id);
+        println!();
 
-            if response.logs.is_empty() {
-                println!("No activity logs found.");
-            } else {
-                for log in &response.logs {
-                    let timestamp = format_timestamp(log.timestamp);
-                    if let Some(ref details) = log.details {
-                        println!("[{}] {} - {}", timestamp, log.action, details);
-                    } else {
-                        println!("[{}] {}", timestamp, log.action);
-                    }
+        if response.logs.is_empty() {
+            println!("No activity logs found.");
+        } else {
+            for log in &response.logs {
+                let timestamp = format_timestamp(log.timestamp);
+                if let Some(ref details) = log.details {
+                    println!("[{}] {} - {}", timestamp, log.action, details);
+                } else {
+                    println!("[{}] {}", timestamp, log.action);
                 }
-                println!();
-                println!("Total: {} log entries", response.logs.len());
             }
-        }
-        OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&response)?);
+            println!();
+            println!("Total: {} log entries", response.logs.len());
         }
     }
 
@@ -406,7 +368,6 @@ mod tests {
         // Compilation test: ensures Info variant exists in GuestsAction
         let _action = GuestsAction::Info {
             guest_id: "test-id".to_string(),
-            format: OutputFormat::Text,
         };
     }
 

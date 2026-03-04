@@ -439,7 +439,7 @@ async fn main() -> CliResult<()> {
             }
         },
         Some(Commands::Guests { action }) => {
-            commands::guests::handle_guests(&server_url, action, &config).await?;
+            commands::guests::handle_guests(&server_url, action, &config, cli.json).await?;
         }
         Some(Commands::Config { action }) => match action {
             ConfigAction::File => {
