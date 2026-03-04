@@ -6,10 +6,12 @@ use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload};
+use crate::providers::adapter::{
+    NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason,
+};
 use crate::providers::gemini::{
-    Content, GenerateContentRequest, GenerateContentResponse, GenerationConfig, Part,
-    ThinkingConfig,
+    Content, GeminiFunctionDeclaration, GeminiToolConfig, GenerateContentRequest,
+    GenerateContentResponse, GenerationConfig, Part, ThinkingConfig,
 };
 use crate::providers::shared::{
     build_document_context, combine_with_document_context, separate_attachments,
@@ -238,10 +240,26 @@ impl ProtocolAdapter for GeminiProtocol {
             thinking_config,
         };
 
+        // Build tool declarations if provided
+        let tools = payload.tools.map(|tool_defs| {
+            let declarations: Vec<GeminiFunctionDeclaration> = tool_defs
+                .iter()
+                .map(|td| GeminiFunctionDeclaration {
+                    name: td.name.clone(),
+                    description: td.description.clone(),
+                    parameters: td.parameters.clone(),
+                })
+                .collect();
+            vec![GeminiToolConfig {
+                function_declarations: declarations,
+            }]
+        });
+
         let request_body = GenerateContentRequest {
             contents,
             system_instruction,
             generation_config: Some(generation_config),
+            tools,
         };
 
         let api_key = config
@@ -312,20 +330,48 @@ impl ProtocolAdapter for GeminiProtocol {
             )));
         }
 
-        // Extract text from candidates[0].content.parts[0].text
-        let text = response_body
+        let candidates = response_body
             .candidates
-            .ok_or_else(|| AlephError::provider("No candidates in response"))?
+            .ok_or_else(|| AlephError::provider("No candidates in response"))?;
+        let candidate = candidates
             .first()
-            .ok_or_else(|| AlephError::provider("No candidates in response"))?
-            .content
-            .parts
-            .first()
-            .ok_or_else(|| AlephError::provider("No parts in response"))?
-            .text
-            .clone();
+            .ok_or_else(|| AlephError::provider("No candidates in response"))?;
 
-        Ok(ProviderResponse::text_only(text))
+        let mut provider_response = ProviderResponse::default();
+
+        // Iterate all parts: collect text and functionCall entries
+        let mut text_parts = Vec::new();
+        for (index, part) in candidate.content.parts.iter().enumerate() {
+            if let Some(ref text) = part.text {
+                text_parts.push(text.clone());
+            }
+            if let Some(ref fc) = part.function_call {
+                provider_response.tool_calls.push(NativeToolCall {
+                    // Gemini does not assign tool call IDs; generate synthetic ones
+                    id: format!("gemini-fc-{}", index),
+                    name: fc.name.clone(),
+                    arguments: fc.args.clone(),
+                });
+            }
+        }
+
+        if !text_parts.is_empty() {
+            provider_response.text = Some(text_parts.join(""));
+        }
+
+        // Map Gemini finish reason to StopReason
+        provider_response.stop_reason = match candidate.finish_reason.as_deref() {
+            Some("STOP") => StopReason::EndTurn,
+            Some("FUNCTION_CALL") => StopReason::ToolUse,
+            Some("MAX_TOKENS") => StopReason::MaxTokens,
+            _ => StopReason::Unknown,
+        };
+
+        Ok(provider_response)
+    }
+
+    fn supports_native_tools(&self) -> bool {
+        true
     }
 
     async fn parse_stream(
@@ -516,15 +562,18 @@ mod tests {
             "candidates": [{
                 "content": {
                     "parts": [{"text": "This is a test response"}]
-                }
+                },
+                "finishReason": "STOP"
             }]
         }"#;
 
         let response: GenerateContentResponse = serde_json::from_str(success_json).unwrap();
         assert!(response.candidates.is_some());
 
-        let text = &response.candidates.unwrap()[0].content.parts[0].text;
-        assert_eq!(text, "This is a test response");
+        let candidates = response.candidates.unwrap();
+        let text = candidates[0].content.parts[0].text.as_deref();
+        assert_eq!(text, Some("This is a test response"));
+        assert_eq!(candidates[0].finish_reason.as_deref(), Some("STOP"));
     }
 
     #[test]
@@ -584,5 +633,215 @@ mod tests {
 
         // We can't easily inspect the request body, but we can verify it builds successfully
         assert!(request.build().is_ok());
+    }
+
+    #[test]
+    fn test_supports_native_tools() {
+        let protocol = GeminiProtocol::new(Client::new());
+        assert!(protocol.supports_native_tools());
+    }
+
+    #[test]
+    fn test_build_request_with_tools() {
+        use crate::dispatcher::ToolDefinition;
+        use crate::ToolCategory;
+
+        let client = Client::new();
+        let protocol = GeminiProtocol::new(client);
+
+        let mut config = ProviderConfig::test_config("gemini-pro");
+        config.api_key = Some("test-api-key".to_string());
+
+        let tools = vec![ToolDefinition::new(
+            "search",
+            "Search the web",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"}
+                },
+                "required": ["query"]
+            }),
+            ToolCategory::Builtin,
+        )];
+
+        let payload = RequestPayload::new("Search for Rust").with_tools(Some(&tools));
+
+        let request = protocol
+            .build_request(&payload, &config, false)
+            .expect("Failed to build request");
+
+        assert!(request.build().is_ok());
+    }
+
+    /// Helper: simulate parse_response logic on a deserialized GenerateContentResponse
+    /// (avoids needing to construct a real reqwest::Response in unit tests)
+    fn extract_provider_response(
+        response_body: GenerateContentResponse,
+    ) -> Result<ProviderResponse> {
+        if let Some(err) = response_body.error {
+            return Err(AlephError::provider(format!(
+                "Gemini error: {}",
+                err.message
+            )));
+        }
+
+        let candidates = response_body
+            .candidates
+            .ok_or_else(|| AlephError::provider("No candidates in response"))?;
+        let candidate = candidates
+            .first()
+            .ok_or_else(|| AlephError::provider("No candidates in response"))?;
+
+        let mut provider_response = ProviderResponse::default();
+
+        let mut text_parts = Vec::new();
+        for (index, part) in candidate.content.parts.iter().enumerate() {
+            if let Some(ref text) = part.text {
+                text_parts.push(text.clone());
+            }
+            if let Some(ref fc) = part.function_call {
+                provider_response.tool_calls.push(NativeToolCall {
+                    id: format!("gemini-fc-{}", index),
+                    name: fc.name.clone(),
+                    arguments: fc.args.clone(),
+                });
+            }
+        }
+
+        if !text_parts.is_empty() {
+            provider_response.text = Some(text_parts.join(""));
+        }
+
+        provider_response.stop_reason = match candidate.finish_reason.as_deref() {
+            Some("STOP") => StopReason::EndTurn,
+            Some("FUNCTION_CALL") => StopReason::ToolUse,
+            Some("MAX_TOKENS") => StopReason::MaxTokens,
+            _ => StopReason::Unknown,
+        };
+
+        Ok(provider_response)
+    }
+
+    #[test]
+    fn test_extract_response_text_only() {
+        let json = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "Hello world"}]
+                },
+                "finishReason": "STOP"
+            }]
+        }"#;
+
+        let response_body: GenerateContentResponse = serde_json::from_str(json).unwrap();
+        let result = extract_provider_response(response_body).unwrap();
+
+        assert_eq!(result.text.as_deref(), Some("Hello world"));
+        assert!(!result.has_tool_calls());
+        assert_eq!(result.stop_reason, StopReason::EndTurn);
+    }
+
+    #[test]
+    fn test_extract_response_with_function_call() {
+        let json = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "functionCall": {
+                            "name": "search",
+                            "args": {"query": "Rust programming"}
+                        }
+                    }]
+                },
+                "finishReason": "FUNCTION_CALL"
+            }]
+        }"#;
+
+        let response_body: GenerateContentResponse = serde_json::from_str(json).unwrap();
+        let result = extract_provider_response(response_body).unwrap();
+
+        assert!(result.text.is_none());
+        assert!(result.has_tool_calls());
+        assert_eq!(result.tool_calls.len(), 1);
+        assert_eq!(result.tool_calls[0].name, "search");
+        assert_eq!(result.tool_calls[0].arguments["query"], "Rust programming");
+        assert!(result.tool_calls[0].id.starts_with("gemini-fc-"));
+        assert_eq!(result.stop_reason, StopReason::ToolUse);
+    }
+
+    #[test]
+    fn test_extract_response_with_text_and_function_call() {
+        let json = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {"text": "Let me search for that."},
+                        {"functionCall": {"name": "web_search", "args": {"q": "test"}}}
+                    ]
+                },
+                "finishReason": "FUNCTION_CALL"
+            }]
+        }"#;
+
+        let response_body: GenerateContentResponse = serde_json::from_str(json).unwrap();
+        let result = extract_provider_response(response_body).unwrap();
+
+        assert_eq!(result.text.as_deref(), Some("Let me search for that."));
+        assert!(result.has_tool_calls());
+        assert_eq!(result.tool_calls[0].name, "web_search");
+        assert_eq!(result.stop_reason, StopReason::ToolUse);
+    }
+
+    #[test]
+    fn test_extract_response_max_tokens() {
+        let json = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "Truncated output..."}]
+                },
+                "finishReason": "MAX_TOKENS"
+            }]
+        }"#;
+
+        let response_body: GenerateContentResponse = serde_json::from_str(json).unwrap();
+        let result = extract_provider_response(response_body).unwrap();
+
+        assert_eq!(result.text.as_deref(), Some("Truncated output..."));
+        assert_eq!(result.stop_reason, StopReason::MaxTokens);
+    }
+
+    #[test]
+    fn test_extract_response_unknown_finish_reason() {
+        let json = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "Some text"}]
+                },
+                "finishReason": "SAFETY"
+            }]
+        }"#;
+
+        let response_body: GenerateContentResponse = serde_json::from_str(json).unwrap();
+        let result = extract_provider_response(response_body).unwrap();
+
+        assert_eq!(result.stop_reason, StopReason::Unknown);
+    }
+
+    #[test]
+    fn test_extract_response_no_finish_reason() {
+        let json = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "Partial response"}]
+                }
+            }]
+        }"#;
+
+        let response_body: GenerateContentResponse = serde_json::from_str(json).unwrap();
+        let result = extract_provider_response(response_body).unwrap();
+
+        assert_eq!(result.text.as_deref(), Some("Partial response"));
+        assert_eq!(result.stop_reason, StopReason::Unknown);
     }
 }
