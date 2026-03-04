@@ -23,6 +23,7 @@ struct ProviderPreset {
     api_key_placeholder: &'static str,
     icon_color: &'static str,
     needs_api_key: bool,
+    auth_type: &'static str,
 }
 
 const PRESETS: &[ProviderPreset] = &[
@@ -35,6 +36,7 @@ const PRESETS: &[ProviderPreset] = &[
         api_key_placeholder: "sk-ant-...",
         icon_color: "#D97757",
         needs_api_key: true,
+        auth_type: "api_key",
     },
     ProviderPreset {
         name: "openai",
@@ -45,6 +47,7 @@ const PRESETS: &[ProviderPreset] = &[
         api_key_placeholder: "sk-...",
         icon_color: "#10A37F",
         needs_api_key: true,
+        auth_type: "api_key",
     },
     ProviderPreset {
         name: "gemini",
@@ -55,6 +58,7 @@ const PRESETS: &[ProviderPreset] = &[
         api_key_placeholder: "AIza...",
         icon_color: "#4285F4",
         needs_api_key: true,
+        auth_type: "api_key",
     },
     ProviderPreset {
         name: "deepseek",
@@ -65,6 +69,7 @@ const PRESETS: &[ProviderPreset] = &[
         api_key_placeholder: "sk-...",
         icon_color: "#4D6BFE",
         needs_api_key: true,
+        auth_type: "api_key",
     },
     ProviderPreset {
         name: "moonshot",
@@ -75,6 +80,7 @@ const PRESETS: &[ProviderPreset] = &[
         api_key_placeholder: "sk-...",
         icon_color: "#5B21B6",
         needs_api_key: true,
+        auth_type: "api_key",
     },
     ProviderPreset {
         name: "volcengine",
@@ -85,6 +91,7 @@ const PRESETS: &[ProviderPreset] = &[
         api_key_placeholder: "sk-...",
         icon_color: "#FF6B35",
         needs_api_key: true,
+        auth_type: "api_key",
     },
     ProviderPreset {
         name: "siliconflow",
@@ -95,6 +102,7 @@ const PRESETS: &[ProviderPreset] = &[
         api_key_placeholder: "sk-...",
         icon_color: "#6C5CE7",
         needs_api_key: true,
+        auth_type: "api_key",
     },
     ProviderPreset {
         name: "zhipu",
@@ -105,6 +113,7 @@ const PRESETS: &[ProviderPreset] = &[
         api_key_placeholder: "sk-...",
         icon_color: "#3B5998",
         needs_api_key: true,
+        auth_type: "api_key",
     },
     ProviderPreset {
         name: "minimax",
@@ -115,6 +124,7 @@ const PRESETS: &[ProviderPreset] = &[
         api_key_placeholder: "sk-...",
         icon_color: "#E84393",
         needs_api_key: true,
+        auth_type: "api_key",
     },
     ProviderPreset {
         name: "ollama",
@@ -125,6 +135,7 @@ const PRESETS: &[ProviderPreset] = &[
         api_key_placeholder: "",
         icon_color: "#1D1D1F",
         needs_api_key: false,
+        auth_type: "api_key",
     },
     ProviderPreset {
         name: "groq",
@@ -135,6 +146,7 @@ const PRESETS: &[ProviderPreset] = &[
         api_key_placeholder: "gsk_...",
         icon_color: "#F55036",
         needs_api_key: true,
+        auth_type: "api_key",
     },
     ProviderPreset {
         name: "openrouter",
@@ -145,11 +157,26 @@ const PRESETS: &[ProviderPreset] = &[
         api_key_placeholder: "sk-or-...",
         icon_color: "#6366F1",
         needs_api_key: true,
+        auth_type: "api_key",
+    },
+];
+
+const OAUTH_PRESETS: &[ProviderPreset] = &[
+    ProviderPreset {
+        name: "codex",
+        protocol: "chatgpt",
+        model: "codex-mini-latest",
+        base_url: "https://chatgpt.com",
+        description: "OpenAI Codex via ChatGPT subscription",
+        api_key_placeholder: "",
+        icon_color: "#10A37F",
+        needs_api_key: false,
+        auth_type: "oauth",
     },
 ];
 
 fn find_preset(name: &str) -> Option<&'static ProviderPreset> {
-    PRESETS.iter().find(|p| p.name == name)
+    PRESETS.iter().chain(OAUTH_PRESETS.iter()).find(|p| p.name == name)
 }
 
 // ============================================================================
@@ -204,6 +231,9 @@ pub fn ProvidersView() -> impl IntoView {
                         </div>
                     })}
 
+                    // Subscription login section (OAuth providers)
+                    <SubscriptionLoginSection providers=providers selected=selected />
+
                     // Preset grid
                     <PresetGrid providers=providers selected=selected />
 
@@ -219,6 +249,115 @@ pub fn ProvidersView() -> impl IntoView {
                     selected=selected
                     error=error
                 />
+            </div>
+        </div>
+    }
+}
+
+// ============================================================================
+// Subscription Login Section (OAuth providers)
+// ============================================================================
+
+#[component]
+fn SubscriptionLoginSection(
+    providers: RwSignal<Vec<ProviderInfo>>,
+    selected: RwSignal<Option<String>>,
+) -> impl IntoView {
+    view! {
+        <div>
+            <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+                "Subscription Login"
+            </h2>
+            <div class="space-y-2">
+                {OAUTH_PRESETS.iter().map(|preset| {
+                    let name = preset.name;
+                    let description = preset.description;
+                    let icon_color = preset.icon_color;
+                    let first_char = preset.name.chars().next().unwrap_or('?').to_uppercase().to_string();
+
+                    let is_configured = move || {
+                        providers.get().iter().any(|p| p.name == name)
+                    };
+
+                    let on_click = move |_| {
+                        if is_configured() {
+                            selected.set(Some(name.to_string()));
+                        } else {
+                            selected.set(Some(format!("__preset__{}", name)));
+                        }
+                    };
+
+                    view! {
+                        <button
+                            on:click=on_click
+                            class=move || {
+                                let base = "w-full text-left p-4 rounded-xl border-2 transition-all";
+                                let sel = selected.get();
+                                let is_sel = sel.as_deref() == Some(name)
+                                    || sel.as_deref() == Some(&format!("__preset__{}", name));
+                                if is_sel {
+                                    format!("{} bg-primary-subtle border-primary", base)
+                                } else if is_configured() {
+                                    format!("{} bg-surface-raised border-success/30 hover:border-primary/40", base)
+                                } else {
+                                    format!("{} bg-surface-raised border-border hover:border-primary/40", base)
+                                }
+                            }
+                        >
+                            <div class="flex items-center gap-3">
+                                <div
+                                    class="w-10 h-10 rounded-xl flex items-center justify-center text-white text-sm font-bold shrink-0"
+                                    style=format!("background-color: {}", icon_color)
+                                >
+                                    {first_char}
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-2">
+                                        <span class="font-semibold text-text-primary text-sm">
+                                            "OpenAI Codex"
+                                        </span>
+                                        {move || {
+                                            let list = providers.get();
+                                            let provider = list.iter().find(|p| p.name == name);
+                                            if let Some(p) = provider {
+                                                if p.is_default {
+                                                    view! {
+                                                        <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
+                                                            "Default"
+                                                        </span>
+                                                    }.into_any()
+                                                } else if p.verified {
+                                                    view! {
+                                                        <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
+                                                            "Connected"
+                                                        </span>
+                                                    }.into_any()
+                                                } else {
+                                                    view! {
+                                                        <span class="px-1.5 py-0.5 bg-surface-sunken text-text-tertiary text-xs rounded shrink-0">
+                                                            "Not connected"
+                                                        </span>
+                                                    }.into_any()
+                                                }
+                                            } else {
+                                                view! {
+                                                    <span class="px-1.5 py-0.5 bg-surface-sunken text-text-tertiary text-xs rounded shrink-0">
+                                                        "Not connected"
+                                                    </span>
+                                                }.into_any()
+                                            }
+                                        }}
+                                    </div>
+                                    <div class="text-xs text-text-tertiary">{description}</div>
+                                </div>
+                                // Arrow icon
+                                <svg class="w-4 h-4 text-text-tertiary shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                                </svg>
+                            </div>
+                        </button>
+                    }
+                }).collect_view()}
             </div>
         </div>
     }
