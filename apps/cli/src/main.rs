@@ -138,6 +138,12 @@ enum Commands {
         action: ModelsAction,
     },
 
+    /// Memory management
+    Memory {
+        #[command(subcommand)]
+        action: MemoryAction,
+    },
+
     /// Generate shell completion script
     Completion {
         /// Shell type (bash, zsh, fish, elvish, powershell)
@@ -233,6 +239,33 @@ enum ModelsAction {
     Get { model_id: String },
     /// Show model capabilities
     Capabilities { model_id: String },
+}
+
+#[derive(Subcommand)]
+enum MemoryAction {
+    /// Search memory
+    Search {
+        /// Search query
+        query: String,
+        /// Maximum results to return
+        #[arg(long, default_value = "10")]
+        limit: usize,
+    },
+    /// Show memory statistics
+    Stats,
+    /// Clear memory
+    Clear {
+        /// Only clear facts, keep other memories
+        #[arg(long)]
+        facts_only: bool,
+    },
+    /// Compress and optimize memory
+    Compress,
+    /// Delete a specific memory entry
+    Delete {
+        /// Memory entry ID
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -383,6 +416,23 @@ async fn main() -> CliResult<()> {
             }
             ModelsAction::Capabilities { model_id } => {
                 commands::models_cmd::capabilities(&server_url, &model_id, cli.json).await?;
+            }
+        },
+        Some(Commands::Memory { action }) => match action {
+            MemoryAction::Search { query, limit } => {
+                commands::memory_cmd::search(&server_url, &query, limit, cli.json).await?
+            }
+            MemoryAction::Stats => {
+                commands::memory_cmd::stats(&server_url, cli.json).await?
+            }
+            MemoryAction::Clear { facts_only } => {
+                commands::memory_cmd::clear(&server_url, facts_only, cli.json).await?
+            }
+            MemoryAction::Compress => {
+                commands::memory_cmd::compress(&server_url, cli.json).await?
+            }
+            MemoryAction::Delete { id } => {
+                commands::memory_cmd::delete(&server_url, &id, cli.json).await?
             }
         },
         Some(Commands::Gateway { action }) => match action {
