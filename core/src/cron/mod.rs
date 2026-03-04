@@ -286,6 +286,11 @@ impl CronService {
         self.executor = Some(executor);
     }
 
+    /// Get a reference to the executor (for manual job triggering via RPC)
+    pub fn executor_ref(&self) -> Option<&JobExecutor> {
+        self.executor.as_ref()
+    }
+
     /// Add a new job
     pub async fn add_job(&self, job: CronJob) -> CronResult<String> {
         // Validate schedule (only for Cron kind)
