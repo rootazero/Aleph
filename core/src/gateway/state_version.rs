@@ -51,7 +51,11 @@ impl StateVersionTracker {
         self.config.fetch_add(1, Ordering::SeqCst) + 1
     }
 
-    /// Take a consistent snapshot of all domain versions.
+    /// Take a point-in-time snapshot of all domain versions.
+    ///
+    /// Note: the three loads are not performed atomically; if a bump occurs
+    /// between reads, the snapshot may reflect a mixed state. This is
+    /// acceptable for version-comparison purposes.
     pub fn snapshot(&self) -> StateVersion {
         StateVersion {
             presence: self.presence.load(Ordering::SeqCst),

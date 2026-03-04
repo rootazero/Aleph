@@ -99,10 +99,10 @@ mod tests {
         assert_eq!(json["uptime_ms"], 42_000);
         assert!(json["state_version"].is_object() || json["state_version"].is_number());
         assert!(json["presence"].is_array());
-        assert_eq!(json["presence"].as_array().unwrap().len(), 1);
+        assert_eq!(json["presence"].as_array().expect("presence should be array").len(), 1);
         assert_eq!(json["limits"]["max_connections"], 64);
         assert_eq!(json["limits"]["current_connections"], 3);
-        assert_eq!(json["capabilities"].as_array().unwrap().len(), 2);
+        assert_eq!(json["capabilities"].as_array().expect("capabilities should be array").len(), 2);
         assert_eq!(json["active_workspace"], "project-x");
     }
 
