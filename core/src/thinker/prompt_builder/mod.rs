@@ -16,6 +16,7 @@ use crate::config::ProfileConfig;
 use crate::dispatcher::tool_index::HydrationResult;
 use crate::agent_loop::ToolInfo;
 
+use super::prompt_budget::{TokenBudget, PromptResult};
 use super::prompt_layer::{AssemblyPath, LayerInput};
 use super::prompt_mode::PromptMode;
 use super::prompt_pipeline::PromptPipeline;
@@ -69,6 +70,8 @@ pub struct PromptConfig {
     /// When set, these are appended to the system prompt to inform the LLM
     /// about available skills from the SkillSystem v2
     pub skill_instructions: Option<String>,
+    /// Token budget for system prompt assembly.
+    pub token_budget: TokenBudget,
 }
 
 impl Default for PromptConfig {
@@ -84,6 +87,7 @@ impl Default for PromptConfig {
             skill_mode: false,
             thinking_transparency: false,
             skill_instructions: None,
+            token_budget: TokenBudget::default(),
         }
     }
 }
@@ -181,6 +185,25 @@ impl PromptBuilder {
             .with_profile(profile)
             .with_mode(mode);
         self.pipeline.execute_with_mode(AssemblyPath::Soul, &input, mode)
+    }
+
+    /// Build system prompt with mode and budget control.
+    ///
+    /// Combines soul-path assembly, mode filtering, and token budget
+    /// enforcement into a single call.  Returns a [`PromptResult`] with
+    /// truncation metadata when sections are removed to fit the budget.
+    pub fn build_with_budget(
+        &self,
+        tools: &[ToolInfo],
+        soul: &SoulManifest,
+        profile: Option<&ProfileConfig>,
+        mode: PromptMode,
+        budget: &TokenBudget,
+    ) -> PromptResult {
+        let input = LayerInput::soul(&self.config, tools, soul)
+            .with_profile(profile)
+            .with_mode(mode);
+        self.pipeline.assemble(AssemblyPath::Soul, &input, mode, budget)
     }
 
     /// Build system prompt using ResolvedContext
