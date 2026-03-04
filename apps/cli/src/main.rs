@@ -180,6 +180,12 @@ enum Commands {
         action: LogsAction,
     },
 
+    /// Identity/soul management
+    Identity {
+        #[command(subcommand)]
+        action: IdentityAction,
+    },
+
     /// Chat control (send, abort, history, clear)
     #[command(name = "chat-control")]
     ChatControl {
@@ -488,6 +494,21 @@ enum LogsAction {
     },
     /// Show log directory path
     Dir,
+}
+
+#[derive(Subcommand)]
+enum IdentityAction {
+    /// Get current identity/soul
+    Get,
+    /// Set identity from JSON manifest
+    Set {
+        /// Soul manifest as JSON string
+        manifest: String,
+    },
+    /// Clear session identity override
+    Clear,
+    /// List identity sources
+    List,
 }
 
 #[derive(Subcommand)]
@@ -837,6 +858,20 @@ async fn main() -> CliResult<()> {
             }
             LogsAction::Dir => {
                 commands::logs_cmd::dir(&server_url, cli.json).await?;
+            }
+        },
+        Some(Commands::Identity { action }) => match action {
+            IdentityAction::Get => {
+                commands::identity_cmd::get(&server_url, cli.json).await?;
+            }
+            IdentityAction::Set { manifest } => {
+                commands::identity_cmd::set(&server_url, &manifest, cli.json).await?;
+            }
+            IdentityAction::Clear => {
+                commands::identity_cmd::clear(&server_url, cli.json).await?;
+            }
+            IdentityAction::List => {
+                commands::identity_cmd::list(&server_url, cli.json).await?;
             }
         },
         Some(Commands::ChatControl { action }) => match action {
