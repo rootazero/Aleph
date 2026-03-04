@@ -87,6 +87,15 @@ color = "#d97757"
 timeout_seconds = 30
 enabled = true
 
+# ChatGPT Subscription (uses OAuth login instead of API key)
+# Run `aleph auth chatgpt` to connect your subscription account
+[providers.chatgpt-sub]
+protocol = "chatgpt"
+model = "gpt-4o"
+color = "#10a37f"
+timeout_seconds = 120
+enabled = false
+
 # ============================================================================
 # ROUTING RULES WITH SEARCH CAPABILITY
 # ============================================================================
