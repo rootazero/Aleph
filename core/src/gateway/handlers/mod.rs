@@ -95,6 +95,8 @@ pub mod secret_approvals;
 pub mod system_info;
 pub mod daemon_control;
 pub mod discord_panel;
+pub mod oauth;
+pub mod vault_config;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
 pub use identity::SharedIdentityResolver;
@@ -209,8 +211,14 @@ impl HandlerRegistry {
 
         // Cron handlers
         registry.register("cron.list", cron::handle_list);
+        registry.register("cron.get", cron::handle_get);
+        registry.register("cron.create", cron::handle_create);
+        registry.register("cron.update", cron::handle_update);
+        registry.register("cron.delete", cron::handle_delete);
         registry.register("cron.status", cron::handle_status);
         registry.register("cron.run", cron::handle_run);
+        registry.register("cron.runs", cron::handle_runs);
+        registry.register("cron.toggle", cron::handle_toggle);
 
         // Chat handlers (placeholders - actual handlers wired in Gateway::new())
         registry.register("chat.send", |req| async move {
@@ -469,6 +477,14 @@ impl HandlerRegistry {
             )
         });
 
+        // Vault configuration handlers (stateless — keychain + file I/O)
+        registry.register("vault.status", vault_config::handle_status);
+        registry.register("vault.storeKey", vault_config::handle_store_key);
+        registry.register("vault.deleteKey", vault_config::handle_delete_key);
+        registry.register("vault.verify", vault_config::handle_verify);
+        registry.register("vault.migrateKeys", vault_config::handle_migrate_keys);
+        registry.register("vault.disableVault", vault_config::handle_disable_vault);
+
         registry
     }
 
@@ -651,8 +667,14 @@ mod tests {
     fn test_cron_handlers_registered() {
         let registry = HandlerRegistry::new();
         assert!(registry.has_method("cron.list"));
+        assert!(registry.has_method("cron.get"));
+        assert!(registry.has_method("cron.create"));
+        assert!(registry.has_method("cron.update"));
+        assert!(registry.has_method("cron.delete"));
         assert!(registry.has_method("cron.status"));
         assert!(registry.has_method("cron.run"));
+        assert!(registry.has_method("cron.runs"));
+        assert!(registry.has_method("cron.toggle"));
     }
 
     #[test]
