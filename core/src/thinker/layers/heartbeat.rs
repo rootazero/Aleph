@@ -1,6 +1,7 @@
 //! Heartbeat layer — progress reporting guidance for long-running tasks (priority 710).
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 
 pub struct HeartbeatLayer;
 
@@ -9,6 +10,9 @@ impl PromptLayer for HeartbeatLayer {
     fn priority(&self) -> u32 { 710 }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Basic, AssemblyPath::Soul, AssemblyPath::Context, AssemblyPath::Cached]
+    }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        matches!(mode, PromptMode::Full)
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         output.push_str("## Progress Reporting\n\n");

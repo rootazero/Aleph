@@ -260,6 +260,7 @@ mod mode_tests {
             "runtime_capabilities",
             "poe_success_criteria",
             "protocol_tokens",
+            "heartbeat",
             "operational_guidelines",
             "citation_standards",
             "generation_models",
