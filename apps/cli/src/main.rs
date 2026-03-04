@@ -22,7 +22,7 @@ mod client;
 mod commands;
 mod config;
 mod error;
-mod ui;
+mod tui;
 
 use clap::{Parser, Subcommand};
 use tracing::info;
