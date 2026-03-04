@@ -431,4 +431,39 @@ mod budget_tests {
         assert!(result.truncation_stats.is_empty(), "Should have no truncation stats");
         assert_eq!(result.mode, PromptMode::Full);
     }
+
+    #[test]
+    fn full_pipeline_mode_and_budget_integration() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let budget = TokenBudget::default();
+
+        let input_full = LayerInput::basic(&config, &tools).with_mode(PromptMode::Full);
+        let input_compact = LayerInput::basic(&config, &tools).with_mode(PromptMode::Compact);
+        let input_minimal = LayerInput::basic(&config, &tools).with_mode(PromptMode::Minimal);
+
+        let full = pipeline.assemble(AssemblyPath::Basic, &input_full, PromptMode::Full, &budget);
+        let compact = pipeline.assemble(AssemblyPath::Basic, &input_compact, PromptMode::Compact, &budget);
+        let minimal = pipeline.assemble(AssemblyPath::Basic, &input_minimal, PromptMode::Minimal, &budget);
+
+        // Full > Compact > Minimal
+        assert!(full.prompt.len() > compact.prompt.len(),
+            "Full ({}) > Compact ({})", full.prompt.len(), compact.prompt.len());
+        assert!(compact.prompt.len() > minimal.prompt.len(),
+            "Compact ({}) > Minimal ({})", compact.prompt.len(), minimal.prompt.len());
+
+        // All should have no truncation (default budget is 80K)
+        assert!(full.truncation_stats.is_empty());
+        assert!(compact.truncation_stats.is_empty());
+        assert!(minimal.truncation_stats.is_empty());
+
+        // Modes are correctly recorded
+        assert_eq!(full.mode, PromptMode::Full);
+        assert_eq!(compact.mode, PromptMode::Compact);
+        assert_eq!(minimal.mode, PromptMode::Minimal);
+
+        // Minimal should still have content (response format at minimum)
+        assert!(!minimal.prompt.is_empty());
+    }
 }
