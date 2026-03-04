@@ -1000,10 +1000,32 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     };
 
     let event_bus = server.event_bus().clone();
-    let router = Arc::new(AgentRouter::new());
 
     // Load app config early so agent handlers can use configured providers
     let loaded_app_config = load_app_config().await;
+
+    // Resolve agent definitions from config (initializes workspace directories)
+    let mut agent_resolver = alephcore::AgentDefinitionResolver::new();
+    let resolved_agents = agent_resolver.resolve_all(&loaded_app_config.agents, &loaded_app_config.profiles);
+
+    // Find default agent
+    let default_agent_id = resolved_agents
+        .iter()
+        .find(|a| a.is_default)
+        .map(|a| a.id.clone())
+        .unwrap_or_else(|| "main".to_string());
+
+    if !args.daemon {
+        for agent in &resolved_agents {
+            println!("  Agent '{}': workspace={}", agent.id, agent.workspace_path.display());
+        }
+    }
+
+    // Build router from config-driven bindings
+    let router = Arc::new(AgentRouter::from_bindings(
+        loaded_app_config.bindings.clone(),
+        &default_agent_id,
+    ));
 
     let agent_result = register_agent_handlers(
         &mut server, session_manager.clone(), event_bus.clone(),

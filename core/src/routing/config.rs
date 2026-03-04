@@ -1,5 +1,6 @@
 //! Configuration structures for routing.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -27,7 +28,7 @@ impl Default for SessionConfig {
 }
 
 /// Route binding configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RouteBinding {
     pub agent_id: String,
     #[serde(rename = "match")]
@@ -35,7 +36,7 @@ pub struct RouteBinding {
 }
 
 /// Match rule for route binding
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct MatchRule {
     /// Channel to match (telegram, discord, slack, ...)
     pub channel: Option<String>,
@@ -53,7 +54,7 @@ pub struct MatchRule {
 }
 
 /// Peer match configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PeerMatchConfig {
     pub kind: String,
     pub id: String,

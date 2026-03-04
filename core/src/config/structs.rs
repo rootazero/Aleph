@@ -106,6 +106,14 @@ pub struct Config {
     /// This uses opaque JSON values since each channel has a different schema.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub channels: HashMap<String, serde_json::Value>,
+    /// Agent definitions for multi-agent configuration
+    /// Defines available agents, their workspaces, profiles, and capabilities
+    #[serde(default)]
+    pub agents: AgentsConfig,
+    /// Channel → Agent routing bindings
+    /// Maps channel/peer patterns to specific agents using RouteBinding
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindings: Vec<crate::routing::config::RouteBinding>,
     /// Presets override loaded from ~/.aleph/presets.toml
     /// Not serialized to config.toml — lives in its own file
     #[serde(skip)]
@@ -210,6 +218,8 @@ impl Default for Config {
             secrets: HashMap::new(),
             secrets_config: SecretsConfig::default(),
             channels: HashMap::new(),
+            agents: AgentsConfig::default(),
+            bindings: Vec::new(),
             presets_override: crate::config::presets_override::PresetsOverride::default(),
             prompts_override: crate::config::prompts_override::PromptsOverride::default(),
             defaults_override: crate::config::defaults_override::DefaultsOverride::default(),

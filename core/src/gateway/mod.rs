@@ -69,6 +69,7 @@ pub mod webhook_receiver;
 pub mod webhooks;
 pub mod run_event_bus;
 pub mod workspace;
+pub mod workspace_loader;
 pub use server::GatewayServer;
 pub use protocol::{JsonRpcRequest, JsonRpcResponse, JsonRpcError};
 pub use event_bus::GatewayEventBus;
