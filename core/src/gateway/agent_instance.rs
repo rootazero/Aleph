@@ -51,6 +51,27 @@ impl Default for AgentInstanceConfig {
     }
 }
 
+impl AgentInstanceConfig {
+    /// Create from a resolved agent definition.
+    ///
+    /// Maps ResolvedAgent fields to AgentInstanceConfig:
+    /// - system_prompt <- agents_md (workspace AGENTS.md content)
+    /// - tool_whitelist <- skills
+    /// - workspace <- workspace_path
+    pub fn from_resolved(agent: &crate::config::agent_resolver::ResolvedAgent) -> Self {
+        Self {
+            agent_id: agent.id.clone(),
+            workspace: agent.workspace_path.clone(),
+            model: agent.model.clone(),
+            fallback_models: vec![],
+            max_loops: 10,
+            system_prompt: agent.agents_md.clone(),
+            tool_whitelist: agent.skills.clone(),
+            tool_blacklist: vec![],
+        }
+    }
+}
+
 /// Agent instance state
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentState {
@@ -641,5 +662,35 @@ mod tests {
         let agents = registry.list().await;
         assert_eq!(agents.len(), 1);
         assert!(agents.contains(&"main".to_string()));
+    }
+
+    #[test]
+    fn test_agent_instance_config_from_resolved() {
+        use crate::config::agent_resolver::ResolvedAgent;
+        use crate::config::types::agents_def::SubagentPolicy;
+        use crate::config::types::profile::ProfileConfig;
+
+        let resolved = ResolvedAgent {
+            id: "coding".to_string(),
+            name: "Code Expert".to_string(),
+            is_default: false,
+            workspace_path: PathBuf::from("/tmp/test-workspace"),
+            profile: ProfileConfig::default(),
+            soul: None,
+            agents_md: Some("Be a great coder.".to_string()),
+            memory_md: None,
+            model: "claude-opus-4-6".to_string(),
+            skills: vec!["git_*".to_string(), "fs_*".to_string()],
+            subagent_policy: SubagentPolicy::default(),
+        };
+
+        let config = AgentInstanceConfig::from_resolved(&resolved);
+        assert_eq!(config.agent_id, "coding");
+        assert_eq!(config.workspace, PathBuf::from("/tmp/test-workspace"));
+        assert_eq!(config.model, "claude-opus-4-6");
+        assert_eq!(config.system_prompt.as_deref(), Some("Be a great coder."));
+        assert_eq!(config.tool_whitelist, vec!["git_*", "fs_*"]);
+        assert!(config.tool_blacklist.is_empty());
+        assert_eq!(config.max_loops, 10);
     }
 }

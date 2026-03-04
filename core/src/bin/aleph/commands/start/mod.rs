@@ -341,20 +341,48 @@ async fn register_agent_handlers(
         ));
 
         let agent_registry = Arc::new(AgentRegistry::new());
-        for agent_config in full_config.get_agent_instance_configs() {
-            let agent_id = agent_config.agent_id.clone();
-            match alephcore::gateway::AgentInstance::with_session_manager(
-                agent_config,
-                session_manager.clone(),
-            ) {
-                Ok(agent) => {
-                    agent_registry.register(agent).await;
-                    if !daemon {
-                        println!("  Registered agent: {} (with SQLite persistence)", agent_id);
+        if !app_config.agents.list.is_empty() {
+            // New path: use ResolvedAgents from AgentDefinitionResolver
+            let mut resolver = alephcore::AgentDefinitionResolver::new();
+            let resolved_agents = resolver.resolve_all(
+                &app_config.agents,
+                &app_config.profiles,
+            );
+            for agent in &resolved_agents {
+                let config = alephcore::gateway::AgentInstanceConfig::from_resolved(agent);
+                let agent_id = config.agent_id.clone();
+                match alephcore::gateway::AgentInstance::with_session_manager(
+                    config,
+                    session_manager.clone(),
+                ) {
+                    Ok(instance) => {
+                        agent_registry.register(instance).await;
+                        if !daemon {
+                            println!("  Registered agent: {} (config-driven)", agent_id);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to create agent '{}': {}", agent_id, e);
                     }
                 }
-                Err(e) => {
-                    eprintln!("Warning: Failed to create agent '{}': {}", agent_id, e);
+            }
+        } else {
+            // Legacy path: use FullGatewayConfig agents
+            for agent_config in full_config.get_agent_instance_configs() {
+                let agent_id = agent_config.agent_id.clone();
+                match alephcore::gateway::AgentInstance::with_session_manager(
+                    agent_config,
+                    session_manager.clone(),
+                ) {
+                    Ok(agent) => {
+                        agent_registry.register(agent).await;
+                        if !daemon {
+                            println!("  Registered agent: {} (with SQLite persistence)", agent_id);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to create agent '{}': {}", agent_id, e);
+                    }
                 }
             }
         }
