@@ -44,7 +44,7 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
 pub async fn get(server_url: &str, model_id: &str, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
 
-    let params = serde_json::json!({ "model": model_id });
+    let params = serde_json::json!({ "provider": model_id });
     let result: Value = client.call("models.get", Some(params)).await?;
 
     let pairs = vec![
@@ -85,7 +85,7 @@ pub async fn get(server_url: &str, model_id: &str, json: bool) -> CliResult<()> 
 pub async fn capabilities(server_url: &str, model_id: &str, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
 
-    let params = serde_json::json!({ "model": model_id });
+    let params = serde_json::json!({ "provider": model_id });
     let result: Value = client.call("models.capabilities", Some(params)).await?;
 
     if json {

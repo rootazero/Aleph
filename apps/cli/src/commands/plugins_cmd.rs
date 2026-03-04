@@ -131,11 +131,8 @@ pub async fn call(
 
     let result: Value = client.call("plugins.callTool", Some(params)).await?;
 
-    if json {
-        output::print_json(&result);
-    } else {
-        output::print_json(&result);
-    }
+    let _ = json;
+    output::print_json(&result);
 
     client.close().await?;
     Ok(())

@@ -11,7 +11,7 @@ pub async fn call(
     server_url: &str,
     method: &str,
     params_json: Option<&str>,
-    _json_mode: bool,
+    json_mode: bool,
 ) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
 
@@ -26,6 +26,8 @@ pub async fn call(
     };
 
     let result: Value = client.call(method, params).await?;
+    // Raw gateway calls always output JSON regardless of mode
+    let _ = json_mode;
     output::print_json(&result);
     client.close().await?;
     Ok(())
