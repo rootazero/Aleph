@@ -2,6 +2,7 @@
 
 pub mod ask;
 pub mod chat;
+pub mod chat_cmd;
 pub mod completion;
 pub mod config_cmd;
 pub mod connect;
