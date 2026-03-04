@@ -6,6 +6,7 @@
 
 use crate::poe::types::ValidationRule;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 
 /// All five assembly paths — this layer participates everywhere.
 const ALL_PATHS: &[AssemblyPath] = &[
@@ -30,6 +31,10 @@ impl PromptLayer for PoePromptLayer {
 
     fn priority(&self) -> u32 {
         505
+    }
+
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        matches!(mode, PromptMode::Full)
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
