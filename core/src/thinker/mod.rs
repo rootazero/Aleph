@@ -36,6 +36,7 @@ pub mod decision_parser;
 pub mod identity;
 pub mod interaction;
 pub mod model_router;
+pub mod prompt_budget;
 pub mod prompt_builder;
 pub mod prompt_hooks;
 pub mod prompt_layer;
@@ -66,6 +67,7 @@ pub use model_router::{ModelId, RoutingCondition, RoutingRule, ThinkerModelSelec
 #[deprecated(since = "0.2.0", note = "Use ThinkerModelSelector instead")]
 pub type ModelRouter = ThinkerModelSelector;
 pub use prompt_builder::{Message, MessageRole, PromptBuilder, PromptConfig};
+pub use prompt_budget::{PromptResult, TokenBudget, TruncationStat, TruncationWarning};
 pub use prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 pub use prompt_mode::PromptMode;
 pub use prompt_pipeline::PromptPipeline;
