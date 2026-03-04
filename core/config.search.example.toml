@@ -91,7 +91,7 @@ enabled = true
 # Run `aleph auth chatgpt` to connect your subscription account
 [providers.chatgpt-sub]
 protocol = "chatgpt"
-model = "gpt-4o"
+model = "codex-mini-latest"
 color = "#10a37f"
 timeout_seconds = 120
 enabled = false
