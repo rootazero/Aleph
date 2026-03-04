@@ -1,6 +1,7 @@
 //! SoulLayer — identity and personality injection (priority 50)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 
 pub struct SoulLayer;
@@ -29,6 +30,11 @@ impl PromptLayer for SoulLayer {
             let identity = sanitize_for_prompt(&identity, SanitizeLevel::Light);
             output.push_str(&identity);
             output.push_str("\n\n");
+        }
+
+        // In Minimal mode, only emit identity line
+        if input.mode == PromptMode::Minimal {
+            return;
         }
 
         // Communication style
@@ -105,6 +111,7 @@ impl PromptLayer for SoulLayer {
 mod tests {
     use super::*;
     use crate::thinker::prompt_builder::PromptConfig;
+    use crate::thinker::prompt_mode::PromptMode;
     use crate::thinker::soul::{SoulManifest, SoulVoice, Verbosity};
 
     #[test]
@@ -168,5 +175,30 @@ mod tests {
         let paths = SoulLayer.paths();
         assert_eq!(paths.len(), 1);
         assert!(paths.contains(&AssemblyPath::Soul));
+    }
+
+    #[test]
+    fn soul_layer_minimal_mode_identity_only() {
+        let layer = SoulLayer;
+        let config = PromptConfig::default();
+        let soul = SoulManifest {
+            identity: "I am Aleph.".to_string(),
+            voice: SoulVoice {
+                tone: "Warm and professional".to_string(),
+                ..Default::default()
+            },
+            directives: vec!["Always help.".to_string()],
+            ..Default::default()
+        };
+        let input = LayerInput::soul(&config, &[], &soul)
+            .with_mode(PromptMode::Minimal);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        // Should contain identity
+        assert!(out.contains("I am Aleph"), "Should contain identity");
+        // Should NOT contain communication style or directives
+        assert!(!out.contains("Communication Style"), "Should not contain style in Minimal");
+        assert!(!out.contains("Always help"), "Should not contain directives in Minimal");
     }
 }

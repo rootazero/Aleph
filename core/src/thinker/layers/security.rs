@@ -2,6 +2,7 @@
 
 use crate::thinker::context::DisableReason;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 
 pub struct SecurityLayer;
@@ -9,6 +10,9 @@ pub struct SecurityLayer;
 impl PromptLayer for SecurityLayer {
     fn name(&self) -> &'static str { "security" }
     fn priority(&self) -> u32 { 600 }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        !matches!(mode, PromptMode::Minimal)
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Context]
     }

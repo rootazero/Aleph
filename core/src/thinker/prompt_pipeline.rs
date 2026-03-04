@@ -3,8 +3,11 @@
 //! The pipeline holds an ordered list of [`PromptLayer`] implementations
 //! and executes them in priority order for a given [`AssemblyPath`].
 
+use std::path::PathBuf;
 use super::layers::*;
 use super::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use super::prompt_budget::{TokenBudget, PromptResult, enforce_budget};
+use super::prompt_mode::PromptMode;
 
 /// Composable prompt assembly engine.
 ///
@@ -36,7 +39,72 @@ impl PromptPipeline {
         output
     }
 
-    /// Create a pipeline pre-loaded with the 22 default layers.
+    /// Execute pipeline with mode filtering (path + mode).
+    pub fn execute_with_mode(
+        &self,
+        path: AssemblyPath,
+        input: &LayerInput,
+        mode: PromptMode,
+    ) -> String {
+        let mut output = String::with_capacity(16384);
+        for layer in &self.layers {
+            if layer.paths().contains(&path) && layer.supports_mode(mode) {
+                layer.inject(&mut output, input);
+            }
+        }
+        output
+    }
+
+    /// Assemble system prompt with mode filtering and budget enforcement.
+    ///
+    /// Combines path matching, mode filtering, and total-budget enforcement
+    /// into a single call.  Returns a [`PromptResult`] that includes
+    /// truncation statistics when the assembled prompt exceeds the budget.
+    pub fn assemble(
+        &self,
+        path: AssemblyPath,
+        input: &LayerInput,
+        mode: PromptMode,
+        budget: &TokenBudget,
+    ) -> PromptResult {
+        // 1. Collect sections from matching layers
+        let mut sections: Vec<(u32, &str, String)> = Vec::new();
+        for layer in &self.layers {
+            if layer.paths().contains(&path) && layer.supports_mode(mode) {
+                let mut section = String::new();
+                layer.inject(&mut section, input);
+                if !section.is_empty() {
+                    sections.push((layer.priority(), layer.name(), section));
+                }
+            }
+        }
+
+        // 2. Check total size
+        let total: usize = sections.iter().map(|(_, _, c)| c.len()).sum();
+        if total <= budget.max_total_chars {
+            let prompt = sections.iter().map(|(_, _, c)| c.as_str()).collect::<Vec<_>>().join("");
+            return PromptResult {
+                prompt,
+                truncation_stats: vec![],
+                mode,
+            };
+        }
+
+        // 3. Enforce budget — protected priorities
+        let refs: Vec<(u32, &str, &str)> = sections.iter()
+            .map(|(p, n, c)| (*p, *n, c.as_str()))
+            .collect();
+        let protected = &[50u32, 75, 100, 500, 501, 1200];
+        let (prompt, stats) = enforce_budget(&refs, budget.max_total_chars, protected);
+
+        PromptResult {
+            prompt,
+            truncation_stats: stats,
+            mode,
+        }
+    }
+
+    /// Create a pipeline pre-loaded with the 23 default layers.
     ///
     /// Layer order (by priority):
     ///   50  SoulLayer
@@ -49,6 +117,7 @@ impl PromptPipeline {
     ///  505  PoePromptLayer
     ///  600  SecurityLayer
     ///  700  ProtocolTokensLayer
+    ///  710  HeartbeatLayer
     ///  800  OperationalGuidelinesLayer
     ///  900  CitationStandardsLayer
     /// 1000  GenerationModelsLayer
@@ -73,6 +142,7 @@ impl PromptPipeline {
             Box::new(crate::poe::PoePromptLayer),
             Box::new(SecurityLayer),
             Box::new(ProtocolTokensLayer),
+            Box::new(HeartbeatLayer),
             Box::new(OperationalGuidelinesLayer),
             Box::new(CitationStandardsLayer),
             Box::new(GenerationModelsLayer),
@@ -85,6 +155,14 @@ impl PromptPipeline {
             Box::new(CustomInstructionsLayer),
             Box::new(LanguageLayer),
         ])
+    }
+
+    /// Add bootstrap layer for workspace context injection.
+    pub fn with_bootstrap(mut self, workspace: PathBuf, per_file: usize, total: usize) -> Self {
+        let layer = BootstrapLayer::new(workspace).with_limits(per_file, total);
+        self.layers.push(Box::new(layer));
+        self.layers.sort_by_key(|l| l.priority());
+        self
     }
 
     /// Number of registered layers (test helper).
@@ -181,7 +259,7 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        assert_eq!(pipeline.layer_count(), 22);
+        assert_eq!(pipeline.layer_count(), 23);
     }
 
     #[test]
@@ -202,5 +280,190 @@ mod tests {
         let input = LayerInput::basic(&config, &tools);
 
         assert_eq!(pipeline.execute(AssemblyPath::Basic, &input), "");
+    }
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::*;
+    use crate::thinker::prompt_builder::PromptConfig;
+    use crate::thinker::prompt_mode::PromptMode;
+
+    #[test]
+    fn full_mode_includes_all_layers() {
+        let pipeline = PromptPipeline::default_layers();
+        for layer in &pipeline.layers {
+            assert!(
+                layer.supports_mode(PromptMode::Full),
+                "Layer '{}' should support Full mode",
+                layer.name()
+            );
+        }
+    }
+
+    #[test]
+    fn compact_mode_excludes_heavy_layers() {
+        let pipeline = PromptPipeline::default_layers();
+        let excluded_in_compact = [
+            "runtime_context",
+            "environment",
+            "runtime_capabilities",
+            "poe_success_criteria",
+            "protocol_tokens",
+            "heartbeat",
+            "operational_guidelines",
+            "citation_standards",
+            "generation_models",
+            "skill_instructions",
+            "special_actions",
+            "guidelines",
+            "thinking_guidance",
+            "skill_mode",
+        ];
+        for layer in &pipeline.layers {
+            if excluded_in_compact.contains(&layer.name()) {
+                assert!(
+                    !layer.supports_mode(PromptMode::Compact),
+                    "Layer '{}' should NOT support Compact mode",
+                    layer.name()
+                );
+            } else {
+                assert!(
+                    layer.supports_mode(PromptMode::Compact),
+                    "Layer '{}' SHOULD support Compact mode",
+                    layer.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn minimal_mode_only_core_layers() {
+        let pipeline = PromptPipeline::default_layers();
+        let included_in_minimal = ["soul", "tools", "hydrated_tools", "response_format", "language"];
+        for layer in &pipeline.layers {
+            if included_in_minimal.contains(&layer.name()) {
+                assert!(
+                    layer.supports_mode(PromptMode::Minimal),
+                    "Layer '{}' SHOULD support Minimal mode",
+                    layer.name()
+                );
+            } else {
+                assert!(
+                    !layer.supports_mode(PromptMode::Minimal),
+                    "Layer '{}' should NOT support Minimal mode",
+                    layer.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn execute_with_mode_filters_layers() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+
+        let full = pipeline.execute_with_mode(AssemblyPath::Basic, &input, PromptMode::Full);
+        let compact = pipeline.execute_with_mode(AssemblyPath::Basic, &input, PromptMode::Compact);
+        let minimal = pipeline.execute_with_mode(AssemblyPath::Basic, &input, PromptMode::Minimal);
+
+        // Full should be longest
+        assert!(full.len() > compact.len(), "Full ({}) should be longer than Compact ({})", full.len(), compact.len());
+        // Compact should be longer than Minimal
+        assert!(compact.len() > minimal.len(), "Compact ({}) should be longer than Minimal ({})", compact.len(), minimal.len());
+        // Minimal should still have some content (response format, language)
+        assert!(!minimal.is_empty(), "Minimal should not be empty");
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use crate::thinker::prompt_builder::PromptConfig;
+    use crate::thinker::prompt_budget::TokenBudget;
+    use crate::thinker::prompt_mode::PromptMode;
+
+    #[test]
+    fn assemble_with_budget_trims_when_over() {
+        use crate::thinker::prompt_layer::PromptLayer as _;
+
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+
+        // First, get the full prompt size so we know what budget to set
+        let full_result = pipeline.assemble(AssemblyPath::Basic, &input, PromptMode::Full, &TokenBudget {
+            max_total_chars: 500_000,
+            ..Default::default()
+        });
+        let full_len = full_result.prompt.len();
+
+        // Budget smaller than full output, but large enough to keep protected layers
+        let budget = TokenBudget {
+            max_total_chars: full_len / 2,
+            ..Default::default()
+        };
+
+        let result = pipeline.assemble(AssemblyPath::Basic, &input, PromptMode::Full, &budget);
+        // Some sections should have been removed
+        assert!(!result.truncation_stats.is_empty(), "Should have truncation stats");
+        // Prompt should be smaller than full
+        assert!(result.prompt.len() < full_len, "Trimmed prompt ({}) should be smaller than full ({})", result.prompt.len(), full_len);
+    }
+
+    #[test]
+    fn assemble_under_budget_no_truncation() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+
+        // Large budget — nothing should be trimmed
+        let budget = TokenBudget {
+            max_total_chars: 500_000,
+            ..Default::default()
+        };
+
+        let result = pipeline.assemble(AssemblyPath::Basic, &input, PromptMode::Full, &budget);
+        assert!(result.truncation_stats.is_empty(), "Should have no truncation stats");
+        assert_eq!(result.mode, PromptMode::Full);
+    }
+
+    #[test]
+    fn full_pipeline_mode_and_budget_integration() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let budget = TokenBudget::default();
+
+        let input_full = LayerInput::basic(&config, &tools).with_mode(PromptMode::Full);
+        let input_compact = LayerInput::basic(&config, &tools).with_mode(PromptMode::Compact);
+        let input_minimal = LayerInput::basic(&config, &tools).with_mode(PromptMode::Minimal);
+
+        let full = pipeline.assemble(AssemblyPath::Basic, &input_full, PromptMode::Full, &budget);
+        let compact = pipeline.assemble(AssemblyPath::Basic, &input_compact, PromptMode::Compact, &budget);
+        let minimal = pipeline.assemble(AssemblyPath::Basic, &input_minimal, PromptMode::Minimal, &budget);
+
+        // Full > Compact > Minimal
+        assert!(full.prompt.len() > compact.prompt.len(),
+            "Full ({}) > Compact ({})", full.prompt.len(), compact.prompt.len());
+        assert!(compact.prompt.len() > minimal.prompt.len(),
+            "Compact ({}) > Minimal ({})", compact.prompt.len(), minimal.prompt.len());
+
+        // All should have no truncation (default budget is 80K)
+        assert!(full.truncation_stats.is_empty());
+        assert!(compact.truncation_stats.is_empty());
+        assert!(minimal.truncation_stats.is_empty());
+
+        // Modes are correctly recorded
+        assert_eq!(full.mode, PromptMode::Full);
+        assert_eq!(compact.mode, PromptMode::Compact);
+        assert_eq!(minimal.mode, PromptMode::Minimal);
+
+        // Minimal should still have content (response format at minimum)
+        assert!(!minimal.prompt.is_empty());
     }
 }

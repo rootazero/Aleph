@@ -5,6 +5,7 @@ use crate::dispatcher::tool_index::HydrationResult;
 use crate::poe::PoePromptContext;
 use super::context::ResolvedContext;
 use super::prompt_builder::PromptConfig;
+use super::prompt_mode::PromptMode;
 use super::soul::SoulManifest;
 
 /// Which assembly path a layer participates in.
@@ -39,27 +40,29 @@ pub struct LayerInput<'a> {
     pub poe: Option<&'a PoePromptContext>,
     /// Active workspace profile (system_prompt overlay, tool whitelist, etc.)
     pub profile: Option<&'a crate::config::ProfileConfig>,
+    /// Prompt mode for this assembly (default: Full)
+    pub mode: PromptMode,
 }
 
 impl<'a> LayerInput<'a> {
     /// Input for the `Basic` path — config + tool list.
     pub fn basic(config: &'a PromptConfig, tools: &'a [ToolInfo]) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, poe: None, profile: None }
+        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, poe: None, profile: None, mode: PromptMode::Full }
     }
 
     /// Input for the `Hydration` path — config + hydration result.
     pub fn hydration(config: &'a PromptConfig, hydration: &'a HydrationResult) -> Self {
-        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, poe: None, profile: None }
+        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, poe: None, profile: None, mode: PromptMode::Full }
     }
 
     /// Input for the `Soul` path — config + tools + soul manifest.
     pub fn soul(config: &'a PromptConfig, tools: &'a [ToolInfo], soul: &'a SoulManifest) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, poe: None, profile: None }
+        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, poe: None, profile: None, mode: PromptMode::Full }
     }
 
     /// Input for the `Context` path — config + resolved context.
     pub fn context(config: &'a PromptConfig, ctx: &'a ResolvedContext) -> Self {
-        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), poe: None, profile: None }
+        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), poe: None, profile: None, mode: PromptMode::Full }
     }
 
     /// Attach POE context to this input.
@@ -71,6 +74,12 @@ impl<'a> LayerInput<'a> {
     /// Attach workspace profile to this input.
     pub fn with_profile(mut self, profile: Option<&'a crate::config::ProfileConfig>) -> Self {
         self.profile = profile;
+        self
+    }
+
+    /// Set the prompt mode for this assembly.
+    pub fn with_mode(mut self, mode: PromptMode) -> Self {
+        self.mode = mode;
         self
     }
 
@@ -99,6 +108,14 @@ pub trait PromptLayer: Send + Sync {
 
     /// Which assembly paths this layer participates in.
     fn paths(&self) -> &'static [AssemblyPath];
+
+    /// Whether this layer participates in the given [`PromptMode`].
+    ///
+    /// The default returns `true` for all modes.  Override in layers
+    /// that should be excluded from Compact or Minimal prompts.
+    fn supports_mode(&self, _mode: PromptMode) -> bool {
+        true
+    }
 
     /// Append this layer's content to `output`.
     fn inject(&self, output: &mut String, input: &LayerInput);

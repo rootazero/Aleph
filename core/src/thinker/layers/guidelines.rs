@@ -1,12 +1,16 @@
 //! GuidelinesLayer — general operational guidelines (priority 1300)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 
 pub struct GuidelinesLayer;
 
 impl PromptLayer for GuidelinesLayer {
     fn name(&self) -> &'static str { "guidelines" }
     fn priority(&self) -> u32 { 1300 }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        matches!(mode, PromptMode::Full)
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[
             AssemblyPath::Basic,
