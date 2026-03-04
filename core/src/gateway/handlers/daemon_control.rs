@@ -135,10 +135,9 @@ fn find_latest_log(dir: &std::path::Path) -> Option<PathBuf> {
         .ok()?
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.path()
-                .extension()
-                .map(|ext| ext == "log")
-                .unwrap_or(false)
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("aleph-") && name.contains(".log")
         })
         .max_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()))
         .map(|e| e.path())
@@ -158,5 +157,22 @@ mod tests {
     fn find_latest_log_returns_none_for_missing_dir() {
         let result = find_latest_log(&PathBuf::from("/nonexistent/path"));
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn find_latest_log_matches_dated_files() {
+        let dir = std::env::temp_dir().join("aleph_log_test");
+        let _ = std::fs::create_dir_all(&dir);
+
+        // Create a file matching real naming: aleph-server.log.2026-03-04
+        let dated = dir.join("aleph-server.log.2026-03-04");
+        std::fs::write(&dated, "test log line").unwrap();
+
+        let result = find_latest_log(&dir);
+        assert!(result.is_some(), "Should find dated log file");
+        assert!(result.unwrap().file_name().unwrap().to_string_lossy().contains("aleph-server"));
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
