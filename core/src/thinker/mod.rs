@@ -106,8 +106,9 @@ pub fn format_truncation_warning(stats: &[prompt_budget::TruncationStat]) -> Str
     format!("[System] Context truncated: {}", parts.join(", "))
 }
 use crate::agents::thinking::ThinkLevel;
-use crate::dispatcher::UnifiedTool;
+use crate::dispatcher::{ToolDefinition, UnifiedTool};
 use crate::error::Result;
+use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 
 /// Configuration for Thinker
@@ -362,6 +363,207 @@ impl<P: ProviderRegistry> Thinker<P> {
         }
     }
 
+    /// Call LLM with native tool_use support, returning structured ProviderResponse
+    ///
+    /// This method uses `process_with_payload()` which passes tool definitions
+    /// through the API's native tool_use mechanism (e.g., Anthropic tool_use,
+    /// OpenAI function calling, Gemini function declarations).
+    async fn call_llm_native(
+        &self,
+        provider: Arc<dyn AiProvider>,
+        system: &str,
+        messages: &[Message],
+        think_level: ThinkLevel,
+        tool_defs: Option<&[ToolDefinition]>,
+    ) -> Result<ProviderResponse> {
+        // Build the full prompt from messages (same as call_llm_with_level)
+        let mut prompt_parts = Vec::new();
+
+        for msg in messages {
+            match msg.role {
+                MessageRole::User => prompt_parts.push(format!("User: {}", msg.content)),
+                MessageRole::Assistant => prompt_parts.push(format!("Assistant: {}", msg.content)),
+                MessageRole::Tool => prompt_parts.push(format!("Tool Result: {}", msg.content)),
+            }
+        }
+
+        let full_prompt = prompt_parts.join("\n\n");
+
+        // Resolve per-request generation params from workspace profile
+        let (temperature, max_tokens) = self.resolve_generation_params();
+
+        // Build payload with tools
+        let payload = RequestPayload::new(&full_prompt)
+            .with_system(Some(system))
+            .with_think_level(Some(think_level))
+            .with_temperature(temperature)
+            .with_max_tokens(max_tokens)
+            .with_tools(tool_defs);
+
+        provider.process_with_payload(payload).await
+    }
+
+    /// Map a native tool call from ProviderResponse to a Decision
+    ///
+    /// Handles both virtual tools (__complete, __ask_user, __fail) and real tools.
+    fn map_native_tool_call_to_decision(
+        &self,
+        tc: &crate::providers::adapter::NativeToolCall,
+    ) -> crate::agent_loop::Decision {
+        use crate::agent_loop::Decision;
+
+        match tc.name.as_str() {
+            virtual_tools::VIRTUAL_COMPLETE => Decision::Complete {
+                summary: tc
+                    .arguments
+                    .get("summary")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            },
+            virtual_tools::VIRTUAL_ASK_USER => Decision::AskUser {
+                question: tc
+                    .arguments
+                    .get("question")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                options: tc
+                    .arguments
+                    .get("options")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    }),
+            },
+            virtual_tools::VIRTUAL_FAIL => Decision::Fail {
+                reason: tc
+                    .arguments
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown failure")
+                    .to_string(),
+            },
+            _ => Decision::UseTool {
+                tool_name: tc.name.clone(),
+                arguments: tc.arguments.clone(),
+            },
+        }
+    }
+
+    /// Build a Thinking result from a native ProviderResponse
+    ///
+    /// If the response contains tool calls, maps the first tool call to a Decision.
+    /// If no tool calls, falls back to DecisionParser on the text content.
+    fn build_thinking_from_native_response(
+        &self,
+        response: ProviderResponse,
+    ) -> Result<Thinking> {
+        if response.has_tool_calls() {
+            let tc = &response.tool_calls[0];
+            let decision = self.map_native_tool_call_to_decision(tc);
+
+            // Use thinking content if available, otherwise use text
+            let reasoning = response
+                .thinking
+                .or(response.text)
+                .unwrap_or_default();
+
+            // Use actual token count if available
+            let tokens_used = response
+                .usage
+                .map(|u| (u.input_tokens + u.output_tokens) as usize);
+
+            Ok(Thinking {
+                reasoning: Some(reasoning),
+                decision,
+                structured: None,
+                tokens_used,
+            })
+        } else if let Some(ref text) = response.text {
+            // Fallback: no tool calls, try DecisionParser on text
+            tracing::warn!(
+                "Native tool_use provider returned text without tool calls, falling back to DecisionParser"
+            );
+            self.parse_response(text)
+        } else {
+            Err(crate::error::AlephError::ProviderError {
+                message: "Empty LLM response (no text and no tool calls)".into(),
+                suggestion: Some(
+                    "The provider returned an empty response. Try again or switch providers."
+                        .into(),
+                ),
+            })
+        }
+    }
+
+    /// Collect tool definitions for native tool_use mode
+    ///
+    /// Converts filtered ToolInfo to ToolDefinition and appends virtual tools.
+    fn collect_native_tool_defs(&self, filtered_tools: &[ToolInfo]) -> Vec<ToolDefinition> {
+        use crate::dispatcher::ToolCategory;
+
+        let mut tool_defs: Vec<ToolDefinition> = filtered_tools
+            .iter()
+            .map(|t| {
+                let params = serde_json::from_str(&t.parameters_schema)
+                    .unwrap_or_else(|_| serde_json::json!({"type": "object", "properties": {}}));
+                ToolDefinition::new(&t.name, &t.description, params, ToolCategory::Builtin)
+            })
+            .collect();
+
+        tool_defs.extend(virtual_tools::virtual_tool_definitions());
+        tool_defs
+    }
+
+    /// Create a PromptConfig with native_tools_enabled set to true
+    ///
+    /// Clones the current config and sets the flag, causing ToolsLayer and
+    /// ResponseFormatLayer to skip their injection.
+    fn native_prompt_config(&self) -> PromptConfig {
+        let mut config = self.config.prompt.clone();
+        config.native_tools_enabled = true;
+        config
+    }
+
+    /// Build prompt with native tools mode (skips ToolsLayer and ResponseFormatLayer)
+    fn build_prompt_native(
+        &self,
+        state: &LoopState,
+        tools: &[ToolInfo],
+        observation: &Observation,
+    ) -> (String, Vec<Message>) {
+        let native_config = self.native_prompt_config();
+        let native_builder = PromptBuilder::new(native_config);
+        let system = if let Some(ref soul) = self.config.soul {
+            native_builder.build_system_prompt_with_soul(
+                tools,
+                soul,
+                self.config.active_profile.as_ref(),
+            )
+        } else {
+            native_builder.build_system_prompt(tools)
+        };
+        let messages = native_builder.build_messages(&state.original_request, observation);
+        (system, messages)
+    }
+
+    /// Build prompt with hydration and native tools mode
+    fn build_prompt_with_hydration_native(
+        &self,
+        state: &LoopState,
+        hydration: &crate::dispatcher::tool_index::HydrationResult,
+        observation: &Observation,
+    ) -> (String, Vec<Message>) {
+        let native_config = self.native_prompt_config();
+        let native_builder = PromptBuilder::new(native_config);
+        let system = native_builder.build_system_prompt_with_hydration(hydration);
+        let messages = native_builder.build_messages(&state.original_request, observation);
+        (system, messages)
+    }
+
     /// Internal implementation for hydration-aware thinking
     ///
     /// This method bypasses keyword-based tool filtering in favor of
@@ -390,35 +592,59 @@ impl<P: ProviderRegistry> Thinker<P> {
         // 2. Select model (with workspace profile override)
         let model_id = self.resolve_model(&observation);
 
-        // 3. Build prompt with hydration-based tools
-        let (system, messages) = self.build_prompt_with_hydration(state, hydration, &observation);
-
-        // 4. Get provider for model
+        // 3. Get provider for model
         let provider = self
             .providers
             .get(&model_id)
             .unwrap_or_else(|| self.providers.default_provider());
 
-        // 5. Call LLM
-        let response = self
-            .call_llm_with_level(provider, &system, &messages, level)
-            .await?;
+        // 4. Check if provider supports native tools → dual-path
+        if provider.supports_native_tools() {
+            // Native tool_use path
+            tracing::info!(
+                subsystem = "thinker",
+                event = "native_tool_use_hydration",
+                model = %model_id.as_str(),
+                provider = %provider.name(),
+                think_level = %level,
+                tool_count = tools_for_observation.len(),
+                "Using native tool_use path with hydrated tools"
+            );
 
-        tracing::debug!(
-            response_len = response.len(),
-            response_preview = %response.chars().take(500).collect::<String>(),
-            think_level = %level,
-            hydration_tool_count = hydration.total_count(),
-            "LLM response with hydrated tools (preview)"
-        );
+            let tool_defs = self.collect_native_tool_defs(&tools_for_observation);
 
-        // 6. Parse response
-        let thinking = self.parse_response(&response)?;
+            // Build prompt with native mode (skips ToolsLayer + ResponseFormatLayer)
+            let (system, messages) =
+                self.build_prompt_with_hydration_native(state, hydration, &observation);
 
-        // 7. Validate decision
-        self.decision_parser.validate(&thinking.decision)?;
+            let response = self
+                .call_llm_native(provider, &system, &messages, level, Some(&tool_defs))
+                .await?;
 
-        Ok(thinking)
+            let thinking = self.build_thinking_from_native_response(response)?;
+            self.decision_parser.validate(&thinking.decision)?;
+            Ok(thinking)
+        } else {
+            // Existing JSON-in-text path (unchanged)
+            let (system, messages) =
+                self.build_prompt_with_hydration(state, hydration, &observation);
+
+            let response = self
+                .call_llm_with_level(provider, &system, &messages, level)
+                .await?;
+
+            tracing::debug!(
+                response_len = response.len(),
+                response_preview = %response.chars().take(500).collect::<String>(),
+                think_level = %level,
+                hydration_tool_count = hydration.total_count(),
+                "LLM response with hydrated tools (preview)"
+            );
+
+            let thinking = self.parse_response(&response)?;
+            self.decision_parser.validate(&thinking.decision)?;
+            Ok(thinking)
+        }
     }
 }
 
@@ -453,10 +679,7 @@ impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
         // 4. Select model (with workspace profile override)
         let model_id = self.resolve_model(&observation);
 
-        // 5. Build prompt
-        let (system, messages) = self.build_prompt(state, &filtered_tools, &observation);
-
-        // 6. Get provider for model
+        // 5. Get provider for model
         let provider = self
             .providers
             .get(&model_id)
@@ -469,58 +692,122 @@ impl<P: ProviderRegistry + 'static> ThinkerTrait for Thinker<P> {
             provider = %provider.name(),
             think_level = %level,
             tool_count = filtered_tools.len(),
+            native_tools = provider.supports_native_tools(),
             "thinker selected provider for LLM call"
         );
 
-        // 7. Call LLM with specified thinking level
-        let response = self
-            .call_llm_with_level(provider, &system, &messages, level)
-            .await?;
+        // 6. Dual-path: native tool_use vs JSON-in-text
+        if provider.supports_native_tools() {
+            // === Native tool_use path ===
+            // Tool definitions are passed via the API; ToolsLayer and
+            // ResponseFormatLayer are skipped in the system prompt.
+            let tool_defs = self.collect_native_tool_defs(&filtered_tools);
 
-        // Log raw LLM response for debugging parse failures
-        tracing::debug!(
-            response_len = response.len(),
-            response_preview = %response.chars().take(500).collect::<String>(),
-            think_level = %level,
-            "LLM raw response (preview)"
-        );
+            // Build prompt with native mode (skips ToolsLayer + ResponseFormatLayer)
+            let (system, messages) =
+                self.build_prompt_native(state, &filtered_tools, &observation);
 
-        // 8. Parse response
-        let thinking = self.parse_response(&response);
+            let response = self
+                .call_llm_native(
+                    provider.clone(),
+                    &system,
+                    &messages,
+                    level,
+                    Some(&tool_defs),
+                )
+                .await?;
 
-        // Log parse result for debugging
-        if thinking.is_err() {
-            tracing::warn!(
-                response_len = response.len(),
-                response_full = %response,
+            tracing::debug!(
+                has_tool_calls = response.has_tool_calls(),
+                has_text = response.text.is_some(),
+                stop_reason = ?response.stop_reason,
                 think_level = %level,
-                "Failed to parse LLM response - full content logged"
+                "Native tool_use LLM response"
             );
+
+            let mut thinking = self.build_thinking_from_native_response(response)?;
+
+            // If token usage was not populated by the provider, estimate it
+            if thinking.tokens_used.is_none() {
+                let input_chars: usize =
+                    system.len() + messages.iter().map(|m| m.content.len()).sum::<usize>();
+                let reasoning_len = thinking
+                    .reasoning
+                    .as_ref()
+                    .map(|r| r.len())
+                    .unwrap_or(0);
+                let estimated_tokens = (input_chars + reasoning_len) / 4;
+                thinking.tokens_used = Some(estimated_tokens);
+            }
+
+            tracing::info!(
+                subsystem = "thinker",
+                event = "native_response_completed",
+                model = %model_id.as_str(),
+                tokens_used = ?thinking.tokens_used,
+                decision_type = thinking.decision.decision_type(),
+                "thinker native tool_use response completed"
+            );
+
+            self.decision_parser.validate(&thinking.decision)?;
+            Ok(thinking)
+        } else {
+            // === Existing JSON-in-text path (unchanged) ===
+
+            // Build prompt (includes ToolsLayer and ResponseFormatLayer)
+            let (system, messages) = self.build_prompt(state, &filtered_tools, &observation);
+
+            // Call LLM with specified thinking level
+            let response = self
+                .call_llm_with_level(provider, &system, &messages, level)
+                .await?;
+
+            // Log raw LLM response for debugging parse failures
+            tracing::debug!(
+                response_len = response.len(),
+                response_preview = %response.chars().take(500).collect::<String>(),
+                think_level = %level,
+                "LLM raw response (preview)"
+            );
+
+            // Parse response
+            let thinking = self.parse_response(&response);
+
+            // Log parse result for debugging
+            if thinking.is_err() {
+                tracing::warn!(
+                    response_len = response.len(),
+                    response_full = %response,
+                    think_level = %level,
+                    "Failed to parse LLM response - full content logged"
+                );
+            }
+
+            let mut thinking = thinking?;
+
+            // Estimate token usage from response length.
+            // This is a rough approximation (~4 chars per token) until providers
+            // return actual usage metadata. The guard needs a non-zero value to work.
+            let input_chars: usize =
+                system.len() + messages.iter().map(|m| m.content.len()).sum::<usize>();
+            let estimated_tokens = (input_chars + response.len()) / 4;
+            thinking.tokens_used = Some(estimated_tokens);
+
+            tracing::info!(
+                subsystem = "thinker",
+                event = "response_completed",
+                model = %model_id.as_str(),
+                estimated_tokens = estimated_tokens,
+                response_len = response.len(),
+                decision_type = thinking.decision.decision_type(),
+                "thinker LLM response completed"
+            );
+
+            // Validate decision
+            self.decision_parser.validate(&thinking.decision)?;
+
+            Ok(thinking)
         }
-
-        let mut thinking = thinking?;
-
-        // 9. Estimate token usage from response length.
-        // This is a rough approximation (~4 chars per token) until providers
-        // return actual usage metadata. The guard needs a non-zero value to work.
-        let input_chars: usize = system.len() + messages.iter().map(|m| m.content.len()).sum::<usize>();
-        let estimated_tokens = (input_chars + response.len()) / 4;
-        thinking.tokens_used = Some(estimated_tokens);
-
-        tracing::info!(
-            subsystem = "thinker",
-            event = "response_completed",
-            model = %model_id.as_str(),
-            estimated_tokens = estimated_tokens,
-            response_len = response.len(),
-            decision_type = thinking.decision.decision_type(),
-            "thinker LLM response completed"
-        );
-
-        // 10. Validate decision
-        self.decision_parser.validate(&thinking.decision)?;
-
-        Ok(thinking)
     }
 
     fn current_think_level(&self) -> ThinkLevel {
@@ -767,6 +1054,279 @@ mod tests {
             thinking.decision,
             crate::agent_loop::Decision::UseTool { .. }
         ));
+    }
+
+    // =========================================================================
+    // Native tool_use decision mapping tests
+    // =========================================================================
+
+    #[test]
+    fn test_map_native_tool_call_to_decision_complete() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+
+        let tc = crate::providers::adapter::NativeToolCall {
+            id: "call_1".into(),
+            name: "__complete".into(),
+            arguments: serde_json::json!({"summary": "Task done successfully"}),
+        };
+
+        let decision = thinker.map_native_tool_call_to_decision(&tc);
+        match decision {
+            crate::agent_loop::Decision::Complete { summary } => {
+                assert_eq!(summary, "Task done successfully");
+            }
+            other => panic!("Expected Complete, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_map_native_tool_call_to_decision_ask_user() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+
+        let tc = crate::providers::adapter::NativeToolCall {
+            id: "call_2".into(),
+            name: "__ask_user".into(),
+            arguments: serde_json::json!({
+                "question": "Which format?",
+                "options": ["PNG", "JPEG"]
+            }),
+        };
+
+        let decision = thinker.map_native_tool_call_to_decision(&tc);
+        match decision {
+            crate::agent_loop::Decision::AskUser { question, options } => {
+                assert_eq!(question, "Which format?");
+                assert_eq!(options, Some(vec!["PNG".to_string(), "JPEG".to_string()]));
+            }
+            other => panic!("Expected AskUser, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_map_native_tool_call_to_decision_fail() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+
+        let tc = crate::providers::adapter::NativeToolCall {
+            id: "call_3".into(),
+            name: "__fail".into(),
+            arguments: serde_json::json!({"reason": "File not found"}),
+        };
+
+        let decision = thinker.map_native_tool_call_to_decision(&tc);
+        match decision {
+            crate::agent_loop::Decision::Fail { reason } => {
+                assert_eq!(reason, "File not found");
+            }
+            other => panic!("Expected Fail, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_map_native_tool_call_to_decision_real_tool() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+
+        let tc = crate::providers::adapter::NativeToolCall {
+            id: "call_4".into(),
+            name: "web_search".into(),
+            arguments: serde_json::json!({"query": "rust async"}),
+        };
+
+        let decision = thinker.map_native_tool_call_to_decision(&tc);
+        match decision {
+            crate::agent_loop::Decision::UseTool {
+                tool_name,
+                arguments,
+            } => {
+                assert_eq!(tool_name, "web_search");
+                assert_eq!(arguments["query"], "rust async");
+            }
+            other => panic!("Expected UseTool, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_build_thinking_from_native_response_with_tool_calls() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+
+        let response = ProviderResponse {
+            text: None,
+            tool_calls: vec![crate::providers::adapter::NativeToolCall {
+                id: "call_5".into(),
+                name: "bash".into(),
+                arguments: serde_json::json!({"command": "ls -la"}),
+            }],
+            thinking: Some("I need to list files".into()),
+            stop_reason: crate::providers::adapter::StopReason::ToolUse,
+            usage: Some(crate::providers::adapter::TokenUsage {
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_read_tokens: None,
+            }),
+        };
+
+        let thinking = thinker.build_thinking_from_native_response(response).unwrap();
+        assert_eq!(thinking.reasoning.as_deref(), Some("I need to list files"));
+        assert_eq!(thinking.tokens_used, Some(150));
+        assert!(matches!(
+            thinking.decision,
+            crate::agent_loop::Decision::UseTool { .. }
+        ));
+    }
+
+    #[test]
+    fn test_build_thinking_from_native_response_text_fallback() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+
+        // Provider returned text without tool calls — should fallback to DecisionParser
+        let response = ProviderResponse {
+            text: Some(r#"{"reasoning": "done", "action": {"type": "complete", "summary": "All done"}}"#.into()),
+            tool_calls: vec![],
+            thinking: None,
+            stop_reason: crate::providers::adapter::StopReason::EndTurn,
+            usage: None,
+        };
+
+        let thinking = thinker.build_thinking_from_native_response(response).unwrap();
+        assert!(matches!(
+            thinking.decision,
+            crate::agent_loop::Decision::Complete { .. }
+        ));
+    }
+
+    #[test]
+    fn test_build_thinking_from_native_response_empty_error() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+
+        let response = ProviderResponse::default();
+
+        let result = thinker.build_thinking_from_native_response(response);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_collect_native_tool_defs_includes_virtual_tools() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+
+        let tools = vec![
+            crate::agent_loop::ToolInfo {
+                name: "bash".into(),
+                description: "Run commands".into(),
+                parameters_schema: r#"{"type":"object","properties":{"command":{"type":"string"}}}"#.into(),
+                category: None,
+            },
+        ];
+
+        let defs = thinker.collect_native_tool_defs(&tools);
+        // Should have 1 real tool + 3 virtual tools
+        assert_eq!(defs.len(), 4);
+        assert_eq!(defs[0].name, "bash");
+        assert_eq!(defs[1].name, "__complete");
+        assert_eq!(defs[2].name, "__ask_user");
+        assert_eq!(defs[3].name, "__fail");
+    }
+
+    #[test]
+    fn test_native_prompt_config_sets_flag() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+
+        let config = thinker.native_prompt_config();
+        assert!(config.native_tools_enabled);
+    }
+
+    #[tokio::test]
+    async fn test_thinker_native_tool_use_path() {
+        // Mock provider that supports native tools and returns a ProviderResponse with tool calls
+        struct NativeMockProvider;
+
+        impl AiProvider for NativeMockProvider {
+            fn process(
+                &self,
+                _input: &str,
+                _system_prompt: Option<&str>,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<String>> + Send + '_>> {
+                Box::pin(async { Ok(String::new()) })
+            }
+
+            fn process_with_payload<'a>(
+                &'a self,
+                _payload: crate::providers::adapter::RequestPayload<'a>,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
+                Box::pin(async {
+                    Ok(ProviderResponse {
+                        text: None,
+                        tool_calls: vec![crate::providers::adapter::NativeToolCall {
+                            id: "call_native_1".into(),
+                            name: "__complete".into(),
+                            arguments: serde_json::json!({"summary": "Native tool use works!"}),
+                        }],
+                        thinking: Some("Thinking through native path".into()),
+                        stop_reason: crate::providers::adapter::StopReason::ToolUse,
+                        usage: Some(crate::providers::adapter::TokenUsage {
+                            input_tokens: 200,
+                            output_tokens: 100,
+                            cache_read_tokens: None,
+                        }),
+                    })
+                })
+            }
+
+            fn supports_native_tools(&self) -> bool {
+                true
+            }
+
+            fn name(&self) -> &str {
+                "native-mock"
+            }
+
+            fn color(&self) -> &str {
+                "#00FF00"
+            }
+        }
+
+        let provider: Arc<dyn AiProvider> = Arc::new(NativeMockProvider);
+        let registry = Arc::new(MockProviderRegistry { provider });
+
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+
+        let state = LoopState::new(
+            "test-session".to_string(),
+            "Test native tool use".to_string(),
+            RequestContext::empty(),
+        );
+
+        let result = thinker.think(&state, &[]).await;
+        assert!(result.is_ok(), "Native tool_use path should succeed");
+
+        let thinking = result.unwrap();
+        assert_eq!(
+            thinking.reasoning.as_deref(),
+            Some("Thinking through native path")
+        );
+        assert_eq!(thinking.tokens_used, Some(300));
+        match thinking.decision {
+            crate::agent_loop::Decision::Complete { summary } => {
+                assert_eq!(summary, "Native tool use works!");
+            }
+            other => panic!("Expected Complete, got {:?}", other),
+        }
     }
 }
 

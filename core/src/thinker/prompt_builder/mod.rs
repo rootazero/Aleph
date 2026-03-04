@@ -72,6 +72,12 @@ pub struct PromptConfig {
     pub skill_instructions: Option<String>,
     /// Token budget for system prompt assembly.
     pub token_budget: TokenBudget,
+    /// Whether native tool_use is enabled (skip ToolsLayer and ResponseFormatLayer)
+    ///
+    /// When true, tool definitions are passed via the API's native tool_use mechanism
+    /// rather than injected into the system prompt. This also means the LLM will
+    /// respond with structured tool calls rather than JSON-in-text.
+    pub native_tools_enabled: bool,
 }
 
 impl Default for PromptConfig {
@@ -88,6 +94,7 @@ impl Default for PromptConfig {
             thinking_transparency: false,
             skill_instructions: None,
             token_budget: TokenBudget::default(),
+            native_tools_enabled: false,
         }
     }
 }

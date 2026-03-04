@@ -17,6 +17,10 @@ impl PromptLayer for ResponseFormatLayer {
         ]
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
+        if _input.config.native_tools_enabled {
+            return; // LLM uses native tool_use for ALL decisions, no JSON format needed
+        }
+
         output.push_str("## Response Format\n");
         output.push_str("You must respond with a JSON object:\n");
         output.push_str("```json\n");
@@ -135,5 +139,23 @@ mod tests {
     #[test]
     fn test_response_format_priority() {
         assert_eq!(ResponseFormatLayer.priority(), 1200);
+    }
+
+    #[test]
+    fn test_response_format_skipped_when_native_tools_enabled() {
+        let layer = ResponseFormatLayer;
+        let config = PromptConfig {
+            native_tools_enabled: true,
+            ..Default::default()
+        };
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(
+            out.is_empty(),
+            "ResponseFormatLayer should skip when native_tools_enabled=true"
+        );
     }
 }
