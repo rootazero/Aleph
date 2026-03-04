@@ -7,7 +7,7 @@ use crate::clipboard::ImageData;
 use crate::config::ProviderConfig;
 use crate::core::MediaAttachment;
 use crate::error::Result;
-use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector};
 use std::future::Future;
@@ -56,7 +56,7 @@ impl HttpProvider {
     }
 
     /// Execute a request (non-streaming)
-    async fn execute(&self, payload: RequestPayload<'_>) -> Result<String> {
+    async fn execute(&self, payload: RequestPayload<'_>) -> Result<ProviderResponse> {
         // PII filtering: filter outbound message before sending to API
         let filtered_input;
         let final_payload = if let Some(engine_lock) = crate::pii::PiiEngine::global() {
@@ -117,22 +117,24 @@ impl HttpProvider {
             }
         })?;
 
-        let response_text = self.adapter.parse_response(response).await?;
+        let provider_response = self.adapter.parse_response(response).await?;
 
-        // Secret leak detection: scan inbound response
-        if let LeakDecision::Block { reason, .. } = detector.scan_inbound(&response_text) {
-            tracing::warn!(
-                provider = %self.name,
-                reason = %reason,
-                "Blocked inbound response: secret leak detected"
-            );
-            return Err(crate::error::AlephError::PermissionDenied {
-                message: format!("Secret leak in response blocked: {}", reason),
-                suggestion: Some("The AI provider response contained a secret value.".into()),
-            });
+        // Secret leak detection: scan inbound response TEXT only
+        if let Some(ref text) = provider_response.text {
+            if let LeakDecision::Block { reason, .. } = detector.scan_inbound(text) {
+                tracing::warn!(
+                    provider = %self.name,
+                    reason = %reason,
+                    "Blocked inbound response: secret leak detected"
+                );
+                return Err(crate::error::AlephError::PermissionDenied {
+                    message: format!("Secret leak in response blocked: {}", reason),
+                    suggestion: Some("The AI provider response contained a secret value.".into()),
+                });
+            }
         }
 
-        Ok(response_text)
+        Ok(provider_response)
     }
 
 }
@@ -148,7 +150,8 @@ impl AiProvider for HttpProvider {
 
         Box::pin(async move {
             let payload = RequestPayload::new(&input).with_system(system_prompt.as_deref());
-            self.execute(payload).await
+            let response = self.execute(payload).await?;
+            Ok(response.text.unwrap_or_default())
         })
     }
 
@@ -166,7 +169,8 @@ impl AiProvider for HttpProvider {
             let payload = RequestPayload::new(&input)
                 .with_system(system_prompt.as_deref())
                 .with_image(image.as_ref());
-            self.execute(payload).await
+            let response = self.execute(payload).await?;
+            Ok(response.text.unwrap_or_default())
         })
     }
 
@@ -184,7 +188,8 @@ impl AiProvider for HttpProvider {
             let payload = RequestPayload::new(&input)
                 .with_system(system_prompt.as_deref())
                 .with_attachments(attachments.as_deref());
-            self.execute(payload).await
+            let response = self.execute(payload).await?;
+            Ok(response.text.unwrap_or_default())
         })
     }
 
@@ -201,7 +206,8 @@ impl AiProvider for HttpProvider {
             let payload = RequestPayload::new(&input)
                 .with_system(system_prompt.as_deref())
                 .with_force_standard_mode(force_standard_mode);
-            self.execute(payload).await
+            let response = self.execute(payload).await?;
+            Ok(response.text.unwrap_or_default())
         })
     }
 
@@ -218,7 +224,8 @@ impl AiProvider for HttpProvider {
             let payload = RequestPayload::new(&input)
                 .with_system(system_prompt.as_deref())
                 .with_think_level(Some(think_level));
-            self.execute(payload).await
+            let response = self.execute(payload).await?;
+            Ok(response.text.unwrap_or_default())
         })
     }
 
@@ -256,8 +263,20 @@ impl AiProvider for HttpProvider {
                 .with_think_level(Some(think_level))
                 .with_temperature(temperature)
                 .with_max_tokens(max_tokens);
-            self.execute(payload).await
+            let response = self.execute(payload).await?;
+            Ok(response.text.unwrap_or_default())
         })
+    }
+
+    fn process_with_payload<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move { self.execute(payload).await })
+    }
+
+    fn supports_native_tools(&self) -> bool {
+        self.adapter.supports_native_tools()
     }
 
     fn name(&self) -> &str {

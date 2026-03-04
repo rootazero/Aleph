@@ -5,7 +5,7 @@
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload};
 use crate::providers::chatgpt::types::{
     InputItem, ReasoningConfig, ResponseResource, ResponsesRequest, StreamEvent,
 };
@@ -145,7 +145,7 @@ impl ProtocolAdapter for ChatGptProtocol {
         Ok(builder)
     }
 
-    async fn parse_response(&self, response: reqwest::Response) -> Result<String> {
+    async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse> {
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -205,7 +205,7 @@ impl ProtocolAdapter for ChatGptProtocol {
         if result.is_empty() {
             Err(AlephError::provider("Empty response from Codex"))
         } else {
-            Ok(result)
+            Ok(ProviderResponse::text_only(result))
         }
     }
 

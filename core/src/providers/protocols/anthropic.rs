@@ -6,7 +6,7 @@ use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload};
 use crate::providers::anthropic::{
     ContentBlock, ErrorResponse, ImageSource, Message, MessageContent, MessagesRequest,
     MessagesResponse, SystemBlock, ThinkingBlock,
@@ -246,7 +246,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             .json(&request_body))
     }
 
-    async fn parse_response(&self, response: reqwest::Response) -> Result<String> {
+    async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse> {
         let status = response.status();
 
         if !status.is_success() {
@@ -281,7 +281,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             .collect::<Vec<_>>()
             .join("");
 
-        Ok(text)
+        Ok(ProviderResponse::text_only(text))
     }
 
     async fn parse_stream(
