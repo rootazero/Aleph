@@ -46,7 +46,7 @@ fn job_to_json(job: &CronJob) -> Value {
         "last_run_at": job.last_run_at,
         "consecutive_failures": job.consecutive_failures,
         "priority": job.priority,
-        "schedule_kind": format!("{:?}", job.schedule_kind),
+        "schedule_kind": job.schedule_kind.as_str(),
     })
 }
 
@@ -324,7 +324,7 @@ pub async fn handle_run(request: JsonRpcRequest, cron: SharedCronService) -> Jso
     // Lock is dropped here
 
     // Execute the job outside the lock
-    match executor(job.agent_id.clone(), job.prompt.clone(), job.id.clone()).await {
+    match executor(job.id.clone(), job.agent_id.clone(), job.prompt.clone()).await {
         Ok(response) => JsonRpcResponse::success(
             request.id,
             json!({
