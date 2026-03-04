@@ -15,6 +15,7 @@ pub mod info;
 pub mod memory_cmd;
 pub mod models_cmd;
 pub mod plugins_cmd;
+pub mod poe_cmd;
 pub mod providers_cmd;
 pub mod session;
 pub mod skills_cmd;

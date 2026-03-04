@@ -150,6 +150,12 @@ enum Commands {
         action: PluginsAction,
     },
 
+    /// POE (Principle-Operation-Evaluation) execution engine
+    Poe {
+        #[command(subcommand)]
+        action: PoeAction,
+    },
+
     /// Skill management (file-based and markdown)
     Skills {
         #[command(subcommand)]
@@ -320,6 +326,50 @@ enum PluginsAction {
         /// JSON params (optional)
         params: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum PoeAction {
+    /// Run a POE task
+    Run {
+        /// Task instruction
+        instruction: String,
+        /// Success manifest (JSON)
+        #[arg(long)]
+        manifest: Option<String>,
+        /// Enable streaming
+        #[arg(long)]
+        stream: bool,
+    },
+    /// Get POE task status
+    Status {
+        /// Task ID
+        task_id: String,
+    },
+    /// Cancel a running POE task
+    Cancel {
+        /// Task ID
+        task_id: String,
+    },
+    /// List all POE tasks
+    List,
+    /// Prepare a POE contract
+    Prepare {
+        /// Task instruction
+        instruction: String,
+    },
+    /// Sign (approve) a pending contract
+    Sign {
+        /// Contract ID
+        contract_id: String,
+    },
+    /// Reject a pending contract
+    Reject {
+        /// Contract ID
+        contract_id: String,
+    },
+    /// List pending contracts
+    Pending,
 }
 
 #[derive(Subcommand)]
@@ -624,6 +674,43 @@ async fn main() -> CliResult<()> {
                     cli.json,
                 )
                 .await?;
+            }
+        },
+        Some(Commands::Poe { action }) => match action {
+            PoeAction::Run {
+                instruction,
+                manifest,
+                stream,
+            } => {
+                commands::poe_cmd::run(
+                    &server_url,
+                    &instruction,
+                    manifest.as_deref(),
+                    stream,
+                    cli.json,
+                )
+                .await?;
+            }
+            PoeAction::Status { task_id } => {
+                commands::poe_cmd::status(&server_url, &task_id, cli.json).await?;
+            }
+            PoeAction::Cancel { task_id } => {
+                commands::poe_cmd::cancel(&server_url, &task_id, cli.json).await?;
+            }
+            PoeAction::List => {
+                commands::poe_cmd::list(&server_url, cli.json).await?;
+            }
+            PoeAction::Prepare { instruction } => {
+                commands::poe_cmd::prepare(&server_url, &instruction, cli.json).await?;
+            }
+            PoeAction::Sign { contract_id } => {
+                commands::poe_cmd::sign(&server_url, &contract_id, cli.json).await?;
+            }
+            PoeAction::Reject { contract_id } => {
+                commands::poe_cmd::reject(&server_url, &contract_id, cli.json).await?;
+            }
+            PoeAction::Pending => {
+                commands::poe_cmd::pending(&server_url, cli.json).await?;
             }
         },
         Some(Commands::Skills { action }) => match action {
