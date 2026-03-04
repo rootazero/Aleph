@@ -132,6 +132,12 @@ enum Commands {
         action: ProvidersAction,
     },
 
+    /// Model management
+    Models {
+        #[command(subcommand)]
+        action: ModelsAction,
+    },
+
     /// Generate shell completion script
     Completion {
         /// Shell type (bash, zsh, fish, elvish, powershell)
@@ -217,6 +223,16 @@ enum ProvidersAction {
     SetDefault { name: String },
     /// Remove a provider
     Remove { name: String },
+}
+
+#[derive(Subcommand)]
+enum ModelsAction {
+    /// List all available models
+    List,
+    /// Get model details
+    Get { model_id: String },
+    /// Show model capabilities
+    Capabilities { model_id: String },
 }
 
 #[derive(Subcommand)]
@@ -356,6 +372,17 @@ async fn main() -> CliResult<()> {
             }
             ProvidersAction::Remove { name } => {
                 commands::providers_cmd::remove(&server_url, &name, cli.json).await?;
+            }
+        },
+        Some(Commands::Models { action }) => match action {
+            ModelsAction::List => {
+                commands::models_cmd::list(&server_url, cli.json).await?;
+            }
+            ModelsAction::Get { model_id } => {
+                commands::models_cmd::get(&server_url, &model_id, cli.json).await?;
+            }
+            ModelsAction::Capabilities { model_id } => {
+                commands::models_cmd::capabilities(&server_url, &model_id, cli.json).await?;
             }
         },
         Some(Commands::Gateway { action }) => match action {
