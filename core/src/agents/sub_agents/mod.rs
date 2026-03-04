@@ -86,6 +86,7 @@ mod result_collector;
 mod run;
 mod registry;
 mod persistence;
+pub mod authority;
 
 pub use traits::{
     SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult,
@@ -112,3 +113,6 @@ pub use result_collector::{
 pub use run::{SubAgentRun, RunStatus, RunOutcome, Lane, CleanupPolicy};
 pub use registry::{LifecycleEvent, RegistryStats, SubAgentRegistry};
 pub use persistence::SubAgentRunFact;
+
+// Sub-agent authorization
+pub use authority::{ConfigDrivenAuthority, PermissiveAuthority, SubagentAuthority};
