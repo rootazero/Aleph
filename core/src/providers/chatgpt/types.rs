@@ -1,97 +1,178 @@
-//! ChatGPT backend-api request/response types
+//! Codex Responses API request/response types
+//!
+//! Types for the OpenAI Responses API used by the Codex backend
+//! at `chatgpt.com/backend-api/codex/responses`.
 
 use serde::{Deserialize, Serialize};
 
-/// ChatGPT backend-api conversation request
+// ─── Request Types ───────────────────────────────────────────────
+
+/// Codex Responses API request body
 #[derive(Debug, Serialize)]
-pub struct ChatGptRequest {
-    pub action: String,
-    pub messages: Vec<ChatGptMessage>,
+pub struct ResponsesRequest {
     pub model: String,
+    pub input: Vec<InputItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub conversation_id: Option<String>,
-    pub parent_message_id: String,
-    pub timezone_offset_min: i32,
-    pub conversation_mode: ConversationMode,
-}
-
-/// A message in the ChatGPT conversation
-#[derive(Debug, Serialize)]
-pub struct ChatGptMessage {
-    pub id: String,
-    pub author: Author,
-    pub content: ChatGptContent,
+    pub instructions: Option<String>,
+    pub stream: bool,
+    pub store: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
+    pub reasoning: Option<ReasoningConfig>,
 }
 
-/// Message author
-#[derive(Debug, Serialize)]
-pub struct Author {
-    pub role: String,
+/// Input item in the conversation (tagged union)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum InputItem {
+    /// A text message from user, assistant, or developer
+    #[serde(rename = "message")]
+    Message { role: String, content: String },
 }
 
-/// Message content
-#[derive(Debug, Serialize)]
-pub struct ChatGptContent {
-    pub content_type: String,
-    pub parts: Vec<serde_json::Value>,
-}
-
-/// Conversation mode controls built-in tools
-#[derive(Debug, Serialize)]
-pub struct ConversationMode {
-    pub kind: String,
+/// Reasoning effort configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReasoningConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub plugin_ids: Option<Vec<String>>,
+    pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
-/// ChatGPT SSE response message wrapper
+// ─── Response Types ──────────────────────────────────────────────
+
+/// Top-level response resource from the Responses API
 #[derive(Debug, Deserialize)]
-pub struct ChatGptStreamResponse {
-    pub message: Option<ChatGptResponseMessage>,
-    pub conversation_id: Option<String>,
-    pub error: Option<serde_json::Value>,
-}
-
-/// Response message from ChatGPT
-#[derive(Debug, Deserialize)]
-pub struct ChatGptResponseMessage {
+pub struct ResponseResource {
     pub id: String,
-    pub author: ResponseAuthor,
-    pub content: ResponseContent,
-    #[serde(default)]
     pub status: String,
-}
-
-/// Response author
-#[derive(Debug, Deserialize)]
-pub struct ResponseAuthor {
-    pub role: String,
-}
-
-/// Response content
-#[derive(Debug, Deserialize)]
-pub struct ResponseContent {
-    pub content_type: String,
+    pub model: String,
     #[serde(default)]
-    pub parts: Vec<serde_json::Value>,
-}
-
-/// ChatGPT available models response
-#[derive(Debug, Deserialize)]
-pub struct ModelsResponse {
-    pub models: Vec<ModelInfo>,
-}
-
-/// Model information
-#[derive(Debug, Deserialize)]
-pub struct ModelInfo {
-    pub slug: String,
-    pub title: String,
+    pub output: Vec<OutputItem>,
     #[serde(default)]
-    pub tags: Vec<String>,
+    pub usage: Option<UsageInfo>,
+    #[serde(default)]
+    pub error: Option<ResponseError>,
 }
+
+/// Output item in the response (tagged union)
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum OutputItem {
+    /// Assistant text message
+    #[serde(rename = "message")]
+    Message {
+        id: String,
+        #[serde(default)]
+        role: String,
+        #[serde(default)]
+        content: Vec<ContentPart>,
+    },
+    /// Reasoning trace
+    #[serde(rename = "reasoning")]
+    Reasoning {
+        id: String,
+        #[serde(default)]
+        content: Option<String>,
+        #[serde(default)]
+        summary: Option<String>,
+    },
+    /// Function/tool call
+    #[serde(rename = "function_call")]
+    FunctionCall {
+        id: String,
+        call_id: String,
+        name: String,
+        arguments: String,
+    },
+}
+
+/// Text content part within a message output
+#[derive(Debug, Deserialize)]
+pub struct ContentPart {
+    /// Usually "output_text"
+    #[serde(rename = "type")]
+    pub part_type: String,
+    pub text: String,
+}
+
+/// Token usage information
+#[derive(Debug, Deserialize)]
+pub struct UsageInfo {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub total_tokens: u32,
+}
+
+/// Error detail in a failed response
+#[derive(Debug, Deserialize)]
+pub struct ResponseError {
+    pub code: String,
+    pub message: String,
+}
+
+// ─── Streaming Event Types ───────────────────────────────────────
+
+/// SSE streaming events from the Responses API
+///
+/// Events arrive as `event: <type>\ndata: <json>\n\n`.
+/// We only need to act on TextDelta (for streaming text),
+/// Completed (final state), and Failed (error).
+/// Other events are accepted but ignored.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum StreamEvent {
+    #[serde(rename = "response.created")]
+    Created { response: ResponseResource },
+
+    #[serde(rename = "response.in_progress")]
+    InProgress { response: ResponseResource },
+
+    #[serde(rename = "response.output_item.added")]
+    OutputItemAdded {
+        output_index: usize,
+        item: OutputItem,
+    },
+
+    #[serde(rename = "response.content_part.added")]
+    ContentPartAdded {
+        output_index: usize,
+        content_index: usize,
+    },
+
+    #[serde(rename = "response.output_text.delta")]
+    TextDelta {
+        delta: String,
+        output_index: usize,
+        content_index: usize,
+    },
+
+    #[serde(rename = "response.output_text.done")]
+    TextDone {
+        text: String,
+        output_index: usize,
+        content_index: usize,
+    },
+
+    #[serde(rename = "response.output_item.done")]
+    OutputItemDone {
+        output_index: usize,
+        item: OutputItem,
+    },
+
+    #[serde(rename = "response.content_part.done")]
+    ContentPartDone {
+        output_index: usize,
+        content_index: usize,
+    },
+
+    #[serde(rename = "response.completed")]
+    Completed { response: ResponseResource },
+
+    #[serde(rename = "response.failed")]
+    Failed { response: ResponseResource },
+}
+
+// ─── Security Types (unchanged, used by security.rs) ─────────────
 
 /// Chat requirements response (security tokens)
 #[derive(Debug, Deserialize)]
