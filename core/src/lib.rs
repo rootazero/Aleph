@@ -104,6 +104,7 @@ pub mod initialization {
 }
 
 pub mod gateway;
+pub mod group_chat;
 pub mod cron;
 
 #[cfg(test)]
