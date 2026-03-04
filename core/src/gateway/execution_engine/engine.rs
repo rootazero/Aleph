@@ -434,6 +434,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             ActiveWorkspace::default_global()
         };
 
+        // Override memory filter with agent-specific scoping for non-main agents
+        let active_workspace = {
+            let mut ws = active_workspace;
+            let agent_id = request.session_key.agent_id();
+            if agent_id != "main" {
+                ws.memory_filter = crate::memory::workspace::WorkspaceFilter::Single(
+                    agent_id.to_string(),
+                );
+            }
+            ws
+        };
+
         debug!(
             run_id = run_id,
             workspace_id = %active_workspace.workspace_id,
