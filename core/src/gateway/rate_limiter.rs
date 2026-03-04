@@ -97,6 +97,21 @@ pub struct RateLimitConfig {
 }
 
 impl RateLimitConfig {
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            auth: WindowConfig { max_requests: 10, window_secs: 60, lockout_secs: Some(300) },
+            rpc_default: WindowConfig { max_requests: 100, window_secs: 60, lockout_secs: None },
+            rpc_write: WindowConfig { max_requests: 20, window_secs: 60, lockout_secs: None },
+            rpc_heavy: WindowConfig { max_requests: 5, window_secs: 60, lockout_secs: None },
+            exempt_loopback: true,
+        }
+    }
+}
+
+impl RateLimitConfig {
     /// Look up the [`WindowConfig`] for a given scope.
     fn config_for(&self, scope: &RateLimitScope) -> &WindowConfig {
         match scope {

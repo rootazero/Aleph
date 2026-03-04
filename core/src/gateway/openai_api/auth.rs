@@ -7,10 +7,11 @@ use serde_json::json;
 /// Strips the "Bearer " prefix (case-insensitive first letter) and returns
 /// the token. Returns `None` if the prefix is missing or the token is empty.
 pub fn extract_bearer_token(header_value: &str) -> Option<&str> {
-    let stripped = if let Some(rest) = header_value.strip_prefix("Bearer ") {
-        rest
-    } else if let Some(rest) = header_value.strip_prefix("bearer ") {
-        rest
+    // Case-insensitive check for "Bearer " prefix (RFC 6750)
+    let stripped = if header_value.len() >= 7
+        && header_value[..7].eq_ignore_ascii_case("bearer ")
+    {
+        &header_value[7..]
     } else {
         return None;
     };
@@ -75,6 +76,16 @@ mod tests {
         // Lowercase bearer prefix
         assert_eq!(
             extract_bearer_token("bearer sk-abc123"),
+            Some("sk-abc123")
+        );
+
+        // Mixed case (RFC 6750 case-insensitive)
+        assert_eq!(
+            extract_bearer_token("BEARER sk-abc123"),
+            Some("sk-abc123")
+        );
+        assert_eq!(
+            extract_bearer_token("BeArEr sk-abc123"),
             Some("sk-abc123")
         );
 
