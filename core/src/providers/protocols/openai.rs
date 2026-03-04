@@ -5,9 +5,12 @@
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload};
+use crate::providers::adapter::{
+    NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
+};
 use crate::providers::openai::{
-    ChatCompletionResponse, ContentBlock, ImageUrl, Message, MessageContent,
+    ChatCompletionResponse, ContentBlock, ImageUrl, Message, MessageContent, OpenAiFunction,
+    OpenAiTool,
 };
 use crate::providers::shared::{
     build_document_context, combine_with_document_context, separate_attachments,
@@ -288,6 +291,24 @@ impl ProtocolAdapter for OpenAiProtocol {
             }
         }
 
+        // Add tool definitions for function calling
+        if let Some(tool_defs) = payload.tools {
+            let tools: Vec<OpenAiTool> = tool_defs
+                .iter()
+                .map(|td| OpenAiTool {
+                    tool_type: "function".into(),
+                    function: OpenAiFunction {
+                        name: td.name.clone(),
+                        description: td.description.clone(),
+                        parameters: td.parameters.clone(),
+                    },
+                })
+                .collect();
+            body["tools"] = serde_json::to_value(&tools).map_err(|e| {
+                AlephError::provider(format!("Failed to serialize tools: {}", e))
+            })?;
+        }
+
         // Validate API key
         let api_key = config
             .api_key
@@ -326,13 +347,59 @@ impl ProtocolAdapter for OpenAiProtocol {
             AlephError::provider(format!("Failed to parse response: {}", e))
         })?;
 
-        let text = completion
+        let choice = completion
             .choices
             .first()
-            .map(|c| c.message.content.clone())
             .ok_or_else(|| AlephError::provider("No response choices"))?;
 
-        Ok(ProviderResponse::text_only(text))
+        let mut provider_response = ProviderResponse::default();
+
+        // Extract text content (nullable when tool_calls present)
+        if let Some(ref content) = choice.message.content {
+            if !content.is_empty() {
+                provider_response.text = Some(content.clone());
+            }
+        }
+
+        // Extract tool calls
+        if let Some(ref tool_calls) = choice.message.tool_calls {
+            for tc in tool_calls {
+                let arguments: serde_json::Value =
+                    serde_json::from_str(&tc.function.arguments).unwrap_or_else(|e| {
+                        error!(
+                            tool = %tc.function.name,
+                            args = %tc.function.arguments,
+                            error = %e,
+                            "Failed to parse tool call arguments, using empty object"
+                        );
+                        serde_json::Value::Object(Default::default())
+                    });
+                provider_response.tool_calls.push(NativeToolCall {
+                    id: tc.id.clone(),
+                    name: tc.function.name.clone(),
+                    arguments,
+                });
+            }
+        }
+
+        // Map finish_reason to StopReason
+        provider_response.stop_reason = match choice.finish_reason.as_deref() {
+            Some("stop") => StopReason::EndTurn,
+            Some("tool_calls") => StopReason::ToolUse,
+            Some("length") => StopReason::MaxTokens,
+            _ => StopReason::Unknown,
+        };
+
+        // Extract usage statistics
+        if let Some(ref usage) = completion.usage {
+            provider_response.usage = Some(TokenUsage {
+                input_tokens: usage.prompt_tokens,
+                output_tokens: usage.completion_tokens,
+                cache_read_tokens: None,
+            });
+        }
+
+        Ok(provider_response)
     }
 
     async fn parse_stream(
@@ -373,6 +440,10 @@ impl ProtocolAdapter for OpenAiProtocol {
         Ok(Box::pin(stream))
     }
 
+    fn supports_native_tools(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "openai"
     }
@@ -382,6 +453,9 @@ impl ProtocolAdapter for OpenAiProtocol {
 mod tests {
     use super::*;
     use crate::config::ProviderConfig;
+    use crate::providers::openai::{
+        OpenAiFunctionCall, OpenAiToolCall,
+    };
 
     #[test]
     fn test_build_endpoint_default() {
@@ -497,5 +571,228 @@ mod tests {
         // In prepend mode, system prompt is merged into user message
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");
+    }
+
+    // =========================================================================
+    // Native Function Calling Tests
+    // =========================================================================
+
+    #[test]
+    fn test_supports_native_tools() {
+        let protocol = OpenAiProtocol::new(Client::new());
+        assert!(protocol.supports_native_tools());
+    }
+
+    #[test]
+    fn test_openai_tool_serialization() {
+        let tool = OpenAiTool {
+            tool_type: "function".into(),
+            function: OpenAiFunction {
+                name: "search".into(),
+                description: "Search the web".into(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"}
+                    },
+                    "required": ["query"]
+                }),
+            },
+        };
+
+        let json = serde_json::to_value(&tool).unwrap();
+        assert_eq!(json["type"], "function");
+        assert_eq!(json["function"]["name"], "search");
+        assert_eq!(json["function"]["description"], "Search the web");
+        assert!(json["function"]["parameters"]["properties"]["query"].is_object());
+    }
+
+    #[test]
+    fn test_parse_tool_calls_response() {
+        // Simulate a real OpenAI response JSON with tool_calls
+        let response_json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": "{\"location\":\"San Francisco\",\"unit\":\"celsius\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": 20,
+                "total_tokens": 70
+            }
+        });
+
+        let response: ChatCompletionResponse =
+            serde_json::from_value(response_json).unwrap();
+
+        assert_eq!(response.choices.len(), 1);
+        let choice = &response.choices[0];
+
+        // content should be None (null in JSON)
+        assert!(choice.message.content.is_none());
+
+        // tool_calls should be present
+        let tool_calls = choice.message.tool_calls.as_ref().unwrap();
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "call_abc123");
+        assert_eq!(tool_calls[0].function.name, "get_weather");
+        assert_eq!(
+            tool_calls[0].function.arguments,
+            r#"{"location":"San Francisco","unit":"celsius"}"#
+        );
+
+        // finish_reason should be tool_calls
+        assert_eq!(choice.finish_reason.as_deref(), Some("tool_calls"));
+
+        // Usage should be present
+        let usage = response.usage.as_ref().unwrap();
+        assert_eq!(usage.prompt_tokens, 50);
+        assert_eq!(usage.completion_tokens, 20);
+    }
+
+    #[test]
+    fn test_parse_text_response() {
+        // Simulate a text-only response
+        let response_json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "Hello! How can I help you?"
+                },
+                "finish_reason": "stop"
+            }]
+        });
+
+        let response: ChatCompletionResponse =
+            serde_json::from_value(response_json).unwrap();
+
+        let choice = &response.choices[0];
+        assert_eq!(
+            choice.message.content.as_deref(),
+            Some("Hello! How can I help you?")
+        );
+        assert!(choice.message.tool_calls.is_none());
+        assert_eq!(choice.finish_reason.as_deref(), Some("stop"));
+    }
+
+    #[test]
+    fn test_parse_function_arguments() {
+        // Test that JSON string arguments parse correctly
+        let tc = OpenAiToolCall {
+            id: "call_123".into(),
+            call_type: Some("function".into()),
+            function: OpenAiFunctionCall {
+                name: "search".into(),
+                arguments: r#"{"query":"rust async","limit":10}"#.into(),
+            },
+        };
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&tc.function.arguments).unwrap();
+        assert_eq!(parsed["query"], "rust async");
+        assert_eq!(parsed["limit"], 10);
+    }
+
+    #[test]
+    fn test_parse_malformed_function_arguments() {
+        // Test fallback for malformed arguments
+        let bad_args = "not valid json {{{";
+        let result: serde_json::Value = serde_json::from_str(bad_args)
+            .unwrap_or(serde_json::Value::Object(Default::default()));
+        assert!(result.is_object());
+        assert!(result.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_build_request_includes_tools() {
+        use crate::dispatcher::ToolDefinition;
+        use crate::ToolCategory;
+
+        let protocol = OpenAiProtocol::new(Client::new());
+        let tools = vec![ToolDefinition::new(
+            "search",
+            "Search the web",
+            serde_json::json!({
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"]
+            }),
+            ToolCategory::Builtin,
+        )];
+        let payload = RequestPayload::new("Hello").with_tools(Some(&tools));
+        let mut config = ProviderConfig::test_config("gpt-4o");
+        config.api_key = Some("test-key".to_string());
+
+        let request = protocol.build_request(&payload, &config, false).unwrap();
+        let built = request.build().unwrap();
+
+        // Verify the body contains tools in OpenAI format
+        let body_bytes = built.body().unwrap().as_bytes().unwrap();
+        let body: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
+        assert!(body["tools"].is_array());
+        assert_eq!(body["tools"][0]["type"], "function");
+        assert_eq!(body["tools"][0]["function"]["name"], "search");
+        assert_eq!(body["tools"][0]["function"]["description"], "Search the web");
+        assert!(body["tools"][0]["function"]["parameters"]["properties"]["query"].is_object());
+    }
+
+    #[test]
+    fn test_build_request_no_tools_when_none() {
+        let protocol = OpenAiProtocol::new(Client::new());
+        let payload = RequestPayload::new("Hello");
+        let mut config = ProviderConfig::test_config("gpt-4o");
+        config.api_key = Some("test-key".to_string());
+
+        let request = protocol.build_request(&payload, &config, false).unwrap();
+        let built = request.build().unwrap();
+
+        let body_bytes = built.body().unwrap().as_bytes().unwrap();
+        let body: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
+        // tools field should be absent when no tools provided
+        assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn test_build_request_with_multiple_tools() {
+        use crate::dispatcher::ToolDefinition;
+        use crate::ToolCategory;
+
+        let protocol = OpenAiProtocol::new(Client::new());
+        let tools = vec![
+            ToolDefinition::new(
+                "search",
+                "Search the web",
+                serde_json::json!({"type": "object", "properties": {}}),
+                ToolCategory::Builtin,
+            ),
+            ToolDefinition::new(
+                "read_file",
+                "Read a file",
+                serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+                ToolCategory::Builtin,
+            ),
+        ];
+        let payload = RequestPayload::new("Hello").with_tools(Some(&tools));
+        let mut config = ProviderConfig::test_config("gpt-4o");
+        config.api_key = Some("test-key".to_string());
+
+        let request = protocol.build_request(&payload, &config, false).unwrap();
+        let built = request.build().unwrap();
+
+        let body_bytes = built.body().unwrap().as_bytes().unwrap();
+        let body: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
+        let tools_array = body["tools"].as_array().unwrap();
+        assert_eq!(tools_array.len(), 2);
+        assert_eq!(tools_array[0]["function"]["name"], "search");
+        assert_eq!(tools_array[1]["function"]["name"], "read_file");
     }
 }

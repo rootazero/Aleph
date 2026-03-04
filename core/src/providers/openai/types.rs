@@ -3,6 +3,7 @@
 /// Data structures for OpenAI chat completion requests and responses.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Request body for OpenAI chat completion API
 #[derive(Debug, Serialize)]
@@ -59,20 +60,76 @@ pub struct ImageUrl {
     pub detail: Option<String>,
 }
 
+// =============================================================================
+// Tool Types (for function calling)
+// =============================================================================
+
+/// Tool definition for OpenAI API function calling
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenAiTool {
+    #[serde(rename = "type")]
+    pub tool_type: String, // always "function"
+    pub function: OpenAiFunction,
+}
+
+/// Function definition within an OpenAI tool
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenAiFunction {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
+/// Tool call in OpenAI API response
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenAiToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    #[allow(dead_code)] // Deserialized from API response
+    pub call_type: Option<String>,
+    pub function: OpenAiFunctionCall,
+}
+
+/// Function call details within a tool call
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenAiFunctionCall {
+    pub name: String,
+    /// JSON string — needs parsing via serde_json::from_str()
+    pub arguments: String,
+}
+
+// =============================================================================
+// Response Types
+// =============================================================================
+
 /// Response from OpenAI chat completion API
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionResponse {
     pub choices: Vec<Choice>,
+    pub usage: Option<OpenAiUsage>,
+}
+
+/// Token usage statistics from OpenAI API
+#[derive(Debug, Deserialize)]
+pub struct OpenAiUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    #[allow(dead_code)] // Deserialized from API response
+    pub total_tokens: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Choice {
     pub message: ResponseMessage,
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ResponseMessage {
-    pub content: String,
+    /// Nullable — can be null when tool_calls are present
+    pub content: Option<String>,
+    /// Tool calls from the model (present when model invokes functions)
+    pub tool_calls: Option<Vec<OpenAiToolCall>>,
 }
 
 /// Error response from OpenAI API
