@@ -410,16 +410,16 @@ async fn main() -> CliResult<()> {
 
     match cli.command {
         Some(Commands::Health) => {
-            commands::health::run(&server_url).await?;
+            commands::health::run(&server_url, cli.json).await?;
         }
         Some(Commands::Info) => {
             commands::info::run(&server_url, cli.json).await?;
         }
         Some(Commands::Tools { category }) => {
-            commands::tools::run(&server_url, category.as_deref()).await?;
+            commands::tools::run(&server_url, category.as_deref(), cli.json).await?;
         }
         Some(Commands::Connect { device }) => {
-            commands::connect::run(&server_url, &device, &config).await?;
+            commands::connect::run(&server_url, &device, &config, cli.json).await?;
         }
         Some(Commands::Ask { message, session }) => {
             commands::ask::run(&server_url, &message, session.as_deref(), &config).await?;
@@ -429,13 +429,13 @@ async fn main() -> CliResult<()> {
         }
         Some(Commands::Session { action }) => match action {
             SessionAction::List => {
-                commands::session::list(&server_url, &config).await?;
+                commands::session::list(&server_url, &config, cli.json).await?;
             }
             SessionAction::New { name } => {
-                commands::session::create(&server_url, name.as_deref(), &config).await?;
+                commands::session::create(&server_url, name.as_deref(), &config, cli.json).await?;
             }
             SessionAction::Delete { key } => {
-                commands::session::delete(&server_url, &key, &config).await?;
+                commands::session::delete(&server_url, &key, &config, cli.json).await?;
             }
         },
         Some(Commands::Guests { action }) => {
@@ -446,30 +446,30 @@ async fn main() -> CliResult<()> {
                 commands::config_cmd::file();
             }
             ConfigAction::Get { section } => {
-                commands::config_cmd::get(&server_url, section.as_deref(), &config).await?;
+                commands::config_cmd::get(&server_url, section.as_deref(), &config, cli.json).await?;
             }
             ConfigAction::Set { path, value } => {
-                commands::config_cmd::set(&server_url, &path, &value, &config).await?;
+                commands::config_cmd::set(&server_url, &path, &value, &config, cli.json).await?;
             }
             ConfigAction::Validate => {
-                commands::config_cmd::validate(&server_url, &config).await?;
+                commands::config_cmd::validate(&server_url, &config, cli.json).await?;
             }
         },
         Some(Commands::Daemon { action }) => match action {
             DaemonAction::Status => {
-                commands::daemon::status(&server_url).await?;
+                commands::daemon::status(&server_url, cli.json).await?;
             }
             DaemonAction::Start => {
                 commands::daemon::start()?;
             }
             DaemonAction::Stop => {
-                commands::daemon::stop(&server_url).await?;
+                commands::daemon::stop(&server_url, cli.json).await?;
             }
             DaemonAction::Restart => {
-                commands::daemon::restart(&server_url).await?;
+                commands::daemon::restart(&server_url, cli.json).await?;
             }
             DaemonAction::Logs { lines, level } => {
-                commands::daemon::logs(&server_url, lines, level.as_deref()).await?;
+                commands::daemon::logs(&server_url, lines, level.as_deref(), cli.json).await?;
             }
         },
         Some(Commands::Providers { action }) => match action {

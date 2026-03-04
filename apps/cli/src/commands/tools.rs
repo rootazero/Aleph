@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 use crate::client::AlephClient;
 use crate::error::CliResult;
+use crate::output;
 
 #[derive(Deserialize)]
 struct Command {
@@ -21,8 +22,15 @@ struct CommandsResponse {
 }
 
 /// Run commands list
-pub async fn run(server_url: &str, category: Option<&str>) -> CliResult<()> {
+pub async fn run(server_url: &str, category: Option<&str>, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
+
+    if json {
+        let result: serde_json::Value = client.call("commands.list", None::<()>).await?;
+        output::print_json(&result);
+        client.close().await?;
+        return Ok(());
+    }
 
     let response: CommandsResponse = client.call("commands.list", None::<()>).await?;
 
