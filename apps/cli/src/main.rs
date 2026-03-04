@@ -22,6 +22,7 @@ mod client;
 mod commands;
 mod config;
 mod error;
+pub(crate) mod output;
 mod tui;
 
 use clap::{Parser, Subcommand};
@@ -47,6 +48,10 @@ pub(crate) struct Cli {
     /// Configuration file path
     #[arg(short, long)]
     config: Option<String>,
+
+    /// Output in JSON format (applies to all subcommands)
+    #[arg(long, global = true)]
+    json: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
