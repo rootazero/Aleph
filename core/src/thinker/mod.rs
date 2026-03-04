@@ -51,6 +51,7 @@ pub mod runtime_context;
 pub mod streaming;
 pub mod tool_filter;
 pub mod user_profile;
+pub mod virtual_tools;
 
 use crate::sync_primitives::Arc;
 
