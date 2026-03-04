@@ -223,6 +223,7 @@ mod tests {
                 },
                 structured: None,
                 tokens_used: None,
+                tool_call_id: None,
             },
             action: Action::ToolCall {
                 tool_name: format!("tool_{}", id),

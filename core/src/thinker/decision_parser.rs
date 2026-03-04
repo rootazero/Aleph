@@ -47,6 +47,7 @@ impl DecisionParser {
                 decision,
                 structured: None,
                 tokens_used: None,
+                tool_call_id: None,
             });
         }
 
@@ -101,6 +102,7 @@ impl DecisionParser {
             decision,
             structured,
             tokens_used: None,
+            tool_call_id: None,
         })
     }
 
@@ -160,6 +162,7 @@ impl DecisionParser {
                 },
                 structured,
                 tokens_used: None,
+                tool_call_id: None,
             })
         }
     }
@@ -259,7 +262,7 @@ impl DecisionParser {
         };
 
         let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
-        Some(Thinking { reasoning, decision, structured, tokens_used: None })
+        Some(Thinking { reasoning, decision, structured, tokens_used: None, tool_call_id: None })
     }
 
     /// Extract JSON from response (handles markdown code blocks)
@@ -556,6 +559,7 @@ impl DecisionParser {
             decision: Decision::Complete { summary },
             structured,
             tokens_used: None,
+            tool_call_id: None,
         })
     }
 
@@ -593,6 +597,7 @@ impl DecisionParser {
                     },
                     structured,
                     tokens_used: None,
+                    tool_call_id: None,
                 });
             }
         }
@@ -641,6 +646,7 @@ impl DecisionParser {
             decision: Decision::Complete { summary },
             structured,
             tokens_used: None,
+            tool_call_id: None,
         })
     }
 

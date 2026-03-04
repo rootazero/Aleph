@@ -355,6 +355,7 @@ mod tests {
                 result_summary: "Found results".to_string(),
                 result_output: r#"{"results": ["item1", "item2"]}"#.to_string(),
                 success: true,
+                tool_call_id: None,
             }],
             available_tools: vec![],
             attachments: vec![],
