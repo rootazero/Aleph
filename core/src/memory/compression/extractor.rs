@@ -4,24 +4,13 @@
 //! Facts are third-person statements about the user.
 
 use crate::error::AlephError;
-
-/// Safely truncate a string at character boundaries (UTF-8 safe)
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_string();
-    }
-    let end_byte = s
-        .char_indices()
-        .nth(max_chars)
-        .map(|(i, _)| i)
-        .unwrap_or(s.len());
-    format!("{}...", &s[..end_byte])
-}
 use crate::memory::context::{FactType, MemoryEntry, MemoryFact};
 use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
+use crate::utils::json_extract::extract_json_robust;
 use serde::{Deserialize, Serialize};
 use crate::sync_primitives::Arc;
+use tracing::warn;
 
 /// A fact extracted by the LLM before embedding
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,15 +180,22 @@ EXAMPLE OUTPUT:
         memories: &[MemoryEntry],
     ) -> Result<Vec<ExtractedFact>, AlephError> {
         // Try to find JSON in the response
-        let json_str = self.extract_json_from_response(response)?;
+        let json_value = match extract_json_robust(response) {
+            Some(v) => v,
+            None => {
+                warn!("No JSON found in extraction response, returning empty facts");
+                return Ok(vec![]);
+            }
+        };
 
         // Parse JSON
-        let parsed: ExtractionResponse = serde_json::from_str(&json_str).map_err(|e| {
-            AlephError::other(format!(
-                "Failed to parse extraction response: {}. Response: {}",
-                e, json_str
-            ))
-        })?;
+        let parsed: ExtractionResponse = match serde_json::from_value(json_value) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Failed to parse extraction JSON as ExtractionResponse: {}, returning empty facts", e);
+                return Ok(vec![]);
+            }
+        };
 
         // Validate and fix source_ids
         let memory_ids: Vec<String> = memories.iter().map(|m| m.id.clone()).collect();
@@ -225,105 +221,64 @@ EXAMPLE OUTPUT:
         Ok(validated_facts)
     }
 
-    /// Extract JSON from potentially wrapped response
-    fn extract_json_from_response(&self, response: &str) -> Result<String, AlephError> {
-        let trimmed = response.trim();
-
-        // Try to find JSON object directly
-        if trimmed.starts_with('{') {
-            // Find matching closing brace
-            let mut depth = 0;
-            let mut end_idx = 0;
-
-            for (idx, ch) in trimmed.chars().enumerate() {
-                match ch {
-                    '{' => depth += 1,
-                    '}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            end_idx = idx + 1;
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            if end_idx > 0 {
-                return Ok(trimmed[..end_idx].to_string());
-            }
-        }
-
-        // Try to extract from markdown code block
-        if let Some(start) = trimmed.find("```json") {
-            if let Some(end) = trimmed[start + 7..].find("```") {
-                return Ok(trimmed[start + 7..start + 7 + end].trim().to_string());
-            }
-        }
-
-        if let Some(start) = trimmed.find("```") {
-            if let Some(end) = trimmed[start + 3..].find("```") {
-                let content = trimmed[start + 3..start + 3 + end].trim();
-                if content.starts_with('{') {
-                    return Ok(content.to_string());
-                }
-            }
-        }
-
-        // Try to find JSON anywhere in the response
-        if let Some(start) = trimmed.find('{') {
-            if let Some(end) = trimmed.rfind('}') {
-                if end > start {
-                    return Ok(trimmed[start..=end].to_string());
-                }
-            }
-        }
-
-        Err(AlephError::other(format!(
-            "Could not find valid JSON in response: {}",
-            truncate_str(trimmed, 200)
-        )))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    #[ignore = "Requires embedding model download"]
-    async fn test_extract_json_simple() {
-        let extractor = create_test_extractor();
-
+    #[test]
+    fn test_extract_json_simple() {
         let response = r#"{"facts": []}"#;
-        let result = extractor.extract_json_from_response(response);
-        assert!(result.is_ok());
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
     }
 
-    #[tokio::test]
-    #[ignore = "Requires embedding model download"]
-    async fn test_extract_json_with_markdown() {
-        let extractor = create_test_extractor();
-
+    #[test]
+    fn test_extract_json_with_markdown() {
         let response = r#"Here are the facts:
 ```json
 {"facts": [{"content": "test", "fact_type": "other", "confidence": 0.9, "source_ids": []}]}
 ```"#;
 
-        let result = extractor.extract_json_from_response(response);
-        assert!(result.is_ok());
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
     }
 
-    #[tokio::test]
-    #[ignore = "Requires embedding model download"]
-    async fn test_extract_json_with_text_before() {
-        let extractor = create_test_extractor();
-
+    #[test]
+    fn test_extract_json_with_text_before() {
         let response = r#"Based on the conversations, I extracted:
 {"facts": [{"content": "User likes Rust", "fact_type": "preference", "confidence": 0.8, "source_ids": []}]}"#;
 
-        let result = extractor.extract_json_from_response(response);
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_parse_extraction_plain_text_fallback() {
+        use crate::memory::context::ContextAnchor;
+
+        let extractor = create_test_extractor();
+        let memories = vec![MemoryEntry {
+            id: "mem-1".to_string(),
+            user_input: "Hello".to_string(),
+            ai_output: "Hi there".to_string(),
+            context: ContextAnchor {
+                app_bundle_id: String::new(),
+                window_title: String::new(),
+                timestamp: 0,
+                topic_id: "single-turn".to_string(),
+            },
+            embedding: None,
+            namespace: "owner".to_string(),
+            workspace: "default".to_string(),
+            similarity_score: None,
+        }];
+
+        // Plain text should return empty vec, not error
+        let result = extractor.parse_extraction_response("这是纯文本回复", &memories);
         assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
     }
 
     fn create_test_extractor() -> FactExtractor {

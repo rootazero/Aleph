@@ -6,11 +6,12 @@
 
 use serde::Deserialize;
 use crate::sync_primitives::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::config::GenerationConfig;
 use crate::dispatcher::planner::GenerationProviders;
 use crate::generation::GenerationType;
+use crate::utils::json_extract::extract_json_robust;
 
 /// Multi-step indicator patterns
 const MULTI_STEP_PATTERNS: &[&str] = &[
@@ -43,7 +44,7 @@ const SINGLE_STEP_LENGTH_THRESHOLD: usize = 10;
 
 use crate::dispatcher::agent_types::TaskGraph;
 use crate::dispatcher::planner::{LlmTaskPlanner, TaskPlanner};
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::providers::AiProvider;
 
 /// Result of task analysis
@@ -239,8 +240,24 @@ risk 值: "low"（分析、生成文本） 或 "high"（调用API、执行代码
         response: &str,
         original_input: &str,
     ) -> Result<AnalysisResult> {
-        let json_str = extract_json(response)?;
-        let parsed: AnalysisResponse = serde_json::from_str(&json_str)?;
+        let json_value = match extract_json_robust(response) {
+            Some(v) => v,
+            None => {
+                warn!("No JSON found in analysis response, falling back to SingleStep");
+                return Ok(AnalysisResult::SingleStep {
+                    intent: original_input.to_string(),
+                });
+            }
+        };
+        let parsed: AnalysisResponse = match serde_json::from_value(json_value) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Failed to parse analysis JSON: {}, falling back to SingleStep", e);
+                return Ok(AnalysisResult::SingleStep {
+                    intent: original_input.to_string(),
+                });
+            }
+        };
 
         match parsed {
             AnalysisResponse::Single { intent } => Ok(AnalysisResult::SingleStep { intent }),
@@ -338,47 +355,6 @@ fn default_risk() -> String {
     "low".to_string()
 }
 
-/// Extract JSON from a response that may be wrapped in markdown code blocks
-fn extract_json(response: &str) -> Result<String> {
-    let trimmed = response.trim();
-
-    // Try to find JSON in ```json code block
-    if let Some(start) = trimmed.find("```json") {
-        let after_marker = &trimmed[start + 7..];
-        if let Some(end) = after_marker.find("```") {
-            return Ok(after_marker[..end].trim().to_string());
-        }
-    }
-
-    // Try to find JSON in generic ``` code block
-    if let Some(start) = trimmed.find("```") {
-        let after_marker = &trimmed[start + 3..];
-        // Skip the language identifier line
-        if let Some(newline) = after_marker.find('\n') {
-            let content = &after_marker[newline + 1..];
-            if let Some(end) = content.find("```") {
-                return Ok(content[..end].trim().to_string());
-            }
-        }
-    }
-
-    // Try direct JSON
-    if trimmed.starts_with('{') {
-        return Ok(trimmed.to_string());
-    }
-
-    // Find first { and last }
-    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-        if end > start {
-            return Ok(trimmed[start..=end].to_string());
-        }
-    }
-
-    Err(AlephError::other(
-        "Could not extract JSON from response",
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,9 +412,9 @@ mod tests {
     #[test]
     fn test_extract_json_direct() {
         let response = r#"{"type": "single", "intent": "test"}"#;
-        let json = extract_json(response).unwrap();
-        assert!(json.contains("single"));
-        assert!(json.contains("test"));
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["type"], "single");
     }
 
     #[test]
@@ -451,9 +427,9 @@ mod tests {
 
 Let me know if you need more details."#;
 
-        let json = extract_json(response).unwrap();
-        assert!(json.contains("single"));
-        assert!(json.contains("translate"));
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["intent"], "translate text");
     }
 
     #[test]
@@ -466,22 +442,25 @@ Let me know if you need more details."#;
 
 Done."#;
 
-        let json = extract_json(response).unwrap();
-        assert!(json.contains("multi"));
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["type"], "multi");
     }
 
     #[test]
     fn test_extract_json_embedded() {
         let response = r#"Based on my analysis: {"type": "single", "intent": "answer question"} That's my conclusion."#;
-        let json = extract_json(response).unwrap();
-        assert!(json.contains("single"));
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["type"], "single");
     }
 
     #[test]
-    fn test_extract_json_failure() {
+    fn test_extract_json_plain_text_fallback() {
+        // Plain text (no JSON) should return None from extract_json_robust
         let response = "No JSON here, just text";
-        let result = extract_json(response);
-        assert!(result.is_err());
+        let result = extract_json_robust(response);
+        assert!(result.is_none());
     }
 
     #[tokio::test]

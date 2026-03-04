@@ -14,6 +14,7 @@ use crate::dispatcher::agent_types::{
 };
 use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
+use crate::utils::json_extract::extract_json_robust;
 
 /// LLM-based task planner
 pub struct LlmTaskPlanner {
@@ -29,21 +30,46 @@ impl LlmTaskPlanner {
     /// Parse the LLM response into a TaskGraph
     fn parse_response(&self, response: &str, original_request: &str) -> Result<TaskGraph> {
         // Extract JSON from response (may be wrapped in markdown code blocks)
-        let json_str = extract_json(response)?;
-
-        // Parse the JSON
-        let plan: PlanResponse = serde_json::from_str(&json_str).map_err(|e| {
-            error!("Failed to parse LLM response as JSON: {}", e);
-            AlephError::Other {
-                message: format!("Invalid task plan JSON: {}", e),
-                suggestion: Some(
-                    "The AI response was not valid JSON. Try rephrasing your request.".to_string(),
-                ),
+        let json_value = match extract_json_robust(response) {
+            Some(v) => v,
+            None => {
+                warn!("No JSON found in planner response, falling back to single-task graph");
+                return self.build_single_task_fallback(original_request);
             }
-        })?;
+        };
+
+        // Parse the JSON into PlanResponse
+        let plan: PlanResponse = match serde_json::from_value(json_value) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Failed to parse planner JSON as PlanResponse: {}, falling back to single-task graph", e);
+                return self.build_single_task_fallback(original_request);
+            }
+        };
 
         // Convert to TaskGraph
         self.build_task_graph(plan, original_request)
+    }
+
+    /// Build a fallback single-task graph when JSON parsing fails
+    fn build_single_task_fallback(&self, original_request: &str) -> Result<TaskGraph> {
+        let graph_id = Uuid::new_v4().to_string();
+        let mut graph = TaskGraph::new(&graph_id, original_request);
+        graph.metadata.original_request = Some(original_request.to_string());
+
+        let task = Task::new(
+            "t1",
+            original_request,
+            TaskType::AiInference(AiTask {
+                prompt: original_request.to_string(),
+                requires_privacy: false,
+                has_images: false,
+                output_format: None,
+            }),
+        );
+        graph.add_task(task);
+
+        Ok(graph)
     }
 
     /// Build a TaskGraph from the parsed plan
@@ -336,48 +362,6 @@ impl TaskPlanner for LlmTaskPlanner {
     }
 }
 
-/// Extract JSON from a response that may be wrapped in markdown code blocks
-fn extract_json(response: &str) -> Result<String> {
-    let trimmed = response.trim();
-
-    // Try to find JSON in code block
-    if let Some(start) = trimmed.find("```json") {
-        let json_start = start + 7;
-        if let Some(end) = trimmed[json_start..].find("```") {
-            return Ok(trimmed[json_start..json_start + end].trim().to_string());
-        }
-    }
-
-    // Try to find JSON in generic code block
-    if let Some(start) = trimmed.find("```") {
-        let json_start = trimmed[start + 3..].find('\n').map(|n| start + 4 + n);
-        if let Some(json_start) = json_start {
-            if let Some(end) = trimmed[json_start..].find("```") {
-                return Ok(trimmed[json_start..json_start + end].trim().to_string());
-            }
-        }
-    }
-
-    // Try direct JSON parse
-    if trimmed.starts_with('{') {
-        return Ok(trimmed.to_string());
-    }
-
-    // Find first { and last }
-    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-        if end > start {
-            return Ok(trimmed[start..=end].to_string());
-        }
-    }
-
-    Err(AlephError::Other {
-        message: "Could not find JSON in response".to_string(),
-        suggestion: Some(
-            "The AI did not return a valid task plan. Try rephrasing your request.".to_string(),
-        ),
-    })
-}
-
 /// Parse language string to Language enum
 fn parse_language(lang: Option<&str>) -> Language {
     match lang {
@@ -460,8 +444,9 @@ mod tests {
     #[test]
     fn test_extract_json_direct() {
         let response = r#"{"title": "Test", "tasks": []}"#;
-        let json = extract_json(response).unwrap();
-        assert!(json.contains("title"));
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["title"], "Test");
     }
 
     #[test]
@@ -474,15 +459,31 @@ mod tests {
 
 Let me know if you need changes."#;
 
-        let json = extract_json(response).unwrap();
-        assert!(json.contains("title"));
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["title"], "Test");
     }
 
     #[test]
     fn test_extract_json_embedded() {
         let response = r#"I'll create a plan: {"title": "Test", "tasks": []} Done!"#;
-        let json = extract_json(response).unwrap();
-        assert!(json.contains("title"));
+        let result = extract_json_robust(response);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["title"], "Test");
+    }
+
+    #[test]
+    fn test_parse_response_plain_text_fallback() {
+        use crate::providers::MockProvider;
+        let provider = Arc::new(MockProvider::new(""));
+        let planner = LlmTaskPlanner::new(provider);
+
+        // Non-JSON response should fallback to single-task graph
+        let result = planner.parse_response("这是一个纯文本回复，没有JSON", "帮我分析这个问题");
+        assert!(result.is_ok());
+        let graph = result.unwrap();
+        assert_eq!(graph.tasks.len(), 1);
+        assert_eq!(graph.metadata.original_request.as_deref(), Some("帮我分析这个问题"));
     }
 
     #[test]
