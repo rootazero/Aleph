@@ -56,6 +56,7 @@ pub mod channel_registry;
 pub mod interfaces;
 pub mod device_store;
 pub mod presence;
+pub mod bind_mode;
 pub mod hot_reload;
 pub mod http_server;
 pub mod inbound_context;
@@ -115,7 +116,8 @@ pub use handlers::auth::{AuthContext, handle_connect, handle_pairing_approve, ha
 pub use handlers::events::{SubscriptionManager, handle_subscribe, handle_unsubscribe, handle_list as handle_events_list};
 pub use handlers::plugins::{init_extension_manager, is_extension_manager_initialized};
 pub use event_bus::{TopicEvent, TopicFilter, topic_matches};
-pub use hot_reload::{ConfigWatcher, ConfigWatcherConfig, ConfigEvent, ConfigWatcherError};
+pub use bind_mode::BindMode;
+pub use hot_reload::{ConfigWatcher, ConfigWatcherConfig, ConfigEvent, ConfigWatcherError, ReloadMode};
 pub use inbound_context::{InboundContext, ReplyRoute};
 pub use pairing_store::{PairingStore, PairingRequest, PairingError, SqlitePairingStore};
 pub use reply_emitter::{ReplyEmitter, ReplyEmitterConfig};
