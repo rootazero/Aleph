@@ -1,4 +1,5 @@
 pub mod chat;
+pub mod cron;
 
 // API layer for Gateway RPC methods
 // Provides type-safe interfaces for interacting with the Gateway
