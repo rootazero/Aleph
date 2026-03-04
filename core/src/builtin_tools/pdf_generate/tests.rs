@@ -220,3 +220,117 @@ fn test_build_full_html_document() {
     assert!(doc.contains("<h1>"));
     assert!(doc.contains("font-family"));
 }
+
+// ── Browser engine integration tests ────────────────────────────────────
+
+/// Integration test: browser engine generates valid PDF from Markdown.
+/// Skipped if Chrome is not available.
+#[tokio::test]
+async fn test_browser_engine_markdown_pdf() {
+    if !super::browser_engine::is_chrome_available() {
+        eprintln!("Skipping browser engine test — Chrome not available");
+        return;
+    }
+
+    let tool = PdfGenerateTool::new();
+    let temp_dir = std::env::temp_dir();
+    let output_path = temp_dir.join("test_browser_engine.pdf");
+
+    let markdown_content = r#"# Browser Engine Test
+
+This PDF was rendered by the **browser engine**.
+
+## Features
+
+- Proper heading sizes
+- **Bold** and *italic* text
+- Lists with correct indentation
+
+## Table
+
+| Feature | Status |
+|---------|--------|
+| Headings | Done |
+| Lists | Done |
+| Tables | Done |
+| Code blocks | Done |
+
+## Code
+
+```rust
+fn main() {
+    println!("Hello from browser engine!");
+}
+```
+
+> This is a blockquote. It should have a left border and muted color.
+
+中文内容测试：这是一段中文文本，用于验证 CJK 字体渲染。
+"#;
+
+    let args = PdfGenerateArgs {
+        content: markdown_content.to_string(),
+        output_path: output_path.to_string_lossy().to_string(),
+        format: ContentFormat::Markdown,
+        page_size: PageSize::A4,
+        title: Some("Browser Engine Test".to_string()),
+        font_size: 12.0,
+        line_spacing: 1.5,
+        margin_mm: 20.0,
+        render_engine: RenderEngine::Browser,
+    };
+
+    let result = tool.call(args).await;
+    assert!(result.is_ok(), "Browser engine should produce PDF: {:?}", result.err());
+
+    let output = result.unwrap();
+    assert!(output.success);
+    assert!(output.pages >= 1);
+
+    // Verify PDF file exists and has substantial content
+    let metadata = std::fs::metadata(&output_path).unwrap();
+    assert!(metadata.len() > 5000, "Browser-rendered PDF should be substantial");
+
+    // Cleanup
+    let _ = std::fs::remove_file(&output_path);
+}
+
+/// Test: Auto engine falls back to native when Chrome is unavailable.
+#[tokio::test]
+async fn test_auto_engine_fallback() {
+    let tool = PdfGenerateTool::new();
+    let temp_dir = std::env::temp_dir();
+    let output_path = temp_dir.join("test_auto_fallback.pdf");
+
+    let args = PdfGenerateArgs {
+        content: "# Fallback Test\n\nThis should work regardless of Chrome.\n".to_string(),
+        output_path: output_path.to_string_lossy().to_string(),
+        format: ContentFormat::Markdown,
+        page_size: PageSize::A4,
+        title: None,
+        font_size: 12.0,
+        line_spacing: 1.5,
+        margin_mm: 20.0,
+        render_engine: RenderEngine::Auto,
+    };
+
+    let result = tool.call(args).await;
+    assert!(result.is_ok(), "Auto engine should always succeed: {:?}", result.err());
+
+    let output = result.unwrap();
+    assert!(output.success);
+
+    let _ = std::fs::remove_file(&output_path);
+}
+
+// ── Schema verification ─────────────────────────────────────────────────
+
+#[test]
+fn test_args_schema_includes_render_engine() {
+    let schema = schemars::schema_for!(PdfGenerateArgs);
+    let json = serde_json::to_string_pretty(&schema).unwrap();
+    assert!(json.contains("render_engine"), "Schema should include render_engine field");
+    assert!(json.contains("auto"), "Schema should include auto option");
+    assert!(json.contains("browser"), "Schema should include browser option");
+    assert!(json.contains("native"), "Schema should include native option");
+}
