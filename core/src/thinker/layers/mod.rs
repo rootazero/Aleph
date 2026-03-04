@@ -34,6 +34,9 @@ mod security;
 mod protocol_tokens;
 mod operational_guidelines;
 
+// --- Bootstrap layer ---
+pub mod bootstrap;
+
 // --- Re-exports ---
 pub use role::RoleLayer;
 pub use guidelines::GuidelinesLayer;
@@ -61,3 +64,4 @@ pub use environment::EnvironmentLayer;
 pub use security::SecurityLayer;
 pub use protocol_tokens::ProtocolTokensLayer;
 pub use operational_guidelines::OperationalGuidelinesLayer;
+pub use bootstrap::BootstrapLayer;
