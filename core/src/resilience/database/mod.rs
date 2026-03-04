@@ -9,6 +9,7 @@
 /// Schema migration utilities are in the `migration` submodule.
 
 mod events;
+mod group_chat;
 mod memory_events;
 mod poe_contracts;
 mod poe_events;

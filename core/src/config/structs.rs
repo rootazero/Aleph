@@ -82,6 +82,12 @@ pub struct Config {
     /// Sub-agent synchronization configuration
     #[serde(default)]
     pub subagent: SubAgentConfig,
+    /// Group chat configuration (multi-agent persona orchestration)
+    #[serde(default)]
+    pub group_chat: GroupChatConfig,
+    /// Preset persona definitions for group chat
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub personas: Vec<PersonaConfig>,
     /// Skill evolution configuration (Skill Compiler - Phase 10)
     #[serde(default)]
     pub evolution: EvolutionConfig,
@@ -211,6 +217,8 @@ impl Default for Config {
             generation: GenerationConfig::default(),
             orchestrator: OrchestratorConfig::default(),
             subagent: SubAgentConfig::default(),
+            group_chat: GroupChatConfig::default(),
+            personas: Vec::new(),
             evolution: EvolutionConfig::default(),
             privacy: PrivacyConfig::default(),
             profiles: HashMap::new(),
