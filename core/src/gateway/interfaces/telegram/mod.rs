@@ -24,6 +24,7 @@
 //! ```
 
 pub mod config;
+pub mod group_chat;
 pub mod message_ops;
 
 pub use config::{TelegramConfig, WebhookConfig};
