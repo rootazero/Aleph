@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use futures_util::{StreamExt, SinkExt};
@@ -16,13 +17,19 @@ use axum::{
     response::IntoResponse,
 };
 use super::control_plane::create_control_plane_router;
+use super::openai_api::routes::{openai_routes, OpenAiApiState};
 
-use super::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, PARSE_ERROR};
-use super::event_bus::GatewayEventBus;
+use super::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, PARSE_ERROR, RATE_LIMITED, INTERNAL_ERROR};
+use super::event_bus::{GatewayEventBus, TopicEvent};
 use super::handlers::HandlerRegistry;
 use super::handlers::events::{
     SubscriptionManager, handle_subscribe, handle_unsubscribe, handle_list as handle_events_list,
 };
+use super::presence::{PresenceTracker, PresenceEntry};
+use super::state_version::StateVersionTracker;
+use super::rate_limiter::{RateLimiter, RateLimitKey, RateLimitConfig, scope_for_method, RateLimitError};
+use super::lane::{LaneManager, LaneConfig};
+use super::event_scope::EventScopeGuard;
 use crate::providers::protocols::ProtocolLoader;
 use notify::RecommendedWatcher;
 use notify_debouncer_full::{Debouncer, FileIdMap};
@@ -83,6 +90,11 @@ pub struct GatewaySharedState {
     pub guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
     pub require_auth: bool,
     pub max_connections: usize,
+    pub presence: Arc<PresenceTracker>,
+    pub state_versions: Arc<StateVersionTracker>,
+    pub rate_limiter: Arc<RateLimiter>,
+    pub lane_manager: Arc<LaneManager>,
+    pub event_scope_guard: Arc<EventScopeGuard>,
 }
 
 /// Configuration for the Gateway server
@@ -138,6 +150,18 @@ pub struct GatewayServer {
     /// Held for ownership: dropping the Debouncer stops the watcher.
     #[allow(dead_code)]
     protocol_watcher: Option<Debouncer<RecommendedWatcher, FileIdMap>>,
+    /// Presence tracker for connected device awareness
+    pub presence: Arc<PresenceTracker>,
+    /// Monotonic version tracker for state change detection
+    pub state_versions: Arc<StateVersionTracker>,
+    /// Per-identity, per-scope sliding window rate limiter
+    pub rate_limiter: Arc<RateLimiter>,
+    /// Lane-based concurrency control for RPC methods
+    pub lane_manager: Arc<LaneManager>,
+    /// Permission-based event scope guard
+    pub event_scope_guard: Arc<EventScopeGuard>,
+    /// Server start time for uptime calculation
+    pub start_time: Instant,
 }
 
 impl GatewayServer {
@@ -162,6 +186,12 @@ impl GatewayServer {
             subscription_manager: Arc::new(SubscriptionManager::new()),
             guest_session_manager: None,
             protocol_watcher,
+            presence: Arc::new(PresenceTracker::new()),
+            state_versions: Arc::new(StateVersionTracker::new()),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
+            lane_manager: Arc::new(LaneManager::new(LaneConfig::default())),
+            event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
+            start_time: Instant::now(),
         }
     }
 
@@ -185,6 +215,12 @@ impl GatewayServer {
             subscription_manager: Arc::new(SubscriptionManager::new()),
             guest_session_manager: None,
             protocol_watcher,
+            presence: Arc::new(PresenceTracker::new()),
+            state_versions: Arc::new(StateVersionTracker::new()),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
+            lane_manager: Arc::new(LaneManager::new(LaneConfig::default())),
+            event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
+            start_time: Instant::now(),
         }
     }
 
@@ -233,14 +269,72 @@ impl GatewayServer {
             guest_session_manager: self.guest_session_manager.clone(),
             require_auth: self.config.require_auth,
             max_connections: self.config.max_connections,
+            presence: self.presence.clone(),
+            state_versions: self.state_versions.clone(),
+            rate_limiter: self.rate_limiter.clone(),
+            lane_manager: self.lane_manager.clone(),
+            event_scope_guard: self.event_scope_guard.clone(),
         });
 
         let control_plane = create_control_plane_router();
+
+        // OpenAI-compatible API routes (/v1/models, /v1/health, /v1/chat/completions)
+        let openai_state = Arc::new(OpenAiApiState {
+            server_id: format!("aleph-{}", self.addr),
+            api_token: None, // TODO: populate from GatewayConfig when token auth is configured
+        });
+        let openai = openai_routes(openai_state);
 
         Router::new()
             .route("/ws", get(ws_upgrade_handler))
             .fallback_service(control_plane)
             .with_state(shared)
+            .merge(openai)
+    }
+
+    /// Spawn background tasks for rate limiter pruning and tick heartbeat.
+    ///
+    /// Call this once before the server starts accepting connections.
+    /// The spawned tasks run until the tokio runtime shuts down.
+    fn spawn_background_tasks(&self) {
+        // Background: prune stale rate-limiter entries every 60s
+        let rl = self.rate_limiter.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                rl.prune_stale(Duration::from_secs(300));
+            }
+        });
+
+        // Background: tick heartbeat every 10s
+        let eb = self.event_bus.clone();
+        let sv = self.state_versions.clone();
+        let pr = self.presence.clone();
+        let st = self.start_time;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                let _ = eb.publish_json(&TopicEvent::new("system.tick", serde_json::json!({
+                    "ts": chrono::Utc::now().timestamp_millis(),
+                    "state_version": sv.snapshot(),
+                    "connections": pr.count(),
+                    "uptime_ms": st.elapsed().as_millis() as u64,
+                })));
+            }
+        });
+    }
+
+    /// Gracefully shut down the gateway: notify all clients, then wait for a grace period.
+    pub async fn graceful_shutdown(&self, reason: &str) {
+        info!("Gateway graceful shutdown: {reason}");
+        let event = TopicEvent::new(
+            "system.shutdown",
+            serde_json::json!({"reason": reason, "grace_period_ms": 5000}),
+        );
+        let _ = self.event_bus.publish_json(&event);
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 
     /// Run the Gateway server
@@ -248,6 +342,7 @@ impl GatewayServer {
     /// This method runs indefinitely, accepting new connections and
     /// processing messages. Each connection is handled in its own task.
     pub async fn run(&self) -> Result<(), GatewayError> {
+        self.spawn_background_tasks();
         let router = self.build_router();
         let listener = tokio::net::TcpListener::bind(&self.addr).await.map_err(|e| {
             GatewayError::BindFailed { addr: self.addr, source: e }
@@ -267,6 +362,7 @@ impl GatewayServer {
         &self,
         shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> Result<(), GatewayError> {
+        self.spawn_background_tasks();
         let router = self.build_router();
         let listener = tokio::net::TcpListener::bind(&self.addr).await.map_err(|e| {
             GatewayError::BindFailed { addr: self.addr, source: e }
@@ -293,6 +389,11 @@ struct ConnectionContext {
     subscription_manager: Arc<SubscriptionManager>,
     guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
     require_auth: bool,
+    presence: Arc<PresenceTracker>,
+    state_versions: Arc<StateVersionTracker>,
+    rate_limiter: Arc<RateLimiter>,
+    lane_manager: Arc<LaneManager>,
+    event_scope_guard: Arc<EventScopeGuard>,
 }
 
 /// axum handler: upgrade HTTP connection to WebSocket at `/ws`
@@ -316,6 +417,11 @@ async fn ws_upgrade_handler(
             subscription_manager: state.subscription_manager.clone(),
             guest_session_manager: state.guest_session_manager.clone(),
             require_auth: state.require_auth,
+            presence: state.presence.clone(),
+            state_versions: state.state_versions.clone(),
+            rate_limiter: state.rate_limiter.clone(),
+            lane_manager: state.lane_manager.clone(),
+            event_scope_guard: state.event_scope_guard.clone(),
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -453,6 +559,19 @@ async fn handle_connection(
                                                     } else {
                                                         info!("Connection {} authenticated (device: {})", conn_id, device_id);
                                                     }
+
+                                                    // Track presence after successful auth
+                                                    let presence_entry = PresenceEntry {
+                                                        conn_id: conn_id.clone(),
+                                                        device_id: state.device_id.clone(),
+                                                        device_name: state.metadata.get("client_name").cloned().unwrap_or_else(|| "Unknown".to_string()),
+                                                        platform: state.metadata.get("platform").cloned().unwrap_or_else(|| "unknown".to_string()),
+                                                        connected_at: chrono::Utc::now(),
+                                                        last_heartbeat: chrono::Utc::now(),
+                                                    };
+                                                    ctx.presence.upsert(conn_id.clone(), presence_entry);
+                                                    ctx.state_versions.bump_presence();
+                                                    let _ = ctx.event_bus.publish_json(&TopicEvent::new("presence.joined", serde_json::json!({"conn_id": &conn_id})));
                                                 }
                                             }
                                         }
@@ -487,6 +606,44 @@ async fn handle_connection(
                                     }
                                 } else {
                                     // No auth required OR already authenticated
+
+                                    // --- Rate limit check ---
+                                    let peer_addr_str = peer_addr.to_string();
+                                    let rl_identity = {
+                                        let conns = ctx.connections.read().await;
+                                        conns.get(&conn_id)
+                                            .and_then(|s| s.device_id.clone())
+                                            .unwrap_or_else(|| peer_addr_str.clone())
+                                    };
+                                    let rl_scope = scope_for_method(&req.method);
+                                    let rl_key = RateLimitKey::new(&rl_identity, rl_scope);
+                                    if let Err(e) = ctx.rate_limiter.check_and_record(&rl_key) {
+                                        let rl_response = match e {
+                                            RateLimitError::Exceeded { retry_after_ms, .. } => {
+                                                JsonRpcResponse::error_with_data(
+                                                    req.id.clone(),
+                                                    RATE_LIMITED,
+                                                    "Rate limit exceeded",
+                                                    serde_json::json!({"retry_after_ms": retry_after_ms}),
+                                                )
+                                            }
+                                            RateLimitError::LockedOut { lockout_remaining_ms, .. } => {
+                                                JsonRpcResponse::error_with_data(
+                                                    req.id.clone(),
+                                                    RATE_LIMITED,
+                                                    "Rate limit lockout",
+                                                    serde_json::json!({"lockout_remaining_ms": lockout_remaining_ms}),
+                                                )
+                                            }
+                                        };
+                                        let rl_resp_str = serde_json::to_string(&rl_response).unwrap_or_default();
+                                        if let Err(e) = write.send(WsMessage::Text(rl_resp_str.into())).await {
+                                            error!("Failed to send rate limit response to {}: {}", conn_id, e);
+                                            break;
+                                        }
+                                        continue;
+                                    }
+
                                     // Handle events.* methods specially (they need conn_id)
                                     if req.method == "events.subscribe" {
                                         let resp = handle_subscribe(req.clone(), &conn_id, ctx.subscription_manager.clone()).await;
@@ -498,7 +655,22 @@ async fn handle_connection(
                                         let resp = handle_events_list(req.clone(), &conn_id, ctx.subscription_manager.clone()).await;
                                         serde_json::to_string(&resp).unwrap_or_default()
                                     } else {
-                                        let response = process_request(&text, &ctx.handlers).await;
+                                        // --- Lane concurrency control ---
+                                        let lane_result = ctx.lane_manager.acquire(&req.method).await;
+                                        let response = match lane_result {
+                                            Ok(_permit) => {
+                                                let resp = process_request(&text, &ctx.handlers).await;
+                                                // permit drops here, releasing the lane slot
+                                                resp
+                                            }
+                                            Err(_) => {
+                                                serde_json::to_string(&JsonRpcResponse::error(
+                                                    req.id.clone(),
+                                                    INTERNAL_ERROR,
+                                                    "Service congested, try again later",
+                                                )).unwrap_or_default()
+                                            }
+                                        };
 
                                         // Extract guest_session_id from connect response (when require_auth=false)
                                         if req.method == "connect" {
@@ -527,6 +699,23 @@ async fn handle_connection(
                                                             state.guest_session_id = Some(session_id.clone());
                                                             info!("Connection {} authenticated as guest (session: {})", conn_id, session_id);
                                                         }
+                                                    }
+
+                                                    // Track presence for no-auth connect
+                                                    let conns = ctx.connections.read().await;
+                                                    if let Some(state) = conns.get(&conn_id) {
+                                                        let presence_entry = PresenceEntry {
+                                                            conn_id: conn_id.clone(),
+                                                            device_id: state.device_id.clone(),
+                                                            device_name: state.metadata.get("client_name").cloned().unwrap_or_else(|| "Unknown".to_string()),
+                                                            platform: state.metadata.get("platform").cloned().unwrap_or_else(|| "unknown".to_string()),
+                                                            connected_at: chrono::Utc::now(),
+                                                            last_heartbeat: chrono::Utc::now(),
+                                                        };
+                                                        drop(conns);
+                                                        ctx.presence.upsert(conn_id.clone(), presence_entry);
+                                                        ctx.state_versions.bump_presence();
+                                                        let _ = ctx.event_bus.publish_json(&TopicEvent::new("presence.joined", serde_json::json!({"conn_id": &conn_id})));
                                                     }
                                                 }
                                             }
@@ -627,7 +816,15 @@ async fn handle_connection(
                                 .or_else(|| event_obj.get("method").and_then(|m| m.as_str()))
                                 .unwrap_or("");
 
-                            ctx.subscription_manager.should_receive(&conn_id, topic).await
+                            // Permission-based scope guard check
+                            let scope_allowed = {
+                                let conns = ctx.connections.read().await;
+                                conns.get(&conn_id)
+                                    .map(|s| ctx.event_scope_guard.can_receive(topic, &s.permissions))
+                                    .unwrap_or(false)
+                            };
+
+                            scope_allowed && ctx.subscription_manager.should_receive(&conn_id, topic).await
                         } else {
                             // Can't parse event, forward by default
                             true
@@ -696,6 +893,12 @@ async fn handle_connection(
         }
 
         conns.remove(&conn_id);
+    }
+
+    // Remove presence and emit departure event
+    if let Some(_entry) = ctx.presence.remove(&conn_id) {
+        ctx.state_versions.bump_presence();
+        let _ = ctx.event_bus.publish_json(&TopicEvent::new("presence.left", serde_json::json!({"conn_id": &conn_id})));
     }
 
     // Remove subscriptions for this connection
