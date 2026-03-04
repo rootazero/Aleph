@@ -3,6 +3,7 @@
 //! This module defines the core configuration structures for Aleph.
 
 use crate::config::types::*;
+use crate::cron::CronConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -85,6 +86,9 @@ pub struct Config {
     /// Group chat configuration (multi-agent persona orchestration)
     #[serde(default)]
     pub group_chat: GroupChatConfig,
+    /// Cron job scheduling configuration
+    #[serde(default)]
+    pub cron: CronConfig,
     /// Preset persona definitions for group chat
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub personas: Vec<PersonaConfig>,
@@ -218,6 +222,7 @@ impl Default for Config {
             orchestrator: OrchestratorConfig::default(),
             subagent: SubAgentConfig::default(),
             group_chat: GroupChatConfig::default(),
+            cron: CronConfig::default(),
             personas: Vec::new(),
             evolution: EvolutionConfig::default(),
             privacy: PrivacyConfig::default(),
