@@ -192,6 +192,7 @@ aleph-logging = { path = "../crates/logging" }
 
 # Native desktop capabilities (in-process alternative to IPC bridge)
 aleph-desktop = { path = "../crates/desktop" }
+open = "5.3.3"
 
 [build-dependencies]
 # No build dependencies - using Gateway WebSocket architecture
