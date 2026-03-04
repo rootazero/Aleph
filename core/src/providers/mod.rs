@@ -125,6 +125,7 @@ pub fn create_mock_provider() -> Arc<dyn AiProvider> {
 /// - `"openai"` - OpenAI and OpenAI-compatible APIs (via HttpProvider)
 /// - `"claude"` / `"anthropic"` - Anthropic Claude API (native)
 /// - `"gemini"` - Google Gemini API (native)
+/// - `"chatgpt"` - ChatGPT subscription backend API (via OAuth)
 /// - `"ollama"` - Local Ollama models (native)
 pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn AiProvider>> {
     // Initialize protocol registry if not already done

@@ -33,6 +33,17 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
+    // ChatGPT subscription (via backend-api, OAuth login)
+    m.insert(
+        "chatgpt",
+        ProviderPreset {
+            base_url: "https://chatgpt.com",
+            protocol: "chatgpt",
+            color: "#10a37f",
+            default_model: "gpt-4o",
+        },
+    );
+
     // DeepSeek
     m.insert(
         "deepseek",
@@ -383,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_presets_have_valid_protocol() {
-        let valid_protocols = ["openai", "anthropic", "gemini"];
+        let valid_protocols = ["openai", "anthropic", "gemini", "chatgpt"];
         for (name, preset) in PRESETS.iter() {
             assert!(
                 valid_protocols.contains(&preset.protocol),
