@@ -77,7 +77,7 @@ pub async fn create(server_url: &str, name: Option<&str>, config: &CliConfig) ->
         name: name.map(|s| s.to_string()),
     };
 
-    let response: CreateResponse = client.call("sessions.create", Some(params)).await?;
+    let response: CreateResponse = client.call("session.create", Some(params)).await?;
 
     println!("✓ Session created: {}", response.session_key);
 
