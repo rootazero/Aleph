@@ -21,6 +21,7 @@
 //! | providers | AI provider management |
 //! | profiles | Auth profile management |
 //! | generation | Content generation |
+//! | group_chat | Multi-agent group chat orchestration |
 //! | pairing | Device pairing |
 //! | runs | Run wait/queue |
 //! | auth | Authentication |
@@ -73,6 +74,7 @@ pub mod profiles;
 pub mod generation;
 pub mod embedding_providers;
 pub mod generation_providers;
+pub mod group_chat;
 pub mod pairing;
 pub mod runs;
 pub mod models;
@@ -418,6 +420,14 @@ impl HandlerRegistry {
                 "workspace.getActive requires WorkspaceManager - wire Gateway runtime first".to_string(),
             )
         });
+
+        // Group Chat handlers (placeholders - actual handlers wired with GroupChatOrchestrator)
+        registry.register("group_chat.start", group_chat::handle_start_placeholder);
+        registry.register("group_chat.continue", group_chat::handle_continue_placeholder);
+        registry.register("group_chat.mention", group_chat::handle_mention_placeholder);
+        registry.register("group_chat.end", group_chat::handle_end_placeholder);
+        registry.register("group_chat.list", group_chat::handle_list_placeholder);
+        registry.register("group_chat.history", group_chat::handle_history_placeholder);
 
         registry
     }
