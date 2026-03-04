@@ -172,3 +172,51 @@ fn test_is_cjk() {
     assert!(!native_engine::is_cjk('A'));
     assert!(!native_engine::is_cjk('1'));
 }
+
+// ── Browser engine unit tests ───────────────────────────────────────────
+
+#[test]
+fn test_css_contains_essential_rules() {
+    let css = super::styles::github_markdown_css();
+    assert!(css.contains("font-family"));
+    assert!(css.contains("code"));
+    assert!(css.contains("table"));
+    assert!(css.contains("blockquote"));
+}
+
+#[test]
+fn test_markdown_to_html_conversion() {
+    let md = "# Hello\n\nThis is **bold** and *italic*.\n\n- item 1\n- item 2\n";
+    let html = super::browser_engine::markdown_to_html(md);
+    assert!(html.contains("<h1>"));
+    assert!(html.contains("<strong>"));
+    assert!(html.contains("<em>"));
+    assert!(html.contains("<li>"));
+}
+
+#[test]
+fn test_markdown_to_html_with_table() {
+    let md = "| A | B |\n|---|---|\n| 1 | 2 |\n";
+    let html = super::browser_engine::markdown_to_html(md);
+    assert!(html.contains("<table>"));
+    assert!(html.contains("<th>"));
+}
+
+#[test]
+fn test_markdown_to_html_with_code_block() {
+    let md = "```rust\nfn main() {}\n```\n";
+    let html = super::browser_engine::markdown_to_html(md);
+    assert!(html.contains("<pre>"));
+    // pulldown-cmark adds class="language-rust" so we match the tag prefix
+    assert!(html.contains("<code"));
+}
+
+#[test]
+fn test_build_full_html_document() {
+    let md = "# Test\n\nContent here.\n";
+    let doc = super::browser_engine::build_html_document(md, Some("My Title"));
+    assert!(doc.contains("<!DOCTYPE html>"));
+    assert!(doc.contains("My Title"));
+    assert!(doc.contains("<h1>"));
+    assert!(doc.contains("font-family"));
+}
