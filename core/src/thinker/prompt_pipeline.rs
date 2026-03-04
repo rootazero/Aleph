@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 use super::layers::*;
 use super::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use super::prompt_budget::{TokenBudget, PromptResult, enforce_budget};
 use super::prompt_mode::PromptMode;
 
 /// Composable prompt assembly engine.
@@ -52,6 +53,55 @@ impl PromptPipeline {
             }
         }
         output
+    }
+
+    /// Assemble system prompt with mode filtering and budget enforcement.
+    ///
+    /// Combines path matching, mode filtering, and total-budget enforcement
+    /// into a single call.  Returns a [`PromptResult`] that includes
+    /// truncation statistics when the assembled prompt exceeds the budget.
+    pub fn assemble(
+        &self,
+        path: AssemblyPath,
+        input: &LayerInput,
+        mode: PromptMode,
+        budget: &TokenBudget,
+    ) -> PromptResult {
+        // 1. Collect sections from matching layers
+        let mut sections: Vec<(u32, &str, String)> = Vec::new();
+        for layer in &self.layers {
+            if layer.paths().contains(&path) && layer.supports_mode(mode) {
+                let mut section = String::new();
+                layer.inject(&mut section, input);
+                if !section.is_empty() {
+                    sections.push((layer.priority(), layer.name(), section));
+                }
+            }
+        }
+
+        // 2. Check total size
+        let total: usize = sections.iter().map(|(_, _, c)| c.len()).sum();
+        if total <= budget.max_total_chars {
+            let prompt = sections.iter().map(|(_, _, c)| c.as_str()).collect::<Vec<_>>().join("");
+            return PromptResult {
+                prompt,
+                truncation_stats: vec![],
+                mode,
+            };
+        }
+
+        // 3. Enforce budget — protected priorities
+        let refs: Vec<(u32, &str, &str)> = sections.iter()
+            .map(|(p, n, c)| (*p, *n, c.as_str()))
+            .collect();
+        let protected = &[50u32, 75, 100, 500, 501, 1200];
+        let (prompt, stats) = enforce_budget(&refs, budget.max_total_chars, protected);
+
+        PromptResult {
+            prompt,
+            truncation_stats: stats,
+            mode,
+        }
     }
 
     /// Create a pipeline pre-loaded with the 23 default layers.
@@ -325,5 +375,60 @@ mod mode_tests {
         assert!(compact.len() > minimal.len(), "Compact ({}) should be longer than Minimal ({})", compact.len(), minimal.len());
         // Minimal should still have some content (response format, language)
         assert!(!minimal.is_empty(), "Minimal should not be empty");
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use crate::thinker::prompt_builder::PromptConfig;
+    use crate::thinker::prompt_budget::TokenBudget;
+    use crate::thinker::prompt_mode::PromptMode;
+
+    #[test]
+    fn assemble_with_budget_trims_when_over() {
+        use crate::thinker::prompt_layer::PromptLayer as _;
+
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+
+        // First, get the full prompt size so we know what budget to set
+        let full_result = pipeline.assemble(AssemblyPath::Basic, &input, PromptMode::Full, &TokenBudget {
+            max_total_chars: 500_000,
+            ..Default::default()
+        });
+        let full_len = full_result.prompt.len();
+
+        // Budget smaller than full output, but large enough to keep protected layers
+        let budget = TokenBudget {
+            max_total_chars: full_len / 2,
+            ..Default::default()
+        };
+
+        let result = pipeline.assemble(AssemblyPath::Basic, &input, PromptMode::Full, &budget);
+        // Some sections should have been removed
+        assert!(!result.truncation_stats.is_empty(), "Should have truncation stats");
+        // Prompt should be smaller than full
+        assert!(result.prompt.len() < full_len, "Trimmed prompt ({}) should be smaller than full ({})", result.prompt.len(), full_len);
+    }
+
+    #[test]
+    fn assemble_under_budget_no_truncation() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+
+        // Large budget — nothing should be trimmed
+        let budget = TokenBudget {
+            max_total_chars: 500_000,
+            ..Default::default()
+        };
+
+        let result = pipeline.assemble(AssemblyPath::Basic, &input, PromptMode::Full, &budget);
+        assert!(result.truncation_stats.is_empty(), "Should have no truncation stats");
+        assert_eq!(result.mode, PromptMode::Full);
     }
 }
