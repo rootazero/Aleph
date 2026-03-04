@@ -32,6 +32,7 @@ mod runtime_context;
 mod environment;
 mod security;
 mod protocol_tokens;
+mod heartbeat;
 mod operational_guidelines;
 
 // --- Re-exports ---
@@ -60,4 +61,5 @@ pub use runtime_context::RuntimeContextLayer;
 pub use environment::EnvironmentLayer;
 pub use security::SecurityLayer;
 pub use protocol_tokens::ProtocolTokensLayer;
+pub use heartbeat::HeartbeatLayer;
 pub use operational_guidelines::OperationalGuidelinesLayer;
