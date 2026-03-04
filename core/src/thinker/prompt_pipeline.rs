@@ -3,6 +3,7 @@
 //! The pipeline holds an ordered list of [`PromptLayer`] implementations
 //! and executes them in priority order for a given [`AssemblyPath`].
 
+use std::path::PathBuf;
 use super::layers::*;
 use super::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use super::prompt_mode::PromptMode;
@@ -102,6 +103,14 @@ impl PromptPipeline {
             Box::new(CustomInstructionsLayer),
             Box::new(LanguageLayer),
         ])
+    }
+
+    /// Add bootstrap layer for workspace context injection.
+    pub fn with_bootstrap(mut self, workspace: PathBuf, per_file: usize, total: usize) -> Self {
+        let layer = BootstrapLayer::new(workspace).with_limits(per_file, total);
+        self.layers.push(Box::new(layer));
+        self.layers.sort_by_key(|l| l.priority());
+        self
     }
 
     /// Number of registered layers (test helper).
