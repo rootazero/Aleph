@@ -18,6 +18,7 @@
 //! - `evolution`: Skill compiler settings (EvolutionConfig, SolidificationThresholds)
 
 pub mod agent;
+pub mod agents_def;
 pub mod dispatcher;
 pub mod evolution;
 pub mod general;
@@ -40,6 +41,7 @@ pub mod video;
 // Re-export all types for backward compatibility
 // Users can still use `use crate::config::XXX` instead of `use crate::config::types::XXX`
 pub use agent::*;
+pub use agents_def::*;
 pub use dispatcher::*;
 pub use evolution::*;
 pub use general::*;
