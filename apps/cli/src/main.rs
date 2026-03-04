@@ -103,12 +103,38 @@ enum Commands {
         device: String,
     },
 
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
     /// Generate shell completion script
     Completion {
         /// Shell type (bash, zsh, fish, elvish, powershell)
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Print config file path
+    File,
+    /// Get configuration (optionally by section: gateway, agents, channels, etc.)
+    Get {
+        /// Config section name (e.g., gateway, agents, channels)
+        section: Option<String>,
+    },
+    /// Set a configuration value
+    Set {
+        /// Dot-separated config path (e.g., gateway.port)
+        path: String,
+        /// Value to set (JSON or plain string)
+        value: String,
+    },
+    /// Validate current configuration
+    Validate,
 }
 
 #[derive(Subcommand)]
@@ -186,6 +212,20 @@ async fn main() -> CliResult<()> {
         Some(Commands::Guests { action }) => {
             commands::guests::handle_guests(&server_url, action, &config).await?;
         }
+        Some(Commands::Config { action }) => match action {
+            ConfigAction::File => {
+                commands::config_cmd::file();
+            }
+            ConfigAction::Get { section } => {
+                commands::config_cmd::get(&server_url, section.as_deref(), &config).await?;
+            }
+            ConfigAction::Set { path, value } => {
+                commands::config_cmd::set(&server_url, &path, &value, &config).await?;
+            }
+            ConfigAction::Validate => {
+                commands::config_cmd::validate(&server_url, &config).await?;
+            }
+        },
         Some(Commands::Completion { shell }) => {
             commands::completion::run(shell);
         }
