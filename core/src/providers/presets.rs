@@ -33,14 +33,14 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
-    // ChatGPT subscription (via backend-api, OAuth login)
+    // ChatGPT subscription (via Codex Responses API, OAuth login)
     m.insert(
         "chatgpt",
         ProviderPreset {
             base_url: "https://chatgpt.com",
             protocol: "chatgpt",
             color: "#10a37f",
-            default_model: "gpt-4o",
+            default_model: "codex-mini-latest",
         },
     );
 
