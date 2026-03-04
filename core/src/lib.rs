@@ -122,6 +122,7 @@ pub use crate::config::{
     MemoryConfig, BehaviorConfig, ShortcutsConfig, GeneralConfig, SmartFlowConfig,
     backup::ConfigBackup,
     patcher::ConfigPatcher,
+    agent_resolver::{AgentDefinitionResolver, ResolvedAgent},
 };
 
 // Initialization
