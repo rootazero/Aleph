@@ -164,6 +164,12 @@ impl WorkspaceFileLoader {
     }
 }
 
+impl Default for WorkspaceFileLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +278,12 @@ mod tests {
         let result = fs::read_to_string(&file_path).unwrap();
         assert!(result.contains("Old content"));
         assert!(result.contains("New content"));
+    }
+
+    #[test]
+    fn test_default_creates_empty_loader() {
+        let loader = WorkspaceFileLoader::default();
+        assert!(loader.cache.is_empty());
     }
 
     #[test]
