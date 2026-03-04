@@ -6,10 +6,12 @@ use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload};
+use crate::providers::adapter::{
+    NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
+};
 use crate::providers::anthropic::{
-    ContentBlock, ErrorResponse, ImageSource, Message, MessageContent, MessagesRequest,
-    MessagesResponse, SystemBlock, ThinkingBlock,
+    AnthropicContentBlock, AnthropicTool, ContentBlock, ErrorResponse, ImageSource, Message,
+    MessageContent, MessagesRequest, MessagesResponse, SystemBlock, ThinkingBlock,
 };
 use crate::providers::shared::{
     build_document_context, combine_with_document_context, separate_attachments,
@@ -215,6 +217,18 @@ impl ProtocolAdapter for AnthropicProtocol {
                 budget_tokens: budget,
             });
 
+        // Convert tool definitions to Anthropic format
+        let tools = payload.tools.map(|tool_defs| {
+            tool_defs
+                .iter()
+                .map(|td| AnthropicTool {
+                    name: td.name.clone(),
+                    description: td.description.clone(),
+                    input_schema: td.parameters.clone(),
+                })
+                .collect()
+        });
+
         let request_body = MessagesRequest {
             model: config.model.clone(),
             messages,
@@ -223,6 +237,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             temperature,
             stream: if is_streaming { Some(true) } else { None },
             thinking,
+            tools,
         };
 
         let api_key = config
@@ -272,16 +287,54 @@ impl ProtocolAdapter for AnthropicProtocol {
             AlephError::provider(format!("Failed to parse response: {}", e))
         })?;
 
-        // Extract text from content blocks
-        let text = response_body
-            .content
-            .iter()
-            .filter(|c| c.content_type == "text")
-            .map(|c| c.text.clone())
-            .collect::<Vec<_>>()
-            .join("");
+        let mut provider_response = ProviderResponse::default();
 
-        Ok(ProviderResponse::text_only(text))
+        for block in &response_body.content {
+            match block {
+                AnthropicContentBlock::Text { text } => {
+                    // Append text (there may be multiple text blocks)
+                    match &mut provider_response.text {
+                        Some(existing) => {
+                            existing.push_str(text);
+                        }
+                        None => {
+                            provider_response.text = Some(text.clone());
+                        }
+                    }
+                }
+                AnthropicContentBlock::Thinking { thinking } => {
+                    provider_response.thinking = Some(thinking.clone());
+                }
+                AnthropicContentBlock::ToolUse { id, name, input } => {
+                    provider_response.tool_calls.push(NativeToolCall {
+                        id: id.clone(),
+                        name: name.clone(),
+                        arguments: input.clone(),
+                    });
+                }
+            }
+        }
+
+        provider_response.stop_reason = match response_body.stop_reason.as_deref() {
+            Some("end_turn") => StopReason::EndTurn,
+            Some("tool_use") => StopReason::ToolUse,
+            Some("max_tokens") => StopReason::MaxTokens,
+            _ => StopReason::Unknown,
+        };
+
+        if let Some(usage) = response_body.usage {
+            provider_response.usage = Some(TokenUsage {
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_tokens: usage.cache_read_input_tokens,
+            });
+        }
+
+        Ok(provider_response)
+    }
+
+    fn supports_native_tools(&self) -> bool {
+        true
     }
 
     async fn parse_stream(
@@ -374,5 +427,59 @@ mod tests {
         let line = "data: [DONE]";
         let result = AnthropicProtocol::parse_sse_line(line);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_supports_native_tools() {
+        let protocol = AnthropicProtocol::new(Client::new());
+        assert!(protocol.supports_native_tools());
+    }
+
+    #[test]
+    fn test_build_request_includes_tools() {
+        use crate::dispatcher::ToolDefinition;
+        use crate::ToolCategory;
+
+        let protocol = AnthropicProtocol::new(Client::new());
+        let tools = vec![ToolDefinition::new(
+            "search",
+            "Search the web",
+            serde_json::json!({
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"]
+            }),
+            ToolCategory::Builtin,
+        )];
+        let payload = RequestPayload::new("Hello").with_tools(Some(&tools));
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+
+        let request = protocol.build_request(&payload, &config, false).unwrap();
+        let built = request.build().unwrap();
+
+        // Verify the body contains tools
+        let body_bytes = built.body().unwrap().as_bytes().unwrap();
+        let body: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
+        assert!(body["tools"].is_array());
+        assert_eq!(body["tools"][0]["name"], "search");
+        assert_eq!(body["tools"][0]["description"], "Search the web");
+        assert!(body["tools"][0]["input_schema"]["properties"]["query"].is_object());
+    }
+
+    #[test]
+    fn test_build_request_no_tools_when_none() {
+        let protocol = AnthropicProtocol::new(Client::new());
+        let payload = RequestPayload::new("Hello");
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+
+        let request = protocol.build_request(&payload, &config, false).unwrap();
+        let built = request.build().unwrap();
+
+        let body_bytes = built.body().unwrap().as_bytes().unwrap();
+        let body: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
+        // tools field should be absent (skip_serializing_if = "Option::is_none")
+        assert!(body.get("tools").is_none());
     }
 }
