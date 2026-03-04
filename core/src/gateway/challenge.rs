@@ -9,7 +9,7 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use hmac::{Hmac, Mac};
 use serde::Serialize;
 use sha2::Sha256;
@@ -78,7 +78,8 @@ pub struct ChallengeManager {
     /// Nonces that have been issued and are awaiting verification.
     pending: DashMap<String, PendingNonce>,
     /// Nonces that have already been successfully verified (replay guard).
-    used: DashSet<String>,
+    /// Maps nonce → Instant when it was used, for age-based pruning.
+    used: DashMap<String, Instant>,
     /// Identifier of this server instance.
     server_id: String,
 }
@@ -86,8 +87,6 @@ pub struct ChallengeManager {
 /// Timestamp tolerance window: challenges are valid for +/- 30 seconds.
 const TIMESTAMP_WINDOW_SECS: u64 = 30;
 
-/// Maximum number of entries in the used-nonce set before pruning trims it.
-const USED_SET_CAP: usize = 10_000;
 
 impl ChallengeManager {
     /// Create a new `ChallengeManager` with an auto-generated server id.
@@ -99,7 +98,7 @@ impl ChallengeManager {
     pub fn with_server_id(server_id: String) -> Self {
         Self {
             pending: DashMap::new(),
-            used: DashSet::new(),
+            used: DashMap::new(),
             server_id,
         }
     }
@@ -152,7 +151,7 @@ impl ChallengeManager {
         token: &str,
     ) -> Result<(), ChallengeError> {
         // 1. Replay check
-        if self.used.contains(nonce) {
+        if self.used.contains_key(nonce) {
             return Err(ChallengeError::NonceReplay);
         }
 
@@ -182,8 +181,8 @@ impl ChallengeManager {
             return Err(ChallengeError::InvalidSignature);
         }
 
-        // 5. Mark as used
-        self.used.insert(nonce.to_owned());
+        // 5. Mark as used (with timestamp for age-based pruning)
+        self.used.insert(nonce.to_owned(), Instant::now());
 
         Ok(())
     }
@@ -196,7 +195,7 @@ impl ChallengeManager {
     /// Remove stale entries.
     ///
     /// - Pending nonces older than `max_age` are dropped.
-    /// - If the used-nonce set exceeds [`USED_SET_CAP`], it is cleared.
+    /// - Used nonces older than `max_age` are pruned (age-based, not bulk clear).
     pub fn prune(&self, max_age: Duration) {
         let now = Instant::now();
 
@@ -204,9 +203,9 @@ impl ChallengeManager {
             now.duration_since(entry.created_at) < max_age
         });
 
-        if self.used.len() > USED_SET_CAP {
-            self.used.clear();
-        }
+        self.used.retain(|_key, used_at| {
+            now.duration_since(*used_at) < max_age
+        });
     }
 }
 

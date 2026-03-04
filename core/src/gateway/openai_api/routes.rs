@@ -22,6 +22,8 @@ use super::types::{
 pub struct OpenAiApiState {
     /// Server identifier surfaced in health checks.
     pub server_id: String,
+    /// Expected API token for authentication. If `None`, any bearer token is accepted.
+    pub api_token: Option<String>,
 }
 
 /// Build an axum [`Router`] exposing the OpenAI-compatible API.
@@ -73,10 +75,17 @@ async fn chat_completions(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if extract_bearer_token(auth_header).is_none() {
-        return Err(ApiError::Unauthorized(
-            "Missing or invalid Authorization header".to_string(),
-        ));
+    let token = extract_bearer_token(auth_header).ok_or_else(|| {
+        ApiError::Unauthorized("Missing or invalid Authorization header".to_string())
+    })?;
+
+    // Validate against configured token if set
+    if let Some(expected) = &_state.api_token {
+        if token != expected.as_str() {
+            return Err(ApiError::Unauthorized(
+                "Invalid API key".to_string(),
+            ));
+        }
     }
 
     // --- Stub response ---
@@ -134,6 +143,14 @@ mod tests {
     fn test_state() -> Arc<OpenAiApiState> {
         Arc::new(OpenAiApiState {
             server_id: "test-server".to_string(),
+            api_token: None,
+        })
+    }
+
+    fn test_state_with_token(token: &str) -> Arc<OpenAiApiState> {
+        Arc::new(OpenAiApiState {
+            server_id: "test-server".to_string(),
+            api_token: Some(token.to_string()),
         })
     }
 
@@ -227,5 +244,47 @@ mod tests {
         assert_eq!(json["choices"][0]["message"]["role"], "assistant");
         assert_eq!(json["choices"][0]["finish_reason"], "stop");
         assert!(json["usage"].is_object());
+    }
+
+    #[tokio::test]
+    async fn test_chat_completions_rejects_wrong_token() {
+        let app = openai_routes(test_state_with_token("sk-correct-token"));
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header("content-type", "application/json")
+            .header("authorization", "Bearer sk-wrong-token")
+            .body(Body::from(
+                serde_json::to_string(&json!({
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "Hello"}]
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_chat_completions_accepts_correct_token() {
+        let app = openai_routes(test_state_with_token("sk-correct-token"));
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header("content-type", "application/json")
+            .header("authorization", "Bearer sk-correct-token")
+            .body(Body::from(
+                serde_json::to_string(&json!({
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "Hello"}]
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }

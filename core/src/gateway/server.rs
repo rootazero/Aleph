@@ -27,7 +27,7 @@ use super::handlers::events::{
 };
 use super::presence::{PresenceTracker, PresenceEntry};
 use super::state_version::StateVersionTracker;
-use super::rate_limiter::{RateLimiter, RateLimitKey, RateLimitConfig, WindowConfig, scope_for_method, RateLimitError};
+use super::rate_limiter::{RateLimiter, RateLimitKey, RateLimitConfig, scope_for_method, RateLimitError};
 use super::lane::{LaneManager, LaneConfig};
 use super::event_scope::EventScopeGuard;
 use crate::providers::protocols::ProtocolLoader;
@@ -188,13 +188,7 @@ impl GatewayServer {
             protocol_watcher,
             presence: Arc::new(PresenceTracker::new()),
             state_versions: Arc::new(StateVersionTracker::new()),
-            rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig {
-                auth: WindowConfig { max_requests: 10, window_secs: 60, lockout_secs: Some(300) },
-                rpc_default: WindowConfig { max_requests: 100, window_secs: 60, lockout_secs: None },
-                rpc_write: WindowConfig { max_requests: 3, window_secs: 60, lockout_secs: None },
-                rpc_heavy: WindowConfig { max_requests: 5, window_secs: 60, lockout_secs: None },
-                exempt_loopback: true,
-            })),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
             lane_manager: Arc::new(LaneManager::new(LaneConfig::default())),
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
             start_time: Instant::now(),
@@ -223,13 +217,7 @@ impl GatewayServer {
             protocol_watcher,
             presence: Arc::new(PresenceTracker::new()),
             state_versions: Arc::new(StateVersionTracker::new()),
-            rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig {
-                auth: WindowConfig { max_requests: 10, window_secs: 60, lockout_secs: Some(300) },
-                rpc_default: WindowConfig { max_requests: 100, window_secs: 60, lockout_secs: None },
-                rpc_write: WindowConfig { max_requests: 3, window_secs: 60, lockout_secs: None },
-                rpc_heavy: WindowConfig { max_requests: 5, window_secs: 60, lockout_secs: None },
-                exempt_loopback: true,
-            })),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
             lane_manager: Arc::new(LaneManager::new(LaneConfig::default())),
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
             start_time: Instant::now(),
@@ -293,6 +281,7 @@ impl GatewayServer {
         // OpenAI-compatible API routes (/v1/models, /v1/health, /v1/chat/completions)
         let openai_state = Arc::new(OpenAiApiState {
             server_id: format!("aleph-{}", self.addr),
+            api_token: None, // TODO: populate from GatewayConfig when token auth is configured
         });
         let openai = openai_routes(openai_state);
 
