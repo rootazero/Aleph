@@ -9,10 +9,45 @@ use std::time::Duration;
 
 use notify::{EventKind, RecursiveMode, Watcher};
 use notify_debouncer_full::new_debouncer;
+use serde::Deserialize;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, error, info, warn};
 
 use super::config::{ConfigError, GatewayConfig};
+
+/// Controls how configuration sections are reloaded at runtime.
+///
+/// - `Off`: Never hot-reload; changes require a full restart.
+/// - `Hot`: Always hot-reload every section immediately.
+/// - `Restart`: Never hot-reload; all changes require restart.
+/// - `Hybrid`: Hot-reload only safe sections (ui, channels, skills, workspace, cron);
+///   other sections require restart.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ReloadMode {
+    Off,
+    Hot,
+    Restart,
+    Hybrid,
+}
+
+impl Default for ReloadMode {
+    fn default() -> Self {
+        Self::Hot
+    }
+}
+
+impl ReloadMode {
+    /// Whether the given configuration section should be hot-reloaded
+    /// under this mode.
+    pub fn should_hot_reload(&self, section: &str) -> bool {
+        match self {
+            Self::Off | Self::Restart => false,
+            Self::Hot => true,
+            Self::Hybrid => matches!(section, "ui" | "channels" | "skills" | "workspace" | "cron"),
+        }
+    }
+}
 
 /// Event emitted when configuration changes
 #[derive(Debug, Clone)]
@@ -325,6 +360,42 @@ model = "claude-opus-4-5"
         // Manually reload
         let new_config = watcher.reload().await.unwrap();
         assert_eq!(new_config.gateway.port, 9999);
+    }
+
+    #[test]
+    fn test_reload_mode_default() {
+        assert_eq!(ReloadMode::default(), ReloadMode::Hot);
+    }
+
+    #[test]
+    fn test_reload_mode_hot_reload_decisions() {
+        let sections = ["ui", "channels", "skills", "workspace", "cron", "agents", "gateway", "providers"];
+
+        // Off → always false
+        for s in &sections {
+            assert!(!ReloadMode::Off.should_hot_reload(s), "Off should never hot-reload '{s}'");
+        }
+
+        // Hot → always true
+        for s in &sections {
+            assert!(ReloadMode::Hot.should_hot_reload(s), "Hot should always hot-reload '{s}'");
+        }
+
+        // Restart → always false
+        for s in &sections {
+            assert!(!ReloadMode::Restart.should_hot_reload(s), "Restart should never hot-reload '{s}'");
+        }
+
+        // Hybrid → true only for safe sections
+        let hybrid_safe = ["ui", "channels", "skills", "workspace", "cron"];
+        let hybrid_unsafe = ["agents", "gateway", "providers", "security", "memory"];
+
+        for s in &hybrid_safe {
+            assert!(ReloadMode::Hybrid.should_hot_reload(s), "Hybrid should hot-reload '{s}'");
+        }
+        for s in &hybrid_unsafe {
+            assert!(!ReloadMode::Hybrid.should_hot_reload(s), "Hybrid should NOT hot-reload '{s}'");
+        }
     }
 
     #[test]
