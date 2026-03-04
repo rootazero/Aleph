@@ -17,3 +17,4 @@ pub mod providers_cmd;
 pub mod session;
 pub mod skills_cmd;
 pub mod tools;
+pub mod workspace_cmd;
