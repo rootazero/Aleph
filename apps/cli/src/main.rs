@@ -144,6 +144,12 @@ enum Commands {
         action: MemoryAction,
     },
 
+    /// Plugin lifecycle management
+    Plugins {
+        #[command(subcommand)]
+        action: PluginsAction,
+    },
+
     /// Generate shell completion script
     Completion {
         /// Shell type (bash, zsh, fish, elvish, powershell)
@@ -265,6 +271,29 @@ enum MemoryAction {
     Delete {
         /// Memory entry ID
         id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PluginsAction {
+    /// List installed plugins
+    List,
+    /// Install a plugin from source (URL, path, or zip)
+    Install { source: String },
+    /// Uninstall a plugin
+    Uninstall { name: String },
+    /// Enable a disabled plugin
+    Enable { name: String },
+    /// Disable a plugin
+    Disable { name: String },
+    /// Call a plugin tool
+    Call {
+        /// Plugin name
+        plugin: String,
+        /// Tool name
+        tool: String,
+        /// JSON params (optional)
+        params: Option<String>,
     },
 }
 
@@ -433,6 +462,37 @@ async fn main() -> CliResult<()> {
             }
             MemoryAction::Delete { id } => {
                 commands::memory_cmd::delete(&server_url, &id, cli.json).await?
+            }
+        },
+        Some(Commands::Plugins { action }) => match action {
+            PluginsAction::List => {
+                commands::plugins_cmd::list(&server_url, cli.json).await?;
+            }
+            PluginsAction::Install { source } => {
+                commands::plugins_cmd::install(&server_url, &source, cli.json).await?;
+            }
+            PluginsAction::Uninstall { name } => {
+                commands::plugins_cmd::uninstall(&server_url, &name, cli.json).await?;
+            }
+            PluginsAction::Enable { name } => {
+                commands::plugins_cmd::enable(&server_url, &name, cli.json).await?;
+            }
+            PluginsAction::Disable { name } => {
+                commands::plugins_cmd::disable(&server_url, &name, cli.json).await?;
+            }
+            PluginsAction::Call {
+                plugin,
+                tool,
+                params,
+            } => {
+                commands::plugins_cmd::call(
+                    &server_url,
+                    &plugin,
+                    &tool,
+                    params.as_deref(),
+                    cli.json,
+                )
+                .await?;
             }
         },
         Some(Commands::Gateway { action }) => match action {
