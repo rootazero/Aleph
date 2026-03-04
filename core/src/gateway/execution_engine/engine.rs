@@ -673,6 +673,23 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         match result {
             LoopResult::Completed { summary, .. } => {
                 info!(run_id = %run_id, "Agent loop completed successfully");
+
+                // Append session summary to daily memory log
+                {
+                    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+                    let time = chrono::Local::now().format("%H:%M").to_string();
+                    let truncated_summary = if summary.len() > 500 {
+                        format!("{}...", &summary[..summary.floor_char_boundary(500)])
+                    } else {
+                        summary.clone()
+                    };
+                    let entry = format!("\n## Session {}\n\n{}\n", time, truncated_summary);
+                    let mut loader = self.workspace_loader.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Err(e) = loader.append_daily_memory(&agent_workspace_dir, &date, &entry) {
+                        tracing::warn!(error = %e, "Failed to append daily memory");
+                    }
+                }
+
                 Ok(summary)
             }
             LoopResult::Failed { reason, .. } => {
