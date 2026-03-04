@@ -131,6 +131,7 @@ fn render_user_message(
 }
 
 /// Render an assistant message with green prefix bar, reasoning, tools, and content.
+#[allow(clippy::too_many_arguments)]
 fn render_assistant_message(
     content: &str,
     tools: &[crate::tui::app::ToolExecution],

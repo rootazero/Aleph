@@ -67,10 +67,6 @@ pub enum Action {
     /// Select a dialog option by index
     DialogSelect(usize),
 
-    // -- Settings --
-    /// Toggle verbose output mode
-    ToggleVerbose,
-
     // -- Dialog response --
     /// Respond to an AskUser dialog
     RespondToDialog { run_id: String, choice: String },
@@ -260,11 +256,7 @@ impl AppState {
     /// empty assistant message. This is idempotent: calling it twice in a row
     /// will not create a second empty assistant message.
     pub fn ensure_assistant_message(&mut self) {
-        let needs_new = match self.messages.last() {
-            Some(ChatMessage::Assistant { .. }) => false,
-            _ => true,
-        };
-        if needs_new {
+        if !matches!(self.messages.last(), Some(ChatMessage::Assistant { .. })) {
             self.messages.push(ChatMessage::Assistant {
                 content: String::new(),
                 tools: Vec::new(),
