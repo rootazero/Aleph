@@ -667,7 +667,6 @@ mod tests {
     #[test]
     fn test_agent_instance_config_from_resolved() {
         use crate::config::agent_resolver::ResolvedAgent;
-        use crate::config::types::agents_def::SubagentPolicy;
         use crate::config::types::profile::ProfileConfig;
 
         let resolved = ResolvedAgent {
@@ -681,7 +680,7 @@ mod tests {
             memory_md: None,
             model: "claude-opus-4-6".to_string(),
             skills: vec!["git_*".to_string(), "fs_*".to_string()],
-            subagent_policy: SubagentPolicy::default(),
+            subagent_policy: None,
         };
 
         let config = AgentInstanceConfig::from_resolved(&resolved);

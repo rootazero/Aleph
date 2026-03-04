@@ -175,6 +175,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             })
             .await;
 
+        // Log lifecycle event: agent started
+        info!(
+            event_type = "agent.lifecycle.started",
+            agent_id = %agent.id(),
+            run_id = %run_id,
+            "Agent execution started"
+        );
+
         // Ensure session exists in memory + SQLite before adding messages
         agent.ensure_session(&request.session_key).await;
 
@@ -216,6 +224,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 error: e.to_string(),
             },
         };
+
+        // Log lifecycle event: agent completed
+        info!(
+            event_type = "agent.lifecycle.completed",
+            agent_id = %agent.id(),
+            run_id = %run_id,
+            success = matches!(final_state, RunState::Completed),
+            "Agent execution completed"
+        );
 
         // Get run info for summary
         let (started_at, steps_completed, final_seq) = {
