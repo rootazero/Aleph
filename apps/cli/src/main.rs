@@ -150,6 +150,12 @@ enum Commands {
         action: PluginsAction,
     },
 
+    /// Background service management
+    Services {
+        #[command(subcommand)]
+        action: ServicesAction,
+    },
+
     /// POE (Principle-Operation-Evaluation) execution engine
     Poe {
         #[command(subcommand)]
@@ -325,6 +331,40 @@ enum PluginsAction {
         tool: String,
         /// JSON params (optional)
         params: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServicesAction {
+    /// List background services
+    List {
+        /// Filter by plugin ID
+        #[arg(long)]
+        plugin: Option<String>,
+        /// Filter by state (running, stopped, error)
+        #[arg(long)]
+        state: Option<String>,
+    },
+    /// Get service status
+    Status {
+        /// Plugin ID
+        plugin_id: String,
+        /// Service ID
+        service_id: String,
+    },
+    /// Start a service
+    Start {
+        /// Plugin ID
+        plugin_id: String,
+        /// Service ID
+        service_id: String,
+    },
+    /// Stop a service
+    Stop {
+        /// Plugin ID
+        plugin_id: String,
+        /// Service ID
+        service_id: String,
     },
 }
 
@@ -674,6 +714,38 @@ async fn main() -> CliResult<()> {
                     cli.json,
                 )
                 .await?;
+            }
+        },
+        Some(Commands::Services { action }) => match action {
+            ServicesAction::List { plugin, state } => {
+                commands::services_cmd::list(
+                    &server_url,
+                    plugin.as_deref(),
+                    state.as_deref(),
+                    cli.json,
+                )
+                .await?;
+            }
+            ServicesAction::Status {
+                plugin_id,
+                service_id,
+            } => {
+                commands::services_cmd::status(&server_url, &plugin_id, &service_id, cli.json)
+                    .await?;
+            }
+            ServicesAction::Start {
+                plugin_id,
+                service_id,
+            } => {
+                commands::services_cmd::start(&server_url, &plugin_id, &service_id, cli.json)
+                    .await?;
+            }
+            ServicesAction::Stop {
+                plugin_id,
+                service_id,
+            } => {
+                commands::services_cmd::stop(&server_url, &plugin_id, &service_id, cli.json)
+                    .await?;
             }
         },
         Some(Commands::Poe { action }) => match action {
