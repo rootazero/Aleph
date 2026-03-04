@@ -168,6 +168,13 @@ enum Commands {
         action: LogsAction,
     },
 
+    /// Chat control (send, abort, history, clear)
+    #[command(name = "chat-control")]
+    ChatControl {
+        #[command(subcommand)]
+        action: ChatControlAction,
+    },
+
     /// Generate shell completion script
     Completion {
         /// Shell type (bash, zsh, fish, elvish, powershell)
@@ -381,6 +388,45 @@ enum LogsAction {
     },
     /// Show log directory path
     Dir,
+}
+
+#[derive(Subcommand)]
+enum ChatControlAction {
+    /// Send a message (non-interactive)
+    Send {
+        /// The message to send
+        message: String,
+        /// Session key
+        #[arg(short, long)]
+        session: Option<String>,
+        /// Enable streaming
+        #[arg(long)]
+        stream: bool,
+        /// Thinking level (none, concise, verbose)
+        #[arg(long)]
+        thinking: Option<String>,
+    },
+    /// Abort a running chat
+    Abort {
+        /// Run ID to abort
+        run_id: String,
+    },
+    /// Show chat history
+    History {
+        /// Session key
+        session_key: String,
+        /// Maximum messages to return
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// Clear chat history
+    Clear {
+        /// Session key
+        session_key: String,
+        /// Keep system messages
+        #[arg(long)]
+        keep_system: bool,
+    },
 }
 
 #[tokio::main]
@@ -616,6 +662,39 @@ async fn main() -> CliResult<()> {
             }
             LogsAction::Dir => {
                 commands::logs_cmd::dir(&server_url, cli.json).await?;
+            }
+        },
+        Some(Commands::ChatControl { action }) => match action {
+            ChatControlAction::Send {
+                message,
+                session,
+                stream,
+                thinking,
+            } => {
+                commands::chat_cmd::send(
+                    &server_url,
+                    &message,
+                    session.as_deref(),
+                    stream,
+                    thinking.as_deref(),
+                    &config,
+                    cli.json,
+                )
+                .await?;
+            }
+            ChatControlAction::Abort { run_id } => {
+                commands::chat_cmd::abort(&server_url, &run_id, &config, cli.json).await?;
+            }
+            ChatControlAction::History { session_key, limit } => {
+                commands::chat_cmd::history(&server_url, &session_key, limit, &config, cli.json)
+                    .await?;
+            }
+            ChatControlAction::Clear {
+                session_key,
+                keep_system,
+            } => {
+                commands::chat_cmd::clear(&server_url, &session_key, keep_system, &config, cli.json)
+                    .await?;
             }
         },
         Some(Commands::Completion { shell }) => {
