@@ -1172,7 +1172,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 if can_create_provider_from_env() {
                     if let Ok(provider_reg) = create_provider_registry_from_env() {
                         let provider = provider_reg.default_provider();
-                        let executor: alephcore::cron::JobExecutor = Arc::new(move |_agent_id, prompt, _job_id| {
+                        let executor: alephcore::cron::JobExecutor = Arc::new(move |_job_id, _agent_id, prompt| {
                             let provider = provider.clone();
                             Box::pin(async move {
                                 provider.process(&prompt, None).await.map_err(|e| format!("{e}"))
