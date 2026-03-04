@@ -35,7 +35,7 @@ use crate::error::CliResult;
 #[derive(Parser)]
 #[command(name = "aleph")]
 #[command(author, version, about, long_about = None)]
-struct Cli {
+pub(crate) struct Cli {
     /// Gateway server URL
     #[arg(short, long, default_value = "ws://127.0.0.1:18789")]
     server: String,
@@ -101,6 +101,13 @@ enum Commands {
         /// Device name for this client
         #[arg(short, long, default_value = "aleph-cli")]
         device: String,
+    },
+
+    /// Generate shell completion script
+    Completion {
+        /// Shell type (bash, zsh, fish, elvish, powershell)
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
     },
 }
 
@@ -178,6 +185,9 @@ async fn main() -> CliResult<()> {
         },
         Some(Commands::Guests { action }) => {
             commands::guests::handle_guests(&server_url, action, &config).await?;
+        }
+        Some(Commands::Completion { shell }) => {
+            commands::completion::run(shell);
         }
         None => {
             // Default: start interactive chat
