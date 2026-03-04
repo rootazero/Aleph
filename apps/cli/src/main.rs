@@ -156,6 +156,12 @@ enum Commands {
         action: SkillsAction,
     },
 
+    /// Workspace management
+    Workspace {
+        #[command(subcommand)]
+        action: WorkspaceAction,
+    },
+
     /// Generate shell completion script
     Completion {
         /// Shell type (bash, zsh, fish, elvish, powershell)
@@ -329,6 +335,32 @@ enum SessionAction {
     Delete {
         /// Session key to delete
         key: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkspaceAction {
+    /// List all workspaces
+    List,
+    /// Create a new workspace
+    Create {
+        /// Workspace name
+        name: String,
+        /// Optional description
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Switch to a workspace
+    Switch {
+        /// Workspace name to switch to
+        name: String,
+    },
+    /// Show the currently active workspace
+    Active,
+    /// Archive a workspace
+    Archive {
+        /// Workspace name to archive
+        name: String,
     },
 }
 
@@ -525,6 +557,29 @@ async fn main() -> CliResult<()> {
             }
             SkillsAction::Delete { name } => {
                 commands::skills_cmd::delete(&server_url, &name, cli.json).await?;
+            }
+        },
+        Some(Commands::Workspace { action }) => match action {
+            WorkspaceAction::List => {
+                commands::workspace_cmd::list(&server_url, cli.json).await?;
+            }
+            WorkspaceAction::Create { name, description } => {
+                commands::workspace_cmd::create(
+                    &server_url,
+                    &name,
+                    description.as_deref(),
+                    cli.json,
+                )
+                .await?;
+            }
+            WorkspaceAction::Switch { name } => {
+                commands::workspace_cmd::switch(&server_url, &name, cli.json).await?;
+            }
+            WorkspaceAction::Active => {
+                commands::workspace_cmd::active(&server_url, cli.json).await?;
+            }
+            WorkspaceAction::Archive { name } => {
+                commands::workspace_cmd::archive(&server_url, &name, cli.json).await?;
             }
         },
         Some(Commands::Gateway { action }) => match action {
