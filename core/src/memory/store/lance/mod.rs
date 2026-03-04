@@ -61,6 +61,14 @@ impl LanceMemoryBackend {
         let memories_table =
             Self::ensure_table(&db, "memories", schema::memories_schema()).await?;
 
+        tracing::info!(
+            subsystem = "memory",
+            event = "store_initialized",
+            backend = "lancedb",
+            db_path = %db_path.display(),
+            "LanceDB memory store initialized"
+        );
+
         Ok(Self {
             _db: db,
             facts_table,

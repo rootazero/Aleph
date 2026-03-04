@@ -24,6 +24,11 @@ use crate::memory::store::{AuditStore, HybridSearchParams, MemoryStore, PathEntr
 use super::arrow_convert::{facts_to_record_batch, record_batch_to_facts};
 use super::LanceMemoryBackend;
 
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+
+static FIRST_WRITE_LOGGED: AtomicBool = AtomicBool::new(false);
+static FIRST_READ_LOGGED: AtomicBool = AtomicBool::new(false);
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -147,6 +152,15 @@ impl MemoryStore for LanceMemoryBackend {
     // -- CRUD ---------------------------------------------------------------
 
     async fn insert_fact(&self, fact: &MemoryFact) -> Result<(), AlephError> {
+        if !FIRST_WRITE_LOGGED.swap(true, AtomicOrdering::Relaxed) {
+            tracing::info!(
+                subsystem = "memory",
+                event = "first_write",
+                table = "facts",
+                fact_id = %fact.id,
+                "memory store received first fact write"
+            );
+        }
         let batch = facts_to_record_batch(std::slice::from_ref(fact))?;
         add_batch(&self.facts_table, batch).await
     }
@@ -195,6 +209,16 @@ impl MemoryStore for LanceMemoryBackend {
         filter: &SearchFilter,
         limit: usize,
     ) -> Result<Vec<ScoredFact>, AlephError> {
+        if !FIRST_READ_LOGGED.swap(true, AtomicOrdering::Relaxed) {
+            tracing::info!(
+                subsystem = "memory",
+                event = "first_read",
+                table = "facts",
+                dim = dim_hint,
+                limit = limit,
+                "memory store received first vector search"
+            );
+        }
         let column_name = format!("vec_{}", dim_hint);
 
         let mut query = self
