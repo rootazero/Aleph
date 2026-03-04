@@ -338,6 +338,7 @@ dependencies = [
  "notify",
  "notify-debouncer-full",
  "once_cell",
+ "open",
  "percent-encoding",
  "plist",
  "portable-pty",
