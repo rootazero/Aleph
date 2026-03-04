@@ -39,6 +39,7 @@
 //! | poe | POE (Principle-Operation-Evaluation) task execution |
 //! | identity | Identity/soul management |
 //! | workspace | Workspace isolation management |
+//! | daemon | Daemon status, shutdown, logs |
 //! | guests | Guest invitation management |
 
 pub mod health;
@@ -52,6 +53,7 @@ pub mod behavior_config;
 pub mod generation_config;
 pub mod search_config;
 pub mod session;
+pub mod session_usage;
 pub mod auth;
 pub mod events;
 pub mod channel;
@@ -91,6 +93,7 @@ pub mod guests;
 pub mod workspace;
 pub mod secret_approvals;
 pub mod system_info;
+pub mod daemon_control;
 pub mod discord_panel;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
@@ -236,6 +239,24 @@ impl HandlerRegistry {
                 req.id,
                 INTERNAL_ERROR,
                 "chat.clear requires Gateway runtime - use Gateway::new()".to_string(),
+            )
+        });
+
+        // Session usage (requires SessionStore -- placeholder)
+        registry.register("session.usage", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "session.usage requires SessionStore — wire in Gateway startup".to_string(),
+            )
+        });
+
+        // Session compact (requires SessionStore — placeholder)
+        registry.register("session.compact", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "session.compact requires SessionStore — wire in Gateway startup".to_string(),
             )
         });
 
@@ -428,6 +449,25 @@ impl HandlerRegistry {
         registry.register("group_chat.end", group_chat::handle_end_placeholder);
         registry.register("group_chat.list", group_chat::handle_list_placeholder);
         registry.register("group_chat.history", group_chat::handle_history_placeholder);
+
+        // Daemon control handlers
+        // daemon.logs is stateless (reads from filesystem) — register directly
+        registry.register("daemon.logs", daemon_control::handle_logs);
+        // daemon.status and daemon.shutdown need runtime state — placeholders
+        registry.register("daemon.status", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "daemon.status requires runtime state — wire in Gateway startup".to_string(),
+            )
+        });
+        registry.register("daemon.shutdown", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "daemon.shutdown requires runtime state — wire in Gateway startup".to_string(),
+            )
+        });
 
         registry
     }

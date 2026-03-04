@@ -35,7 +35,7 @@ use crate::error::CliResult;
 #[derive(Parser)]
 #[command(name = "aleph")]
 #[command(author, version, about, long_about = None)]
-struct Cli {
+pub(crate) struct Cli {
     /// Gateway server URL
     #[arg(short, long, default_value = "ws://127.0.0.1:18789")]
     server: String,
@@ -101,6 +101,66 @@ enum Commands {
         /// Device name for this client
         #[arg(short, long, default_value = "aleph-cli")]
         device: String,
+    },
+
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
+    /// Manage Gateway daemon
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+
+    /// Generate shell completion script
+    Completion {
+        /// Shell type (bash, zsh, fish, elvish, powershell)
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Print config file path
+    File,
+    /// Get configuration (optionally by section: gateway, agents, channels, etc.)
+    Get {
+        /// Config section name (e.g., gateway, agents, channels)
+        section: Option<String>,
+    },
+    /// Set a configuration value
+    Set {
+        /// Dot-separated config path (e.g., gateway.port)
+        path: String,
+        /// Value to set (JSON or plain string)
+        value: String,
+    },
+    /// Validate current configuration
+    Validate,
+}
+
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Show Gateway server status
+    Status,
+    /// Start Gateway server
+    Start,
+    /// Stop Gateway server
+    Stop,
+    /// Restart Gateway server
+    Restart,
+    /// View Gateway logs
+    Logs {
+        /// Number of lines to show
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
+        /// Filter by log level (e.g., warn, error)
+        #[arg(short, long)]
+        level: Option<String>,
     },
 }
 
@@ -178,6 +238,40 @@ async fn main() -> CliResult<()> {
         },
         Some(Commands::Guests { action }) => {
             commands::guests::handle_guests(&server_url, action, &config).await?;
+        }
+        Some(Commands::Config { action }) => match action {
+            ConfigAction::File => {
+                commands::config_cmd::file();
+            }
+            ConfigAction::Get { section } => {
+                commands::config_cmd::get(&server_url, section.as_deref(), &config).await?;
+            }
+            ConfigAction::Set { path, value } => {
+                commands::config_cmd::set(&server_url, &path, &value, &config).await?;
+            }
+            ConfigAction::Validate => {
+                commands::config_cmd::validate(&server_url, &config).await?;
+            }
+        },
+        Some(Commands::Daemon { action }) => match action {
+            DaemonAction::Status => {
+                commands::daemon::status(&server_url).await?;
+            }
+            DaemonAction::Start => {
+                commands::daemon::start()?;
+            }
+            DaemonAction::Stop => {
+                commands::daemon::stop(&server_url).await?;
+            }
+            DaemonAction::Restart => {
+                commands::daemon::restart(&server_url).await?;
+            }
+            DaemonAction::Logs { lines, level } => {
+                commands::daemon::logs(&server_url, lines, level.as_deref()).await?;
+            }
+        },
+        Some(Commands::Completion { shell }) => {
+            commands::completion::run(shell);
         }
         None => {
             // Default: start interactive chat

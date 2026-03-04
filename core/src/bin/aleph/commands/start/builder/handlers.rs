@@ -100,6 +100,8 @@ pub(in crate::commands::start) fn register_session_handlers(
     register_handler!(server, "sessions.history", session_handlers::handle_history_db, session_manager);
     register_handler!(server, "sessions.reset", session_handlers::handle_reset_db, session_manager);
     register_handler!(server, "sessions.delete", session_handlers::handle_delete_db, session_manager);
+    register_handler!(server, "session.usage", session_handlers::handle_usage_db, session_manager);
+    register_handler!(server, "session.compact", session_handlers::handle_compact_db, session_manager);
 
     if !daemon {
         println!("Session methods:");
@@ -107,6 +109,8 @@ pub(in crate::commands::start) fn register_session_handlers(
         println!("  - sessions.history: Get session message history");
         println!("  - sessions.reset  : Clear session messages");
         println!("  - sessions.delete : Delete a session");
+        println!("  - session.usage   : Get session token/message stats");
+        println!("  - session.compact : Compact session history");
         println!();
     }
 }
@@ -479,4 +483,33 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "search_config.update", search_config::handle_update, config, event_bus);
     register_handler!(server, "search_config.test", search_config::handle_test, config);
     register_handler!(server, "search_config.deleteBackend", search_config::handle_delete_backend, config, event_bus);
+}
+
+// ─── register_daemon_handlers ────────────────────────────────────────────────
+
+pub(in crate::commands::start) fn register_daemon_handlers(
+    server: &mut GatewayServer,
+    start_time: std::time::Instant,
+    daemon: bool,
+) {
+    use alephcore::gateway::handlers::daemon_control;
+
+    // daemon.logs is already registered as stateless in HandlerRegistry::new()
+    // Wire daemon.status with the actual start_time
+    let start = start_time;
+    server.handlers_mut().register("daemon.status", move |req| {
+        let st = start;
+        async move { daemon_control::handle_status(req, st).await }
+    });
+
+    // Wire daemon.shutdown (stateless — sends SIGTERM to self)
+    register_handler!(server, "daemon.shutdown", daemon_control::handle_shutdown);
+
+    if !daemon {
+        println!("Daemon methods:");
+        println!("  - daemon.status   : Server runtime status");
+        println!("  - daemon.shutdown : Graceful shutdown");
+        println!("  - daemon.logs     : View recent logs");
+        println!();
+    }
 }
