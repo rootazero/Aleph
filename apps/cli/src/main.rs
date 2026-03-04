@@ -109,6 +109,12 @@ enum Commands {
         action: ConfigAction,
     },
 
+    /// Manage Gateway daemon
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+
     /// Generate shell completion script
     Completion {
         /// Shell type (bash, zsh, fish, elvish, powershell)
@@ -135,6 +141,27 @@ enum ConfigAction {
     },
     /// Validate current configuration
     Validate,
+}
+
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Show Gateway server status
+    Status,
+    /// Start Gateway server
+    Start,
+    /// Stop Gateway server
+    Stop,
+    /// Restart Gateway server
+    Restart,
+    /// View Gateway logs
+    Logs {
+        /// Number of lines to show
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
+        /// Filter by log level (e.g., warn, error)
+        #[arg(short, long)]
+        level: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -224,6 +251,23 @@ async fn main() -> CliResult<()> {
             }
             ConfigAction::Validate => {
                 commands::config_cmd::validate(&server_url, &config).await?;
+            }
+        },
+        Some(Commands::Daemon { action }) => match action {
+            DaemonAction::Status => {
+                commands::daemon::status(&server_url).await?;
+            }
+            DaemonAction::Start => {
+                commands::daemon::start()?;
+            }
+            DaemonAction::Stop => {
+                commands::daemon::stop(&server_url).await?;
+            }
+            DaemonAction::Restart => {
+                commands::daemon::restart(&server_url).await?;
+            }
+            DaemonAction::Logs { lines, level } => {
+                commands::daemon::logs(&server_url, lines, level.as_deref()).await?;
             }
         },
         Some(Commands::Completion { shell }) => {
