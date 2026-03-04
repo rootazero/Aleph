@@ -5,12 +5,16 @@
 //! to add role-specific context without overriding the base identity.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 
 pub struct ProfileLayer;
 
 impl PromptLayer for ProfileLayer {
     fn name(&self) -> &'static str { "profile" }
     fn priority(&self) -> u32 { 75 }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        !matches!(mode, PromptMode::Minimal)
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Soul, AssemblyPath::Context]
     }
