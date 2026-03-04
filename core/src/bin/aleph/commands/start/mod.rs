@@ -966,6 +966,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         print_startup_banner(addr, &full_config);
     }
 
+    let start_time = std::time::Instant::now();
+
     let server_config = ServerConfig {
         max_connections: final_max_connections,
         require_auth: full_config.gateway.require_auth,
@@ -1042,6 +1044,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     register_session_handlers(&mut server, &session_manager, args.daemon);
     register_memory_handlers(&mut server, &memory_db, args.daemon);
+    register_daemon_handlers(&mut server, start_time, args.daemon);
 
     // Initialize WorkspaceManager (SQLite-based workspace state)
     let workspace_manager = {
