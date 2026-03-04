@@ -313,8 +313,8 @@ fn SubscriptionLoginSection(
                                 </div>
                                 <div class="flex-1 min-w-0">
                                     <div class="flex items-center gap-2">
-                                        <span class="font-semibold text-text-primary text-sm">
-                                            "OpenAI Codex"
+                                        <span class="font-semibold text-text-primary text-sm capitalize">
+                                            {name}
                                         </span>
                                         {move || {
                                             let list = providers.get();
@@ -613,6 +613,8 @@ fn ProviderDetailPanel(
     let saving = RwSignal::new(false);
     let testing = RwSignal::new(false);
     let test_result = RwSignal::new(Option::<TestResult>::None);
+    let oauth_status = RwSignal::new(Option::<OAuthStatus>::None);
+    let oauth_loading = RwSignal::new(false);
 
     let is_new = move || {
         let sel = selected.get();
@@ -662,6 +664,34 @@ fn ProviderDetailPanel(
                 }
             }
         }
+    });
+
+    // Check OAuth status when an OAuth provider is selected
+    Effect::new(move || {
+        let sel = selected.get();
+        let provider_name = sel.as_deref()
+            .and_then(|s| s.strip_prefix("__preset__").or(Some(s)))
+            .and_then(|name| if name.starts_with("__") { None } else { Some(name.to_string()) });
+
+        if let Some(name) = provider_name {
+            if find_preset(&name).map(|p| p.auth_type == "oauth").unwrap_or(false) {
+                oauth_loading.set(true);
+                spawn_local(async move {
+                    let state = expect_context::<DashboardState>();
+                    match ProvidersApi::oauth_status(&state, name).await {
+                        Ok(status) => oauth_status.set(Some(status)),
+                        Err(_) => oauth_status.set(Some(OAuthStatus {
+                            connected: false,
+                            expires_in_seconds: None,
+                            error: None,
+                        })),
+                    }
+                    oauth_loading.set(false);
+                });
+                return;
+            }
+        }
+        oauth_status.set(None);
     });
 
     // Build config from form
@@ -857,38 +887,115 @@ fn ProviderDetailPanel(
                             {if preset_info.map(|p| p.auth_type == "oauth").unwrap_or(false) {
                                 view! {
                                     <div class="space-y-6">
-                                        // Connection Status card
+                                        // Connection Status card (reactive)
                                         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
                                             <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Connection Status"</h3>
-                                            <div class="flex items-center gap-3">
-                                                <div class="w-3 h-3 rounded-full bg-text-tertiary"></div>
-                                                <span class="text-sm text-text-secondary">"Not connected"</span>
-                                            </div>
+                                            {move || {
+                                                let status = oauth_status.get();
+                                                let is_connected = status.as_ref().map(|s| s.connected).unwrap_or(false);
+                                                let loading = oauth_loading.get();
+
+                                                if loading {
+                                                    view! {
+                                                        <div class="flex items-center gap-3">
+                                                            <div class="w-3 h-3 rounded-full bg-text-tertiary animate-pulse"></div>
+                                                            <span class="text-sm text-text-tertiary">"Checking..."</span>
+                                                        </div>
+                                                    }.into_any()
+                                                } else if is_connected {
+                                                    let expires = status.as_ref()
+                                                        .and_then(|s| s.expires_in_seconds)
+                                                        .map(|secs| {
+                                                            let hours = secs / 3600;
+                                                            let mins = (secs % 3600) / 60;
+                                                            if hours > 0 {
+                                                                format!("Expires in {}h {}m", hours, mins)
+                                                            } else {
+                                                                format!("Expires in {}m", mins)
+                                                            }
+                                                        });
+                                                    view! {
+                                                        <div>
+                                                            <div class="flex items-center gap-3">
+                                                                <div class="w-3 h-3 rounded-full bg-success"></div>
+                                                                <span class="text-sm text-success font-medium">"Connected"</span>
+                                                            </div>
+                                                            {expires.map(|e| view! {
+                                                                <p class="mt-1 text-xs text-text-tertiary">{e}</p>
+                                                            })}
+                                                        </div>
+                                                    }.into_any()
+                                                } else {
+                                                    view! {
+                                                        <div class="flex items-center gap-3">
+                                                            <div class="w-3 h-3 rounded-full bg-text-tertiary"></div>
+                                                            <span class="text-sm text-text-secondary">"Not connected"</span>
+                                                        </div>
+                                                    }.into_any()
+                                                }
+                                            }}
                                             <p class="text-xs text-text-tertiary">
                                                 "Use your ChatGPT Plus or Pro subscription to access Codex models. No API key needed."
                                             </p>
-                                            <button
-                                                on:click=move |_| {
-                                                    let provider_name = "codex".to_string();
-                                                    spawn_local(async move {
-                                                        let state = expect_context::<DashboardState>();
-                                                        match ProvidersApi::oauth_login(&state, provider_name).await {
-                                                            Ok(_status) => {
-                                                                // TODO: Update connection status display
+                                            // Login / Logout button (reactive)
+                                            {move || {
+                                                let is_connected = oauth_status.get().as_ref().map(|s| s.connected).unwrap_or(false);
+                                                if is_connected {
+                                                    view! {
+                                                        <button
+                                                            on:click=move |_| {
+                                                                let provider_name = "codex".to_string();
+                                                                spawn_local(async move {
+                                                                    let state = expect_context::<DashboardState>();
+                                                                    match ProvidersApi::oauth_logout(&state, provider_name).await {
+                                                                        Ok(()) => {
+                                                                            oauth_status.set(Some(OAuthStatus {
+                                                                                connected: false,
+                                                                                expires_in_seconds: None,
+                                                                                error: None,
+                                                                            }));
+                                                                        }
+                                                                        Err(e) => {
+                                                                            error.set(Some(format!("Logout failed: {}", e)));
+                                                                        }
+                                                                    }
+                                                                });
                                                             }
-                                                            Err(e) => {
-                                                                error.set(Some(format!("OAuth login failed: {}", e)));
+                                                            class="w-full px-4 py-2.5 bg-surface-sunken border border-border text-text-secondary text-sm font-medium rounded-xl hover:bg-surface-raised transition-colors"
+                                                        >
+                                                            "Logout"
+                                                        </button>
+                                                    }.into_any()
+                                                } else {
+                                                    view! {
+                                                        <button
+                                                            on:click=move |_| {
+                                                                let provider_name = "codex".to_string();
+                                                                oauth_loading.set(true);
+                                                                spawn_local(async move {
+                                                                    let state = expect_context::<DashboardState>();
+                                                                    match ProvidersApi::oauth_login(&state, provider_name).await {
+                                                                        Ok(status) => {
+                                                                            oauth_status.set(Some(status));
+                                                                        }
+                                                                        Err(e) => {
+                                                                            error.set(Some(format!("OAuth login failed: {}", e)));
+                                                                        }
+                                                                    }
+                                                                    oauth_loading.set(false);
+                                                                });
                                                             }
-                                                        }
-                                                    });
+                                                            prop:disabled=move || oauth_loading.get()
+                                                            class="w-full px-4 py-3 bg-[#10A37F] hover:bg-[#0d8c6d] disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
+                                                        >
+                                                            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                                                                <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364l2.0201-1.1638a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.4091-.6765zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0974-2.3616l2.603-1.5018 2.6029 1.5018v3.0036l-2.6029 1.5018-2.603-1.5018z"/>
+                                                            </svg>
+                                                            {move || if oauth_loading.get() { "Logging in..." } else { "Login with ChatGPT" }}
+                                                        </button>
+                                                    }.into_any()
                                                 }
-                                                class="w-full px-4 py-3 bg-[#10A37F] hover:bg-[#0d8c6d] text-white text-sm font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
-                                            >
-                                                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                                                    <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364l2.0201-1.1638a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.4091-.6765zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0974-2.3616l2.603-1.5018 2.6029 1.5018v3.0036l-2.6029 1.5018-2.603-1.5018z"/>
-                                                </svg>
-                                                "Login with ChatGPT"
-                                            </button>
+                                            }}
                                         </div>
 
                                         // Model configuration card (simplified for OAuth)
