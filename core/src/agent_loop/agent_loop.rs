@@ -2,6 +2,7 @@
 
 use crate::sync_primitives::Arc;
 use tokio::sync::watch;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 use aleph_protocol::IdentityContext;
 use crate::agents::thinking::{is_thinking_level_error, ThinkingFallbackState};
@@ -19,6 +20,8 @@ use super::state::{LoopState, LoopStep, RequestContext};
 use super::traits::{ActionExecutor, CompressorTrait, ThinkerTrait};
 use super::events::AgentLoopEvent;
 use crate::poe::StepDirective;
+
+static FIRST_CYCLE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Extract file paths from tool arguments
 fn extract_affected_files(arguments: &serde_json::Value) -> Vec<String> {
@@ -356,6 +359,13 @@ where
         // Notify loop start
         callback.on_loop_start(&state).await;
 
+        tracing::info!(
+            subsystem = "agent_loop",
+            event = "initialized",
+            session_id = %state.session_id,
+            "agent loop initialized"
+        );
+
         // Track iteration for compaction trigger
         let mut iteration: u32 = 0;
         // Track last tool for compaction context
@@ -372,8 +382,25 @@ where
                     self.compaction_trigger
                         .emit_loop_stop(StopReason::UserAborted)
                         .await;
+                    tracing::info!(
+                        subsystem = "agent_loop",
+                        event = "session_completed",
+                        session_id = %state.session_id,
+                        result = "user_aborted",
+                        steps = state.step_count,
+                        "agent loop session ended"
+                    );
                     return LoopResult::UserAborted;
                 }
+            }
+
+            if !FIRST_CYCLE_LOGGED.swap(true, AtomicOrdering::Relaxed) {
+                tracing::info!(
+                    subsystem = "agent_loop",
+                    event = "first_cycle_started",
+                    session_id = %state.session_id,
+                    "agent loop entered first execution cycle"
+                );
             }
 
             // ===== COMPACTION TRIGGER: Before Iteration =====
@@ -433,6 +460,14 @@ where
                     _ => StopReason::Error(violation.description()),
                 };
                 self.compaction_trigger.emit_loop_stop(stop_reason).await;
+                tracing::info!(
+                    subsystem = "agent_loop",
+                    event = "session_completed",
+                    session_id = %state.session_id,
+                    result = "guard_triggered",
+                    steps = state.step_count,
+                    "agent loop session ended"
+                );
                 return LoopResult::GuardTriggered(violation);
             }
 
@@ -495,6 +530,14 @@ where
                         // Either fallback is disabled, not a thinking error, or exhausted
                         let reason = format!("Thinking failed: {}", e);
                         callback.on_failed(&reason).await;
+                        tracing::info!(
+                            subsystem = "agent_loop",
+                            event = "session_completed",
+                            session_id = %state.session_id,
+                            result = "thinking_failed",
+                            steps = state.step_count,
+                            "agent loop session ended"
+                        );
                         return LoopResult::Failed {
                             reason,
                             steps: state.step_count,
@@ -524,6 +567,15 @@ where
                     self.compaction_trigger
                         .emit_loop_stop(StopReason::Completed)
                         .await;
+                    tracing::info!(
+                        subsystem = "agent_loop",
+                        event = "session_completed",
+                        session_id = %state.session_id,
+                        result = "completed",
+                        steps = state.step_count,
+                        total_tokens = state.total_tokens,
+                        "agent loop session ended"
+                    );
                     return LoopResult::Completed {
                         summary: summary.clone(),
                         steps: state.step_count,
@@ -536,6 +588,14 @@ where
                     self.compaction_trigger
                         .emit_loop_stop(StopReason::Error(reason.clone()))
                         .await;
+                    tracing::info!(
+                        subsystem = "agent_loop",
+                        event = "session_completed",
+                        session_id = %state.session_id,
+                        result = "decision_failed",
+                        steps = state.step_count,
+                        "agent loop session ended"
+                    );
                     return LoopResult::Failed {
                         reason: reason.clone(),
                         steps: state.step_count,
@@ -648,6 +708,14 @@ where
                             self.compaction_trigger
                                 .emit_loop_stop(StopReason::DoomLoopDetected)
                                 .await;
+                            tracing::info!(
+                                subsystem = "agent_loop",
+                                event = "session_completed",
+                                session_id = %state.session_id,
+                                result = "doom_loop",
+                                steps = state.step_count,
+                                "agent loop session ended"
+                            );
                             return LoopResult::GuardTriggered(final_violation);
                         }
                     }
@@ -704,6 +772,15 @@ where
                     self.compaction_trigger
                         .emit_loop_stop(StopReason::Completed)
                         .await;
+                    tracing::info!(
+                        subsystem = "agent_loop",
+                        event = "session_completed",
+                        session_id = %state.session_id,
+                        result = "silent",
+                        steps = state.step_count,
+                        total_tokens = state.total_tokens,
+                        "agent loop session ended"
+                    );
                     return LoopResult::Completed {
                         summary: "[silent]".to_string(),
                         steps: state.step_count,
@@ -716,6 +793,15 @@ where
                     self.compaction_trigger
                         .emit_loop_stop(StopReason::Completed)
                         .await;
+                    tracing::info!(
+                        subsystem = "agent_loop",
+                        event = "session_completed",
+                        session_id = %state.session_id,
+                        result = "heartbeat_ok",
+                        steps = state.step_count,
+                        total_tokens = state.total_tokens,
+                        "agent loop session ended"
+                    );
                     return LoopResult::Completed {
                         summary: "[heartbeat_ok]".to_string(),
                         steps: state.step_count,
@@ -816,6 +902,14 @@ where
                     self.compaction_trigger
                         .emit_loop_stop(StopReason::Error(reason))
                         .await;
+                    tracing::info!(
+                        subsystem = "agent_loop",
+                        event = "session_completed",
+                        session_id = %state.session_id,
+                        result = "poe_strategy_switch",
+                        steps = state.step_count,
+                        "agent loop session ended"
+                    );
                     return LoopResult::GuardTriggered(violation);
                 }
                 StepDirective::Abort { reason } => {
@@ -823,6 +917,14 @@ where
                     self.compaction_trigger
                         .emit_loop_stop(StopReason::Error(reason.clone()))
                         .await;
+                    tracing::info!(
+                        subsystem = "agent_loop",
+                        event = "session_completed",
+                        session_id = %state.session_id,
+                        result = "poe_aborted",
+                        steps = state.step_count,
+                        "agent loop session ended"
+                    );
                     return LoopResult::PoeAborted { reason };
                 }
             }

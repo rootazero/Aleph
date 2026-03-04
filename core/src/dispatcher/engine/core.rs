@@ -293,6 +293,14 @@ impl AgentEngine {
             "Executing task graph: {} ({})",
             graph.metadata.title, graph.id
         );
+        info!(
+            subsystem = "dispatcher",
+            event = "dag_constructed",
+            graph_id = %graph.id,
+            node_count = graph.tasks.len(),
+            edge_count = graph.edges.len(),
+            "dispatcher task graph ready for execution"
+        );
         *self.state.write().await = ExecutionState::Executing;
 
         // Reset state
@@ -370,6 +378,13 @@ impl AgentEngine {
                 }
 
                 self.monitor.on_task_start(&task);
+                info!(
+                    subsystem = "dispatcher",
+                    event = "task_execution_started",
+                    task_id = %task_id,
+                    task_name = %task.name,
+                    "dispatcher starting task execution"
+                );
 
                 // Spawn execution
                 let executors = &self.executors;
@@ -385,6 +400,13 @@ impl AgentEngine {
                 match result {
                     Ok(task_result) => {
                         debug!("Task {} completed successfully", task_id);
+                        info!(
+                            subsystem = "dispatcher",
+                            event = "task_execution_completed",
+                            task_id = %task_id,
+                            status = "success",
+                            "dispatcher task completed"
+                        );
 
                         {
                             let mut scheduler = self.scheduler.write().await;
@@ -399,6 +421,13 @@ impl AgentEngine {
                     }
                     Err(e) => {
                         error!("Task {} failed: {}", task_id, e);
+                        info!(
+                            subsystem = "dispatcher",
+                            event = "task_execution_completed",
+                            task_id = %task_id,
+                            status = "failed",
+                            "dispatcher task completed"
+                        );
 
                         let error_msg = e.to_string();
                         {
