@@ -7,9 +7,12 @@ use crate::agents::thinking::ThinkLevel;
 use crate::clipboard::ImageData;
 use crate::config::ProviderConfig;
 use crate::core::MediaAttachment;
+use crate::dispatcher::ToolDefinition;
 use crate::error::Result;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Unified request payload for protocol adapters
 ///
@@ -40,6 +43,9 @@ pub struct RequestPayload<'a> {
 
     /// Per-request max_tokens override (takes priority over provider config)
     pub max_tokens: Option<u32>,
+
+    /// Tool definitions for native tool_use (None = no tools / fallback mode)
+    pub tools: Option<&'a [ToolDefinition]>,
 }
 
 impl<'a> RequestPayload<'a> {
@@ -92,6 +98,12 @@ impl<'a> RequestPayload<'a> {
         self.max_tokens = max_tokens;
         self
     }
+
+    /// Set tool definitions for native tool_use
+    pub fn with_tools(mut self, tools: Option<&'a [ToolDefinition]>) -> Self {
+        self.tools = tools;
+        self
+    }
 }
 
 /// Protocol adapter trait for building requests and parsing responses
@@ -141,6 +153,77 @@ pub trait ProtocolAdapter: Send + Sync {
     fn name(&self) -> &'static str;
 }
 
+// =============================================================================
+// Provider Response Types (for native tool_use)
+// =============================================================================
+
+/// Structured response from an LLM provider
+///
+/// Replaces raw String return from `ProtocolAdapter::parse_response()`.
+/// Supports text-only responses (fallback) and native tool_use responses.
+#[derive(Debug, Clone, Default)]
+pub struct ProviderResponse {
+    /// LLM text output (for non-tool responses, or thinking content)
+    pub text: Option<String>,
+    /// Native tool calls from the LLM
+    pub tool_calls: Vec<NativeToolCall>,
+    /// Thinking/reasoning process (extended thinking)
+    pub thinking: Option<String>,
+    /// Why the LLM stopped generating
+    pub stop_reason: StopReason,
+    /// Token usage statistics
+    pub usage: Option<TokenUsage>,
+}
+
+impl ProviderResponse {
+    /// Create a text-only response (for fallback providers)
+    pub fn text_only(text: String) -> Self {
+        Self {
+            text: Some(text),
+            stop_reason: StopReason::EndTurn,
+            ..Default::default()
+        }
+    }
+
+    /// Whether this response contains native tool calls
+    pub fn has_tool_calls(&self) -> bool {
+        !self.tool_calls.is_empty()
+    }
+}
+
+/// A native tool call from the LLM
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeToolCall {
+    /// Provider-assigned ID (used for tool_result passback)
+    pub id: String,
+    /// Tool name
+    pub name: String,
+    /// Tool arguments as JSON
+    pub arguments: Value,
+}
+
+/// Why the LLM stopped generating
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum StopReason {
+    /// LLM finished its response naturally
+    #[default]
+    EndTurn,
+    /// LLM wants to call a tool
+    ToolUse,
+    /// Hit max_tokens limit
+    MaxTokens,
+    /// Unknown or unsupported stop reason
+    Unknown,
+}
+
+/// Token usage statistics
+#[derive(Debug, Clone, Default)]
+pub struct TokenUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cache_read_tokens: Option<u32>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +260,45 @@ mod tests {
 
         assert_eq!(payload.temperature, Some(0.7));
         assert_eq!(payload.max_tokens, Some(4096));
+    }
+
+    #[test]
+    fn test_provider_response_text_only() {
+        let resp = ProviderResponse::text_only("hello".to_string());
+        assert_eq!(resp.text.as_deref(), Some("hello"));
+        assert!(!resp.has_tool_calls());
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+    }
+
+    #[test]
+    fn test_provider_response_with_tool_calls() {
+        let resp = ProviderResponse {
+            tool_calls: vec![NativeToolCall {
+                id: "call_123".into(),
+                name: "search".into(),
+                arguments: serde_json::json!({"query": "test"}),
+            }],
+            stop_reason: StopReason::ToolUse,
+            ..Default::default()
+        };
+        assert!(resp.has_tool_calls());
+        assert_eq!(resp.tool_calls[0].name, "search");
+        assert_eq!(resp.stop_reason, StopReason::ToolUse);
+    }
+
+    #[test]
+    fn test_provider_response_default() {
+        let resp = ProviderResponse::default();
+        assert!(resp.text.is_none());
+        assert!(!resp.has_tool_calls());
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+        assert!(resp.usage.is_none());
+    }
+
+    #[test]
+    fn test_request_payload_with_tools() {
+        let payload = RequestPayload::new("test input")
+            .with_tools(None);
+        assert!(payload.tools.is_none());
     }
 }

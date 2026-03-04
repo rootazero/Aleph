@@ -74,6 +74,7 @@ impl HttpProvider {
                             force_standard_mode: payload.force_standard_mode,
                             temperature: payload.temperature,
                             max_tokens: payload.max_tokens,
+                            tools: payload.tools,
                         }
                     } else {
                         payload
