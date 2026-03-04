@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::client::AlephClient;
 use crate::config::CliConfig;
 use crate::error::CliResult;
+use crate::output;
 
 #[derive(Deserialize)]
 struct Session {
@@ -23,11 +24,18 @@ struct SessionListResponse {
 }
 
 /// List all sessions
-pub async fn list(server_url: &str, config: &CliConfig) -> CliResult<()> {
+pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
 
     // Authenticate first
     client.authenticate(config).await?;
+
+    if json {
+        let result: serde_json::Value = client.call("sessions.list", None::<()>).await?;
+        output::print_json(&result);
+        client.close().await?;
+        return Ok(());
+    }
 
     let response: SessionListResponse = client.call("sessions.list", None::<()>).await?;
 
@@ -56,7 +64,7 @@ pub async fn list(server_url: &str, config: &CliConfig) -> CliResult<()> {
 }
 
 /// Create a new session
-pub async fn create(server_url: &str, name: Option<&str>, config: &CliConfig) -> CliResult<()> {
+pub async fn create(server_url: &str, name: Option<&str>, config: &CliConfig, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
 
     // Authenticate first
@@ -68,25 +76,29 @@ pub async fn create(server_url: &str, name: Option<&str>, config: &CliConfig) ->
         name: Option<String>,
     }
 
-    #[derive(Deserialize)]
-    struct CreateResponse {
-        session_key: String,
-    }
-
     let params = CreateParams {
         name: name.map(|s| s.to_string()),
     };
 
-    let response: CreateResponse = client.call("session.create", Some(params)).await?;
+    if json {
+        let result: serde_json::Value = client.call("session.create", Some(params)).await?;
+        output::print_json(&result);
+    } else {
+        #[derive(Deserialize)]
+        struct CreateResponse {
+            session_key: String,
+        }
 
-    println!("✓ Session created: {}", response.session_key);
+        let response: CreateResponse = client.call("session.create", Some(params)).await?;
+        println!("✓ Session created: {}", response.session_key);
+    }
 
     client.close().await?;
     Ok(())
 }
 
 /// Delete a session
-pub async fn delete(server_url: &str, key: &str, config: &CliConfig) -> CliResult<()> {
+pub async fn delete(server_url: &str, key: &str, config: &CliConfig, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
 
     // Authenticate first
@@ -101,9 +113,13 @@ pub async fn delete(server_url: &str, key: &str, config: &CliConfig) -> CliResul
         session_key: key.to_string(),
     };
 
-    let _: serde_json::Value = client.call("sessions.delete", Some(params)).await?;
+    let result: serde_json::Value = client.call("sessions.delete", Some(params)).await?;
 
-    println!("✓ Session deleted: {}", key);
+    if json {
+        output::print_json(&result);
+    } else {
+        println!("✓ Session deleted: {}", key);
+    }
 
     client.close().await?;
     Ok(())
