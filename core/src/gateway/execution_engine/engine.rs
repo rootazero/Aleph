@@ -45,6 +45,8 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     workspace_manager: Option<Arc<WorkspaceManager>>,
     /// Memory backend for auto-memorization of conversations
     memory_backend: Option<crate::memory::store::MemoryBackend>,
+    /// Workspace file loader for agent-scoped SOUL.md/AGENTS.md/MEMORY.md
+    workspace_loader: std::sync::Mutex<crate::gateway::workspace_loader::WorkspaceFileLoader>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -66,6 +68,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             session_manager,
             workspace_manager: None,
             memory_backend,
+            workspace_loader: std::sync::Mutex::new(
+                crate::gateway::workspace_loader::WorkspaceFileLoader::new(),
+            ),
         }
     }
 
@@ -516,6 +521,36 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 extra_instructions.push(format!("## Workspace Profile\n\n{}", ws_prompt));
             }
         }
+        // Inject workspace files from agent's workspace directory
+        let agent_workspace_dir = agent.config().workspace.clone();
+        {
+            let mut loader = self.workspace_loader.lock().unwrap_or_else(|e| e.into_inner());
+
+            // Inject AGENTS.md as agent-specific instructions
+            if let Some(agents_md) = loader.load_agents_md(&agent_workspace_dir) {
+                if !agents_md.is_empty() {
+                    extra_instructions.push(format!("## Agent Instructions\n\n{}", agents_md));
+                }
+            }
+
+            // Inject MEMORY.md as persistent agent memory
+            if let Some(memory_md) = loader.load_memory_md(&agent_workspace_dir, 20_000) {
+                if !memory_md.is_empty() {
+                    extra_instructions.push(format!("## Agent Memory\n\n{}", memory_md));
+                }
+            }
+
+            // Inject recent daily memory logs
+            let recent = loader.load_recent_memory(&agent_workspace_dir, 7);
+            if !recent.is_empty() {
+                let daily = recent.iter()
+                    .map(|m| format!("### {}\n{}", m.date, m.content))
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                extra_instructions.push(format!("## Recent Activity\n\n{}", daily));
+            }
+        }
+
         let custom_instructions = if extra_instructions.is_empty() {
             None
         } else {
@@ -523,11 +558,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         };
 
         // Only inject soul into prompts if bootstrap is complete (soul.md exists)
-        let soul = if bootstrap_prompt.is_none() && !resolved_soul.is_empty() {
+        let mut soul = if bootstrap_prompt.is_none() && !resolved_soul.is_empty() {
             Some(resolved_soul)
         } else {
             None
         };
+
+        // Override soul manifest if workspace has SOUL.md
+        {
+            let mut loader = self.workspace_loader.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(workspace_soul) = loader.load_soul(&agent_workspace_dir) {
+                soul = Some(workspace_soul);
+            }
+        }
 
         let thinker_config = ThinkerConfig {
             prompt: PromptConfig {
