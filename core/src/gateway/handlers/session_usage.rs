@@ -58,13 +58,12 @@ pub async fn handle(request: JsonRpcRequest, store: Arc<SessionStore>) -> JsonRp
 }
 
 /// Estimate token counts from message history.
-/// Uses rough approximation: ~3 chars per token.
+/// Uses rough approximation: ~3 bytes per token (byte-based, not char-based).
 fn estimate_tokens(messages: &[super::session::HistoryMessage]) -> (u64, u64) {
     let mut input = 0u64;
     let mut output = 0u64;
     for msg in messages {
-        let chars = msg.content.len() as u64;
-        let tokens = chars / 3;
+        let tokens = (msg.content.len() as u64) / 3;
         match msg.role.as_str() {
             "user" => input += tokens,
             "assistant" => output += tokens,
