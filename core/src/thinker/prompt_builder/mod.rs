@@ -17,6 +17,7 @@ use crate::dispatcher::tool_index::HydrationResult;
 use crate::agent_loop::ToolInfo;
 
 use super::prompt_layer::{AssemblyPath, LayerInput};
+use super::prompt_mode::PromptMode;
 use super::prompt_pipeline::PromptPipeline;
 use super::soul::SoulManifest;
 
@@ -166,6 +167,20 @@ impl PromptBuilder {
         }
 
         prompt
+    }
+
+    /// Build system prompt with explicit mode control.
+    pub fn build_system_prompt_with_mode(
+        &self,
+        tools: &[ToolInfo],
+        soul: &SoulManifest,
+        profile: Option<&ProfileConfig>,
+        mode: PromptMode,
+    ) -> String {
+        let input = LayerInput::soul(&self.config, tools, soul)
+            .with_profile(profile)
+            .with_mode(mode);
+        self.pipeline.execute_with_mode(AssemblyPath::Soul, &input, mode)
     }
 
     /// Build system prompt using ResolvedContext
