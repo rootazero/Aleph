@@ -1,12 +1,16 @@
 //! RuntimeContextLayer — micro-environmental awareness (priority 200)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 
 pub struct RuntimeContextLayer;
 
 impl PromptLayer for RuntimeContextLayer {
     fn name(&self) -> &'static str { "runtime_context" }
     fn priority(&self) -> u32 { 200 }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        matches!(mode, PromptMode::Full)
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Context]
     }

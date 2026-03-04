@@ -101,6 +101,14 @@ pub trait PromptLayer: Send + Sync {
     /// Which assembly paths this layer participates in.
     fn paths(&self) -> &'static [AssemblyPath];
 
+    /// Whether this layer participates in the given [`PromptMode`].
+    ///
+    /// The default returns `true` for all modes.  Override in layers
+    /// that should be excluded from Compact or Minimal prompts.
+    fn supports_mode(&self, _mode: PromptMode) -> bool {
+        true
+    }
+
     /// Append this layer's content to `output`.
     fn inject(&self, output: &mut String, input: &LayerInput);
 

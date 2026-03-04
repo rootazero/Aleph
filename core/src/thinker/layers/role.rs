@@ -1,12 +1,16 @@
 //! RoleLayer — core role definition (priority 100)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 
 pub struct RoleLayer;
 
 impl PromptLayer for RoleLayer {
     fn name(&self) -> &'static str { "role" }
     fn priority(&self) -> u32 { 100 }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        !matches!(mode, PromptMode::Minimal)
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Basic, AssemblyPath::Hydration, AssemblyPath::Soul, AssemblyPath::Context]
     }

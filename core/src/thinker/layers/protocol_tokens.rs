@@ -2,12 +2,16 @@
 
 use crate::thinker::interaction::Capability;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 
 pub struct ProtocolTokensLayer;
 
 impl PromptLayer for ProtocolTokensLayer {
     fn name(&self) -> &'static str { "protocol_tokens" }
     fn priority(&self) -> u32 { 700 }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        matches!(mode, PromptMode::Full)
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Context]
     }
