@@ -319,6 +319,59 @@ pub async fn handle_capabilities(request: JsonRpcRequest, config: Arc<Config>) -
     }
 }
 
+/// Parameters for models.set
+#[derive(Debug, Deserialize)]
+pub struct SetParams {
+    /// Model/provider name to set as active
+    pub model: String,
+}
+
+/// Set the active model (default provider)
+///
+/// # RPC Method
+/// `models.set`
+///
+/// # Parameters
+/// - `model` (required): Provider name to set as the default
+///
+/// # Returns
+/// ```json
+/// {
+///   "model": "openai",
+///   "message": "Default model set to: openai"
+/// }
+/// ```
+pub async fn handle_set(
+    request: JsonRpcRequest,
+    config: Arc<tokio::sync::RwLock<Config>>,
+) -> JsonRpcResponse {
+    let params: SetParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let mut cfg = config.write().await;
+
+    // Verify the provider exists
+    if !cfg.providers.contains_key(&params.model) {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Provider not found: {}", params.model),
+        );
+    }
+
+    cfg.general.default_provider = Some(params.model.clone());
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "model": params.model,
+            "message": format!("Default model set to: {}", params.model),
+        }),
+    )
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

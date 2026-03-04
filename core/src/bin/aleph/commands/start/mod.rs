@@ -17,6 +17,7 @@ use alephcore::gateway::handlers::agent::{
     AgentRunManager, handle_run,
     handle_status as handle_agent_status,
     handle_cancel as handle_agent_cancel,
+    handle_respond_to_input,
 };
 use alephcore::gateway::{
     can_create_provider_from_env, create_provider_registry_from_env,
@@ -484,15 +485,21 @@ async fn register_agent_handlers(
         async move { chat_handlers::handle_clear(req, manager).await }
     });
 
+    // agent.respondToInput is stateless (no context args)
+    server.handlers_mut().register("agent.respondToInput", |req| async move {
+        handle_respond_to_input(req).await
+    });
+
     if !daemon {
         println!("Agent control methods:");
-        println!("  - agent.run     : Execute agent request with streaming");
-        println!("  - agent.status  : Query run status by run_id");
-        println!("  - agent.cancel  : Cancel an active run");
-        println!("  - chat.send     : Send chat message (wraps agent.run)");
-        println!("  - chat.abort    : Abort message generation");
-        println!("  - chat.history  : Get chat history");
-        println!("  - chat.clear    : Clear chat history");
+        println!("  - agent.run            : Execute agent request with streaming");
+        println!("  - agent.status         : Query run status by run_id");
+        println!("  - agent.cancel         : Cancel an active run");
+        println!("  - agent.respondToInput : Respond to user input request");
+        println!("  - chat.send            : Send chat message (wraps agent.run)");
+        println!("  - chat.abort           : Abort message generation");
+        println!("  - chat.history         : Get chat history");
+        println!("  - chat.clear           : Clear chat history");
         println!();
     }
 
@@ -1099,11 +1106,25 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     };
     let app_config_for_channels = app_config.clone();
     let app_config_for_reload = app_config.clone();
+    let app_config_for_oauth = app_config.clone();
+    let app_config_for_models = app_config.clone();
     register_config_handlers(&mut server, app_config, config_patcher, event_bus.clone(), auth_bundle.device_store.clone());
 
     register_session_handlers(&mut server, &session_manager, args.daemon);
     register_memory_handlers(&mut server, &memory_db, args.daemon);
+    register_models_handlers(&mut server, &app_config_for_models, args.daemon);
     register_daemon_handlers(&mut server, start_time, args.daemon);
+
+    // OAuth state: restore from config if chatgpt provider has an api_key
+    let oauth_state: alephcore::gateway::handlers::oauth::SharedOAuthState = {
+        use alephcore::gateway::handlers::oauth::restore_from_config;
+        let restored = restore_from_config(&*app_config_for_oauth.read().await);
+        if restored.is_some() && !args.daemon {
+            println!("OAuth: restored ChatGPT token from config");
+        }
+        Arc::new(tokio::sync::RwLock::new(restored))
+    };
+    register_oauth_handlers(&mut server, &oauth_state, &app_config_for_oauth, args.daemon);
 
     // Initialize WorkspaceManager (SQLite-based workspace state)
     let workspace_manager = {

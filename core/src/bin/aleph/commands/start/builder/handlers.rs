@@ -11,9 +11,11 @@ use alephcore::gateway::GatewayServer;
 use alephcore::gateway::handlers::session as session_handlers;
 use alephcore::gateway::handlers::channel as channel_handlers;
 use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
+use alephcore::gateway::handlers::oauth as oauth_handlers;
 use alephcore::gateway::handlers::config as config_handlers;
 use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::handlers::memory as memory_handlers;
+use alephcore::gateway::handlers::models as models_handlers;
 use alephcore::gateway::handlers::workspace as workspace_handlers;
 use alephcore::gateway::{
     SessionManager,
@@ -100,6 +102,7 @@ pub(in crate::commands::start) fn register_session_handlers(
     register_handler!(server, "sessions.history", session_handlers::handle_history_db, session_manager);
     register_handler!(server, "sessions.reset", session_handlers::handle_reset_db, session_manager);
     register_handler!(server, "sessions.delete", session_handlers::handle_delete_db, session_manager);
+    register_handler!(server, "session.create", session_handlers::handle_create_db, session_manager);
     register_handler!(server, "session.usage", session_handlers::handle_usage_db, session_manager);
     register_handler!(server, "session.compact", session_handlers::handle_compact_db, session_manager);
 
@@ -109,6 +112,7 @@ pub(in crate::commands::start) fn register_session_handlers(
         println!("  - sessions.history: Get session message history");
         println!("  - sessions.reset  : Clear session messages");
         println!("  - sessions.delete : Delete a session");
+        println!("  - session.create  : Create a new session");
         println!("  - session.usage   : Get session token/message stats");
         println!("  - session.compact : Compact session history");
         println!();
@@ -344,6 +348,54 @@ pub(in crate::commands::start) fn register_memory_handlers(
     }
 }
 
+// ─── register_models_handlers ────────────────────────────────────────────────
+
+pub(in crate::commands::start) fn register_models_handlers(
+    server: &mut GatewayServer,
+    config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
+    daemon: bool,
+) {
+    // models.list and models.get need a read-only snapshot; clone the Arc<RwLock<Config>>
+    // and take a read lock inside the closure to get Arc<Config>.
+    let config_for_list = Arc::clone(config);
+    server.handlers_mut().register("models.list", move |req| {
+        let cfg = config_for_list.clone();
+        async move {
+            let snapshot = Arc::new(cfg.read().await.clone());
+            models_handlers::handle_list(req, snapshot).await
+        }
+    });
+
+    let config_for_get = Arc::clone(config);
+    server.handlers_mut().register("models.get", move |req| {
+        let cfg = config_for_get.clone();
+        async move {
+            let snapshot = Arc::new(cfg.read().await.clone());
+            models_handlers::handle_get(req, snapshot).await
+        }
+    });
+
+    let config_for_caps = Arc::clone(config);
+    server.handlers_mut().register("models.capabilities", move |req| {
+        let cfg = config_for_caps.clone();
+        async move {
+            let snapshot = Arc::new(cfg.read().await.clone());
+            models_handlers::handle_capabilities(req, snapshot).await
+        }
+    });
+
+    register_handler!(server, "models.set", models_handlers::handle_set, config);
+
+    if !daemon {
+        println!("Model methods:");
+        println!("  - models.list         : List available models");
+        println!("  - models.get          : Get model details");
+        println!("  - models.capabilities : Get model capabilities");
+        println!("  - models.set          : Set default model");
+        println!();
+    }
+}
+
 // ─── register_workspace_handlers ─────────────────────────────────────────────
 
 pub(in crate::commands::start) fn register_workspace_handlers(
@@ -510,6 +562,27 @@ pub(in crate::commands::start) fn register_daemon_handlers(
         println!("  - daemon.status   : Server runtime status");
         println!("  - daemon.shutdown : Graceful shutdown");
         println!("  - daemon.logs     : View recent logs");
+        println!();
+    }
+}
+
+// ─── register_oauth_handlers ─────────────────────────────────────────────────
+
+pub(in crate::commands::start) fn register_oauth_handlers(
+    server: &mut GatewayServer,
+    oauth_state: &oauth_handlers::SharedOAuthState,
+    config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
+    daemon: bool,
+) {
+    register_handler!(server, "providers.oauthLogin", oauth_handlers::handle_oauth_login, oauth_state, config);
+    register_handler!(server, "providers.oauthLogout", oauth_handlers::handle_oauth_logout, oauth_state, config);
+    register_handler!(server, "providers.oauthStatus", oauth_handlers::handle_oauth_status, oauth_state, config);
+
+    if !daemon {
+        println!("OAuth methods:");
+        println!("  - providers.oauthLogin  : Start browser OAuth login");
+        println!("  - providers.oauthLogout : Clear OAuth token");
+        println!("  - providers.oauthStatus : Check OAuth status");
         println!();
     }
 }

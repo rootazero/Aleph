@@ -694,7 +694,7 @@ async fn execute_slash_command(
             if let Some(model_name) = name {
                 let params = json!({ "model": model_name });
                 match client
-                    .call::<_, Value>("model.set", Some(params))
+                    .call::<_, Value>("models.set", Some(params))
                     .await
                 {
                     Ok(_) => {
@@ -710,7 +710,7 @@ async fn execute_slash_command(
             }
         }
         SlashCommand::Models => {
-            match client.call::<_, Value>("model.list", None::<()>).await {
+            match client.call::<_, Value>("models.list", None::<()>).await {
                 Ok(result) => {
                     let models = format_value_as_list(&result, "Available models");
                     state.add_system_message(models);
