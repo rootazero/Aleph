@@ -349,6 +349,16 @@ enum SessionAction {
         /// Session key to delete
         key: String,
     },
+    /// Show session usage statistics
+    Usage {
+        /// Session key
+        key: String,
+    },
+    /// Compact session (compress history)
+    Compact {
+        /// Session key
+        key: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -482,6 +492,12 @@ async fn main() -> CliResult<()> {
             }
             SessionAction::Delete { key } => {
                 commands::session::delete(&server_url, &key, &config, cli.json).await?;
+            }
+            SessionAction::Usage { key } => {
+                commands::session::usage(&server_url, &key, &config, cli.json).await?;
+            }
+            SessionAction::Compact { key } => {
+                commands::session::compact(&server_url, &key, &config, cli.json).await?;
             }
         },
         Some(Commands::Guests { action }) => {

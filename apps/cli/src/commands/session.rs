@@ -124,3 +124,55 @@ pub async fn delete(server_url: &str, key: &str, config: &CliConfig, json: bool)
     client.close().await?;
     Ok(())
 }
+
+/// Show session usage statistics
+pub async fn usage(server_url: &str, key: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url).await?;
+    client.authenticate(config).await?;
+
+    let params = serde_json::json!({ "session_key": key });
+    let result: serde_json::Value = client.call("session.usage", Some(params)).await?;
+
+    if json {
+        output::print_json(&result);
+    } else {
+        let pairs = vec![
+            ("Session", result.get("session_key").and_then(|v| v.as_str()).unwrap_or("-").to_string()),
+            ("Total Tokens", result.get("tokens").and_then(|v| v.as_u64()).map(|n| n.to_string()).unwrap_or_else(|| "-".to_string())),
+            ("Input Tokens", result.get("input_tokens").and_then(|v| v.as_u64()).map(|n| n.to_string()).unwrap_or_else(|| "-".to_string())),
+            ("Output Tokens", result.get("output_tokens").and_then(|v| v.as_u64()).map(|n| n.to_string()).unwrap_or_else(|| "-".to_string())),
+            ("Messages", result.get("messages").and_then(|v| v.as_u64()).map(|n| n.to_string()).unwrap_or_else(|| "-".to_string())),
+            ("Created", result.get("created_at").and_then(|v| v.as_str()).unwrap_or("-").to_string()),
+            ("Last Active", result.get("last_active_at").and_then(|v| v.as_str()).unwrap_or("-").to_string()),
+        ];
+        output::print_detail(&pairs, false, &result);
+    }
+
+    client.close().await?;
+    Ok(())
+}
+
+/// Compact a session (compress history)
+pub async fn compact(server_url: &str, key: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url).await?;
+    client.authenticate(config).await?;
+
+    let params = serde_json::json!({ "session_key": key });
+    let result: serde_json::Value = client.call("session.compact", Some(params)).await?;
+
+    if json {
+        output::print_json(&result);
+    } else {
+        let msg = result.get("message").and_then(|v| v.as_str()).unwrap_or("Compacted.");
+        let before = result.get("before_messages").and_then(|v| v.as_u64()).unwrap_or(0);
+        let after = result.get("after_messages").and_then(|v| v.as_u64()).unwrap_or(0);
+        let saved = result.get("tokens_saved").and_then(|v| v.as_u64()).unwrap_or(0);
+        println!("{}", msg);
+        println!("  Before: {} messages", before);
+        println!("  After:  {} messages", after);
+        println!("  Tokens saved: {}", saved);
+    }
+
+    client.close().await?;
+    Ok(())
+}
