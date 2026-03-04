@@ -2,6 +2,7 @@
 //!
 //! Channel-agnostic orchestration for multi-persona collaborative discussions.
 
+pub mod coordinator;
 pub mod persona;
 pub mod protocol;
 pub mod session;
