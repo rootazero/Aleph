@@ -1,6 +1,7 @@
 //! CustomInstructionsLayer — user-provided custom instructions (priority 1500)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 
 pub struct CustomInstructionsLayer;
@@ -8,6 +9,9 @@ pub struct CustomInstructionsLayer;
 impl PromptLayer for CustomInstructionsLayer {
     fn name(&self) -> &'static str { "custom_instructions" }
     fn priority(&self) -> u32 { 1500 }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        !matches!(mode, PromptMode::Minimal)
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[
             AssemblyPath::Basic,

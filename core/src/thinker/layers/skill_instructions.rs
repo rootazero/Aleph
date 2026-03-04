@@ -1,6 +1,7 @@
 //! SkillInstructionsLayer — skill system v2 instructions (priority 1050)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 
 pub struct SkillInstructionsLayer;
@@ -8,6 +9,9 @@ pub struct SkillInstructionsLayer;
 impl PromptLayer for SkillInstructionsLayer {
     fn name(&self) -> &'static str { "skill_instructions" }
     fn priority(&self) -> u32 { 1050 }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        matches!(mode, PromptMode::Full)
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Basic, AssemblyPath::Hydration]
     }
