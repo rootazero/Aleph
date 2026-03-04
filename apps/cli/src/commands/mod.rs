@@ -13,6 +13,7 @@ pub mod health;
 pub mod identity_cmd;
 pub mod logs_cmd;
 pub mod info;
+pub mod mcp_cmd;
 pub mod memory_cmd;
 pub mod models_cmd;
 pub mod plugins_cmd;

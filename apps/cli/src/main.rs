@@ -199,6 +199,12 @@ enum Commands {
         action: ChatControlAction,
     },
 
+    /// MCP tool approval workflow
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
+
     /// Generate shell completion script
     Completion {
         /// Shell type (bash, zsh, fish, elvish, powershell)
@@ -527,6 +533,33 @@ enum VaultAction {
     Delete,
     /// Verify vault integrity
     Verify,
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+    /// List pending tool approval requests
+    Pending,
+    /// Approve a tool execution request
+    Approve {
+        /// Request ID
+        request_id: String,
+        /// Reason for approval
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Reject a tool execution request
+    Reject {
+        /// Request ID
+        request_id: String,
+        /// Reason for rejection
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Cancel a pending approval
+    Cancel {
+        /// Request ID
+        request_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -904,6 +937,22 @@ async fn main() -> CliResult<()> {
             }
             VaultAction::Verify => {
                 commands::vault_cmd::verify(&server_url, cli.json).await?;
+            }
+        },
+        Some(Commands::Mcp { action }) => match action {
+            McpAction::Pending => {
+                commands::mcp_cmd::pending(&server_url, cli.json).await?;
+            }
+            McpAction::Approve { request_id, reason } => {
+                commands::mcp_cmd::approve(&server_url, &request_id, reason.as_deref(), cli.json)
+                    .await?;
+            }
+            McpAction::Reject { request_id, reason } => {
+                commands::mcp_cmd::reject(&server_url, &request_id, reason.as_deref(), cli.json)
+                    .await?;
+            }
+            McpAction::Cancel { request_id } => {
+                commands::mcp_cmd::cancel(&server_url, &request_id, cli.json).await?;
             }
         },
         Some(Commands::ChatControl { action }) => match action {
