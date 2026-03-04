@@ -70,6 +70,8 @@ pub struct PromptConfig {
     /// When set, these are appended to the system prompt to inform the LLM
     /// about available skills from the SkillSystem v2
     pub skill_instructions: Option<String>,
+    /// Token budget for system prompt assembly.
+    pub token_budget: TokenBudget,
 }
 
 impl Default for PromptConfig {
@@ -85,6 +87,7 @@ impl Default for PromptConfig {
             skill_mode: false,
             thinking_transparency: false,
             skill_instructions: None,
+            token_budget: TokenBudget::default(),
         }
     }
 }
