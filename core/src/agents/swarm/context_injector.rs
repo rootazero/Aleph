@@ -140,6 +140,13 @@ impl ContextInjector {
             return String::new();
         }
 
+        tracing::info!(
+            subsystem = "swarm",
+            event = "context_injected",
+            entries = recent_updates.len(),
+            "swarm context injector providing team awareness to agent"
+        );
+
         let mut context = String::from("\n## Swarm State (Team Awareness)\n");
 
         for entry in recent_updates {

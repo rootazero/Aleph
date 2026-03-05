@@ -197,6 +197,18 @@ impl SwarmCoordinator {
             },
         };
 
+        let event_tier = match &swarm_event {
+            AgentEvent::Critical(_) => "critical",
+            AgentEvent::Important(_) => "important",
+            AgentEvent::Info(_) => "info",
+        };
+        tracing::info!(
+            subsystem = "swarm",
+            event = "event_published",
+            event_tier = event_tier,
+            "swarm coordinator published event to bus"
+        );
+
         // Publish to bus
         if let Err(e) = self.bus.publish(swarm_event).await {
             tracing::warn!("Failed to publish swarm event: {}", e);
