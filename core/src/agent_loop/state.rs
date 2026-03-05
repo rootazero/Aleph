@@ -34,6 +34,8 @@ pub struct LoopState {
     pub compressed_until_step: usize,
     /// POE hint for next Think step (consumed once, then cleared)
     pub poe_hint: Option<String>,
+    /// Whether the escalation check has already fired (fire-once guard)
+    pub escalation_checked: bool,
 }
 
 impl LoopState {
@@ -50,6 +52,7 @@ impl LoopState {
             history_summary: String::new(),
             compressed_until_step: 0,
             poe_hint: None,
+            escalation_checked: false,
         }
     }
 
@@ -94,6 +97,35 @@ impl LoopState {
     /// Take the POE hint (consuming it).
     pub fn take_poe_hint(&mut self) -> Option<String> {
         self.poe_hint.take()
+    }
+
+    /// Get list of tool names invoked so far.
+    pub fn tools_used(&self) -> Vec<String> {
+        self.steps
+            .iter()
+            .filter_map(|s| {
+                if let super::decision::Action::ToolCall { tool_name, .. } = &s.action {
+                    Some(tool_name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Check if any step had a failure result.
+    pub fn has_failures(&self) -> bool {
+        self.steps.iter().any(|s| !s.result.is_success())
+    }
+
+    /// Get original user input.
+    pub fn original_input(&self) -> &str {
+        &self.original_request
+    }
+
+    /// Get last step's result summary (if any).
+    pub fn last_result_summary(&self) -> Option<String> {
+        self.steps.last().map(|s| s.result.summary())
     }
 
     /// Get elapsed time since session start

@@ -130,6 +130,8 @@ where
     pub(crate) overflow_detector: Option<Arc<OverflowDetector>>,
     /// Optional SwarmCoordinator for swarm intelligence integration
     pub(crate) swarm_coordinator: Option<Arc<crate::agents::swarm::coordinator::SwarmCoordinator>>,
+    /// Optional task router for dynamic escalation
+    pub(crate) task_router: Option<Arc<dyn crate::routing::TaskRouter>>,
 }
 
 impl<T, E, C> AgentLoop<T, E, C>
@@ -148,6 +150,7 @@ where
             compaction_trigger: OptionalCompactionTrigger::new(None),
             overflow_detector: None,
             swarm_coordinator: None,
+            task_router: None,
         }
     }
 
@@ -172,6 +175,7 @@ where
             compaction_trigger: OptionalCompactionTrigger::new(Some(event_bus)),
             overflow_detector: None,
             swarm_coordinator: None,
+            task_router: None,
         }
     }
 
@@ -216,6 +220,7 @@ where
             compaction_trigger: OptionalCompactionTrigger::new(event_bus),
             overflow_detector,
             swarm_coordinator: None,
+            task_router: None,
         }
     }
 
@@ -239,6 +244,7 @@ where
             compaction_trigger: OptionalCompactionTrigger::new(event_bus),
             overflow_detector,
             swarm_coordinator,
+            task_router: None,
         }
     }
 
@@ -316,6 +322,12 @@ where
         coordinator: Arc<crate::agents::swarm::coordinator::SwarmCoordinator>,
     ) -> Self {
         self.swarm_coordinator = Some(coordinator);
+        self
+    }
+
+    /// Set a task router for dynamic escalation checking.
+    pub fn with_task_router(mut self, router: Arc<dyn crate::routing::TaskRouter>) -> Self {
+        self.task_router = Some(router);
         self
     }
 
@@ -469,6 +481,35 @@ where
                     "agent loop session ended"
                 );
                 return LoopResult::GuardTriggered(violation);
+            }
+
+            // ===== Escalation Check =====
+            if let Some(ref router) = self.task_router {
+                if !state.escalation_checked {
+                    let esc_ctx = crate::routing::EscalationContext {
+                        step_count: state.step_count,
+                        tools_invoked: state.tools_used(),
+                        has_failures: state.has_failures(),
+                        original_message: state.original_input().to_string(),
+                    };
+                    if let Some(route) = router.should_escalate(&esc_ctx).await {
+                        state.escalation_checked = true;
+                        tracing::info!(
+                            subsystem = "task_router",
+                            event = "escalation_triggered",
+                            route = route.label(),
+                            steps = state.step_count,
+                            "task router triggered dynamic escalation"
+                        );
+                        let snapshot = crate::routing::EscalationSnapshot {
+                            original_message: state.original_input().to_string(),
+                            completed_steps: state.step_count,
+                            tools_invoked: state.tools_used(),
+                            partial_result: state.last_result_summary(),
+                        };
+                        return LoopResult::Escalated { route, context: snapshot };
+                    }
+                }
             }
 
             // ===== Compression =====
@@ -834,6 +875,51 @@ where
             let completed_at = chrono::Utc::now().timestamp_millis();
 
             callback.on_action_done(&action, &result).await;
+
+            // ===== Escalate Task Tool Detection =====
+            if let Action::ToolCall { tool_name, arguments } = &action {
+                if tool_name == "escalate_task" && result.is_success() {
+                    let output_str = result.full_output();
+                    if output_str.contains("accepted") {
+                        let target = arguments
+                            .get("target")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("multi_step");
+                        let reason = arguments
+                            .get("reason")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("LLM requested escalation")
+                            .to_string();
+
+                        let route = match target {
+                            "critical" => crate::routing::TaskRoute::Critical {
+                                reason,
+                                manifest_hints: crate::routing::ManifestHints::default(),
+                            },
+                            "collaborative" => crate::routing::TaskRoute::Collaborative {
+                                reason,
+                                strategy: crate::routing::CollabStrategy::Parallel,
+                            },
+                            _ => crate::routing::TaskRoute::MultiStep { reason },
+                        };
+
+                        tracing::info!(
+                            subsystem = "task_router",
+                            event = "llm_escalation",
+                            route = route.label(),
+                            "LLM self-escalated via escalate_task tool"
+                        );
+
+                        let snapshot = crate::routing::EscalationSnapshot {
+                            original_message: state.original_input().to_string(),
+                            completed_steps: state.step_count,
+                            tools_invoked: state.tools_used(),
+                            partial_result: state.last_result_summary(),
+                        };
+                        return LoopResult::Escalated { route, context: snapshot };
+                    }
+                }
+            }
 
             // ===== SWARM EVENT: Action Completed =====
             // Publish action completed event to swarm coordinator (shadow mode)
