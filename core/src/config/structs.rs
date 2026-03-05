@@ -83,6 +83,9 @@ pub struct Config {
     /// Sub-agent synchronization configuration
     #[serde(default)]
     pub subagent: SubAgentConfig,
+    /// Task routing decision layer configuration
+    #[serde(default)]
+    pub task_routing: TaskRoutingConfig,
     /// Group chat configuration (multi-agent persona orchestration)
     #[serde(default)]
     pub group_chat: GroupChatConfig,
@@ -221,6 +224,7 @@ impl Default for Config {
             generation: GenerationConfig::default(),
             orchestrator: OrchestratorConfig::default(),
             subagent: SubAgentConfig::default(),
+            task_routing: TaskRoutingConfig::default(),
             group_chat: GroupChatConfig::default(),
             cron: CronConfig::default(),
             personas: Vec::new(),
