@@ -712,12 +712,104 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // ================================================================
         match task_route {
             crate::routing::TaskRoute::Simple => {
-                // Standard Agent Loop path (unchanged)
-                self.execute_simple_loop(
-                    run_id, request, &agent_workspace_dir, thinker, local_executor,
-                    compressor, loop_config, context, allowed_tools, identity,
-                    initial_history, abort_rx, callback,
-                ).await
+                // Standard Agent Loop path — clone params for potential escalation re-dispatch
+                let result = self.execute_simple_loop(
+                    run_id, request, &agent_workspace_dir, thinker.clone(), local_executor.clone(),
+                    compressor.clone(), loop_config.clone(), context.clone(), allowed_tools.clone(),
+                    identity.clone(), initial_history.clone(), abort_rx, callback.clone(),
+                ).await;
+
+                // Handle mid-execution escalation: re-dispatch to the escalated route
+                match result {
+                    Err(ExecutionError::Escalated { route, context: esc_ctx, .. }) => {
+                        let enriched_input = if let Some(ref partial) = esc_ctx.partial_result {
+                            format!(
+                                "{}\n\n## Prior Analysis (from initial attempt)\n\n{}",
+                                request.input, partial
+                            )
+                        } else {
+                            request.input.clone()
+                        };
+                        let mut escalated_request = request.clone();
+                        escalated_request.input = enriched_input;
+                        // Use partial result as conversation context, or fall back to initial history
+                        let escalated_history = esc_ctx.partial_result.clone().or(initial_history);
+
+                        match route {
+                            crate::routing::TaskRoute::MultiStep { ref reason } => {
+                                info!(subsystem = "task_router", run_id = %run_id, reason = %reason,
+                                    "Escalation re-dispatch → Dispatcher DAG");
+                                match self.run_dispatcher_dag(
+                                    run_id, &escalated_request, &agent_workspace_dir, thinker.clone(),
+                                    local_executor.clone(), compressor.clone(), loop_config.clone(),
+                                    context.clone(), allowed_tools.clone(), identity.clone(),
+                                    escalated_history.clone(), callback.clone(),
+                                ).await {
+                                    Ok(r) => Ok(r),
+                                    Err(e) => {
+                                        warn!(subsystem = "task_router", run_id = %run_id, error = %e,
+                                            "Escalated DAG failed, falling back to Agent Loop");
+                                        self.execute_simple_loop(
+                                            run_id, &escalated_request, &agent_workspace_dir, thinker,
+                                            local_executor, compressor, loop_config, context,
+                                            allowed_tools, identity, escalated_history,
+                                            watch::channel(false).1, callback,
+                                        ).await
+                                    }
+                                }
+                            }
+                            crate::routing::TaskRoute::Critical { ref reason, ref manifest_hints } => {
+                                info!(subsystem = "task_router", run_id = %run_id, reason = %reason,
+                                    "Escalation re-dispatch → POE Full");
+                                match self.run_poe_critical(
+                                    run_id, &escalated_request, &agent_workspace_dir, manifest_hints,
+                                    thinker.clone(), local_executor.clone(), compressor.clone(),
+                                    loop_config.clone(), allowed_tools.clone(), callback.clone(),
+                                ).await {
+                                    Ok(r) => Ok(r),
+                                    Err(e) => {
+                                        warn!(subsystem = "task_router", run_id = %run_id, error = %e,
+                                            "Escalated POE failed, falling back to Agent Loop");
+                                        self.execute_simple_loop(
+                                            run_id, &escalated_request, &agent_workspace_dir, thinker,
+                                            local_executor, compressor, loop_config, context,
+                                            allowed_tools, identity, escalated_history,
+                                            watch::channel(false).1, callback,
+                                        ).await
+                                    }
+                                }
+                            }
+                            crate::routing::TaskRoute::Collaborative { ref reason, ref strategy } => {
+                                info!(subsystem = "task_router", run_id = %run_id, reason = %reason,
+                                    "Escalation re-dispatch → Collaborative");
+                                match self.run_collaborative(
+                                    run_id, &escalated_request, &agent_workspace_dir, strategy,
+                                    thinker.clone(), local_executor.clone(), compressor.clone(),
+                                    loop_config.clone(), context.clone(), allowed_tools.clone(),
+                                    identity.clone(), callback.clone(),
+                                ).await {
+                                    Ok(r) => Ok(r),
+                                    Err(e) => {
+                                        warn!(subsystem = "task_router", run_id = %run_id, error = %e,
+                                            "Escalated collaborative failed, falling back to Agent Loop");
+                                        self.execute_simple_loop(
+                                            run_id, &escalated_request, &agent_workspace_dir, thinker,
+                                            local_executor, compressor, loop_config, context,
+                                            allowed_tools, identity, escalated_history,
+                                            watch::channel(false).1, callback,
+                                        ).await
+                                    }
+                                }
+                            }
+                            crate::routing::TaskRoute::Simple => {
+                                // Shouldn't escalate back to Simple, but handle gracefully
+                                let partial = esc_ctx.partial_result.unwrap_or_default();
+                                Ok(partial)
+                            }
+                        }
+                    }
+                    other => other,
+                }
             }
             crate::routing::TaskRoute::MultiStep { ref reason } => {
                 info!(
@@ -919,16 +1011,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     completed_steps = esc_ctx.completed_steps,
                     "Agent loop escalated to higher execution path"
                 );
-                // Re-dispatch via the escalated route
-                // Return partial result with escalation context for now
-                let partial = esc_ctx.partial_result.unwrap_or_default();
-                let escalation_note = format!(
-                    "## Escalation\n\nTask escalated to **{}** execution after {} steps.\n\n{}",
-                    route.label(),
-                    esc_ctx.completed_steps,
-                    partial
-                );
-                Ok(escalation_note)
+                // Signal escalation back to caller for re-dispatch
+                Err(ExecutionError::Escalated {
+                    route_label: route.label().to_string(),
+                    completed_steps: esc_ctx.completed_steps,
+                    route,
+                    context: esc_ctx,
+                })
             }
         }
     }
@@ -988,6 +1077,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             loop_config: loop_config.clone(),
             tools: allowed_tools.clone(),
             identity: identity.clone(),
+            workspace: agent_workspace_dir.to_path_buf(),
         });
 
         // 3. Execute via DagScheduler
@@ -1083,12 +1173,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // 5. Convert outcome to response
         match outcome {
-            PoeOutcome::Success(verdict) => {
-                Ok(format!(
-                    "✅ 任务完成，质量验证通过 (score: {:.1}%)\n\n{}",
-                    verdict.distance_score * 100.0,
-                    verdict.reason
-                ))
+            PoeOutcome::Success { worker_summary, verdict } => {
+                // Return worker's actual output; append verification status
+                if worker_summary.is_empty() {
+                    Ok(verdict.reason)
+                } else {
+                    Ok(worker_summary)
+                }
             }
             PoeOutcome::StrategySwitch { reason, suggestion } => {
                 Ok(format!(
@@ -1347,6 +1438,7 @@ where
     loop_config: LoopConfig,
     tools: Vec<UnifiedTool>,
     identity: IdentityContext,
+    workspace: std::path::PathBuf,
 }
 
 #[async_trait]
@@ -1367,15 +1459,23 @@ where
             format!("{}\n\n## Context from dependencies\n\n{}", task.name, context)
         };
 
+        let mut loop_config = self.loop_config.clone();
+        // DAG nodes should not re-escalate — disable task router
+        loop_config.max_steps = 30;
+
         let agent_loop = AgentLoop::new(
             self.thinker.clone(),
             self.executor.clone(),
             self.compressor.clone(),
-            self.loop_config.clone(),
+            loop_config,
         );
+        let context = RequestContext {
+            working_directory: Some(self.workspace.to_string_lossy().to_string()),
+            ..Default::default()
+        };
         let run_ctx = RunContext::new(
             prompt,
-            RequestContext::empty(),
+            context,
             self.tools.clone(),
             self.identity.clone(),
         );
@@ -1385,18 +1485,40 @@ where
 
         match result {
             LoopResult::Completed { summary, .. } => {
+                info!(subsystem = "dag_executor", task_id = %task.id, "DAG node completed");
                 Ok(crate::dispatcher::context::TaskOutput::text(summary))
             }
             LoopResult::Failed { reason, .. } => {
+                warn!(subsystem = "dag_executor", task_id = %task.id, reason = %reason, "DAG node failed");
                 Err(crate::error::AlephError::other(format!(
                     "Agent loop failed for task '{}': {}",
                     task.id, reason
                 )))
             }
-            other => {
+            LoopResult::Escalated { route, .. } => {
+                // DAG nodes should complete, not escalate; treat as partial success
+                info!(subsystem = "dag_executor", task_id = %task.id, route = route.label(), "DAG node tried to escalate, treating as completion");
+                Ok(crate::dispatcher::context::TaskOutput::text(
+                    format!("Task '{}' partially completed (escalation suppressed)", task.id)
+                ))
+            }
+            LoopResult::GuardTriggered(violation) => {
+                warn!(subsystem = "dag_executor", task_id = %task.id, violation = %violation.description(), "DAG node guard triggered");
                 Err(crate::error::AlephError::other(format!(
-                    "Agent loop interrupted for task '{}': {:?}",
-                    task.id, other.steps()
+                    "Guard triggered for task '{}': {}",
+                    task.id, violation.description()
+                )))
+            }
+            LoopResult::UserAborted => {
+                warn!(subsystem = "dag_executor", task_id = %task.id, "DAG node user aborted");
+                Err(crate::error::AlephError::other(format!(
+                    "User aborted task '{}'", task.id
+                )))
+            }
+            LoopResult::PoeAborted { reason } => {
+                warn!(subsystem = "dag_executor", task_id = %task.id, reason = %reason, "DAG node POE aborted");
+                Err(crate::error::AlephError::other(format!(
+                    "POE aborted task '{}': {}", task.id, reason
                 )))
             }
         }

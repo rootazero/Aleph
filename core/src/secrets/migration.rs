@@ -94,6 +94,68 @@ pub fn save_migrated_config(config: &Config) -> Result<(), SecretError> {
     Ok(())
 }
 
+/// Result of a reverse migration (vault → plaintext).
+#[derive(Debug)]
+pub struct ReverseMigrationResult {
+    /// Number of keys restored to plaintext.
+    pub restored_count: usize,
+    /// Names of restored providers.
+    pub restored_providers: Vec<String>,
+}
+
+/// Check if config has any vault-referenced keys that can be reversed.
+pub fn needs_reverse_migration(config: &Config) -> bool {
+    config.providers.values().any(|p| p.secret_name.is_some())
+}
+
+/// Reverse-migrate all vault-referenced API keys back to plaintext.
+///
+/// For each provider with a secret_name:
+/// 1. Decrypt the key from the vault
+/// 2. Set api_key on the provider config
+/// 3. Clear the secret_name field
+/// 4. Delete the entry from the vault
+pub fn reverse_migrate_api_keys(
+    config: &mut Config,
+    vault: &mut SecretVault,
+) -> Result<ReverseMigrationResult, SecretError> {
+    let mut restored = Vec::new();
+
+    let to_restore: Vec<(String, String)> = config
+        .providers
+        .iter()
+        .filter_map(|(name, p)| {
+            p.secret_name
+                .as_ref()
+                .map(|sn| (name.clone(), sn.clone()))
+        })
+        .collect();
+
+    for (provider_name, secret_name) in to_restore {
+        let decrypted = vault.get(&secret_name)?;
+        let api_key = decrypted.expose().to_string();
+
+        if let Some(provider) = config.providers.get_mut(&provider_name) {
+            provider.api_key = Some(api_key);
+            provider.secret_name = None;
+        }
+
+        let _ = vault.delete(&secret_name)?;
+
+        info!(
+            provider = %provider_name,
+            secret_name = %secret_name,
+            "Restored API key from vault to plaintext"
+        );
+        restored.push(provider_name);
+    }
+
+    Ok(ReverseMigrationResult {
+        restored_count: restored.len(),
+        restored_providers: restored,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +244,75 @@ mod tests {
 
         let result = migrate_api_keys(&mut config, &mut vault).unwrap();
         assert_eq!(result.migrated_count, 0);
+    }
+
+    #[test]
+    fn test_reverse_migration_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let vault_path = dir.path().join("test.vault");
+        let mut vault = SecretVault::open(&vault_path, "master").unwrap();
+        let mut config = make_config_with_plaintext_keys();
+
+        // Forward migrate
+        let fwd = migrate_api_keys(&mut config, &mut vault).unwrap();
+        assert_eq!(fwd.migrated_count, 2);
+        assert!(!needs_migration(&config));
+        assert!(needs_reverse_migration(&config));
+
+        // Reverse migrate
+        let rev = reverse_migrate_api_keys(&mut config, &mut vault).unwrap();
+        assert_eq!(rev.restored_count, 2);
+        assert!(rev.restored_providers.contains(&"claude-main".to_string()));
+        assert!(rev.restored_providers.contains(&"openai-main".to_string()));
+
+        // Config restored to plaintext
+        let claude = config.providers.get("claude-main").unwrap();
+        assert_eq!(claude.api_key.as_deref(), Some("sk-ant-test-key-123"));
+        assert!(claude.secret_name.is_none());
+
+        let openai = config.providers.get("openai-main").unwrap();
+        assert_eq!(openai.api_key.as_deref(), Some("sk-openai-test-456"));
+        assert!(openai.secret_name.is_none());
+
+        // Vault is now empty
+        assert!(vault.is_empty());
+
+        // State flags flipped back
+        assert!(needs_migration(&config));
+        assert!(!needs_reverse_migration(&config));
+    }
+
+    #[test]
+    fn test_reverse_migration_skips_plaintext_only() {
+        let dir = TempDir::new().unwrap();
+        let vault_path = dir.path().join("test.vault");
+        let mut vault = SecretVault::open(&vault_path, "master").unwrap();
+        let config_with_plaintext = make_config_with_plaintext_keys();
+
+        assert!(!needs_reverse_migration(&config_with_plaintext));
+
+        let mut config = config_with_plaintext;
+        let result = reverse_migrate_api_keys(&mut config, &mut vault).unwrap();
+        assert_eq!(result.restored_count, 0);
+    }
+
+    #[test]
+    fn test_needs_reverse_migration() {
+        let mut config = Config::default();
+
+        // No providers → false
+        assert!(!needs_reverse_migration(&config));
+
+        // Plaintext only → false
+        let mut p = ProviderConfig::test_config("model");
+        p.api_key = Some("key".into());
+        config.providers.insert("a".into(), p);
+        assert!(!needs_reverse_migration(&config));
+
+        // With secret_name → true
+        let mut p2 = ProviderConfig::test_config("model2");
+        p2.secret_name = Some("vault_key".into());
+        config.providers.insert("b".into(), p2);
+        assert!(needs_reverse_migration(&config));
     }
 }

@@ -39,7 +39,7 @@ impl Default for ExecutionEngineConfig {
     fn default() -> Self {
         Self {
             max_concurrent_runs: 5,
-            default_timeout_secs: 300,
+            default_timeout_secs: 900,
             enable_tracing: true,
         }
     }
@@ -133,4 +133,12 @@ pub enum ExecutionError {
 
     #[error("Execution failed: {0}")]
     Failed(String),
+
+    #[error("Escalated to {route_label} after {completed_steps} steps")]
+    Escalated {
+        route_label: String,
+        route: crate::routing::TaskRoute,
+        context: crate::routing::EscalationSnapshot,
+        completed_steps: usize,
+    },
 }

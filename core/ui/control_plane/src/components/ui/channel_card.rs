@@ -21,14 +21,7 @@ pub fn ChannelCard(
     // Build the icon container background with 15% opacity hex suffix
     let icon_bg = format!("background-color: {}15", brand_color);
 
-    let action_label = move || {
-        match status.get() {
-            ChannelStatus::Connected | ChannelStatus::Connecting | ChannelStatus::Error => {
-                "Configure"
-            }
-            _ => "Set up",
-        }
-    };
+    let action_label = "Configure";
 
     view! {
         <A

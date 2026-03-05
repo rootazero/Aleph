@@ -188,11 +188,11 @@ impl ChannelCrystallizer {
     ) -> SkillExecution {
         // Determine execution status and satisfaction from outcome
         let (status, satisfaction) = match outcome {
-            PoeOutcome::Success(verdict) if verdict.passed => {
+            PoeOutcome::Success { verdict, .. } if verdict.passed => {
                 let sat = 1.0 - verdict.distance_score;
                 (ExecutionStatus::Success, Some(sat))
             }
-            PoeOutcome::Success(verdict) => {
+            PoeOutcome::Success { verdict, .. } => {
                 let sat = (1.0 - verdict.distance_score) * 0.5;
                 (ExecutionStatus::PartialSuccess, Some(sat))
             }
@@ -472,12 +472,12 @@ impl ExperienceCrystallizer {
     ) -> SkillExecution {
         // Determine execution status and satisfaction from outcome
         let (status, satisfaction) = match outcome {
-            PoeOutcome::Success(verdict) if verdict.passed => {
+            PoeOutcome::Success { verdict, .. } if verdict.passed => {
                 // Full success: satisfaction based on distance score (0.0 = perfect -> 1.0 satisfaction)
                 let sat = 1.0 - verdict.distance_score;
                 (ExecutionStatus::Success, Some(sat))
             }
-            PoeOutcome::Success(verdict) => {
+            PoeOutcome::Success { verdict, .. } => {
                 // Completed but validation failed
                 let sat = (1.0 - verdict.distance_score) * 0.5; // Lower satisfaction
                 (ExecutionStatus::PartialSuccess, Some(sat))
@@ -614,7 +614,7 @@ mod tests {
         let crystallizer = ExperienceCrystallizer::new(tracker.clone());
 
         let task = create_test_task();
-        let outcome = PoeOutcome::Success(Verdict::success("All tests passed").with_distance_score(0.1));
+        let outcome = PoeOutcome::success(Verdict::success("All tests passed").with_distance_score(0.1), "");
         let output = create_test_output();
 
         // Record should succeed
@@ -734,7 +734,7 @@ mod tests {
 
         let task = create_test_task();
         let verdict = Verdict::success("All passed").with_distance_score(0.0);
-        let outcome = PoeOutcome::Success(verdict);
+        let outcome = PoeOutcome::success(verdict, "");
         let output = create_test_output();
 
         let execution = crystallizer.map_to_skill_execution(&task, &outcome, &output);
@@ -751,7 +751,7 @@ mod tests {
         let task = create_test_task();
         // Verdict passed but with distance
         let verdict = Verdict::success("Mostly passed").with_distance_score(0.3);
-        let outcome = PoeOutcome::Success(verdict);
+        let outcome = PoeOutcome::success(verdict, "");
         let output = create_test_output();
 
         let execution = crystallizer.map_to_skill_execution(&task, &outcome, &output);
@@ -787,7 +787,7 @@ mod tests {
         let manifest = SuccessManifest::new("test-task", "Test objective");
         let long_instruction = "a".repeat(200);
         let task = PoeTask::new(manifest, long_instruction);
-        let outcome = PoeOutcome::Success(Verdict::success("Done"));
+        let outcome = PoeOutcome::success(Verdict::success("Done"), "");
         let output = create_test_output();
 
         let execution = crystallizer.map_to_skill_execution(&task, &outcome, &output);
@@ -805,7 +805,7 @@ mod tests {
 
         // Just verify creation works
         let task = create_test_task();
-        let outcome = PoeOutcome::Success(Verdict::success("Done"));
+        let outcome = PoeOutcome::success(Verdict::success("Done"), "");
         let output = create_test_output();
 
         // This should not panic - sends to channel
@@ -832,7 +832,7 @@ mod tests {
 
         // Record some experiences
         let task = create_test_task();
-        let outcome = PoeOutcome::Success(Verdict::success("Done"));
+        let outcome = PoeOutcome::success(Verdict::success("Done"), "");
         let output = create_test_output();
 
         crystallizer.record(&task, &outcome, &output);
@@ -851,7 +851,7 @@ mod tests {
         let recorder = NoOpRecorder;
 
         let task = create_test_task();
-        let outcome = PoeOutcome::Success(Verdict::success("Done"));
+        let outcome = PoeOutcome::success(Verdict::success("Done"), "");
         let output = create_test_output();
 
         // Should not panic
@@ -867,7 +867,7 @@ mod tests {
         let recorder: Arc<dyn ExperienceRecorder> = Arc::new(NoOpRecorder);
 
         let task = create_test_task();
-        let outcome = PoeOutcome::Success(Verdict::success("Done"));
+        let outcome = PoeOutcome::success(Verdict::success("Done"), "");
         let output = create_test_output();
 
         recorder.record(&task, &outcome, &output);

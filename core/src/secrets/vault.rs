@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use super::crypto::SecretsCrypto;
@@ -13,6 +14,11 @@ use crate::config::Config;
 
 /// Current vault format version.
 const VAULT_VERSION: u32 = 1;
+
+/// Keyring service name for Aleph vault.
+const KEYRING_SERVICE: &str = "aleph.vault";
+/// Keyring account name for the master key.
+const KEYRING_ACCOUNT: &str = "master_key";
 
 /// Encrypted secret vault backed by a file.
 pub struct SecretVault {
@@ -171,9 +177,151 @@ impl super::router::AsyncSecretResolver for SecretVault {
     }
 }
 
-/// Resolve the master key from environment or return error.
+/// Resolve the master key from environment variable or OS keychain.
+///
+/// Priority:
+/// 1. `ALEPH_MASTER_KEY` environment variable (CI / server override)
+/// 2. OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service)
 pub fn resolve_master_key() -> Result<String, SecretError> {
-    std::env::var("ALEPH_MASTER_KEY").map_err(|_| SecretError::MasterKeyMissing)
+    // Priority 1: env var (CI / server override)
+    if let Ok(key) = std::env::var("ALEPH_MASTER_KEY") {
+        if !key.is_empty() {
+            return Ok(key);
+        }
+    }
+    // Priority 2: OS keychain
+    match get_master_key_from_keyring() {
+        Ok(Some(key)) => return Ok(key),
+        Ok(None) => {}
+        Err(e) => tracing::debug!(error = %e, "Keychain unavailable, skipping"),
+    }
+    Err(SecretError::MasterKeyMissing)
+}
+
+/// Read the master key from the OS keychain.
+///
+/// Returns `Ok(Some(key))` if found, `Ok(None)` if not set,
+/// or `Err` if the keychain backend is unavailable.
+pub fn get_master_key_from_keyring() -> Result<Option<String>, SecretError> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
+        .map_err(|e| SecretError::ProviderError {
+            provider: "keychain".into(),
+            message: format!("Failed to create keyring entry: {}", e),
+        })?;
+
+    match entry.get_password() {
+        Ok(password) => Ok(Some(password)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(SecretError::ProviderError {
+            provider: "keychain".into(),
+            message: format!("Failed to read from keychain: {}", e),
+        }),
+    }
+}
+
+/// Store the master key in the OS keychain.
+pub fn store_master_key_to_keyring(key: &str) -> Result<(), SecretError> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
+        .map_err(|e| SecretError::ProviderError {
+            provider: "keychain".into(),
+            message: format!("Failed to create keyring entry: {}", e),
+        })?;
+
+    entry.set_password(key).map_err(|e| SecretError::ProviderError {
+        provider: "keychain".into(),
+        message: format!("Failed to store in keychain: {}", e),
+    })?;
+
+    info!("Master key stored in OS keychain");
+    Ok(())
+}
+
+/// Delete the master key from the OS keychain.
+///
+/// Returns `Ok(true)` if deleted, `Ok(false)` if not found.
+pub fn delete_master_key_from_keyring() -> Result<bool, SecretError> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
+        .map_err(|e| SecretError::ProviderError {
+            provider: "keychain".into(),
+            message: format!("Failed to create keyring entry: {}", e),
+        })?;
+
+    match entry.delete_credential() {
+        Ok(()) => {
+            info!("Master key removed from OS keychain");
+            Ok(true)
+        }
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(e) => Err(SecretError::ProviderError {
+            provider: "keychain".into(),
+            message: format!("Failed to delete from keychain: {}", e),
+        }),
+    }
+}
+
+/// Current vault configuration status (never exposes the key value).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultStatus {
+    /// Whether the vault file exists on disk.
+    pub vault_exists: bool,
+    /// Whether a master key is resolvable (env or keychain).
+    pub master_key_configured: bool,
+    /// Source of the master key: "env_var", "keychain", or null.
+    pub master_key_source: Option<String>,
+    /// Path to the vault file.
+    pub vault_path: String,
+    /// Whether the OS keychain backend is available.
+    pub keychain_available: bool,
+    /// Number of providers with plaintext API keys (candidates for migration).
+    #[serde(default)]
+    pub plaintext_key_count: usize,
+    /// Number of providers with encrypted vault references.
+    #[serde(default)]
+    pub encrypted_key_count: usize,
+}
+
+/// Get the current vault status without exposing any secrets.
+pub fn vault_status() -> VaultStatus {
+    let vault_path = SecretVault::default_path();
+    let vault_exists = vault_path.exists();
+
+    // Check env var
+    let env_key = std::env::var("ALEPH_MASTER_KEY")
+        .ok()
+        .filter(|k| !k.is_empty());
+
+    // Check keychain
+    let keychain_result = get_master_key_from_keyring();
+    let keychain_available = keychain_result.is_ok();
+    let keychain_key = keychain_result.ok().flatten();
+
+    let (master_key_configured, master_key_source) = if env_key.is_some() {
+        (true, Some("env_var".to_string()))
+    } else if keychain_key.is_some() {
+        (true, Some("keychain".to_string()))
+    } else {
+        (false, None)
+    };
+
+    let config = Config::load().ok();
+    let plaintext_key_count = config
+        .as_ref()
+        .map(|c| c.providers.values().filter(|p| p.api_key.is_some()).count())
+        .unwrap_or(0);
+    let encrypted_key_count = config
+        .as_ref()
+        .map(|c| c.providers.values().filter(|p| p.secret_name.is_some()).count())
+        .unwrap_or(0);
+
+    VaultStatus {
+        vault_exists,
+        master_key_configured,
+        master_key_source,
+        vault_path: vault_path.display().to_string(),
+        keychain_available,
+        plaintext_key_count,
+        encrypted_key_count,
+    }
 }
 
 /// Resolve secret_name references in provider configs using an async resolver.

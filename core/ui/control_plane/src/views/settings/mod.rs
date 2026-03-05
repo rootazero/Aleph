@@ -13,6 +13,7 @@ pub mod search;
 pub mod plugins;
 pub mod skills;
 pub mod policies;
+pub mod vault;
 pub mod channels;
 
 pub use providers::ProvidersView;
@@ -30,6 +31,7 @@ pub use search::SearchView;
 pub use plugins::PluginsView;
 pub use skills::SkillsView;
 pub use policies::PoliciesView;
+pub use vault::VaultView;
 pub use channels::TelegramChannelView;
 pub use channels::DiscordChannelView;
 pub use channels::WhatsAppChannelView;

@@ -127,7 +127,16 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
     type Args = PdfGenerateArgs;
     type Output = PdfGenerateOutput;
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+    async fn call(&self, mut args: Self::Args) -> Result<Self::Output> {
+        // Auto-detect Markdown when format is Text (the default)
+        if matches!(args.format, ContentFormat::Text) {
+            let detected = ContentFormat::detect(&args.content);
+            if matches!(detected, ContentFormat::Markdown) {
+                info!("Auto-detected Markdown content, switching format to Markdown");
+                args.format = ContentFormat::Markdown;
+            }
+        }
+
         let output_path = self.resolve_output_path(&args.output_path)?;
 
         let result = match args.render_engine {

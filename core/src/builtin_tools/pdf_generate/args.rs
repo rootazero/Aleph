@@ -49,6 +49,76 @@ pub enum ContentFormat {
     Markdown,
 }
 
+impl ContentFormat {
+    /// Auto-detect whether content is Markdown based on common patterns.
+    ///
+    /// Returns `Markdown` if the content contains typical Markdown syntax
+    /// (headings, bold/italic, lists, code blocks, links, etc.).
+    pub fn detect(content: &str) -> Self {
+        // Check first ~2000 chars for performance
+        let sample = if content.len() > 2000 {
+            content.get(..2000).unwrap_or(content)
+        } else {
+            content
+        };
+
+        let mut score = 0u32;
+
+        for line in sample.lines() {
+            let trimmed = line.trim();
+            // Headings: # ## ### etc.
+            if trimmed.starts_with("# ")
+                || trimmed.starts_with("## ")
+                || trimmed.starts_with("### ")
+                || trimmed.starts_with("#### ")
+            {
+                score += 3;
+            }
+            // Unordered list items: - item or * item
+            if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+                score += 1;
+            }
+            // Ordered list items: 1. item
+            if trimmed.len() > 2
+                && trimmed.as_bytes()[0].is_ascii_digit()
+                && trimmed.contains(". ")
+            {
+                score += 1;
+            }
+            // Code block fences
+            if trimmed.starts_with("```") {
+                score += 2;
+            }
+            // Blockquote
+            if trimmed.starts_with("> ") {
+                score += 1;
+            }
+            // Horizontal rule
+            if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+                score += 1;
+            }
+        }
+
+        // Inline patterns: **bold**, *italic*, [link](url), ![image](url), `code`
+        if sample.contains("**") || sample.contains("__") {
+            score += 2;
+        }
+        if sample.contains("](") {
+            score += 2;
+        }
+        if sample.contains('`') {
+            score += 1;
+        }
+
+        // Threshold: 3+ points → likely markdown
+        if score >= 3 {
+            ContentFormat::Markdown
+        } else {
+            ContentFormat::Text
+        }
+    }
+}
+
 /// Rendering engine for PDF generation
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]

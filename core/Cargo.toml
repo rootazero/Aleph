@@ -128,6 +128,8 @@ aes-gcm = "0.10"
 hkdf = "0.12"
 secrecy = { version = "0.10", features = ["serde"] }
 zeroize = { version = "1.8", features = ["derive"] }
+# OS keychain integration (Vault master key storage)
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 # EVM signing (Agent Secret Management Phase 3)
 k256 = { version = "0.13", features = ["ecdsa", "schnorr"] }
 sha3 = "0.10"

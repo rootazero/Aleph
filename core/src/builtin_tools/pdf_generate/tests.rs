@@ -323,6 +323,38 @@ async fn test_auto_engine_fallback() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+// ── Content format auto-detection ────────────────────────────────────────
+
+#[test]
+fn test_detect_markdown_headings() {
+    let content = "# Title\n\nSome text\n\n## Section\n\nMore text";
+    assert!(matches!(ContentFormat::detect(content), ContentFormat::Markdown));
+}
+
+#[test]
+fn test_detect_markdown_mixed() {
+    let content = "# Report\n\n**Bold text** and *italic*.\n\n- item 1\n- item 2\n";
+    assert!(matches!(ContentFormat::detect(content), ContentFormat::Markdown));
+}
+
+#[test]
+fn test_detect_plain_text() {
+    let content = "Hello, this is just plain text.\nNothing special here.";
+    assert!(matches!(ContentFormat::detect(content), ContentFormat::Text));
+}
+
+#[test]
+fn test_detect_markdown_code_blocks() {
+    let content = "Here is some code:\n\n```rust\nfn main() {}\n```\n\nEnd.";
+    assert!(matches!(ContentFormat::detect(content), ContentFormat::Markdown));
+}
+
+#[test]
+fn test_detect_markdown_links() {
+    let content = "Check out [this link](https://example.com) for details.\n\nAlso **bold**.";
+    assert!(matches!(ContentFormat::detect(content), ContentFormat::Markdown));
+}
+
 // ── Schema verification ─────────────────────────────────────────────────
 
 #[test]

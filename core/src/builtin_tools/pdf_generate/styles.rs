@@ -12,8 +12,11 @@ pub fn github_markdown_css() -> &'static str {
         font-size: 14px;
         line-height: 1.6;
         color: #24292e;
+        background-color: #ffffff;
         padding: 2em;
         max-width: 100%;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
     }
 
     h1, h2, h3, h4, h5, h6 {
@@ -42,7 +45,10 @@ pub fn github_markdown_css() -> &'static str {
     }
     pre {
         background-color: #f6f8fa; border-radius: 6px; padding: 16px;
-        overflow-x: auto; margin-bottom: 1em; line-height: 1.45;
+        margin-bottom: 1em; line-height: 1.45;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
     }
     pre code { background-color: transparent; padding: 0; font-size: 0.85em; }
 
@@ -59,10 +65,11 @@ pub fn github_markdown_css() -> &'static str {
     img { max-width: 100%; height: auto; }
 
     @media print {
-        body { padding: 0; }
+        body { padding: 0; background-color: #ffffff; }
         h1, h2, h3 { break-after: avoid; }
         pre, blockquote, table { break-inside: avoid; }
-        p { orphans: 3; widows: 3; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+        p { orphans: 3; widows: 3; word-wrap: break-word; overflow-wrap: break-word; }
     }
     "#
 }

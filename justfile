@@ -23,7 +23,7 @@ default:
 
 # Run server (debug)
 dev:
-    cargo run --bin {{server_bin}}
+    cargo run -p alephcore --bin {{server_bin}}
 
 # ─── Full Builds ───
 
@@ -32,12 +32,12 @@ all: build macos
 
 # Build server (release)
 build: wasm
-    cargo build --bin {{server_bin}} --release
+    cargo build -p alephcore --bin {{server_bin}} --release
     @echo "✓ Server: {{release_dir}}/{{server_bin}}"
 
 # Build server (debug, faster compile)
 build-debug: wasm
-    cargo build --bin {{server_bin}}
+    cargo build -p alephcore --bin {{server_bin}}
     @echo "✓ Server (debug): {{debug_dir}}/{{server_bin}}"
 
 # Build macOS native app (release)

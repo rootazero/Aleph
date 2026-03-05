@@ -197,6 +197,59 @@ Rust Core 是 Aleph 的灵魂，只负责三件事：
 
 ---
 
+## 🧬 软件设计原则 (Design Principles)
+
+以下原则指导 Aleph 每一行代码的编写决策，是架构红线之下的工程纪律。
+
+### P1. 低耦合 (Low Coupling)
+
+- **模块间通过 Trait 通信，不依赖具体实现** — 模块只知道对方的契约，不知道对方的内部结构
+- **禁止跨层直接调用** — Core 不直接调用 UI，UI 不直接操作数据库，Interface 不处理业务逻辑
+- **依赖方向单向流动** — `Interface → Core → Domain`，禁止反向依赖
+- **事件驱动解耦** — 模块间优先通过事件/消息传递状态变化，而非直接方法调用
+
+### P2. 高内聚 (High Cohesion)
+
+- **单一职责** — 每个模块/struct/函数只做一件事，做好一件事
+- **相关逻辑物理聚合** — 紧密相关的类型、函数、trait 放在同一模块目录下，不要分散到不同子系统
+- **命名即文档** — 模块名、函数名、类型名应准确反映其唯一职责，无需注释解释"它是干什么的"
+- **大文件及时拆分** — 单文件超过 500 行应考虑按职责拆分为子模块 (参见 [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md))
+
+### P3. 可扩展性 (Extensibility)
+
+- **开放-封闭原则 (OCP)** — 对扩展开放，对修改封闭。新增功能通过实现 trait / 注册插件完成，不修改已有核心逻辑
+- **策略模式优于条件分支** — 用 trait object / enum dispatch 替代 `if-else` 链或 `match` 的无限膨胀
+- **插件化优先** — 非核心功能优先实现为 Skill / MCP Server / WASM 插件，而非硬编码进 Core
+- **Schema 驱动** — 接口使用 JSON Schema (schemars) 自描述，新增字段不破坏旧客户端
+
+### P4. 依赖倒置 (Dependency Inversion)
+
+- **高层模块不依赖低层模块，两者都依赖抽象** — Core 定义 trait，具体实现在 crate 边界之外
+- **实践**: `DesktopCapability` trait 在 core 中定义，native 实现在 `crates/desktop/`；`MemoryStore` trait 在 core 中定义，LanceDB 实现在同层但可替换
+- **构造时注入** — 通过 `AppContext` / Builder 模式在启动时组装依赖，运行时不 `new` 具体类型
+
+### P5. 最小知识原则 (Least Knowledge / Law of Demeter)
+
+- **只与直接协作者通信** — `a.b().c().d()` 链式调用是设计缺陷的信号
+- **封装内部结构** — 不暴露 struct 内部字段的引用链，提供有意义的方法代替
+- **接口最小化** — pub API 只暴露调用者真正需要的，`pub(crate)` 优于 `pub`
+
+### P6. 简洁性 (Simplicity — KISS & YAGNI)
+
+- **奥卡姆剃刀** — 如无必要，勿增实体。不为假想的未来需求预留抽象
+- **三次法则** — 代码重复不超过两处时不要提前抽象，第三次出现再提取
+- **删除优于注释** — 废弃代码直接删除，不要注释掉保留。Git 是时光机
+- **扁平优于嵌套** — 优先使用 early return / `?` 操作符，减少缩进层级
+
+### P7. 防御性设计 (Defensive Design)
+
+- **系统边界校验** — 在用户输入、外部 API 响应、IPC 消息的入口处严格校验，内部传递信任已校验的数据
+- **优雅降级** — 外部依赖 (LLM/网络/文件系统) 失败时提供 fallback，不 panic
+- **锁安全** — `.lock().unwrap_or_else(|e| e.into_inner())`，永远处理 poison
+- **UTF-8 安全** — 字符串切片使用 `char_indices()` / `.get(..n)`，不用 `&s[..n]`
+
+---
+
 ## 🧭 北极星 (North Star)
 
 ### 架构已定，填充不推倒
