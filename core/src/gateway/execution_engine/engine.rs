@@ -47,6 +47,8 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     memory_backend: Option<crate::memory::store::MemoryBackend>,
     /// Workspace file loader for agent-scoped SOUL.md/AGENTS.md/MEMORY.md
     workspace_loader: std::sync::Mutex<crate::gateway::workspace_loader::WorkspaceFileLoader>,
+    /// Optional task router for pre-classification and escalation handling
+    task_router: Option<Arc<dyn crate::routing::TaskRouter>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -71,7 +73,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             workspace_loader: std::sync::Mutex::new(
                 crate::gateway::workspace_loader::WorkspaceFileLoader::new(),
             ),
+            task_router: None,
         }
+    }
+
+    /// Set a task router for pre-classification of incoming requests.
+    pub fn with_task_router(mut self, router: Arc<dyn crate::routing::TaskRouter>) -> Self {
+        self.task_router = Some(router);
+        self
     }
 
     /// Set the workspace manager for workspace-scoped profile resolution.
@@ -679,6 +688,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // Run with local executor
         let agent_loop = AgentLoop::new(thinker, local_executor, compressor, loop_config);
+        // Inject task router for dynamic escalation
+        let agent_loop = if let Some(ref router) = self.task_router {
+            agent_loop.with_task_router(Arc::clone(router))
+        } else {
+            agent_loop
+        };
         let mut run_context = RunContext::new(
             request.input.clone(),
             context,
@@ -749,9 +764,25 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 warn!(run_id = %run_id, reason = %reason, "Agent loop aborted by POE");
                 Err(ExecutionError::Failed(format!("POE aborted: {}", reason)))
             }
-            LoopResult::Escalated { route, .. } => {
-                info!(run_id = %run_id, route = route.label(), "Agent loop escalated to higher route");
-                Err(ExecutionError::Failed(format!("Escalated to {}", route.label())))
+            LoopResult::Escalated { route, context } => {
+                info!(
+                    subsystem = "task_router",
+                    event = "escalated",
+                    run_id = %run_id,
+                    route = route.label(),
+                    completed_steps = context.completed_steps,
+                    "Agent loop escalated to higher execution path"
+                );
+                // Phase 1: Return partial result with escalation info
+                // Phase 2 will re-dispatch via route to Dispatcher/POE/Swarm
+                let msg = context.partial_result.unwrap_or_else(|| {
+                    format!(
+                        "Task escalated to {} execution ({} steps completed). Full route dispatch coming in Phase 2.",
+                        route.label(),
+                        context.completed_steps
+                    )
+                });
+                Ok(msg)
             }
         }
     }
