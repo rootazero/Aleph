@@ -293,18 +293,29 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Ok(())
             }
             Err(e) => {
-                let _ = emitter
-                    .emit(StreamEvent::RunError {
-                        run_id: run_id.clone(),
-                        seq: final_seq,
-                        error: e.to_string(),
-                        error_code: Some(match e {
-                            ExecutionError::Timeout => "TIMEOUT".to_string(),
-                            ExecutionError::Cancelled => "CANCELLED".to_string(),
-                            _ => "INTERNAL_ERROR".to_string(),
-                        }),
-                    })
-                    .await;
+                // Only emit RunError for system-level errors (Timeout, Cancelled).
+                // AgentLoop failures (ExecutionError::Failed) have already emitted
+                // RunError via callback.on_failed(), so re-emitting would cause
+                // duplicate error messages on channels like Telegram.
+                match e {
+                    ExecutionError::Timeout | ExecutionError::Cancelled => {
+                        let _ = emitter
+                            .emit(StreamEvent::RunError {
+                                run_id: run_id.clone(),
+                                seq: final_seq,
+                                error: e.to_string(),
+                                error_code: Some(match e {
+                                    ExecutionError::Timeout => "TIMEOUT".to_string(),
+                                    ExecutionError::Cancelled => "CANCELLED".to_string(),
+                                    _ => unreachable!(),
+                                }),
+                            })
+                            .await;
+                    }
+                    _ => {
+                        // Already reported via callback — skip duplicate emission
+                    }
+                }
                 Err(ExecutionError::Failed(e.to_string()))
             }
         };
