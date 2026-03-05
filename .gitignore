@@ -72,3 +72,4 @@ agentstructure/
 icons/
 !apps/desktop/src-tauri/icons/
 Aleph.dmg
+apps/macos-native/Aleph/Resources/aleph-server
