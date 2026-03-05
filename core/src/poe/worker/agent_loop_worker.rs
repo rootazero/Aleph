@@ -140,6 +140,15 @@ where
             LoopResult::PoeAborted { reason } => {
                 WorkerOutput::failed(format!("POE aborted: {}", reason))
             }
+            LoopResult::Escalated { route, context } => {
+                let mut out = WorkerOutput::failed(format!(
+                    "Escalated to {}: {}",
+                    route.label(),
+                    context.partial_result.unwrap_or_default()
+                ));
+                out.steps_taken = context.completed_steps.min(u32::MAX as usize) as u32;
+                out
+            }
         };
 
         output.artifacts = artifacts;
