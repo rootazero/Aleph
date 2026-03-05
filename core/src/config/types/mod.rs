@@ -36,6 +36,7 @@ pub mod secrets;
 pub mod skills;
 pub mod smart_flow;
 pub mod subagent;
+pub mod task_routing;
 pub mod tools;
 pub mod video;
 
@@ -60,5 +61,6 @@ pub use secrets::*;
 pub use skills::*;
 pub use smart_flow::*;
 pub use subagent::*;
+pub use task_routing::*;
 pub use tools::*;
 pub use video::*;
