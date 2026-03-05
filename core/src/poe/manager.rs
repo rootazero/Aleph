@@ -295,6 +295,16 @@ impl<W: Worker> PoeManager<W> {
             soft_metrics_count: task.manifest.soft_metrics.len(),
         });
 
+        tracing::info!(
+            subsystem = "poe",
+            event = "manifest_created",
+            task_id = %task.manifest.task_id,
+            hard_constraints = task.manifest.hard_constraints.len(),
+            soft_metrics = task.manifest.soft_metrics.len(),
+            max_attempts = task.manifest.max_attempts,
+            "POE full manager created success manifest"
+        );
+
         // Capture initial workspace snapshot for rollback
         let snapshot = if let Some(ref workspace) = self.workspace {
             match StateSnapshot::capture(workspace).await {
@@ -324,6 +334,15 @@ impl<W: Worker> PoeManager<W> {
         let mut previous_failure: Option<String> = None;
         let mut last_verdict: Option<Verdict> = None;
         let mut last_output: Option<WorkerOutput> = None;
+
+        tracing::info!(
+            subsystem = "poe",
+            event = "poe_loop_started",
+            task_id = %task.manifest.task_id,
+            max_attempts = task.manifest.max_attempts,
+            max_tokens = self.config.max_tokens,
+            "POE full manager entering P->O->E execution loop"
+        );
 
         // Main P->O->E loop
         while !budget.exhausted() {

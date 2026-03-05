@@ -5,12 +5,19 @@
 //! LLM calls — those happen at a higher layer that consumes the orchestrator.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::config::types::{GroupChatConfig, PersonaConfig};
 
 use super::persona::PersonaRegistry;
-use super::protocol::{GroupChatError, GroupChatStatus, PersonaSource};
+use super::protocol::{GroupChatError, PersonaSource};
 use super::session::GroupChatSession;
+
+/// A shared, async-lockable session handle.
+///
+/// Handlers hold this Arc after a brief orchestrator lock, then lock the
+/// individual session without blocking other sessions.
+pub type SharedSession = Arc<tokio::sync::Mutex<GroupChatSession>>;
 
 /// Orchestrator for multi-agent group chat sessions.
 ///
@@ -19,7 +26,7 @@ use super::session::GroupChatSession;
 pub struct GroupChatOrchestrator {
     config: GroupChatConfig,
     persona_registry: PersonaRegistry,
-    sessions: HashMap<String, GroupChatSession>,
+    sessions: HashMap<String, SharedSession>,
 }
 
 impl GroupChatOrchestrator {
@@ -44,6 +51,9 @@ impl GroupChatOrchestrator {
 
     /// Create a new group chat session.
     ///
+    /// Returns both the session ID and a [`SharedSession`] handle so the caller
+    /// can immediately lock the session after releasing the orchestrator lock.
+    ///
     /// # Errors
     ///
     /// - [`GroupChatError::TooManyPersonas`] if the number of persona sources
@@ -56,7 +66,7 @@ impl GroupChatOrchestrator {
         topic: Option<String>,
         source_channel: String,
         source_session_key: String,
-    ) -> Result<String, GroupChatError> {
+    ) -> Result<(String, SharedSession), GroupChatError> {
         // 1. Validate persona count
         let max = self.config.max_personas_per_session;
         if sources.len() > max {
@@ -68,6 +78,7 @@ impl GroupChatOrchestrator {
 
         // 2. Resolve personas (validates that all presets exist)
         let participants = self.persona_registry.resolve(&sources)?;
+        let participant_count = participants.len();
 
         // 3. Generate session ID
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -80,70 +91,58 @@ impl GroupChatOrchestrator {
             source_channel,
             source_session_key,
         );
-        self.sessions.insert(session_id.clone(), session);
+        let handle = Arc::new(tokio::sync::Mutex::new(session));
+        self.sessions.insert(session_id.clone(), Arc::clone(&handle));
 
-        // 5. Return the session ID
-        Ok(session_id)
+        tracing::info!(
+            subsystem = "group_chat",
+            event = "session_created",
+            session_id = %session_id,
+            persona_count = participant_count,
+            "group chat session created"
+        );
+
+        // 5. Return both the session ID and the handle
+        Ok((session_id, handle))
     }
 
-    /// Look up a session by ID (immutable).
-    pub fn get_session(&self, session_id: &str) -> Option<&GroupChatSession> {
-        self.sessions.get(session_id)
-    }
-
-    /// Look up a session by ID (mutable).
-    pub fn get_session_mut(&mut self, session_id: &str) -> Option<&mut GroupChatSession> {
-        self.sessions.get_mut(session_id)
-    }
-
-    /// End a session, setting its status to [`GroupChatStatus::Ended`].
+    /// Look up a session by ID, returning a cloned [`SharedSession`] handle.
     ///
-    /// # Errors
-    ///
-    /// Returns [`GroupChatError::SessionNotFound`] if the session does not exist.
-    pub fn end_session(&mut self, session_id: &str) -> Result<(), GroupChatError> {
-        let session = self
-            .sessions
-            .get_mut(session_id)
-            .ok_or_else(|| GroupChatError::SessionNotFound(session_id.to_string()))?;
-        session.end();
-        Ok(())
-    }
-
-    /// Count sessions that are currently [`GroupChatStatus::Active`].
-    pub fn active_session_count(&self) -> usize {
-        self.sessions
-            .values()
-            .filter(|s| s.status == GroupChatStatus::Active)
-            .count()
-    }
-
-    /// Return references to all sessions that are currently [`GroupChatStatus::Active`].
-    pub fn list_active_sessions(&self) -> Vec<&GroupChatSession> {
-        self.sessions
-            .values()
-            .filter(|s| s.status == GroupChatStatus::Active)
-            .collect()
+    /// The caller should drop the orchestrator lock before awaiting the
+    /// session lock.
+    pub fn get_session(&self, session_id: &str) -> Option<SharedSession> {
+        self.sessions.get(session_id).cloned()
     }
 
     /// Check whether a session has exceeded the configured maximum number of rounds.
     ///
+    /// The caller provides the session's `current_round` (read while holding the
+    /// session lock) so the orchestrator does not need to lock the session itself.
+    ///
     /// # Errors
     ///
-    /// - [`GroupChatError::SessionNotFound`] if the session does not exist.
     /// - [`GroupChatError::MaxRoundsReached`] if `current_round >= max_rounds`.
-    pub fn check_round_limit(&self, session_id: &str) -> Result<(), GroupChatError> {
-        let session = self
-            .sessions
-            .get(session_id)
-            .ok_or_else(|| GroupChatError::SessionNotFound(session_id.to_string()))?;
-
+    pub fn check_round_limit(&self, current_round: u32) -> Result<(), GroupChatError> {
         let max_rounds = self.config.max_rounds as u32;
-        if session.current_round >= max_rounds {
+        if current_round >= max_rounds {
             return Err(GroupChatError::MaxRoundsReached(max_rounds));
         }
-
         Ok(())
+    }
+
+    /// Returns the configured `max_rounds` value.
+    pub fn max_rounds(&self) -> u32 {
+        self.config.max_rounds as u32
+    }
+
+    /// Return handles to all sessions (both active and ended).
+    ///
+    /// The caller can then lock each session individually to inspect status.
+    pub fn all_sessions(&self) -> Vec<(String, SharedSession)> {
+        self.sessions
+            .iter()
+            .map(|(id, handle)| (id.clone(), Arc::clone(handle)))
+            .collect()
     }
 
     /// Reload configuration and persona definitions (e.g., after hot-reload).
@@ -160,6 +159,7 @@ impl GroupChatOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::group_chat::protocol::GroupChatStatus;
 
     fn test_config() -> GroupChatConfig {
         GroupChatConfig {
@@ -186,18 +186,18 @@ mod tests {
         ]
     }
 
-    #[test]
-    fn test_orchestrator_creation() {
+    #[tokio::test]
+    async fn test_orchestrator_creation() {
         let orch = GroupChatOrchestrator::new(test_config(), &test_personas());
 
-        assert_eq!(orch.active_session_count(), 0);
+        assert_eq!(orch.all_sessions().len(), 0);
         assert_eq!(orch.config().max_personas_per_session, 4);
         assert_eq!(orch.config().max_rounds, 3);
         assert_eq!(orch.persona_registry().len(), 2);
     }
 
-    #[test]
-    fn test_create_session() {
+    #[tokio::test]
+    async fn test_create_session() {
         let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
 
         let sources = vec![
@@ -212,11 +212,10 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        let session_id = result.unwrap();
+        let (session_id, handle) = result.unwrap();
         assert!(!session_id.is_empty());
-        assert_eq!(orch.active_session_count(), 1);
 
-        let session = orch.get_session(&session_id).expect("session should exist");
+        let session = handle.lock().await;
         assert_eq!(session.topic, Some("Design review".to_string()));
         assert_eq!(session.participants.len(), 2);
         assert_eq!(session.source_channel, "telegram");
@@ -224,8 +223,8 @@ mod tests {
         assert_eq!(session.status, GroupChatStatus::Active);
     }
 
-    #[test]
-    fn test_create_session_preset_not_found() {
+    #[tokio::test]
+    async fn test_create_session_preset_not_found() {
         let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
 
         let sources = vec![
@@ -245,11 +244,11 @@ mod tests {
             matches!(err, GroupChatError::PersonaNotFound(ref id) if id == "nonexistent"),
             "expected PersonaNotFound, got: {err:?}"
         );
-        assert_eq!(orch.active_session_count(), 0);
+        assert_eq!(orch.all_sessions().len(), 0);
     }
 
-    #[test]
-    fn test_create_session_too_many_personas() {
+    #[tokio::test]
+    async fn test_create_session_too_many_personas() {
         let config = GroupChatConfig {
             max_personas_per_session: 1,
             ..Default::default()
@@ -273,65 +272,69 @@ mod tests {
             matches!(err, GroupChatError::TooManyPersonas { count: 2, max: 1 }),
             "expected TooManyPersonas, got: {err:?}"
         );
-        assert_eq!(orch.active_session_count(), 0);
+        assert_eq!(orch.all_sessions().len(), 0);
     }
 
-    #[test]
-    fn test_end_session() {
+    #[tokio::test]
+    async fn test_end_session() {
         let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
 
         let sources = vec![PersonaSource::Preset("arch".into())];
-        let session_id = orch
+        let (session_id, _) = orch
             .create_session(sources, None, "cli".into(), "cli:1".into())
             .unwrap();
 
-        assert_eq!(orch.active_session_count(), 1);
+        let handle = orch.get_session(&session_id).expect("session should exist");
+        {
+            let mut session = handle.lock().await;
+            assert_eq!(session.status, GroupChatStatus::Active);
+            session.end();
+        }
 
-        let result = orch.end_session(&session_id);
-        assert!(result.is_ok());
-
-        let session = orch.get_session(&session_id).expect("session should still exist");
+        let session = handle.lock().await;
         assert_eq!(session.status, GroupChatStatus::Ended);
-        assert_eq!(orch.active_session_count(), 0);
     }
 
-    #[test]
-    fn test_end_session_not_found() {
-        let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
+    #[tokio::test]
+    async fn test_end_session_not_found() {
+        let orch = GroupChatOrchestrator::new(test_config(), &test_personas());
 
-        let result = orch.end_session("nonexistent-session");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            matches!(err, GroupChatError::SessionNotFound(ref id) if id == "nonexistent-session"),
-            "expected SessionNotFound, got: {err:?}"
-        );
+        assert!(orch.get_session("nonexistent-session").is_none());
     }
 
-    #[test]
-    fn test_list_active_sessions() {
+    #[tokio::test]
+    async fn test_list_active_sessions() {
         let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
 
         // Create two sessions
         let sources_a = vec![PersonaSource::Preset("arch".into())];
-        let id_a = orch
+        let (id_a, _) = orch
             .create_session(sources_a, Some("Session A".into()), "cli".into(), "cli:a".into())
             .unwrap();
 
         let sources_b = vec![PersonaSource::Preset("pm".into())];
-        let _id_b = orch
+        let (_id_b, _) = orch
             .create_session(sources_b, Some("Session B".into()), "cli".into(), "cli:b".into())
             .unwrap();
 
-        assert_eq!(orch.active_session_count(), 2);
-        assert_eq!(orch.list_active_sessions().len(), 2);
+        let all = orch.all_sessions();
+        assert_eq!(all.len(), 2);
 
-        // End one session
-        orch.end_session(&id_a).unwrap();
+        // End session A
+        let handle_a = orch.get_session(&id_a).unwrap();
+        handle_a.lock().await.end();
 
-        assert_eq!(orch.active_session_count(), 1);
-        let active = orch.list_active_sessions();
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].topic, Some("Session B".to_string()));
+        // Count active sessions
+        let mut active_count = 0;
+        let mut active_topic = None;
+        for (_, handle) in orch.all_sessions() {
+            let s = handle.lock().await;
+            if s.status == GroupChatStatus::Active {
+                active_count += 1;
+                active_topic = s.topic.clone();
+            }
+        }
+        assert_eq!(active_count, 1);
+        assert_eq!(active_topic, Some("Session B".to_string()));
     }
 }

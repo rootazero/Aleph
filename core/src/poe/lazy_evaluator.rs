@@ -331,8 +331,23 @@ impl LazyPoeEvaluator {
             return None;
         }
 
+        tracing::info!(
+            subsystem = "poe_lazy",
+            event = "validation_triggered",
+            tools_invoked = manifest.tools_invoked.len(),
+            retries_remaining = manifest.max_retries - manifest.retry_count,
+            "POE lazy evaluator validation triggered at completion"
+        );
+
         // Check 1: No tools invoked despite active POE
         if manifest.tools_invoked.is_empty() && manifest.consume_retry() {
+            tracing::info!(
+                subsystem = "poe_lazy",
+                event = "validation_result",
+                passed = false,
+                reason = "no_tools_invoked",
+                "POE lazy evaluator validation failed"
+            );
             return Some(
                 "[POE-Lazy] You are about to complete without having used any tools. \
                  Please verify your answer by using appropriate tools before concluding."
@@ -343,6 +358,13 @@ impl LazyPoeEvaluator {
         // Check 2: Hallucination detection
         if let Some(hint) = detect_hallucination(completion_text, &manifest) {
             if manifest.consume_retry() {
+                tracing::info!(
+                    subsystem = "poe_lazy",
+                    event = "validation_result",
+                    passed = false,
+                    reason = "hallucination_detected",
+                    "POE lazy evaluator validation failed"
+                );
                 return Some(hint);
             }
         }
@@ -350,9 +372,23 @@ impl LazyPoeEvaluator {
         // Check 3: Query relevance
         if let Some(hint) = check_query_relevance(completion_text, &manifest) {
             if manifest.consume_retry() {
+                tracing::info!(
+                    subsystem = "poe_lazy",
+                    event = "validation_result",
+                    passed = false,
+                    reason = "low_query_relevance",
+                    "POE lazy evaluator validation failed"
+                );
                 return Some(hint);
             }
         }
+
+        tracing::info!(
+            subsystem = "poe_lazy",
+            event = "validation_result",
+            passed = true,
+            "POE lazy evaluator validation passed"
+        );
 
         None
     }
