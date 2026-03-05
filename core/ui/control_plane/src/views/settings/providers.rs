@@ -165,7 +165,7 @@ const OAUTH_PRESETS: &[ProviderPreset] = &[
     ProviderPreset {
         name: "codex",
         protocol: "chatgpt",
-        model: "codex-mini-latest",
+        model: "gpt-5.3-codex",
         base_url: "https://chatgpt.com",
         description: "OpenAI Codex via ChatGPT subscription",
         api_key_placeholder: "",
@@ -676,8 +676,8 @@ fn ProviderDetailPanel(
         if let Some(name) = provider_name {
             if find_preset(&name).map(|p| p.auth_type == "oauth").unwrap_or(false) {
                 oauth_loading.set(true);
+                let state = expect_context::<DashboardState>();
                 spawn_local(async move {
-                    let state = expect_context::<DashboardState>();
                     match ProvidersApi::oauth_status(&state, name).await {
                         Ok(status) => oauth_status.set(Some(status)),
                         Err(_) => oauth_status.set(Some(OAuthStatus {
@@ -945,8 +945,8 @@ fn ProviderDetailPanel(
                                                         <button
                                                             on:click=move |_| {
                                                                 let provider_name = "codex".to_string();
+                                                                let state = expect_context::<DashboardState>();
                                                                 spawn_local(async move {
-                                                                    let state = expect_context::<DashboardState>();
                                                                     match ProvidersApi::oauth_logout(&state, provider_name).await {
                                                                         Ok(()) => {
                                                                             oauth_status.set(Some(OAuthStatus {
@@ -972,8 +972,8 @@ fn ProviderDetailPanel(
                                                             on:click=move |_| {
                                                                 let provider_name = "codex".to_string();
                                                                 oauth_loading.set(true);
+                                                                let state = expect_context::<DashboardState>();
                                                                 spawn_local(async move {
-                                                                    let state = expect_context::<DashboardState>();
                                                                     match ProvidersApi::oauth_login(&state, provider_name).await {
                                                                         Ok(status) => {
                                                                             oauth_status.set(Some(status));
@@ -1008,10 +1008,10 @@ fn ProviderDetailPanel(
                                                     prop:value=move || form_model.get()
                                                     on:input=move |ev| form_model.set(event_target_value(&ev))
                                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                                    placeholder="codex-mini-latest"
+                                                    placeholder="gpt-5.3-codex"
                                                 />
                                                 <p class="mt-1 text-xs text-text-tertiary">
-                                                    "Available: codex-mini-latest, gpt-5.2-codex, gpt-5.3-codex"
+                                                    "Available: gpt-5.3-codex, gpt-5.2-codex, codex-mini-latest"
                                                 </p>
                                             </div>
                                             <div>

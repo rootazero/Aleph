@@ -393,7 +393,11 @@ impl<W: Worker> PoeManager<W> {
 
             // Check for success
             if verdict.passed {
-                let outcome = PoeOutcome::Success(verdict);
+                let worker_summary = match &output.final_state {
+                    crate::poe::types::WorkerState::Completed { summary } => summary.clone(),
+                    _ => String::new(),
+                };
+                let outcome = PoeOutcome::Success { verdict, worker_summary };
                 self.record_experience(&task, &outcome, &output, start_time);
                 self.emit_event(&task.manifest.task_id, PoeEvent::OutcomeRecorded {
                     task_id: task.manifest.task_id.clone(),
@@ -647,7 +651,7 @@ mod tests {
         let outcome = manager.execute(task).await.unwrap();
 
         match outcome {
-            PoeOutcome::Success(verdict) => {
+            PoeOutcome::Success { verdict, .. } => {
                 assert!(verdict.passed);
                 assert_eq!(verdict.distance_score, 0.0);
             }
@@ -874,7 +878,7 @@ mod tests {
 
         let task = create_simple_task();
         let outcome = manager.execute(task).await.unwrap();
-        assert!(matches!(outcome, PoeOutcome::Success(_)));
+        assert!(matches!(outcome, PoeOutcome::Success { .. }));
 
         // Collect emitted events (non-blocking)
         let mut events = Vec::new();

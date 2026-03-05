@@ -1,42 +1,107 @@
 //! ChatGPT OAuth authentication
 //!
 //! Implements the browser-based OAuth flow for ChatGPT subscription accounts.
-//! Opens system browser for user login, captures callback via localhost server.
+//! Uses PKCE (Proof Key for Code Exchange) with S256 challenge method,
+//! matching the OpenAI Codex CLI implementation.
 
 use crate::error::{AlephError, Result};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+
+/// Characters that must be percent-encoded in URL query values.
+/// RFC 3986 unreserved chars (ALPHA / DIGIT / "-" / "." / "_" / "~") are NOT encoded.
+const QUERY_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'<')
+    .add(b'>')
+    .add(b'`')
+    .add(b'?')
+    .add(b'{')
+    .add(b'}')
+    .add(b'%')
+    .add(b'/')
+    .add(b':')
+    .add(b'@')
+    .add(b'[')
+    .add(b']')
+    .add(b'\\')
+    .add(b'^')
+    .add(b'|')
+    .add(b'!')
+    .add(b'$')
+    .add(b'&')
+    .add(b'\'')
+    .add(b'(')
+    .add(b')')
+    .add(b'*')
+    .add(b'+')
+    .add(b',')
+    .add(b';')
+    .add(b'=');
 use reqwest::Client;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
-/// OpenAI OAuth client ID (web client)
-const OPENAI_CLIENT_ID: &str = "DRivsnm2Mu42T3KOpqdtwB3NYviHYzwD";
+/// OpenAI OAuth client ID (public client, same as Codex CLI)
+const OPENAI_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
-/// OpenAI auth endpoints
-const AUTHORIZE_URL: &str = "https://auth0.openai.com/authorize";
-const TOKEN_URL: &str = "https://auth0.openai.com/oauth/token";
-const SESSION_URL: &str = "https://chatgpt.com/api/auth/session";
+/// OpenAI auth issuer
+const ISSUER: &str = "https://auth.openai.com";
 
 /// OAuth callback timeout (5 minutes)
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Callback path (must match Codex CLI convention)
+const CALLBACK_PATH: &str = "/auth/callback";
+
+/// Fixed callback port (must match OpenAI's registered redirect_uri)
+const CALLBACK_PORT: u16 = 1455;
+
+/// PKCE code verifier + challenge pair
+struct PkceCodes {
+    code_verifier: String,
+    code_challenge: String,
+}
+
+/// Generate PKCE codes (code_verifier + S256 code_challenge)
+fn generate_pkce() -> PkceCodes {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let code_verifier = URL_SAFE_NO_PAD.encode(bytes);
+
+    let mut hasher = Sha256::new();
+    hasher.update(code_verifier.as_bytes());
+    let code_challenge = URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+    PkceCodes {
+        code_verifier,
+        code_challenge,
+    }
+}
+
+/// Generate a random state parameter
+fn generate_state() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
 
 /// Token response from the OAuth token endpoint
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
     access_token: String,
     refresh_token: Option<String>,
+    #[allow(dead_code)]
+    id_token: Option<String>,
     expires_in: Option<u64>,
-}
-
-/// Session response from the ChatGPT session endpoint
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct SessionResponse {
-    #[serde(default, rename = "accessToken")]
-    access_token: Option<String>,
-    #[serde(default)]
-    expires: Option<String>,
 }
 
 /// Query params received on the OAuth callback
@@ -74,39 +139,45 @@ impl ChatGptAuth {
         Ok(&self.access_token)
     }
 
-    /// Build the OAuth authorization URL
-    pub fn build_authorize_url(port: u16, state: &str) -> String {
-        // redirect_uri is always http://localhost:{port}/callback — percent-encode manually
-        let redirect_uri = format!("http%3A%2F%2Flocalhost%3A{}%2Fcallback", port);
-        // state is a UUID (hex + hyphens) so it's already URL-safe
+    /// Build the OAuth authorization URL with PKCE
+    fn build_authorize_url(port: u16, state: &str, pkce: &PkceCodes) -> String {
+        let encode = |s: &str| utf8_percent_encode(s, QUERY_ENCODE_SET).to_string();
+        let redirect_uri = encode(&format!("http://localhost:{}{}", port, CALLBACK_PATH));
+        let scope = encode("openid profile email offline_access");
+
         format!(
-            "{}?client_id={}&redirect_uri={}&response_type=code&scope=openid%20profile%20email&state={}&audience=https%3A%2F%2Fapi.openai.com%2Fv1",
-            AUTHORIZE_URL,
+            "{}/oauth/authorize?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
+            ISSUER,
             OPENAI_CLIENT_ID,
             redirect_uri,
-            state,
+            scope,
+            encode(&pkce.code_challenge),
+            encode(state),
         )
     }
 
-    /// Run the full OAuth browser authorization flow.
+    /// Run the full OAuth browser authorization flow with PKCE.
     ///
-    /// 1. Binds a random localhost port
-    /// 2. Opens the system browser to the OAuth authorize URL
-    /// 3. Waits for the callback with an authorization code (5 min timeout)
-    /// 4. Exchanges the code for tokens
-    /// 5. Returns a populated `ChatGptAuth`
+    /// 1. Generates PKCE codes (code_verifier + code_challenge)
+    /// 2. Binds a random localhost port
+    /// 3. Opens the system browser to the OAuth authorize URL
+    /// 4. Waits for the callback with an authorization code (5 min timeout)
+    /// 5. Exchanges the code + code_verifier for tokens
+    /// 6. Returns a populated `ChatGptAuth`
     pub async fn authorize_via_browser() -> Result<Self> {
-        // Bind a random available port
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|e| AlephError::network(format!("Failed to bind localhost listener: {}", e)))?;
-        let port = listener
-            .local_addr()
-            .map_err(|e| AlephError::network(format!("Failed to get local address: {}", e)))?
-            .port();
+        let pkce = generate_pkce();
 
-        let state = uuid::Uuid::new_v4().to_string();
-        let authorize_url = Self::build_authorize_url(port, &state);
+        // Bind the fixed callback port (OpenAI only accepts localhost:1455)
+        let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", CALLBACK_PORT))
+            .await
+            .map_err(|e| AlephError::network(format!(
+                "Failed to bind localhost:{} — is another login in progress? Error: {}",
+                CALLBACK_PORT, e
+            )))?;
+        let port = CALLBACK_PORT;
+
+        let state = generate_state();
+        let authorize_url = Self::build_authorize_url(port, &state, &pkce);
 
         info!(port, "Starting OAuth callback server on localhost");
 
@@ -117,8 +188,9 @@ impl ChatGptAuth {
         let expected_state = state.clone();
 
         // Build the axum callback router
+        let callback_path = CALLBACK_PATH;
         let app = axum::Router::new().route(
-            "/callback",
+            callback_path,
             axum::routing::get(move |query: axum::extract::Query<CallbackParams>| {
                 let tx = tx.lock().unwrap_or_else(|e| e.into_inner()).take();
                 async move {
@@ -137,8 +209,18 @@ impl ChatGptAuth {
                         );
                     }
 
-                    if let Some(ref received_state) = query.state {
-                        if received_state != &expected_state {
+                    match &query.state {
+                        None => {
+                            error!("OAuth callback missing state parameter");
+                            if let Some(tx) = tx {
+                                let _ = tx.send(Err("Missing state parameter".to_string()));
+                            }
+                            return axum::response::Html(
+                                "<html><body><h1>Authentication Failed</h1><p>Missing state parameter. You can close this window.</p></body></html>"
+                                    .to_string(),
+                            );
+                        }
+                        Some(received_state) if received_state != &expected_state => {
                             error!("OAuth state mismatch");
                             if let Some(tx) = tx {
                                 let _ = tx.send(Err("State parameter mismatch".to_string()));
@@ -148,6 +230,7 @@ impl ChatGptAuth {
                                     .to_string(),
                             );
                         }
+                        _ => {} // State matches, proceed
                     }
 
                     match &query.code {
@@ -219,24 +302,30 @@ impl ChatGptAuth {
         // Abort the server now that we have the code
         server_handle.abort();
 
-        debug!("Exchanging authorization code for tokens");
-        Self::exchange_code_for_token(&code, port).await
+        debug!("Exchanging authorization code for tokens (with PKCE verifier)");
+        Self::exchange_code_for_token(&code, port, &pkce).await
     }
 
-    /// Exchange an authorization code for access and refresh tokens
-    async fn exchange_code_for_token(code: &str, port: u16) -> Result<Self> {
+    /// Exchange an authorization code + PKCE verifier for access and refresh tokens
+    async fn exchange_code_for_token(code: &str, port: u16, pkce: &PkceCodes) -> Result<Self> {
         let client = Client::new();
-        let redirect_uri = format!("http://localhost:{}/callback", port);
+        let redirect_uri = format!("http://localhost:{}{}", port, CALLBACK_PATH);
+        let token_url = format!("{}/oauth/token", ISSUER);
+
+        // Use form-encoded body (matching Codex CLI)
+        let enc = |s: &str| utf8_percent_encode(s, QUERY_ENCODE_SET).to_string();
+        let body = format!(
+            "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
+            enc(code),
+            enc(&redirect_uri),
+            enc(OPENAI_CLIENT_ID),
+            enc(&pkce.code_verifier),
+        );
 
         let response = client
-            .post(TOKEN_URL)
-            .header("Content-Type", "application/json")
-            .json(&serde_json::json!({
-                "grant_type": "authorization_code",
-                "client_id": OPENAI_CLIENT_ID,
-                "code": code,
-                "redirect_uri": redirect_uri,
-            }))
+            .post(&token_url)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
             .send()
             .await
             .map_err(|e| AlephError::network(format!("Token exchange request failed: {}", e)))?;
@@ -271,47 +360,58 @@ impl ChatGptAuth {
         })
     }
 
-    /// Refresh the access token using the session endpoint
+    /// Refresh the access token using the refresh_token grant
     pub async fn refresh(&mut self) -> Result<()> {
+        let refresh_token = self.refresh_token.as_ref().ok_or_else(|| {
+            AlephError::authentication(
+                "chatgpt",
+                "No refresh token available. Please re-login.",
+            )
+        })?;
+
         let client = Client::new();
+        let token_url = format!("{}/oauth/token", ISSUER);
+
+        let enc = |s: &str| utf8_percent_encode(s, QUERY_ENCODE_SET).to_string();
+        let body = format!(
+            "grant_type=refresh_token&client_id={}&refresh_token={}",
+            enc(OPENAI_CLIENT_ID),
+            enc(refresh_token),
+        );
 
         let response = client
-            .get(SESSION_URL)
-            .header("Authorization", format!("Bearer {}", self.access_token))
-            .header("Cookie", format!("__Secure-next-auth.session-token={}", self.access_token))
+            .post(&token_url)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
             .send()
             .await
-            .map_err(|e| AlephError::network(format!("Session refresh request failed: {}", e)))?;
+            .map_err(|e| AlephError::network(format!("Token refresh request failed: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body_text = response.text().await.unwrap_or_default();
             return Err(AlephError::authentication(
                 "chatgpt",
                 &format!(
-                    "Session refresh failed ({}): {}. Re-authentication may be required.",
-                    status, body
+                    "Token refresh failed ({}): {}. Re-authentication may be required.",
+                    status, body_text
                 ),
             ));
         }
 
-        let session: SessionResponse = response.json().await.map_err(|e| {
-            AlephError::provider(format!("Failed to parse session response: {}", e))
+        let token_resp: TokenResponse = response.json().await.map_err(|e| {
+            AlephError::provider(format!("Failed to parse refresh response: {}", e))
         })?;
 
-        if let Some(new_token) = session.access_token {
-            self.access_token = new_token;
-            // Session tokens from ChatGPT typically last ~30 days,
-            // but we conservatively set a shorter window
-            self.expires_at = SystemTime::now() + Duration::from_secs(3600);
-            debug!("ChatGPT session refreshed successfully");
-            Ok(())
-        } else {
-            Err(AlephError::authentication(
-                "chatgpt",
-                "Session refresh response did not contain a new access token",
-            ))
+        self.access_token = token_resp.access_token;
+        if let Some(new_refresh) = token_resp.refresh_token {
+            self.refresh_token = Some(new_refresh);
         }
+        let expires_in = token_resp.expires_in.unwrap_or(3600);
+        self.expires_at = SystemTime::now() + Duration::from_secs(expires_in);
+
+        debug!("ChatGPT token refreshed successfully");
+        Ok(())
     }
 
     /// Ensure the token is valid, refreshing if necessary.
@@ -353,9 +453,34 @@ mod tests {
 
     #[test]
     fn test_build_authorize_url() {
-        let url = ChatGptAuth::build_authorize_url(12345, "random_state");
-        assert!(url.contains("auth0.openai.com") || url.contains("auth.openai.com"));
+        let pkce = PkceCodes {
+            code_verifier: "test_verifier".to_string(),
+            code_challenge: "test_challenge".to_string(),
+        };
+        let url = ChatGptAuth::build_authorize_url(12345, "random_state", &pkce);
+        assert!(url.contains("auth.openai.com/oauth/authorize"));
         assert!(url.contains("12345"));
         assert!(url.contains("random_state"));
+        assert!(url.contains("code_challenge"));
+        assert!(url.contains("S256"));
+        assert!(url.contains("app_EMoamEEZ73f0CkXaXp7hrann"));
+        assert!(url.contains("offline_access"));
+    }
+
+    #[test]
+    fn test_pkce_generation() {
+        let pkce = generate_pkce();
+        assert!(!pkce.code_verifier.is_empty());
+        assert!(!pkce.code_challenge.is_empty());
+        // Verify code_challenge is SHA256 of code_verifier
+        let mut hasher = Sha256::new();
+        hasher.update(pkce.code_verifier.as_bytes());
+        let expected = URL_SAFE_NO_PAD.encode(hasher.finalize());
+        assert_eq!(pkce.code_challenge, expected);
+    }
+
+    #[test]
+    fn test_callback_path() {
+        assert_eq!(CALLBACK_PATH, "/auth/callback");
     }
 }

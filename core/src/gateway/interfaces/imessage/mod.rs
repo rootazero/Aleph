@@ -166,6 +166,11 @@ impl Channel for IMessageChannel {
             return Ok(());
         }
 
+        if !self.config.enabled {
+            info!("iMessage channel is disabled, skipping start");
+            return Ok(());
+        }
+
         info!("Starting iMessage channel");
         self.channel_state.set_status(ChannelStatus::Connecting).await;
 

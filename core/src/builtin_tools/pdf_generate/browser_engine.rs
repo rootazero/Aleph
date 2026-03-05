@@ -60,7 +60,11 @@ pub async fn generate(
         }
         ContentFormat::Text => {
             let escaped = html_escape(&args.content);
-            let html_body = format!("<pre>{escaped}</pre>");
+            // Use <div> with whitespace preservation instead of <pre>
+            // to avoid the code-block gray background on plain text
+            let html_body = format!(
+                "<div style=\"white-space: pre-wrap; word-wrap: break-word;\">{escaped}</div>"
+            );
             styles::wrap_html_with_styles(&html_body, args.title.as_deref())
         }
     };

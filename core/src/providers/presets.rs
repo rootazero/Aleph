@@ -40,7 +40,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
             base_url: "https://chatgpt.com",
             protocol: "chatgpt",
             color: "#10a37f",
-            default_model: "codex-mini-latest",
+            default_model: "gpt-5.3-codex",
         },
     );
 

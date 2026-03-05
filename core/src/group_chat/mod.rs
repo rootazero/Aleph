@@ -12,7 +12,7 @@ pub mod session;
 
 pub use channel::{GroupChatCommandParser, GroupChatRenderer};
 pub use executor::GroupChatExecutor;
-pub use orchestrator::GroupChatOrchestrator;
+pub use orchestrator::{GroupChatOrchestrator, SharedSession};
 pub use persona::PersonaRegistry;
 pub use protocol::*;
 pub use session::GroupChatSession;

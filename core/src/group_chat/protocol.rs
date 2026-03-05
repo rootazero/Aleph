@@ -70,7 +70,7 @@ pub struct Persona {
 
 /// Where a persona definition comes from.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum PersonaSource {
     /// A preset persona loaded by name from the persona registry.
     Preset(String),

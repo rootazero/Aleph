@@ -611,8 +611,12 @@ impl PoeTask {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "outcome")]
 pub enum PoeOutcome {
-    /// Task completed successfully
-    Success(Verdict),
+    /// Task completed successfully (verdict + worker's output summary)
+    Success {
+        verdict: Verdict,
+        #[serde(default)]
+        worker_summary: String,
+    },
 
     /// Strategy switch needed (task too complex or wrong approach)
     StrategySwitch {
@@ -632,9 +636,9 @@ pub enum PoeOutcome {
 }
 
 impl PoeOutcome {
-    /// Create a successful outcome.
-    pub fn success(verdict: Verdict) -> Self {
-        PoeOutcome::Success(verdict)
+    /// Create a successful outcome with worker summary.
+    pub fn success(verdict: Verdict, worker_summary: impl Into<String>) -> Self {
+        PoeOutcome::Success { verdict, worker_summary: worker_summary.into() }
     }
 
     /// Create a strategy switch outcome.
@@ -655,7 +659,7 @@ impl PoeOutcome {
 
     /// Check if the outcome is a success.
     pub fn is_success(&self) -> bool {
-        matches!(self, PoeOutcome::Success(v) if v.passed)
+        matches!(self, PoeOutcome::Success { verdict: v, .. } if v.passed)
     }
 }
 

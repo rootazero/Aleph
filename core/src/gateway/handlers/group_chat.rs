@@ -5,13 +5,21 @@
 //! Each method has two variants:
 //! - `handle_xxx_placeholder`: stateless placeholders returning errors (used in HandlerRegistry::new())
 //! - `handle_xxx`: real handlers that delegate to `GroupChatOrchestrator` + `GroupChatExecutor`
+//!
+//! All real handlers follow the per-session locking pattern:
+//!   1. Briefly lock the orchestrator to obtain a `SharedSession` handle
+//!   2. Drop the orchestrator lock
+//!   3. Lock only the target session for the duration of the operation
+//! This allows different sessions to proceed concurrently.
 
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::group_chat::{GroupChatExecutor, GroupChatMessage, GroupChatOrchestrator, PersonaSource};
+use crate::group_chat::{
+    GroupChatExecutor, GroupChatMessage, GroupChatOrchestrator, GroupChatStatus, PersonaSource,
+};
 
 /// Shared GroupChatOrchestrator handle for real handlers
 pub type SharedOrchestrator = Arc<Mutex<GroupChatOrchestrator>>;
@@ -99,33 +107,25 @@ pub async fn handle_start(
         .unwrap_or("rpc:direct")
         .to_string();
 
-    // Create session
-    let mut orch_guard = orch.lock().await;
-    let session_id = match orch_guard.create_session(personas, topic, source_channel, source_session_key) {
-        Ok(id) => id,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to create session: {}", e),
-            );
-        }
-    };
-
-    // If initial_message provided, execute the first round
-    if let Some(msg) = initial_message {
-        let session = match orch_guard.get_session_mut(&session_id) {
-            Some(s) => s,
-            None => {
+    // Brief orch lock: create session and get handle
+    let (session_id, session_handle) = {
+        let mut orch_guard = orch.lock().await;
+        match orch_guard.create_session(personas, topic, source_channel, source_session_key) {
+            Ok(pair) => pair,
+            Err(e) => {
                 return JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    "Session created but not found",
+                    format!("Failed to create session: {}", e),
                 );
             }
-        };
+        }
+    }; // orch lock dropped
 
-        match executor.execute_round(session, &msg).await {
+    // If initial_message provided, execute the first round (only session locked)
+    if let Some(msg) = initial_message {
+        let mut session = session_handle.lock().await;
+        match executor.execute_round(&mut session, &msg).await {
             Ok(messages) => {
                 let messages_json: Vec<Value> = messages.iter().map(message_to_json).collect();
                 JsonRpcResponse::success(
@@ -174,29 +174,37 @@ pub async fn handle_continue(
         }
     };
 
-    let mut orch_guard = orch.lock().await;
+    // Brief orch lock: get session handle + max_rounds config
+    let (session_handle, max_rounds) = {
+        let orch_guard = orch.lock().await;
+        let handle = match orch_guard.get_session(&session_id) {
+            Some(h) => h,
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Session not found: {}", session_id),
+                );
+            }
+        };
+        (handle, orch_guard.max_rounds())
+    }; // orch lock dropped
 
-    // Check round limit before proceeding
-    if let Err(e) = orch_guard.check_round_limit(&session_id) {
+    // Lock session, check round limit, execute
+    let mut session = session_handle.lock().await;
+
+    if session.current_round >= max_rounds {
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Round limit exceeded: {}", e),
+            format!(
+                "Round limit exceeded: maximum rounds reached: {}",
+                max_rounds
+            ),
         );
     }
 
-    let session = match orch_guard.get_session_mut(&session_id) {
-        Some(s) => s,
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("Session not found: {}", session_id),
-            );
-        }
-    };
-
-    match executor.execute_round(session, &message).await {
+    match executor.execute_round(&mut session, &message).await {
         Ok(messages) => {
             let messages_json: Vec<Value> = messages.iter().map(message_to_json).collect();
             JsonRpcResponse::success(
@@ -238,48 +246,66 @@ pub async fn handle_end(request: JsonRpcRequest, orch: SharedOrchestrator) -> Js
         }
     };
 
-    let mut orch_guard = orch.lock().await;
-    match orch_guard.end_session(&session_id) {
-        Ok(()) => JsonRpcResponse::success(request.id, json!({ "ended": session_id })),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to end session: {}", e),
-        ),
-    }
+    // Brief orch lock: get session handle
+    let session_handle = {
+        let orch_guard = orch.lock().await;
+        match orch_guard.get_session(&session_id) {
+            Some(h) => h,
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Session not found: {}", session_id),
+                );
+            }
+        }
+    }; // orch lock dropped
+
+    // Lock session, end it
+    let mut session = session_handle.lock().await;
+    session.end();
+
+    JsonRpcResponse::success(request.id, json!({ "ended": session_id }))
 }
 
 /// Handle group_chat.list RPC request (real)
 ///
 /// Returns a list of all active group chat sessions.
 pub async fn handle_list(request: JsonRpcRequest, orch: SharedOrchestrator) -> JsonRpcResponse {
-    let orch_guard = orch.lock().await;
-    let sessions = orch_guard.list_active_sessions();
+    // Brief orch lock: snapshot all session handles
+    let all = {
+        let orch_guard = orch.lock().await;
+        orch_guard.all_sessions()
+    }; // orch lock dropped
 
-    let sessions_json: Vec<Value> = sessions
-        .iter()
-        .map(|s| {
-            let participants: Vec<Value> = s
-                .participants
-                .iter()
-                .map(|p| {
-                    json!({
-                        "id": p.id,
-                        "name": p.name,
-                    })
+    // Lock each session individually to read data
+    let mut sessions_json: Vec<Value> = Vec::with_capacity(all.len());
+    for (_id, handle) in &all {
+        let s = handle.lock().await;
+        if s.status != GroupChatStatus::Active {
+            continue;
+        }
+
+        let participants: Vec<Value> = s
+            .participants
+            .iter()
+            .map(|p| {
+                json!({
+                    "id": p.id,
+                    "name": p.name,
                 })
-                .collect();
-
-            json!({
-                "id": s.id,
-                "topic": s.topic,
-                "participants": participants,
-                "current_round": s.current_round,
-                "status": s.status.as_str(),
-                "created_at": s.created_at,
             })
-        })
-        .collect();
+            .collect();
+
+        sessions_json.push(json!({
+            "id": s.id,
+            "topic": s.topic,
+            "participants": participants,
+            "current_round": s.current_round,
+            "status": s.status.as_str(),
+            "created_at": s.created_at,
+        }));
+    }
 
     JsonRpcResponse::success(request.id, json!({ "sessions": sessions_json }))
 }
@@ -295,17 +321,23 @@ pub async fn handle_history(request: JsonRpcRequest, orch: SharedOrchestrator) -
         }
     };
 
-    let orch_guard = orch.lock().await;
-    let session = match orch_guard.get_session(&session_id) {
-        Some(s) => s,
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("Session not found: {}", session_id),
-            );
+    // Brief orch lock: get session handle
+    let session_handle = {
+        let orch_guard = orch.lock().await;
+        match orch_guard.get_session(&session_id) {
+            Some(h) => h,
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Session not found: {}", session_id),
+                );
+            }
         }
-    };
+    }; // orch lock dropped
+
+    // Lock session, read history
+    let session = session_handle.lock().await;
 
     let history: Vec<Value> = session
         .history

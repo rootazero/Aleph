@@ -91,9 +91,7 @@ pub enum SecretError {
     #[error("Secret '{0}' not found")]
     NotFound(String),
 
-    #[error(
-        "Master key not configured. Set ALEPH_MASTER_KEY env var or run `aleph secret init`"
-    )]
+    #[error("Master key not configured. Set ALEPH_MASTER_KEY env var, store it via Settings → Vault, or run `aleph secret init`")]
     MasterKeyMissing,
 
     #[error("Decryption failed: vault may be corrupted or master key is wrong")]

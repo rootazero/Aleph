@@ -35,6 +35,7 @@ pub enum SettingsTab {
     Policies,
     RoutingRules,
     Security,
+    Vault,
 }
 
 impl SettingsTab {
@@ -60,6 +61,7 @@ impl SettingsTab {
             Self::Policies => "/settings/policies",
             Self::RoutingRules => "/settings/routing",
             Self::Security => "/settings/security",
+            Self::Vault => "/settings/vault",
         }
     }
 
@@ -85,6 +87,7 @@ impl SettingsTab {
             Self::Policies => "Policies",
             Self::RoutingRules => "Routing Rules",
             Self::Security => "Security",
+            Self::Vault => "Vault",
         }
     }
 
@@ -110,6 +113,7 @@ impl SettingsTab {
             Self::Policies => r#"<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>"#,
             Self::RoutingRules => r#"<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>"#,
             Self::Security => r#"<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>"#,
+            Self::Vault => r#"<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>"#,
         }
     }
 }
@@ -158,6 +162,7 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
             SettingsTab::Policies,
             SettingsTab::RoutingRules,
             SettingsTab::Security,
+            SettingsTab::Vault,
         ],
     },
 ];
