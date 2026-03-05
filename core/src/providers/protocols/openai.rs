@@ -295,13 +295,21 @@ impl ProtocolAdapter for OpenAiProtocol {
         if let Some(tool_defs) = payload.tools {
             let tools: Vec<OpenAiTool> = tool_defs
                 .iter()
-                .map(|td| OpenAiTool {
-                    tool_type: "function".into(),
-                    function: OpenAiFunction {
-                        name: td.name.clone(),
-                        description: td.description.clone(),
-                        parameters: td.parameters.clone(),
-                    },
+                .map(|td| {
+                    // Ensure parameters has "type" field — required by strict
+                    // backends like AWS Bedrock, which rejects schemas without it.
+                    let mut params = td.parameters.clone();
+                    if let Some(obj) = params.as_object_mut() {
+                        obj.entry("type").or_insert_with(|| json!("object"));
+                    }
+                    OpenAiTool {
+                        tool_type: "function".into(),
+                        function: OpenAiFunction {
+                            name: td.name.clone(),
+                            description: td.description.clone(),
+                            parameters: params,
+                        },
+                    }
                 })
                 .collect();
             body["tools"] = serde_json::to_value(&tools).map_err(|e| {
