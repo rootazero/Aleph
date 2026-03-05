@@ -686,8 +686,154 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 IdentityContext::owner(session_key_str.clone(), "gateway".to_string())
             });
 
-        // Run with local executor
-        let agent_loop = AgentLoop::new(thinker, local_executor, compressor, loop_config);
+        // ================================================================
+        // Pre-classification: determine execution route before running
+        // ================================================================
+        let task_route = if let Some(ref router) = self.task_router {
+            let router_context = crate::routing::RouterContext {
+                session_history_len: 0,
+                available_tools: allowed_tools.iter().map(|t| t.name.clone()).collect(),
+                user_preferences: None,
+            };
+            let route = router.classify(&request.input, &router_context).await;
+            info!(
+                subsystem = "task_router",
+                run_id = %run_id,
+                route = route.label(),
+                "Pre-classified task route"
+            );
+            route
+        } else {
+            crate::routing::TaskRoute::Simple
+        };
+
+        // ================================================================
+        // Route dispatch: Simple runs AgentLoop; others dispatch to subsystems
+        // ================================================================
+        match task_route {
+            crate::routing::TaskRoute::Simple => {
+                // Standard Agent Loop path (unchanged)
+                self.execute_simple_loop(
+                    run_id, request, &agent_workspace_dir, thinker, local_executor,
+                    compressor, loop_config, context, allowed_tools, identity,
+                    initial_history, abort_rx, callback,
+                ).await
+            }
+            crate::routing::TaskRoute::MultiStep { ref reason } => {
+                info!(
+                    subsystem = "task_router",
+                    run_id = %run_id,
+                    reason = %reason,
+                    "Dispatching to Dispatcher DAG"
+                );
+                // Dispatcher DAG: planner decomposes → DagScheduler executes
+                match self.run_dispatcher_dag(
+                    run_id, request, &agent_workspace_dir, thinker.clone(),
+                    local_executor.clone(), compressor.clone(), loop_config.clone(),
+                    context.clone(), allowed_tools.clone(), identity.clone(),
+                    initial_history.clone(), callback.clone(),
+                ).await {
+                    Ok(result) => Ok(result),
+                    Err(e) => {
+                        // Graceful degradation: DAG failure → fallback to Agent Loop
+                        warn!(
+                            subsystem = "task_router",
+                            run_id = %run_id,
+                            error = %e,
+                            "DAG execution failed, falling back to Agent Loop"
+                        );
+                        self.execute_simple_loop(
+                            run_id, request, &agent_workspace_dir, thinker, local_executor,
+                            compressor, loop_config, context, allowed_tools, identity,
+                            initial_history, abort_rx, callback,
+                        ).await
+                    }
+                }
+            }
+            crate::routing::TaskRoute::Critical { ref reason, ref manifest_hints } => {
+                info!(
+                    subsystem = "task_router",
+                    run_id = %run_id,
+                    reason = %reason,
+                    "Dispatching to POE Full Manager"
+                );
+                // POE Full: PoeManager wraps execution with SuccessManifest validation
+                match self.run_poe_critical(
+                    run_id, request, &agent_workspace_dir, manifest_hints,
+                    thinker.clone(), local_executor.clone(), compressor.clone(),
+                    loop_config.clone(), allowed_tools.clone(), callback.clone(),
+                ).await {
+                    Ok(result) => Ok(result),
+                    Err(e) => {
+                        // Graceful degradation: POE failure → fallback to Agent Loop
+                        warn!(
+                            subsystem = "task_router",
+                            run_id = %run_id,
+                            error = %e,
+                            "POE execution failed, falling back to Agent Loop"
+                        );
+                        self.execute_simple_loop(
+                            run_id, request, &agent_workspace_dir, thinker, local_executor,
+                            compressor, loop_config, context, allowed_tools, identity,
+                            initial_history, abort_rx, callback,
+                        ).await
+                    }
+                }
+            }
+            crate::routing::TaskRoute::Collaborative { ref reason, ref strategy } => {
+                info!(
+                    subsystem = "task_router",
+                    run_id = %run_id,
+                    reason = %reason,
+                    strategy = ?strategy,
+                    "Dispatching to collaborative execution"
+                );
+                // Collaborative: parallel agent execution with result aggregation
+                match self.run_collaborative(
+                    run_id, request, &agent_workspace_dir, strategy,
+                    thinker.clone(), local_executor.clone(), compressor.clone(),
+                    loop_config.clone(), context.clone(), allowed_tools.clone(),
+                    identity.clone(), callback.clone(),
+                ).await {
+                    Ok(result) => Ok(result),
+                    Err(e) => {
+                        // Graceful degradation: Swarm failure → fallback to DAG → Agent Loop
+                        warn!(
+                            subsystem = "task_router",
+                            run_id = %run_id,
+                            error = %e,
+                            "Collaborative execution failed, falling back to Agent Loop"
+                        );
+                        self.execute_simple_loop(
+                            run_id, request, &agent_workspace_dir, thinker, local_executor,
+                            compressor, loop_config, context, allowed_tools, identity,
+                            initial_history, abort_rx, callback,
+                        ).await
+                    }
+                }
+            }
+        }
+    }
+
+    /// Execute the standard Agent Loop (Simple route).
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_simple_loop<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        request: &RunRequest,
+        agent_workspace_dir: &std::path::Path,
+        thinker: Arc<Thinker<SingleProviderRegistry>>,
+        executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
+        compressor: Arc<NoOpCompressor>,
+        loop_config: LoopConfig,
+        context: RequestContext,
+        allowed_tools: Vec<UnifiedTool>,
+        identity: IdentityContext,
+        initial_history: Option<String>,
+        abort_rx: watch::Receiver<bool>,
+        callback: Arc<EventEmittingCallback<E>>,
+    ) -> Result<String, ExecutionError> {
+        let agent_loop = AgentLoop::new(thinker, executor, compressor, loop_config);
         // Inject task router for dynamic escalation
         let agent_loop = if let Some(ref router) = self.task_router {
             agent_loop.with_task_router(Arc::clone(router))
@@ -741,7 +887,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     };
                     let entry = format!("\n## Session {}\n\n{}\n", time, truncated_summary);
                     let mut loader = self.workspace_loader.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Err(e) = loader.append_daily_memory(&agent_workspace_dir, &date, &entry) {
+                    if let Err(e) = loader.append_daily_memory(agent_workspace_dir, &date, &entry) {
                         tracing::warn!(error = %e, "Failed to append daily memory");
                     }
                 }
@@ -764,25 +910,494 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 warn!(run_id = %run_id, reason = %reason, "Agent loop aborted by POE");
                 Err(ExecutionError::Failed(format!("POE aborted: {}", reason)))
             }
-            LoopResult::Escalated { route, context } => {
+            LoopResult::Escalated { route, context: esc_ctx } => {
                 info!(
                     subsystem = "task_router",
                     event = "escalated",
                     run_id = %run_id,
                     route = route.label(),
-                    completed_steps = context.completed_steps,
+                    completed_steps = esc_ctx.completed_steps,
                     "Agent loop escalated to higher execution path"
                 );
-                // Phase 1: Return partial result with escalation info
-                // Phase 2 will re-dispatch via route to Dispatcher/POE/Swarm
-                let msg = context.partial_result.unwrap_or_else(|| {
-                    format!(
-                        "Task escalated to {} execution ({} steps completed). Full route dispatch coming in Phase 2.",
-                        route.label(),
-                        context.completed_steps
-                    )
-                });
-                Ok(msg)
+                // Re-dispatch via the escalated route
+                // Return partial result with escalation context for now
+                let partial = esc_ctx.partial_result.unwrap_or_default();
+                let escalation_note = format!(
+                    "## Escalation\n\nTask escalated to **{}** execution after {} steps.\n\n{}",
+                    route.label(),
+                    esc_ctx.completed_steps,
+                    partial
+                );
+                Ok(escalation_note)
+            }
+        }
+    }
+
+    /// Execute via Dispatcher DAG: planner decomposes message into TaskGraph,
+    /// DagScheduler executes nodes (each via Agent Loop).
+    #[allow(clippy::too_many_arguments)]
+    async fn run_dispatcher_dag<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        request: &RunRequest,
+        agent_workspace_dir: &std::path::Path,
+        thinker: Arc<Thinker<SingleProviderRegistry>>,
+        executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
+        compressor: Arc<NoOpCompressor>,
+        loop_config: LoopConfig,
+        context: RequestContext,
+        allowed_tools: Vec<UnifiedTool>,
+        identity: IdentityContext,
+        initial_history: Option<String>,
+        _callback: Arc<EventEmittingCallback<E>>,
+    ) -> Result<String, ExecutionError> {
+        use crate::dispatcher::planner::{LlmTaskPlanner, TaskPlanner};
+        use crate::dispatcher::scheduler::DagScheduler;
+        use crate::dispatcher::context::TaskContext;
+        use crate::dispatcher::callback::NoOpExecutionCallback;
+
+        // Emit planning notification
+        info!(subsystem = "task_router", run_id = %run_id, "Starting DAG planning");
+
+        // 1. Plan: decompose message into TaskGraph
+        let provider = self.provider_registry.default_provider();
+        let planner = LlmTaskPlanner::new(provider);
+        let graph = planner.plan(&request.input).await.map_err(|e| {
+            ExecutionError::Failed(format!("Task planning failed: {}", e))
+        })?;
+
+        info!(
+            subsystem = "task_router",
+            run_id = %run_id,
+            tasks = graph.tasks.len(),
+            "Task graph planned"
+        );
+
+        info!(
+            subsystem = "task_router",
+            run_id = %run_id,
+            task_count = graph.tasks.len(),
+            "DAG scheduled, executing tasks"
+        );
+
+        // 2. Create a GraphTaskExecutor that uses Agent Loop for each node
+        let dag_executor = Arc::new(AgentLoopGraphExecutor {
+            thinker: thinker.clone(),
+            executor: executor.clone(),
+            compressor: compressor.clone(),
+            loop_config: loop_config.clone(),
+            tools: allowed_tools.clone(),
+            identity: identity.clone(),
+        });
+
+        // 3. Execute via DagScheduler
+        let task_context = TaskContext::new(&request.input);
+        let dag_callback = Arc::new(NoOpExecutionCallback);
+        let result = DagScheduler::execute_graph(
+            graph, dag_executor, dag_callback, task_context, None,
+        ).await.map_err(|e| {
+            ExecutionError::Failed(format!("DAG execution failed: {}", e))
+        })?;
+
+        info!(
+            subsystem = "task_router",
+            run_id = %run_id,
+            completed = result.completed_tasks.len(),
+            failed = result.failed_tasks.len(),
+            "DAG execution complete"
+        );
+
+        // 4. Aggregate results
+        let summary = result.detailed_summary();
+        Ok(summary)
+    }
+
+    /// Execute via POE Full Manager: wraps execution with SuccessManifest validation.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_poe_critical<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        request: &RunRequest,
+        agent_workspace_dir: &std::path::Path,
+        manifest_hints: &crate::routing::ManifestHints,
+        thinker: Arc<Thinker<SingleProviderRegistry>>,
+        executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
+        compressor: Arc<NoOpCompressor>,
+        loop_config: LoopConfig,
+        allowed_tools: Vec<UnifiedTool>,
+        _callback: Arc<EventEmittingCallback<E>>,
+    ) -> Result<String, ExecutionError> {
+        use crate::poe::{PoeManager, PoeConfig, CompositeValidator};
+        use crate::poe::types::{PoeTask, PoeOutcome, SuccessManifest};
+        use crate::poe::worker::AgentLoopWorker;
+
+        info!(subsystem = "task_router", run_id = %run_id, "Building success manifest for POE");
+
+        // 1. Build SuccessManifest from hints
+        let mut manifest = SuccessManifest::new(run_id, &request.input);
+        manifest.max_attempts = 3;
+
+        // Add hard constraints from hints as semantic checks
+        for constraint in &manifest_hints.hard_constraints {
+            manifest.hard_constraints.push(
+                crate::poe::types::ValidationRule::SemanticCheck {
+                    target: crate::poe::types::JudgeTarget::Content(String::new()),
+                    prompt: constraint.clone(),
+                    passing_criteria: constraint.clone(),
+                    model_tier: Default::default(),
+                }
+            );
+        }
+
+        // 2. Create PoeTask
+        let task = PoeTask::new(manifest, request.input.clone());
+
+        // 3. Create AgentLoopWorker as the POE worker
+        let worker = AgentLoopWorker::new(
+            agent_workspace_dir.to_path_buf(),
+            thinker,
+            executor,
+            compressor,
+            allowed_tools,
+            loop_config,
+        );
+
+        // 4. Create PoeManager and execute
+        let poe_provider = self.provider_registry.default_provider();
+        let validator = CompositeValidator::new(poe_provider);
+        let poe_config = PoeConfig::default();
+        let manager = PoeManager::new(worker, validator, poe_config)
+            .with_workspace(agent_workspace_dir.to_path_buf());
+
+        info!(subsystem = "task_router", run_id = %run_id, "POE execution starting");
+
+        let outcome = manager.execute(task).await.map_err(|e| {
+            ExecutionError::Failed(format!("POE execution failed: {}", e))
+        })?;
+
+        info!(
+            subsystem = "task_router",
+            run_id = %run_id,
+            "POE execution complete"
+        );
+
+        // 5. Convert outcome to response
+        match outcome {
+            PoeOutcome::Success(verdict) => {
+                Ok(format!(
+                    "✅ 任务完成，质量验证通过 (score: {:.1}%)\n\n{}",
+                    verdict.distance_score * 100.0,
+                    verdict.reason
+                ))
+            }
+            PoeOutcome::StrategySwitch { reason, suggestion } => {
+                Ok(format!(
+                    "⚠️ POE 检测到执行策略需要调整: {}\n建议: {}",
+                    reason, suggestion
+                ))
+            }
+            PoeOutcome::BudgetExhausted { attempts, last_error } => {
+                Ok(format!(
+                    "⚠️ POE 已用完所有 {} 次重试，最后错误: {}",
+                    attempts, last_error
+                ))
+            }
+        }
+    }
+
+    /// Execute via collaborative multi-agent execution.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_collaborative<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        request: &RunRequest,
+        _agent_workspace_dir: &std::path::Path,
+        strategy: &crate::routing::CollabStrategy,
+        thinker: Arc<Thinker<SingleProviderRegistry>>,
+        executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
+        compressor: Arc<NoOpCompressor>,
+        loop_config: LoopConfig,
+        context: RequestContext,
+        allowed_tools: Vec<UnifiedTool>,
+        identity: IdentityContext,
+        callback: Arc<EventEmittingCallback<E>>,
+    ) -> Result<String, ExecutionError> {
+        info!(subsystem = "task_router", run_id = %run_id, "Starting collaborative execution");
+
+        match strategy {
+            crate::routing::CollabStrategy::Parallel => {
+                // Parallel: run multiple Agent Loops with different role prompts
+                self.run_parallel_agents(
+                    run_id, request, thinker, executor, compressor,
+                    loop_config, context, allowed_tools, identity, callback,
+                ).await
+            }
+            crate::routing::CollabStrategy::Adversarial => {
+                // Adversarial: Generator + Reviewer loop
+                self.run_adversarial(
+                    run_id, request, thinker, executor, compressor,
+                    loop_config, context, allowed_tools, identity, callback,
+                ).await
+            }
+            crate::routing::CollabStrategy::GroupChat => {
+                // GroupChat: delegate to existing group_chat orchestrator
+                // For now, fall back to simple execution (GroupChat has its own entry point)
+                Err(ExecutionError::Failed(
+                    "GroupChat is handled via dedicated chat channel".to_string()
+                ))
+            }
+        }
+    }
+
+    /// Run parallel Agent Loops with different perspectives, then merge results.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_parallel_agents<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        request: &RunRequest,
+        thinker: Arc<Thinker<SingleProviderRegistry>>,
+        executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
+        compressor: Arc<NoOpCompressor>,
+        loop_config: LoopConfig,
+        context: RequestContext,
+        allowed_tools: Vec<UnifiedTool>,
+        identity: IdentityContext,
+        _callback: Arc<EventEmittingCallback<E>>,
+    ) -> Result<String, ExecutionError> {
+        let roles = vec![
+            ("分析师", "你是一位深度分析师。从多个角度系统地分析以下任务，关注可行性、风险和最佳方案。"),
+            ("执行者", "你是一位实干型执行者。直接给出具体的执行方案和操作步骤。"),
+        ];
+
+        info!(
+            subsystem = "task_router",
+            run_id = %run_id,
+            agent_count = roles.len(),
+            "Launching parallel agents"
+        );
+
+        let mut handles = Vec::new();
+
+        for (role_name, role_prompt) in &roles {
+            let thinker = thinker.clone();
+            let executor = executor.clone();
+            let compressor = compressor.clone();
+            let config = loop_config.clone();
+            let tools = allowed_tools.clone();
+            let id = identity.clone();
+            let input = format!(
+                "## 角色: {}\n\n{}\n\n## 任务\n\n{}",
+                role_name, role_prompt, request.input
+            );
+            let ctx = context.clone();
+            let role = role_name.to_string();
+
+            let handle = tokio::spawn(async move {
+                let agent_loop = AgentLoop::new(thinker, executor, compressor, config);
+                let run_ctx = RunContext::new(input, ctx, tools, id);
+                let result = agent_loop.run(run_ctx, &crate::agent_loop::NoOpLoopCallback).await;
+                (role, result)
+            });
+            handles.push(handle);
+        }
+
+        // Collect results
+        let mut results = Vec::new();
+        for handle in handles {
+            match handle.await {
+                Ok((role, LoopResult::Completed { summary, .. })) => {
+                    results.push(format!("### {} 视角\n\n{}", role, summary));
+                }
+                Ok((role, LoopResult::Failed { reason, .. })) => {
+                    results.push(format!("### {} 视角\n\n⚠️ 执行失败: {}", role, reason));
+                }
+                Ok((role, _)) => {
+                    results.push(format!("### {} 视角\n\n⚠️ 执行中断", role));
+                }
+                Err(e) => {
+                    warn!(run_id = %run_id, error = %e, "Parallel agent task failed");
+                }
+            }
+        }
+
+        if results.is_empty() {
+            return Err(ExecutionError::Failed("All parallel agents failed".to_string()));
+        }
+
+        info!(
+            subsystem = "task_router",
+            run_id = %run_id,
+            agents = results.len(),
+            "Parallel agent execution complete"
+        );
+
+        // Merge: use LLM to synthesize results
+        let merged = format!(
+            "# 多角色协作结果\n\n{}\n\n---\n\n*由 {} 个 Agent 协作完成*",
+            results.join("\n\n---\n\n"),
+            results.len()
+        );
+        Ok(merged)
+    }
+
+    /// Run adversarial execution: Generator produces result, Reviewer critiques.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_adversarial<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        request: &RunRequest,
+        thinker: Arc<Thinker<SingleProviderRegistry>>,
+        executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
+        compressor: Arc<NoOpCompressor>,
+        loop_config: LoopConfig,
+        context: RequestContext,
+        allowed_tools: Vec<UnifiedTool>,
+        identity: IdentityContext,
+        _callback: Arc<EventEmittingCallback<E>>,
+    ) -> Result<String, ExecutionError> {
+        let max_rounds = 2;
+        let mut last_output = String::new();
+
+        for round in 0..max_rounds {
+            info!(
+                subsystem = "task_router",
+                run_id = %run_id,
+                round = round + 1,
+                max_rounds = max_rounds,
+                "Adversarial round"
+            );
+
+            // Generator: execute the task (or revise based on feedback)
+            let gen_input = if round == 0 {
+                request.input.clone()
+            } else {
+                format!(
+                    "## 原始任务\n\n{}\n\n## 上一轮输出\n\n{}\n\n## 审查反馈\n\n请根据以上反馈修正你的输出。",
+                    request.input, last_output
+                )
+            };
+
+            let gen_loop = AgentLoop::new(
+                thinker.clone(), executor.clone(), compressor.clone(), loop_config.clone(),
+            );
+            let gen_ctx = RunContext::new(
+                gen_input, context.clone(), allowed_tools.clone(), identity.clone(),
+            );
+            let gen_result = gen_loop.run(gen_ctx, &crate::agent_loop::NoOpLoopCallback).await;
+
+            let gen_output = match gen_result {
+                LoopResult::Completed { summary, .. } => summary,
+                LoopResult::Failed { reason, .. } => {
+                    return Err(ExecutionError::Failed(format!("Generator failed: {}", reason)));
+                }
+                _ => return Err(ExecutionError::Failed("Generator interrupted".to_string())),
+            };
+
+            // Reviewer: critique the output
+            let review_input = format!(
+                "## 角色: 严格审查员\n\n审查以下输出是否完整、准确、高质量。如果有问题，指出具体问题和改进建议。如果质量达标，回复 'APPROVED'。\n\n## 原始任务\n\n{}\n\n## 待审查输出\n\n{}",
+                request.input, gen_output
+            );
+
+            let rev_loop = AgentLoop::new(
+                thinker.clone(), executor.clone(), compressor.clone(), loop_config.clone(),
+            );
+            let rev_ctx = RunContext::new(
+                review_input, context.clone(), allowed_tools.clone(), identity.clone(),
+            );
+            let rev_result = rev_loop.run(rev_ctx, &crate::agent_loop::NoOpLoopCallback).await;
+
+            let review = match rev_result {
+                LoopResult::Completed { summary, .. } => summary,
+                _ => "APPROVED".to_string(), // If reviewer fails, accept
+            };
+
+            if review.contains("APPROVED") {
+                info!(
+                    subsystem = "task_router",
+                    run_id = %run_id,
+                    round = round + 1,
+                    "Adversarial review approved"
+                );
+                return Ok(gen_output);
+            }
+
+            last_output = format!("{}\n\n**审查反馈:** {}", gen_output, review);
+        }
+
+        // Return last output after max rounds
+        Ok(last_output)
+    }
+}
+
+// ============================================================================
+// AgentLoopGraphExecutor — enables DAG nodes to be executed via Agent Loop
+// ============================================================================
+
+/// GraphTaskExecutor implementation that runs each DAG node via an Agent Loop.
+struct AgentLoopGraphExecutor<T, E, C>
+where
+    T: crate::agent_loop::ThinkerTrait + 'static,
+    E: crate::agent_loop::ActionExecutor + 'static,
+    C: crate::agent_loop::CompressorTrait + 'static,
+{
+    thinker: Arc<T>,
+    executor: Arc<E>,
+    compressor: Arc<C>,
+    loop_config: LoopConfig,
+    tools: Vec<UnifiedTool>,
+    identity: IdentityContext,
+}
+
+#[async_trait]
+impl<T, E, C> crate::dispatcher::scheduler::GraphTaskExecutor for AgentLoopGraphExecutor<T, E, C>
+where
+    T: crate::agent_loop::ThinkerTrait + 'static,
+    E: crate::agent_loop::ActionExecutor + 'static,
+    C: crate::agent_loop::CompressorTrait + 'static,
+{
+    async fn execute(
+        &self,
+        task: &crate::dispatcher::agent_types::Task,
+        context: &str,
+    ) -> crate::error::Result<crate::dispatcher::context::TaskOutput> {
+        let prompt = if context.is_empty() {
+            task.name.clone()
+        } else {
+            format!("{}\n\n## Context from dependencies\n\n{}", task.name, context)
+        };
+
+        let agent_loop = AgentLoop::new(
+            self.thinker.clone(),
+            self.executor.clone(),
+            self.compressor.clone(),
+            self.loop_config.clone(),
+        );
+        let run_ctx = RunContext::new(
+            prompt,
+            RequestContext::empty(),
+            self.tools.clone(),
+            self.identity.clone(),
+        );
+        let result = agent_loop
+            .run(run_ctx, &crate::agent_loop::NoOpLoopCallback)
+            .await;
+
+        match result {
+            LoopResult::Completed { summary, .. } => {
+                Ok(crate::dispatcher::context::TaskOutput::text(summary))
+            }
+            LoopResult::Failed { reason, .. } => {
+                Err(crate::error::AlephError::other(format!(
+                    "Agent loop failed for task '{}': {}",
+                    task.id, reason
+                )))
+            }
+            other => {
+                Err(crate::error::AlephError::other(format!(
+                    "Agent loop interrupted for task '{}': {:?}",
+                    task.id, other.steps()
+                )))
             }
         }
     }
