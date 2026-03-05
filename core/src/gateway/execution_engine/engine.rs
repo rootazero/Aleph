@@ -700,6 +700,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             LoopResult::GuardTriggered(_) => 0,
             LoopResult::UserAborted => 0,
             LoopResult::PoeAborted { .. } => 0,
+            LoopResult::Escalated { ref context, .. } => context.completed_steps,
         };
 
         {
@@ -747,6 +748,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             LoopResult::PoeAborted { reason } => {
                 warn!(run_id = %run_id, reason = %reason, "Agent loop aborted by POE");
                 Err(ExecutionError::Failed(format!("POE aborted: {}", reason)))
+            }
+            LoopResult::Escalated { route, .. } => {
+                info!(run_id = %run_id, route = route.label(), "Agent loop escalated to higher route");
+                Err(ExecutionError::Failed(format!("Escalated to {}", route.label())))
             }
         }
     }

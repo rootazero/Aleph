@@ -30,6 +30,11 @@ pub enum LoopResult {
         /// Reason for POE-initiated abort
         reason: String,
     },
+    /// Task escalated to higher-level execution path via routing decision layer.
+    Escalated {
+        route: crate::routing::TaskRoute,
+        context: crate::routing::EscalationSnapshot,
+    },
 }
 
 impl LoopResult {
@@ -46,6 +51,7 @@ impl LoopResult {
             LoopResult::GuardTriggered(_) => 0,
             LoopResult::UserAborted => 0,
             LoopResult::PoeAborted { .. } => 0,
+            LoopResult::Escalated { context, .. } => context.completed_steps,
         }
     }
 }
