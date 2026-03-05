@@ -221,10 +221,18 @@ impl ProtocolAdapter for AnthropicProtocol {
         let tools = payload.tools.map(|tool_defs| {
             tool_defs
                 .iter()
-                .map(|td| AnthropicTool {
-                    name: td.name.clone(),
-                    description: td.description.clone(),
-                    input_schema: td.parameters.clone(),
+                .map(|td| {
+                    // Ensure input_schema has "type" field — required by strict
+                    // backends like AWS Bedrock, which rejects schemas without it.
+                    let mut schema = td.parameters.clone();
+                    if let Some(obj) = schema.as_object_mut() {
+                        obj.entry("type").or_insert_with(|| serde_json::json!("object"));
+                    }
+                    AnthropicTool {
+                        name: td.name.clone(),
+                        description: td.description.clone(),
+                        input_schema: schema,
+                    }
                 })
                 .collect()
         });
