@@ -346,11 +346,38 @@ async fn register_agent_handlers(
         // Build task router from config
         let task_router: Option<Arc<dyn alephcore::routing::TaskRouter>> = if app_config.task_routing.enabled {
             let rules = alephcore::routing::RoutingRules::from_config(&app_config.task_routing.patterns);
-            let router = alephcore::routing::CompositeRouter::new(
+            let mut router = alephcore::routing::CompositeRouter::new(
                 rules,
                 app_config.task_routing.enable_llm_fallback,
                 app_config.task_routing.escalation_step_threshold,
             );
+            // Wire LLM classify function using the default provider
+            if app_config.task_routing.enable_llm_fallback {
+                let classify_provider = provider_registry.default_provider();
+                let classify_fn: alephcore::routing::composite_router::LlmClassifyFn = Arc::new(move |msg: &str| {
+                    let provider = classify_provider.clone();
+                    let prompt = alephcore::routing::llm_classifier::build_classify_prompt(msg);
+                    Box::pin(async move {
+                        match provider.process(&prompt, None).await {
+                            Ok(response) => alephcore::routing::llm_classifier::parse_classify_response(&response),
+                            Err(e) => {
+                                tracing::warn!(
+                                    subsystem = "task_router",
+                                    error = %e,
+                                    "LLM classification failed, defaulting to simple"
+                                );
+                                alephcore::routing::TaskRoute::Simple
+                            }
+                        }
+                    })
+                });
+                router = router.with_llm_classify_fn(classify_fn);
+                tracing::info!(
+                    subsystem = "task_router",
+                    event = "llm_classify_wired",
+                    "LLM classify function wired to default provider"
+                );
+            }
             tracing::info!(
                 subsystem = "task_router",
                 event = "initialized",
