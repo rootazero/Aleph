@@ -244,10 +244,19 @@ impl ProtocolAdapter for GeminiProtocol {
         let tools = payload.tools.map(|tool_defs| {
             let declarations: Vec<GeminiFunctionDeclaration> = tool_defs
                 .iter()
-                .map(|td| GeminiFunctionDeclaration {
-                    name: td.name.clone(),
-                    description: td.description.clone(),
-                    parameters: td.parameters.clone(),
+                .map(|td| {
+                    // Ensure parameters has "type" field — required by strict
+                    // backends; keeps parity with Anthropic/OpenAI adapters.
+                    let mut params = td.parameters.clone();
+                    if let Some(obj) = params.as_object_mut() {
+                        obj.entry("type")
+                            .or_insert_with(|| serde_json::json!("object"));
+                    }
+                    GeminiFunctionDeclaration {
+                        name: td.name.clone(),
+                        description: td.description.clone(),
+                        parameters: params,
+                    }
                 })
                 .collect();
             vec![GeminiToolConfig {
