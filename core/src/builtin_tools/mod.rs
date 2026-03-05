@@ -62,6 +62,7 @@ pub mod profile_update;
 pub mod scratchpad;
 pub mod soul_update;
 pub mod vision;
+pub mod escalate_task;
 
 pub use atomic_ops::{AtomicOpsArgs, AtomicOpsOutput, AtomicOpsTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};
@@ -96,6 +97,7 @@ pub use profile_update::{ProfileField, ProfileOperation, ProfileUpdateArgs, Prof
 pub use scratchpad::{ScratchpadAction, ScratchpadArgs, ScratchpadOutput, ScratchpadTool};
 pub use soul_update::{SoulField, SoulOperation, SoulUpdateArgs, SoulUpdateOutput, SoulUpdateTool};
 pub use vision::{VisionAction, VisionArgs, VisionOutput, VisionTool};
+pub use escalate_task::{EscalateTaskArgs, EscalateTaskOutput, EscalateTaskTool};
 
 // Message tool re-exports
 pub use message::{

@@ -19,8 +19,9 @@
 use crate::sync_primitives::Arc;
 
 use crate::builtin_tools::{
-    BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, FileOpsTool,
-    ImageGenerateTool, PdfGenerateTool, ReadSkillTool, SearchTool, WebFetchTool, YouTubeTool,
+    BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, EscalateTaskTool,
+    FileOpsTool, ImageGenerateTool, PdfGenerateTool, ReadSkillTool, SearchTool, WebFetchTool,
+    YouTubeTool,
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::tools::AlephToolDyn;
@@ -130,6 +131,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Send messages to other sessions (same or different agent)",
         requires_config: true, // Requires gateway_context
     },
+    BuiltinToolDefinition {
+        name: "escalate_task",
+        description: "Request escalation to a more capable execution strategy",
+        requires_config: false,
+    },
 ];
 
 /// Create a boxed tool instance by name
@@ -195,6 +201,7 @@ pub fn create_tool_boxed(
         // so they cannot be created via create_tool_boxed. They are created
         // dynamically in BuiltinToolRegistry::execute_tool().
         "sessions_list" | "sessions_send" => None,
+        "escalate_task" => Some(Box::new(EscalateTaskTool)),
         _ => None,
     }
 }
