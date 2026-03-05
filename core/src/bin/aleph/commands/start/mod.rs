@@ -100,19 +100,27 @@ fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayConfig) {
     println!();
 }
 
-/// Initialize the tracing subscriber with log level from CLI args.
+/// Initialize the tracing subscriber with file + console logging.
+///
+/// Uses `aleph_logging::init_component_logging` which provides:
+/// - Console output with PII scrubbing
+/// - File output to `~/.aleph/logs/aleph-server.log.YYYY-MM-DD`
+/// - Daily rotation and 7-day retention
 fn initialize_tracing(args: &Args) {
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
     let filter = format!("aleph_server={},alephcore::gateway={}", args.log_level, args.log_level);
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer()
-            .with_target(true)
-            .with_thread_ids(false)
-            .with_file(false)
-            .with_line_number(false))
-        .with(tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&filter)))
-        .init();
+    if let Err(e) = aleph_logging::init_component_logging("server", 7, &filter) {
+        eprintln!("Warning: Failed to initialize file logging: {}. Falling back to console only.", e);
+        use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_thread_ids(false)
+                .with_file(false)
+                .with_line_number(false))
+            .with(tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&filter)))
+            .init();
+    }
 }
 
 /// Load gateway configuration, apply CLI overrides, and return resolved values.
@@ -335,14 +343,43 @@ async fn register_agent_handlers(
             ))
             .collect();
 
-        let engine = Arc::new(ExecutionEngine::new(
+        // Build task router from config
+        let task_router: Option<Arc<dyn alephcore::routing::TaskRouter>> = if app_config.task_routing.enabled {
+            let rules = alephcore::routing::RoutingRules::from_config(&app_config.task_routing.patterns);
+            let router = alephcore::routing::CompositeRouter::new(
+                rules,
+                app_config.task_routing.enable_llm_fallback,
+                app_config.task_routing.escalation_step_threshold,
+            );
+            tracing::info!(
+                subsystem = "task_router",
+                event = "initialized",
+                llm_fallback = app_config.task_routing.enable_llm_fallback,
+                escalation_threshold = app_config.task_routing.escalation_step_threshold,
+                "Task router initialized"
+            );
+            Some(Arc::new(router))
+        } else {
+            tracing::info!(
+                subsystem = "task_router",
+                event = "disabled",
+                "Task routing disabled by config"
+            );
+            None
+        };
+
+        let mut engine = ExecutionEngine::new(
             ExecutionEngineConfig::default(),
             provider_registry,
             tool_registry,
             tools,
             session_manager.clone(),
             Some(memory_db.clone()),
-        ));
+        );
+        if let Some(router) = task_router {
+            engine = engine.with_task_router(router);
+        }
+        let engine = Arc::new(engine);
 
         let agent_registry = Arc::new(AgentRegistry::new());
         if !app_config.agents.list.is_empty() {
@@ -830,9 +867,13 @@ async fn initialize_channels(
 
     #[cfg(target_os = "macos")]
     {
-        let imessage_config = IMessageConfig {
-            enabled: true,
-            ..Default::default()
+        let imessage_config = if let Some(app_im) = app_config.channels.get("imessage") {
+            serde_json::from_value::<IMessageConfig>(app_im.clone()).unwrap_or_else(|e| {
+                tracing::warn!("Failed to parse imessage config from app config: {}, falling back", e);
+                IMessageConfig::default()
+            })
+        } else {
+            IMessageConfig::default()
         };
         let imessage_channel = IMessageChannel::new(imessage_config);
         let channel_id = channel_registry.register(Box::new(imessage_channel)).await;
@@ -872,7 +913,14 @@ async fn initialize_channels(
     }
 
     {
-        let whatsapp_config = WhatsAppConfig::default();
+        let whatsapp_config = if let Some(app_wa) = app_config.channels.get("whatsapp") {
+            serde_json::from_value::<WhatsAppConfig>(app_wa.clone()).unwrap_or_else(|e| {
+                tracing::warn!("Failed to parse whatsapp config from app config: {}, falling back", e);
+                WhatsAppConfig::default()
+            })
+        } else {
+            WhatsAppConfig::default()
+        };
         let whatsapp_channel = WhatsAppChannel::new("whatsapp", whatsapp_config);
         let channel_id = channel_registry.register(Box::new(whatsapp_channel)).await;
         if !daemon {
