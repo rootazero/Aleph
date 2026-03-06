@@ -10,7 +10,7 @@ mod tests {
     use crate::memory::store::lance::LanceMemoryBackend;
     use crate::memory::store::types::SearchFilter;
     use crate::memory::store::{GraphNode, GraphStore, MemoryStore};
-    use crate::memory::workspace::{WorkspaceContext, WorkspaceFilter, DEFAULT_WORKSPACE};
+    use crate::gateway::workspace::{WorkspaceContext, WorkspaceFilter, DEFAULT_WORKSPACE};
     use crate::memory::workspace_store;
 
     /// Helper: create a MemoryFact with a synthetic embedding and assigned workspace.
@@ -228,7 +228,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_workspace_crud_operations() {
-        use crate::memory::workspace::Workspace;
+        use crate::gateway::workspace::Workspace;
         use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().unwrap();

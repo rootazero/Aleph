@@ -476,7 +476,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let mut ws = active_workspace;
             let agent_id = request.session_key.agent_id();
             if agent_id != "main" {
-                ws.memory_filter = crate::memory::workspace::WorkspaceFilter::Single(
+                ws.memory_filter = crate::gateway::workspace::WorkspaceFilter::Single(
                     agent_id.to_string(),
                 );
             }

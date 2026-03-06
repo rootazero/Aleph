@@ -12,7 +12,7 @@ use super::error::ToolError;
 use crate::error::Result;
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::{MemoryBackend, MemoryStore, PathEntry as StorePathEntry};
-use crate::memory::workspace::WorkspaceFilter;
+use crate::gateway::workspace::WorkspaceFilter;
 use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter, DEFAULT_WORKSPACE};
 use crate::tools::AlephTool;
 

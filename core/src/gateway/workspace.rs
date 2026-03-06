@@ -126,7 +126,7 @@ impl WorkspaceContext {
     pub fn to_search_filter(&self) -> SearchFilter {
         SearchFilter::new()
             .with_namespace(self.namespace.clone())
-            .with_workspace(crate::memory::workspace::WorkspaceFilter::Single(
+            .with_workspace(WorkspaceFilter::Single(
                 self.workspace_id.clone(),
             ))
             .with_valid_only()
@@ -331,7 +331,7 @@ pub struct ActiveWorkspace {
     pub profile: ProfileConfig,
 
     /// Memory filter scoped to this workspace
-    pub memory_filter: crate::memory::workspace::WorkspaceFilter,
+    pub memory_filter: WorkspaceFilter,
 }
 
 impl ActiveWorkspace {
@@ -366,7 +366,7 @@ impl ActiveWorkspace {
             });
 
         let memory_filter =
-            crate::memory::workspace::WorkspaceFilter::Single(workspace.id.clone());
+            WorkspaceFilter::Single(workspace.id.clone());
 
         Self {
             workspace_id: workspace.id,
@@ -399,7 +399,7 @@ impl ActiveWorkspace {
             });
 
         let memory_filter =
-            crate::memory::workspace::WorkspaceFilter::Single(workspace.id.clone());
+            WorkspaceFilter::Single(workspace.id.clone());
 
         Self {
             workspace_id: workspace.id,
@@ -416,7 +416,7 @@ impl ActiveWorkspace {
         Self {
             workspace_id: "global".to_string(),
             profile: ProfileConfig::default(),
-            memory_filter: crate::memory::workspace::WorkspaceFilter::Single(
+            memory_filter: WorkspaceFilter::Single(
                 "global".to_string(),
             ),
         }

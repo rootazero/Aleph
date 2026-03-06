@@ -5,7 +5,7 @@
 
 use crate::memory::context::{FactType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier};
 use crate::memory::namespace::NamespaceScope;
-use crate::memory::workspace::WorkspaceFilter;
+use crate::gateway::workspace::WorkspaceFilter;
 
 // ---------------------------------------------------------------------------
 // SQL String Escaping — prevent injection in LanceDB/DataFusion filter strings
