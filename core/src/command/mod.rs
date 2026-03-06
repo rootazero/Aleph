@@ -11,16 +11,11 @@
 
 mod dispatcher;
 mod parser;
-mod registry;
 mod types;
 
 pub use dispatcher::{CommandDispatcher, DirectHandler};
 pub use parser::{CommandContext, CommandParser, ParsedCommand};
-pub use registry::CommandRegistry;
 pub use types::{CommandExecutionResult, CommandNode, CommandTriggers, CommandType};
-
-// Re-export builtin hint localization
-pub use registry::get_builtin_hint;
 
 #[cfg(test)]
 mod tests {
