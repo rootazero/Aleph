@@ -234,7 +234,7 @@ proptest! {
         // Verify the Verdict itself has passed=true
         prop_assert!(verdict.passed);
 
-        let outcome = PoeOutcome::success(verdict);
+        let outcome = PoeOutcome::success(verdict, "");
         prop_assert!(
             outcome.is_success(),
             "PoeOutcome::Success with passed=true should be is_success()"
@@ -281,7 +281,7 @@ proptest! {
         let verdict = Verdict::failure(reason);
         prop_assert!(!verdict.passed);
 
-        let outcome = PoeOutcome::success(verdict);
+        let outcome = PoeOutcome::success(verdict, "");
         prop_assert!(
             !outcome.is_success(),
             "PoeOutcome::Success with passed=false should NOT be is_success()"
@@ -320,7 +320,7 @@ proptest! {
     #[test]
     fn poe_outcome_serde_roundtrip(
         variant in prop_oneof![
-            arb_verdict().prop_map(PoeOutcome::Success),
+            arb_verdict().prop_map(|v| PoeOutcome::Success { verdict: v, worker_summary: String::new() }),
             ("[a-zA-Z0-9 ]{1,20}", "[a-zA-Z0-9 ]{1,20}")
                 .prop_map(|(r, s)| PoeOutcome::StrategySwitch { reason: r, suggestion: s }),
             (0u8..=255u8, "[a-zA-Z0-9 ]{1,20}")

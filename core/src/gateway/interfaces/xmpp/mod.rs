@@ -36,7 +36,7 @@ pub use message_ops::XmppMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId,
     OutboundMessage, SendResult,
 };
 use async_trait::async_trait;

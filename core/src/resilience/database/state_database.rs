@@ -508,6 +508,33 @@ impl StateDatabase {
             );
 
             CREATE INDEX IF NOT EXISTS idx_gc_turns_session ON group_chat_turns(session_id);
+
+            -- ================================================================
+            -- SharedArena Tables
+            -- ================================================================
+
+            CREATE TABLE IF NOT EXISTS arenas (
+                id            TEXT PRIMARY KEY,
+                goal          TEXT NOT NULL,
+                strategy      TEXT NOT NULL,
+                participants  TEXT NOT NULL,
+                created_by    TEXT NOT NULL,
+                status        TEXT NOT NULL DEFAULT 'created',
+                created_at    TEXT NOT NULL,
+                settled_at    TEXT,
+                settle_report TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS arena_artifacts (
+                id            TEXT PRIMARY KEY,
+                arena_id      TEXT NOT NULL,
+                agent_id      TEXT NOT NULL,
+                kind          TEXT NOT NULL,
+                content       TEXT,
+                reference     TEXT,
+                metadata      TEXT,
+                created_at    TEXT NOT NULL
+            );
             "#
     }
 
