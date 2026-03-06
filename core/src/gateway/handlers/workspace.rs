@@ -10,11 +10,8 @@ use super::super::protocol::{
 };
 use super::parse_params;
 use crate::gateway::workspace::WorkspaceManager;
+use crate::gateway::workspace_store::{self, LegacyWorkspace};
 use crate::memory::store::{MemoryBackend, MemoryStore};
-// CRUD handlers still use workspace_store which operates on memory::workspace::Workspace.
-// This will be migrated to WorkspaceManager in T6.
-use crate::memory::workspace::Workspace;
-use crate::memory::workspace_store;
 use crate::sync_primitives::Arc;
 
 // ============================================================================
@@ -49,7 +46,7 @@ pub async fn handle_create(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         Err(e) => return e,
     };
 
-    let mut ws = Workspace::new(params.id, params.name);
+    let mut ws = LegacyWorkspace::new(params.id, params.name);
     if let Some(desc) = params.description {
         ws.description = Some(desc);
     }
