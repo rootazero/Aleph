@@ -588,7 +588,7 @@ mod tests {
         );
 
         assert_eq!(
-            PoeTaskStatus::Completed(PoeOutcome::success(crate::poe::Verdict::success("ok")))
+            PoeTaskStatus::Completed(PoeOutcome::success(crate::poe::Verdict::success("ok"), ""))
                 .status_str(),
             "success"
         );

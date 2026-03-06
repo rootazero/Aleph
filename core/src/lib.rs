@@ -36,6 +36,7 @@
 
 pub mod agent_loop;
 pub mod agents;
+pub mod arena;
 pub mod approval;
 pub mod browser;
 pub mod builtin_tools;
