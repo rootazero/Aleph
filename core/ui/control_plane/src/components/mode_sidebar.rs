@@ -7,7 +7,7 @@ use leptos_router::hooks::use_location;
 use super::bottom_bar::PanelMode;
 use super::chat_sidebar::ChatSidebar;
 use super::dashboard_sidebar::DashboardSidebar;
-use crate::components::settings_sidebar::{SETTINGS_GROUPS, SettingsTab};
+use crate::components::settings_sidebar::SETTINGS_GROUPS;
 
 #[component]
 pub fn ModeSidebar() -> impl IntoView {

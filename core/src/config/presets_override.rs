@@ -141,6 +141,7 @@ pub struct OwnedProviderPreset {
 /// Owned version of GenerationPreset for runtime-merged presets.
 #[derive(Debug, Clone)]
 pub struct OwnedGenerationPreset {
+    #[allow(dead_code)]
     pub provider_type: String,
     pub default_model: String,
     pub base_url: Option<String>,

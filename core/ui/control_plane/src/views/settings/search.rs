@@ -174,6 +174,9 @@ pub fn SearchView() -> impl IntoView {
                     // Preset grid
                     <PresetGrid config=config selected=selected show_add_form=show_add_form />
 
+                    // Custom providers (not matching any preset)
+                    <CustomSearchProvidersList config=config selected=selected show_add_form=show_add_form />
+
                     // Add Custom Provider button
                     <div class="pt-2">
                         <button
@@ -308,6 +311,102 @@ fn PresetGrid(
                 }).collect_view()}
             </div>
         </div>
+    }
+}
+
+// ============================================================================
+// Custom Search Providers List (non-preset providers)
+// ============================================================================
+
+#[component]
+fn CustomSearchProvidersList(
+    config: RwSignal<SearchConfig>,
+    selected: RwSignal<Option<String>>,
+    show_add_form: RwSignal<bool>,
+) -> impl IntoView {
+    let preset_names: Vec<&str> = PRESETS.iter().map(|p| p.name).collect();
+
+    view! {
+        {move || {
+            let cfg = config.get();
+            let custom: Vec<_> = cfg.backends.iter()
+                .filter(|b| !preset_names.contains(&b.name.as_str()))
+                .cloned()
+                .collect();
+            if custom.is_empty() {
+                view! { <div></div> }.into_any()
+            } else {
+                view! {
+                    <div>
+                        <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+                            "Custom Providers"
+                        </h2>
+                        <div class="grid grid-cols-1 gap-2">
+                            {custom.into_iter().map(|backend| {
+                                let name = backend.name.clone();
+                                let name_click = name.clone();
+                                let name_check = name.clone();
+                                let is_default = !cfg.default_provider.is_empty() && cfg.default_provider == name;
+                                let verified = backend.verified;
+                                let first_char = name.chars().next().unwrap_or('?').to_uppercase().to_string();
+
+                                view! {
+                                    <button
+                                        on:click=move |_| {
+                                            selected.set(Some(name_click.clone()));
+                                            show_add_form.set(false);
+                                        }
+                                        class=move || {
+                                            let base = "text-left p-3 rounded-lg border transition-all";
+                                            let is_sel = selected.get().as_deref() == Some(&name_check);
+                                            if is_sel {
+                                                format!("{} bg-primary-subtle border-primary", base)
+                                            } else {
+                                                format!("{} bg-surface-raised border-border hover:border-primary/40", base)
+                                            }
+                                        }
+                                    >
+                                        <div class="flex items-center gap-3">
+                                            <div
+                                                class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold shrink-0"
+                                                style="background-color: #808080"
+                                            >
+                                                {first_char}
+                                            </div>
+                                            <div class="min-w-0">
+                                                <div class="flex items-center gap-2">
+                                                    <span class="font-medium text-text-primary text-sm truncate">
+                                                        {name}
+                                                    </span>
+                                                    {if is_default {
+                                                        view! {
+                                                            <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
+                                                                "Default"
+                                                            </span>
+                                                        }.into_any()
+                                                    } else if verified {
+                                                        view! {
+                                                            <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
+                                                                "Verified"
+                                                            </span>
+                                                        }.into_any()
+                                                    } else {
+                                                        view! { <span></span> }.into_any()
+                                                    }}
+                                                </div>
+                                                <div class="text-xs text-text-tertiary truncate">
+                                                    "Custom search provider"
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </button>
+                                }
+                            }).collect_view()}
+                        </div>
+                    </div>
+                }.into_any()
+            }
+        }}
     }
 }
 

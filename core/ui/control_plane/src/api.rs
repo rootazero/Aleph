@@ -25,6 +25,7 @@ pub struct MemoryFact {
 }
 
 /// Backend memory search result entry (matches handler MemoryEntry)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct BackendMemoryEntry {
     id: String,

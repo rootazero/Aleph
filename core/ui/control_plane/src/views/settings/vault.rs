@@ -9,7 +9,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{DisableVaultResult, MigrateKeysResult, VaultConfigApi, VaultStatus, VaultVerifyResult};
+use crate::api::{VaultConfigApi, VaultStatus, VaultVerifyResult};
 use crate::context::DashboardState;
 
 #[component]
@@ -37,7 +37,7 @@ pub fn VaultView() -> impl IntoView {
         });
     };
 
-    create_effect(move |_| {
+    Effect::new(move || {
         if state.is_connected.get() {
             load_status();
         } else {

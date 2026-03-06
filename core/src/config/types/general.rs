@@ -96,7 +96,7 @@ pub fn default_output_mode() -> String {
 }
 
 pub fn default_typing_speed() -> u32 {
-    50 // 50 characters per second
+    200 // 200 characters per second
 }
 
 impl Default for BehaviorConfig {

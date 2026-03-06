@@ -10,7 +10,7 @@ pub mod persona;
 pub mod protocol;
 pub mod session;
 
-pub use channel::{GroupChatCommandParser, GroupChatRenderer};
+pub use channel::{DefaultGroupChatCommandParser, GroupChatCommandParser, GroupChatRenderer};
 pub use executor::GroupChatExecutor;
 pub use orchestrator::{GroupChatOrchestrator, SharedSession};
 pub use persona::PersonaRegistry;

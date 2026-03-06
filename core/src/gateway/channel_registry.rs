@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 use crate::sync_primitives::{Arc, Mutex};
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use super::channel::{
     Channel, ChannelConfig, ChannelError, ChannelFactory, ChannelId, ChannelInfo,

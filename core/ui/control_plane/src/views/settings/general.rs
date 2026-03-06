@@ -1,6 +1,5 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use leptos::ev::Event;
 use crate::context::DashboardState;
 use crate::api::{ConfigApi, GeneralConfig, GeneralConfigApi};
 
@@ -17,7 +16,7 @@ pub fn GeneralView() -> impl IntoView {
     let (error, set_error) = signal(Option::<String>::None);
 
     // Store save_config in a StoredValue to avoid closure capture issues
-    let save_config_fn = store_value(move || {
+    let save_config_fn = StoredValue::new(move || {
         if !state.is_connected.get() { return; }
         if let Some(cfg) = config.get() {
             set_saving.set(true);

@@ -84,7 +84,7 @@ pub mod openai_api;
 pub use server::GatewayServer;
 pub use protocol::{JsonRpcRequest, JsonRpcResponse, JsonRpcError};
 pub use event_bus::GatewayEventBus;
-pub use event_emitter::{EventEmitter, StreamEvent, GatewayEventEmitter, NoOpEventEmitter, DynEventEmitter};
+pub use event_emitter::{EventEmitter, StreamEvent, GatewayEventEmitter, NoOpEventEmitter, DynEventEmitter, OutputMode};
 pub use tool_display::{ToolDisplay, get_tool_display, format_tool_meta, format_tool_summary, group_paths};
 pub use stream_buffer::StreamBuffer;
 pub use message_dedup::{normalize_text, is_text_duplicate, SentMessageTracker, SentRecord};

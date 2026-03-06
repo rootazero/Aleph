@@ -485,16 +485,42 @@ pub enum EventEmitError {
     EventBus(String),
 }
 
+/// Output mode for controlling response delivery behavior
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutputMode {
+    /// Stream response chunks with throttling (character-by-character feel)
+    Typewriter,
+    /// Buffer all chunks and deliver complete response at once
+    Instant,
+}
+
+impl OutputMode {
+    /// Parse from config string value
+    pub fn from_config(s: &str) -> Self {
+        match s {
+            "instant" => Self::Instant,
+            _ => Self::Typewriter,
+        }
+    }
+}
+
 /// Gateway-based event emitter
 ///
 /// Broadcasts events to all connected WebSocket clients via the event bus.
 /// Supports throttled response chunk emission (150ms) for smoother streaming.
+/// Respects `output_mode` configuration:
+/// - Typewriter: stream chunks with 150ms throttling
+/// - Instant: buffer all chunks, only emit on final
 pub struct GatewayEventEmitter {
     event_bus: Arc<GatewayEventBus>,
     seq_counter: AtomicU64,
-    // Throttling state for response chunks
+    // Throttling state for response chunks (typewriter mode)
     delta_buffer: Mutex<String>,
     last_delta_at: Mutex<Instant>,
+    // Instant mode buffer for accumulating all chunks
+    instant_buffer: Mutex<String>,
+    /// Output mode: typewriter (streaming) or instant (all-at-once)
+    output_mode: OutputMode,
 }
 
 impl GatewayEventEmitter {
@@ -507,7 +533,26 @@ impl GatewayEventEmitter {
             seq_counter: AtomicU64::new(0),
             delta_buffer: Mutex::new(String::new()),
             last_delta_at: Mutex::new(Instant::now()),
+            instant_buffer: Mutex::new(String::new()),
+            output_mode: OutputMode::Typewriter,
         }
+    }
+
+    /// Create with a specific output mode
+    pub fn with_output_mode(event_bus: Arc<GatewayEventBus>, output_mode: OutputMode) -> Self {
+        Self {
+            event_bus,
+            seq_counter: AtomicU64::new(0),
+            delta_buffer: Mutex::new(String::new()),
+            last_delta_at: Mutex::new(Instant::now()),
+            instant_buffer: Mutex::new(String::new()),
+            output_mode,
+        }
+    }
+
+    /// Get the current output mode
+    pub fn output_mode(&self) -> &OutputMode {
+        &self.output_mode
     }
 
     /// Emit response chunk with 150ms throttling
@@ -568,7 +613,48 @@ impl GatewayEventEmitter {
 #[async_trait]
 impl EventEmitter for GatewayEventEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
-        // Wrap as JSON-RPC notification
+        // In instant mode, buffer non-final ResponseChunks and only emit on final
+        if self.output_mode == OutputMode::Instant {
+            if let StreamEvent::ResponseChunk {
+                ref content,
+                is_final,
+                ref run_id,
+                ..
+            } = event
+            {
+                if !is_final {
+                    // Buffer the chunk content, don't emit yet
+                    self.instant_buffer.lock().await.push_str(content);
+                    return Ok(());
+                }
+
+                // Final chunk: combine buffered content + this chunk, emit as single response
+                let mut buffer = self.instant_buffer.lock().await;
+                let full_content = if buffer.is_empty() {
+                    content.clone()
+                } else {
+                    let buffered = std::mem::take(&mut *buffer);
+                    format!("{}{}", buffered, content)
+                };
+                drop(buffer);
+
+                let final_event = StreamEvent::ResponseChunk {
+                    run_id: run_id.clone(),
+                    seq: self.next_seq(),
+                    content: full_content,
+                    chunk_index: 0,
+                    is_final: true,
+                };
+                let event_value = serde_json::to_value(&final_event)?;
+                let notification =
+                    JsonRpcRequest::notification(event_method(&final_event), Some(event_value));
+                let json = serde_json::to_string(&notification)?;
+                self.event_bus.publish(json);
+                return Ok(());
+            }
+        }
+
+        // Default: broadcast immediately (typewriter mode or non-ResponseChunk events)
         let event_value = serde_json::to_value(&event)?;
         let notification = JsonRpcRequest::notification(event_method(&event), Some(event_value));
         let json = serde_json::to_string(&notification)?;
@@ -921,5 +1007,102 @@ mod tests {
         } else {
             panic!("Wrong event type");
         }
+    }
+
+    #[test]
+    fn test_output_mode_from_config() {
+        assert_eq!(OutputMode::from_config("typewriter"), OutputMode::Typewriter);
+        assert_eq!(OutputMode::from_config("instant"), OutputMode::Instant);
+        assert_eq!(OutputMode::from_config("unknown"), OutputMode::Typewriter);
+        assert_eq!(OutputMode::from_config(""), OutputMode::Typewriter);
+    }
+
+    #[tokio::test]
+    async fn test_instant_mode_buffers_non_final_chunks() {
+        use super::super::event_bus::GatewayEventBus;
+
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let emitter = GatewayEventEmitter::with_output_mode(
+            event_bus,
+            OutputMode::Instant,
+        );
+
+        // Non-final chunks should be buffered, not emitted
+        let _ = emitter
+            .emit(StreamEvent::ResponseChunk {
+                run_id: "run-1".to_string(),
+                seq: 0,
+                content: "Hello ".to_string(),
+                chunk_index: 0,
+                is_final: false,
+            })
+            .await;
+
+        let _ = emitter
+            .emit(StreamEvent::ResponseChunk {
+                run_id: "run-1".to_string(),
+                seq: 1,
+                content: "World".to_string(),
+                chunk_index: 1,
+                is_final: false,
+            })
+            .await;
+
+        // Check that content is buffered in instant_buffer
+        let buffer = emitter.instant_buffer.lock().await;
+        assert_eq!(*buffer, "Hello World");
+        drop(buffer);
+
+        // Final chunk should flush everything
+        let _ = emitter
+            .emit(StreamEvent::ResponseChunk {
+                run_id: "run-1".to_string(),
+                seq: 2,
+                content: "!".to_string(),
+                chunk_index: 2,
+                is_final: true,
+            })
+            .await;
+
+        // Buffer should be empty after final
+        let buffer = emitter.instant_buffer.lock().await;
+        assert!(buffer.is_empty(), "Instant buffer should be empty after final chunk");
+    }
+
+    #[tokio::test]
+    async fn test_instant_mode_passes_non_chunk_events() {
+        use super::super::event_bus::GatewayEventBus;
+
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let emitter = GatewayEventEmitter::with_output_mode(
+            event_bus.clone(),
+            OutputMode::Instant,
+        );
+
+        // Subscribe to verify events are published
+        let mut rx = event_bus.subscribe();
+
+        // Reasoning events should still be emitted immediately in instant mode
+        let _ = emitter
+            .emit(StreamEvent::Reasoning {
+                run_id: "run-1".to_string(),
+                seq: 0,
+                content: "Thinking...".to_string(),
+                is_complete: false,
+            })
+            .await;
+
+        // Should receive the event
+        let msg = rx.try_recv();
+        assert!(msg.is_ok(), "Non-ResponseChunk events should be emitted immediately in instant mode");
+    }
+
+    #[test]
+    fn test_default_output_mode_is_typewriter() {
+        use super::super::event_bus::GatewayEventBus;
+
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let emitter = GatewayEventEmitter::new(event_bus);
+        assert_eq!(*emitter.output_mode(), OutputMode::Typewriter);
     }
 }

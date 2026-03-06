@@ -35,12 +35,11 @@ pub use message_ops::{NostrEvent, NostrMessageOps};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, InboundMessage, MessageId, OutboundMessage,
+    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage,
     SendResult,
 };
 use async_trait::async_trait;
-use crate::sync_primitives::Arc;
-use tokio::sync::{mpsc, watch, RwLock};
+use tokio::sync::{mpsc, watch};
 
 /// Nostr channel implementation using NIP-01 WebSocket relay protocol.
 pub struct NostrChannel {

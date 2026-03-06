@@ -14,7 +14,7 @@ pub fn BehaviorView() -> impl IntoView {
     // State
     let config = RwSignal::new(BehaviorConfig {
         output_mode: "typewriter".to_string(),
-        typing_speed: 50,
+        typing_speed: 200,
     });
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
@@ -94,7 +94,7 @@ fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
     let save_error = RwSignal::new(Option::<String>::None);
     let save_success = RwSignal::new(false);
 
-    let save_config_fn = store_value(move || {
+    let save_config_fn = StoredValue::new(move || {
         saving.set(true);
         save_error.set(None);
         save_success.set(false);
@@ -200,7 +200,7 @@ fn TypingSpeedSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
     let save_error = RwSignal::new(Option::<String>::None);
     let save_success = RwSignal::new(false);
 
-    let save_config_fn = store_value(move || {
+    let save_config_fn = StoredValue::new(move || {
         saving.set(true);
         save_error.set(None);
         save_success.set(false);

@@ -56,6 +56,7 @@ pub async fn handle_run_with_engine<P, R>(
     event_bus: Arc<GatewayEventBus>,
     router: Arc<AgentRouter>,
     agent_registry: Arc<AgentRegistry>,
+    app_config: Arc<tokio::sync::RwLock<alephcore::Config>>,
 ) -> alephcore::gateway::JsonRpcResponse
 where
     P: alephcore::thinker::ProviderRegistry + 'static,
@@ -150,8 +151,14 @@ where
         }
     };
 
-    // Create emitter for streaming events
-    let emitter = Arc::new(GatewayEventEmitter::new(event_bus.clone()));
+    // Create emitter for streaming events, respecting output_mode config
+    let output_mode = {
+        let cfg = app_config.read().await;
+        let behavior = cfg.behavior.as_ref();
+        let mode_str = behavior.map(|b| b.output_mode.as_str()).unwrap_or("typewriter");
+        alephcore::gateway::OutputMode::from_config(mode_str)
+    };
+    let emitter = Arc::new(GatewayEventEmitter::with_output_mode(event_bus.clone(), output_mode));
 
     // Create run request
     let run_request = RunRequest {
@@ -200,6 +207,7 @@ pub async fn handle_chat_send_with_engine<P, R>(
     event_bus: Arc<GatewayEventBus>,
     router: Arc<AgentRouter>,
     agent_registry: Arc<AgentRegistry>,
+    app_config: Arc<tokio::sync::RwLock<alephcore::Config>>,
 ) -> alephcore::gateway::JsonRpcResponse
 where
     P: alephcore::thinker::ProviderRegistry + 'static,
@@ -274,8 +282,14 @@ where
         }
     };
 
-    // Create emitter for streaming events
-    let emitter = Arc::new(GatewayEventEmitter::new(event_bus.clone()));
+    // Create emitter for streaming events, respecting output_mode config
+    let output_mode = {
+        let cfg = app_config.read().await;
+        let behavior = cfg.behavior.as_ref();
+        let mode_str = behavior.map(|b| b.output_mode.as_str()).unwrap_or("typewriter");
+        alephcore::gateway::OutputMode::from_config(mode_str)
+    };
+    let emitter = Arc::new(GatewayEventEmitter::with_output_mode(event_bus.clone(), output_mode));
 
     // Create run request
     let run_request = RunRequest {

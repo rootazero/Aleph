@@ -16,13 +16,13 @@ use crate::context::DashboardState;
 pub fn MemoryView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
-    let config = create_rw_signal(Option::<MemoryConfig>::None);
-    let loading = create_rw_signal(true);
-    let saving = create_rw_signal(false);
-    let error = create_rw_signal(Option::<String>::None);
+    let config = RwSignal::new(Option::<MemoryConfig>::None);
+    let loading = RwSignal::new(true);
+    let saving = RwSignal::new(false);
+    let error = RwSignal::new(Option::<String>::None);
 
     // Load config on mount
-    create_effect(move |_| {
+    Effect::new(move || {
         if state.is_connected.get() {
             spawn_local(async move {
                 loading.set(true);
@@ -67,7 +67,7 @@ pub fn MemoryView() -> impl IntoView {
                 {move || {
                     if loading.get() {
                         view! { <div class="text-text-tertiary">"Loading..."</div> }.into_any()
-                    } else if let Some(cfg) = config.get() {
+                    } else if let Some(_cfg) = config.get() {
                         view! {
                             <div class="space-y-6">
                                 {move || error.get().map(|e| view! {

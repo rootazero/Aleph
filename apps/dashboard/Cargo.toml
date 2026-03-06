@@ -29,10 +29,3 @@ futures = "0.3"
 
 # Internal logic
 shared-ui-logic = { path = "../../shared/ui_logic", features = ["leptos", "wasm"] }
-
-[profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
