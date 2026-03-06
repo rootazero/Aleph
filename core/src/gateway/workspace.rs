@@ -1154,4 +1154,59 @@ mod tests {
         let filter_sql = active.memory_filter.to_sql_filter();
         assert_eq!(filter_sql, "workspace = 'global'");
     }
+
+    // -----------------------------------------------------------------------
+    // WorkspaceFilter unit tests (moved from memory::workspace)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_workspace_filter_sql() {
+        let f = WorkspaceFilter::Single("work".to_string());
+        assert_eq!(f.to_sql_filter(), "workspace = 'work'");
+
+        let f = WorkspaceFilter::Multiple(vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(f.to_sql_filter(), "workspace IN ('a', 'b')");
+
+        let f = WorkspaceFilter::Multiple(vec![]);
+        assert_eq!(f.to_sql_filter(), "1=0");
+
+        let f = WorkspaceFilter::All;
+        assert_eq!(f.to_sql_filter(), "1=1");
+    }
+
+    #[test]
+    fn test_workspace_filter_sql_injection_escape() {
+        let f = WorkspaceFilter::Single("it's".to_string());
+        assert_eq!(f.to_sql_filter(), "workspace = 'it''s'");
+
+        let f = WorkspaceFilter::Multiple(vec!["o'reilly".to_string()]);
+        assert_eq!(f.to_sql_filter(), "workspace IN ('o''reilly')");
+    }
+
+    // -----------------------------------------------------------------------
+    // WorkspaceContext unit tests (moved from memory::workspace)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_workspace_context_default_owner() {
+        let ctx = WorkspaceContext::default_owner();
+        assert_eq!(ctx.workspace_id(), "default");
+        assert!(matches!(ctx.namespace, NamespaceScope::Owner));
+    }
+
+    #[test]
+    fn test_workspace_context_custom() {
+        let ctx = WorkspaceContext::new("crypto", NamespaceScope::Owner);
+        assert_eq!(ctx.workspace_id(), "crypto");
+    }
+
+    #[test]
+    fn test_workspace_context_to_search_filter() {
+        let ctx = WorkspaceContext::new("crypto", NamespaceScope::Owner);
+        let filter = ctx.to_search_filter();
+        let sql = filter.to_lance_filter().unwrap();
+        assert!(sql.contains("workspace = 'crypto'"));
+        assert!(sql.contains("is_valid = true"));
+        assert!(sql.contains("namespace = 'owner'"));
+    }
 }

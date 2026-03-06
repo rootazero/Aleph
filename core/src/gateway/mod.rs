@@ -74,6 +74,7 @@ pub mod webhooks;
 pub mod run_event_bus;
 pub mod workspace;
 pub mod workspace_loader;
+pub mod workspace_store;
 pub mod state_version;
 pub mod hello_snapshot;
 pub mod event_scope;

@@ -11,7 +11,7 @@ mod tests {
     use crate::memory::store::types::SearchFilter;
     use crate::memory::store::{GraphNode, GraphStore, MemoryStore};
     use crate::gateway::workspace::{WorkspaceContext, WorkspaceFilter, DEFAULT_WORKSPACE};
-    use crate::memory::workspace_store;
+    use crate::gateway::workspace_store;
 
     /// Helper: create a MemoryFact with a synthetic embedding and assigned workspace.
     fn make_fact(content: &str, workspace: &str, embedding: Vec<f32>) -> MemoryFact {
@@ -228,7 +228,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_workspace_crud_operations() {
-        use crate::gateway::workspace::Workspace;
+        use crate::gateway::workspace_store::LegacyWorkspace;
         use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().unwrap();
@@ -239,7 +239,7 @@ mod tests {
         );
 
         // Create a workspace
-        let ws = Workspace::new("crypto", "Crypto Research");
+        let ws = LegacyWorkspace::new("crypto", "Crypto Research");
         workspace_store::create_workspace(&backend, &ws)
             .await
             .unwrap();
@@ -272,7 +272,7 @@ mod tests {
         assert!(archived.is_archived, "workspace should be archived");
 
         // Verify default workspace cannot be archived
-        let default_ws = Workspace::default_workspace();
+        let default_ws = LegacyWorkspace::default_workspace();
         workspace_store::create_workspace(&backend, &default_ws)
             .await
             .unwrap();
