@@ -513,11 +513,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         }
 
         // --- Identity / Bootstrap / User Profile ---
-        // Resolve AI identity from ~/.aleph/soul.md (layered: session > project > global > default)
-        let mut identity_resolver = crate::thinker::identity::IdentityResolver::with_defaults();
-        let agent_id = request.session_key.agent_id().to_string();
-        identity_resolver.add_project(&agent_id);
+        // Resolve AI identity from ~/.aleph/soul.md (layered: session > global > default)
+        let identity_resolver = crate::thinker::identity::IdentityResolver::with_defaults();
         let resolved_soul = identity_resolver.resolve();
+        let agent_id = request.session_key.agent_id().to_string();
 
         // Check bootstrap state — if no soul.md, inject First Contact Protocol
         let bootstrap_detector = crate::agent_loop::bootstrap::BootstrapDetector::new(
