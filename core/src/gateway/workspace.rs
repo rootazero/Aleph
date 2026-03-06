@@ -38,7 +38,105 @@ use thiserror::Error;
 use tracing::{debug, info};
 
 use crate::config::ProfileConfig;
+use crate::memory::namespace::NamespaceScope;
+use crate::memory::store::types::SearchFilter;
 use crate::routing::SessionKey;
+
+/// Default workspace identifier
+pub const DEFAULT_WORKSPACE: &str = "default";
+
+// =============================================================================
+// WorkspaceFilter
+// =============================================================================
+
+/// Filter for selecting workspaces when querying memory facts.
+#[derive(Debug, Clone)]
+pub enum WorkspaceFilter {
+    /// Filter to a single workspace by id
+    Single(String),
+    /// Filter to multiple workspaces by id
+    Multiple(Vec<String>),
+    /// No filtering — include all workspaces
+    All,
+}
+
+impl WorkspaceFilter {
+    /// Convert the filter to a SQL WHERE clause fragment.
+    ///
+    /// Returns a string suitable for use in a SQL `WHERE` clause that filters
+    /// on the `workspace` column.
+    pub fn to_sql_filter(&self) -> String {
+        match self {
+            WorkspaceFilter::Single(id) => {
+                format!("workspace = '{}'", id.replace('\'', "''"))
+            }
+            WorkspaceFilter::Multiple(ids) => {
+                if ids.is_empty() {
+                    return "1=0".to_string(); // match nothing
+                }
+                let escaped: Vec<String> = ids
+                    .iter()
+                    .map(|id| format!("'{}'", id.replace('\'', "''")))
+                    .collect();
+                format!("workspace IN ({})", escaped.join(", "))
+            }
+            WorkspaceFilter::All => "1=1".to_string(),
+        }
+    }
+}
+
+// =============================================================================
+// WorkspaceContext
+// =============================================================================
+
+/// Runtime context for the active workspace.
+///
+/// Created from a Session, flows through the Agent Loop to all memory
+/// operations.  Carries the workspace identifier and namespace scope so
+/// that every store call is automatically scoped.
+#[derive(Debug, Clone)]
+pub struct WorkspaceContext {
+    /// Active workspace identifier.
+    pub workspace_id: String,
+    /// Namespace scope for access control.
+    pub namespace: NamespaceScope,
+}
+
+impl WorkspaceContext {
+    /// Create a new workspace context.
+    pub fn new(workspace_id: impl Into<String>, namespace: NamespaceScope) -> Self {
+        Self {
+            workspace_id: workspace_id.into(),
+            namespace,
+        }
+    }
+
+    /// Convenience constructor for the default owner context.
+    ///
+    /// Uses `DEFAULT_WORKSPACE` ("default") and `NamespaceScope::Owner`.
+    pub fn default_owner() -> Self {
+        Self {
+            workspace_id: DEFAULT_WORKSPACE.to_string(),
+            namespace: NamespaceScope::Owner,
+        }
+    }
+
+    /// Build a `SearchFilter` pre-populated with this context's workspace
+    /// and namespace, restricted to valid facts only.
+    pub fn to_search_filter(&self) -> SearchFilter {
+        SearchFilter::new()
+            .with_namespace(self.namespace.clone())
+            .with_workspace(crate::memory::workspace::WorkspaceFilter::Single(
+                self.workspace_id.clone(),
+            ))
+            .with_valid_only()
+    }
+
+    /// Return a reference to the workspace identifier.
+    pub fn workspace_id(&self) -> &str {
+        &self.workspace_id
+    }
+}
 
 // =============================================================================
 // Workspace
