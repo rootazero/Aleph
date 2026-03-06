@@ -19,13 +19,13 @@
 //! let manager = WorkspaceManager::new(config)?;
 //!
 //! // Create a workspace from a profile
-//! let ws = manager.create("project-x", "coding").await?;
+//! let ws = manager.create("project-x", "coding", None).await?;
 //!
-//! // Switch user's active workspace
-//! manager.set_active("user-123", "project-x").await?;
+//! // Set active agent for a channel+peer
+//! manager.set_active_agent("telegram", "user-123", "project-x")?;
 //!
-//! // Get current workspace for user
-//! let active = manager.get_active("user-123").await?;
+//! // Get active agent for a channel+peer
+//! let agent_id = manager.get_active_agent("telegram", "user-123")?;
 //! ```
 
 use chrono::{DateTime, Utc};
@@ -311,21 +311,6 @@ impl CacheState {
 }
 
 // =============================================================================
-// UserActiveWorkspace
-// =============================================================================
-
-/// Tracks which workspace a user is currently in
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserActiveWorkspace {
-    /// User identifier
-    pub user_id: String,
-    /// Currently active workspace ID
-    pub workspace_id: String,
-    /// When this was last updated
-    pub updated_at: DateTime<Utc>,
-}
-
-// =============================================================================
 // ActiveWorkspace
 // =============================================================================
 
@@ -350,28 +335,26 @@ pub struct ActiveWorkspace {
 }
 
 impl ActiveWorkspace {
-    /// Resolve the active workspace for a user from the WorkspaceManager.
+    /// Resolve the active workspace for an agent from the WorkspaceManager.
     ///
-    /// Looks up the user's active workspace, resolves its profile binding,
-    /// and builds a `WorkspaceFilter::Single` for memory scoping.
+    /// Since Agent↔Workspace is 1:1, the agent_id is used directly as workspace_id.
+    /// Resolves the workspace's profile binding and builds a memory filter.
     ///
-    /// Falls back to the "global" workspace with a default profile if:
-    /// - No active workspace is set for the user
-    /// - The workspace's profile cannot be resolved
+    /// Falls back to a default global workspace if the workspace is not found.
     pub async fn from_manager(
         manager: &WorkspaceManager,
-        user_id: &str,
+        agent_id: &str,
     ) -> Self {
-        // Get the active workspace for this user (defaults to "global" internally)
         let workspace = manager
-            .get_active(user_id)
+            .get(agent_id)
             .await
-            .unwrap_or_else(|_| {
-                // If get_active fails entirely, construct a minimal global workspace
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| {
+                debug!("Workspace '{}' not found, falling back to global", agent_id);
                 Workspace::new("global", "default")
             });
 
-        // Resolve the profile from the workspace's profile binding
         let profile = manager
             .get_profile(&workspace.profile)
             .unwrap_or_else(|| {
@@ -528,11 +511,12 @@ impl WorkspaceManager {
                 allowed_tools TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS user_active_workspace (
-                user_id TEXT PRIMARY KEY,
-                workspace_id TEXT NOT NULL,
-                updated_at INTEGER NOT NULL,
-                FOREIGN KEY (workspace_id) REFERENCES workspaces(id)
+            CREATE TABLE IF NOT EXISTS channel_active_agent (
+                channel TEXT NOT NULL,
+                peer_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                updated_at INTEGER,
+                PRIMARY KEY (channel, peer_id)
             );
 
             CREATE INDEX IF NOT EXISTS idx_workspaces_profile ON workspaces(profile);
@@ -834,9 +818,9 @@ impl WorkspaceManager {
             WorkspaceError::Database(format!("Lock error: {}", e))
         })?;
 
-        // First remove any user active workspace references
+        // Remove any channel_active_agent references pointing to this workspace (agent_id = workspace_id in 1:1 model)
         conn.execute(
-            "UPDATE user_active_workspace SET workspace_id = 'global' WHERE workspace_id = ?",
+            "DELETE FROM channel_active_agent WHERE agent_id = ?",
             params![id],
         )
         .ok();
@@ -853,72 +837,34 @@ impl WorkspaceManager {
     }
 
     // =========================================================================
-    // User Active Workspace
+    // Channel Active Agent
     // =========================================================================
 
-    /// Set the active workspace for a user
-    pub async fn set_active(&self, user_id: &str, workspace_id: &str) -> Result<(), WorkspaceError> {
-        // Verify workspace exists
-        if self.get(workspace_id).await?.is_none() {
-            return Err(WorkspaceError::NotFound(workspace_id.to_string()));
-        }
-
-        let conn = self.conn.lock().map_err(|e| {
-            WorkspaceError::Database(format!("Lock error: {}", e))
-        })?;
-
+    /// Set the active agent for a channel+peer combination
+    pub fn set_active_agent(&self, channel: &str, peer_id: &str, agent_id: &str) -> Result<(), WorkspaceError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Utc::now().timestamp();
         conn.execute(
-            "INSERT OR REPLACE INTO user_active_workspace (user_id, workspace_id, updated_at)
-             VALUES (?, ?, ?)",
-            params![user_id, workspace_id, Utc::now().timestamp()],
-        )
-        .map_err(|e| WorkspaceError::Database(e.to_string()))?;
-
-        // Touch the workspace
-        conn.execute(
-            "UPDATE workspaces SET last_active_at = ? WHERE id = ?",
-            params![Utc::now().timestamp(), workspace_id],
-        )
-        .ok();
-
-        debug!("Set active workspace for user '{}' to '{}'", user_id, workspace_id);
-
+            "INSERT INTO channel_active_agent (channel, peer_id, agent_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(channel, peer_id) DO UPDATE SET agent_id = ?3, updated_at = ?4",
+            params![channel, peer_id, agent_id, now],
+        ).map_err(|e| WorkspaceError::Database(e.to_string()))?;
         Ok(())
     }
 
-    /// Get the active workspace for a user
-    pub async fn get_active(&self, user_id: &str) -> Result<Workspace, WorkspaceError> {
-        let workspace_id = {
-            let conn = self.conn.lock().map_err(|e| {
-                WorkspaceError::Database(format!("Lock error: {}", e))
-            })?;
-
-            conn.query_row(
-                "SELECT workspace_id FROM user_active_workspace WHERE user_id = ?",
-                params![user_id],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap_or_else(|_| "global".to_string())
-        };
-
-        self.get(&workspace_id)
-            .await?
-            .ok_or(WorkspaceError::NotFound(workspace_id))
-    }
-
-    /// Get the active workspace ID for a user (lightweight, no full workspace fetch)
-    pub async fn get_active_id(&self, user_id: &str) -> String {
-        let conn = match self.conn.lock() {
-            Ok(c) => c,
-            Err(_) => return "global".to_string(),
-        };
-
-        conn.query_row(
-            "SELECT workspace_id FROM user_active_workspace WHERE user_id = ?",
-            params![user_id],
-            |row| row.get::<_, String>(0),
-        )
-        .unwrap_or_else(|_| "global".to_string())
+    /// Get the active agent for a channel+peer combination
+    pub fn get_active_agent(&self, channel: &str, peer_id: &str) -> Result<Option<String>, WorkspaceError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT agent_id FROM channel_active_agent WHERE channel = ?1 AND peer_id = ?2"
+        ).map_err(|e| WorkspaceError::Database(e.to_string()))?;
+        let result = stmt.query_row(params![channel, peer_id], |row| row.get::<_, String>(0));
+        match result {
+            Ok(id) => Ok(Some(id)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(WorkspaceError::Database(e.to_string())),
+        }
     }
 
     // =========================================================================
@@ -1070,29 +1016,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_user_active_workspace() {
+    async fn test_channel_active_agent() {
         let temp = tempdir().unwrap();
         let config = test_config(temp.path().join("test.db"));
         let manager = WorkspaceManager::new(config).unwrap();
 
-        // Load profiles
-        manager.load_profiles(HashMap::from([
-            ("coding".to_string(), ProfileConfig::default()),
-        ]));
+        // Set active agent for a channel+peer
+        manager.set_active_agent("telegram", "user-123", "my-agent").unwrap();
 
-        // Create workspace
-        manager.create("my-project", "coding", None).await.unwrap();
+        // Get active agent
+        let agent = manager.get_active_agent("telegram", "user-123").unwrap();
+        assert_eq!(agent, Some("my-agent".to_string()));
 
-        // Set active
-        manager.set_active("user-123", "my-project").await.unwrap();
+        // Unknown peer returns None
+        let unknown = manager.get_active_agent("telegram", "unknown-user").unwrap();
+        assert_eq!(unknown, None);
 
-        // Get active
-        let active = manager.get_active("user-123").await.unwrap();
-        assert_eq!(active.id, "my-project");
+        // Update active agent (upsert)
+        manager.set_active_agent("telegram", "user-123", "new-agent").unwrap();
+        let updated = manager.get_active_agent("telegram", "user-123").unwrap();
+        assert_eq!(updated, Some("new-agent".to_string()));
 
-        // Unknown user defaults to global
-        let default = manager.get_active("unknown-user").await.unwrap();
-        assert_eq!(default.id, "global");
+        // Different channel returns None
+        let other_channel = manager.get_active_agent("discord", "user-123").unwrap();
+        assert_eq!(other_channel, None);
     }
 
     #[tokio::test]
@@ -1160,12 +1107,11 @@ mod tests {
             ("coding".to_string(), coding_profile.clone()),
         ]));
 
-        // Create a workspace bound to the "coding" profile
+        // Create a workspace bound to the "coding" profile (agent_id = workspace_id in 1:1 model)
         manager.create("project-x", "coding", Some("Test project")).await.unwrap();
-        manager.set_active("user-1", "project-x").await.unwrap();
 
-        // Resolve active workspace — should get "project-x" with "coding" profile
-        let active = ActiveWorkspace::from_manager(&manager, "user-1").await;
+        // Resolve active workspace by agent_id — should get "project-x" with "coding" profile
+        let active = ActiveWorkspace::from_manager(&manager, "project-x").await;
         assert_eq!(active.workspace_id, "project-x");
         assert_eq!(active.profile.model, Some("claude-sonnet".to_string()));
         assert_eq!(active.profile.temperature, Some(0.2));
@@ -1185,8 +1131,8 @@ mod tests {
         // Load only default profile (no custom profiles)
         manager.load_profiles(HashMap::new());
 
-        // Unknown user with no active workspace → should fall back to "global"
-        let active = ActiveWorkspace::from_manager(&manager, "unknown-user").await;
+        // Non-existent agent_id → should fall back to "global"
+        let active = ActiveWorkspace::from_manager(&manager, "nonexistent-agent").await;
         assert_eq!(active.workspace_id, "global");
 
         // Profile should be the default (since global workspace uses "default" profile)
