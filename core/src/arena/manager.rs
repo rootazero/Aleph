@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+use serde_json::{json, Value};
+
 use crate::domain::Entity;
 use crate::sync_primitives::{Arc, RwLock};
 
@@ -111,6 +113,40 @@ impl ArenaManager {
                 }
             })
             .collect()
+    }
+
+    /// Query arena state as a JSON snapshot (for RPC handlers).
+    ///
+    /// Returns `None` if the arena does not exist.
+    pub fn query_arena(&self, arena_id: &ArenaId) -> Option<Value> {
+        let shared = self.arenas.get(arena_id)?;
+        let arena = shared.read().unwrap_or_else(|e| e.into_inner());
+
+        let slot_summaries: Vec<Value> = arena
+            .slots()
+            .values()
+            .map(|slot| {
+                json!({
+                    "agent_id": slot.agent_id,
+                    "status": format!("{:?}", slot.status),
+                    "artifact_count": slot.artifacts.len(),
+                    "updated_at": slot.updated_at.to_rfc3339(),
+                })
+            })
+            .collect();
+
+        let progress = arena.progress();
+
+        Some(json!({
+            "arena_id": arena.id().as_str(),
+            "goal": arena.manifest().goal,
+            "status": format!("{:?}", arena.status()),
+            "progress": {
+                "total_steps": progress.total_steps,
+                "completed_steps": progress.completed_steps,
+            },
+            "slots": slot_summaries,
+        }))
     }
 
     /// Settle an arena: drain shared facts, count artifacts, archive, and return a report.
