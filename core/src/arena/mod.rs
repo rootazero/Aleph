@@ -16,3 +16,6 @@ pub use handle::*;
 pub use manager::*;
 pub use storage::*;
 pub use types::*;
+
+#[cfg(test)]
+mod integration_tests;
