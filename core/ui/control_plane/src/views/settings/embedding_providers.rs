@@ -3,7 +3,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::api::{
     EmbeddingProvidersApi, EmbeddingProviderEntry, EmbeddingProviderConfig,
-    EmbeddingPresetEntry, EmbeddingTestResult,
+    EmbeddingPresetEntry,
 };
 use crate::context::DashboardState;
 
@@ -12,15 +12,15 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
     // State signals
-    let (providers, set_providers) = create_signal(Vec::<EmbeddingProviderEntry>::new());
-    let (presets, set_presets) = create_signal(Vec::<EmbeddingPresetEntry>::new());
-    let (is_loading, set_is_loading) = create_signal(true);
-    let (error_message, set_error_message) = create_signal(Option::<String>::None);
-    let (selected_provider_id, set_selected_provider_id) = create_signal(Option::<String>::None);
-    let (show_add_form, set_show_add_form) = create_signal(false);
+    let (providers, set_providers) = signal(Vec::<EmbeddingProviderEntry>::new());
+    let (presets, set_presets) = signal(Vec::<EmbeddingPresetEntry>::new());
+    let (is_loading, set_is_loading) = signal(true);
+    let (error_message, set_error_message) = signal(Option::<String>::None);
+    let (selected_provider_id, set_selected_provider_id) = signal(Option::<String>::None);
+    let (show_add_form, set_show_add_form) = signal(false);
 
     // Load providers and presets on mount
-    create_effect(move |_| {
+    Effect::new(move || {
         if state.is_connected.get() {
             spawn_local(async move {
                 set_is_loading.set(true);
@@ -91,43 +91,185 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                         } else {
                             view! {
                                 <div class="p-6 space-y-4">
-                                    // Provider List
-                                    <div class="space-y-3">
-                                        <h2 class="text-sm font-semibold text-text-secondary uppercase tracking-wider">
-                                            "Configured Providers"
+                                    // Preset Grid
+                                    <div>
+                                        <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+                                            "Embedding Providers"
                                         </h2>
-                                        {move || {
-                                            let provider_list = providers.get();
-                                            if provider_list.is_empty() {
-                                                view! {
-                                                    <div class="p-4 text-center text-text-tertiary text-sm border border-border rounded-lg">
-                                                        "No embedding providers configured"
-                                                    </div>
-                                                }.into_any()
-                                            } else {
-                                                view! {
-                                                    <div class="grid grid-cols-1 gap-3">
-                                                        {provider_list.into_iter().map(|p| {
-                                                            let pid = p.id.clone();
-                                                            let is_selected = selected_provider_id.get() == Some(pid.clone());
+                                        <div class="grid grid-cols-1 gap-2">
+                                            {move || {
+                                                let preset_list = presets.get();
+                                                let provider_list = providers.get();
+                                                preset_list.into_iter().map(|preset| {
+                                                    let preset_id = preset.id.clone();
+                                                    let preset_name = preset.name.clone();
+                                                    let preset_label = preset.preset.clone();
+                                                    let model = preset.model.clone();
+                                                    let dims = preset.dimensions;
+                                                    let first_char = preset_name.chars().next().unwrap_or('?').to_uppercase().to_string();
+
+                                                    // Check if this preset is configured
+                                                    let configured_provider = provider_list.iter().find(|p| p.preset == preset_label);
+                                                    let is_configured = configured_provider.is_some();
+                                                    let is_active = configured_provider.map_or(false, |p| p.is_active);
+                                                    let is_verified = configured_provider.map_or(false, |p| p.verified);
+                                                    let configured_id = configured_provider.map(|p| p.id.clone());
+
+                                                    let sel_id = configured_id.clone().unwrap_or(preset_id.clone());
+                                                    let sel_id_click = sel_id.clone();
+                                                    let sel_id_check = sel_id.clone();
+
+                                                    let icon_color = match preset_label.as_str() {
+                                                        "silicon_flow" => "#6C5CE7",
+                                                        "open_ai" => "#10A37F",
+                                                        "ollama" => "#1D1D1F",
+                                                        _ => "#808080",
+                                                    };
+
+                                                    view! {
+                                                        <button
+                                                            on:click=move |_| {
+                                                                set_selected_provider_id.set(Some(sel_id_click.clone()));
+                                                                set_show_add_form.set(false);
+                                                            }
+                                                            class=move || {
+                                                                let base = "text-left p-3 rounded-lg border transition-all";
+                                                                let is_sel = selected_provider_id.get().as_deref() == Some(&sel_id_check);
+                                                                if is_sel {
+                                                                    format!("{} bg-primary-subtle border-primary", base)
+                                                                } else if is_configured {
+                                                                    format!("{} bg-surface-raised border-border hover:border-primary/40", base)
+                                                                } else {
+                                                                    format!("{} bg-surface-sunken border-border hover:border-border-strong", base)
+                                                                }
+                                                            }
+                                                        >
+                                                            <div class="flex items-center gap-3">
+                                                                <div
+                                                                    class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold shrink-0"
+                                                                    style=format!("background-color: {}", icon_color)
+                                                                >
+                                                                    {first_char}
+                                                                </div>
+                                                                <div class="min-w-0">
+                                                                    <div class="flex items-center gap-2">
+                                                                        <span class="font-medium text-text-primary text-sm truncate">
+                                                                            {preset_name}
+                                                                        </span>
+                                                                        {if is_active {
+                                                                            view! {
+                                                                                <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
+                                                                                    "Default"
+                                                                                </span>
+                                                                            }.into_any()
+                                                                        } else if is_verified {
+                                                                            view! {
+                                                                                <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
+                                                                                    "Verified"
+                                                                                </span>
+                                                                            }.into_any()
+                                                                        } else {
+                                                                            view! { <span></span> }.into_any()
+                                                                        }}
+                                                                    </div>
+                                                                    <div class="text-xs text-text-tertiary truncate">
+                                                                        {format!("{} · {}d", model, dims)}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </button>
+                                                    }
+                                                }).collect_view()
+                                            }}
+                                        </div>
+                                    </div>
+
+                                    // Custom providers (not matching any preset)
+                                    {move || {
+                                        let provider_list = providers.get();
+                                        let preset_labels: Vec<String> = presets.get().iter().map(|p| p.preset.clone()).collect();
+                                        let custom_providers: Vec<_> = provider_list.into_iter()
+                                            .filter(|p| !preset_labels.contains(&p.preset))
+                                            .collect();
+                                        if custom_providers.is_empty() {
+                                            view! { <div></div> }.into_any()
+                                        } else {
+                                            view! {
+                                                <div class="pt-2">
+                                                    <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+                                                        "Custom Providers"
+                                                    </h2>
+                                                    <div class="grid grid-cols-1 gap-2">
+                                                        {custom_providers.into_iter().map(|cp| {
+                                                            let cp_id = cp.id.clone();
+                                                            let cp_name = cp.name.clone();
+                                                            let cp_model = cp.model.clone();
+                                                            let cp_dims = cp.dimensions;
+                                                            let cp_is_active = cp.is_active;
+                                                            let cp_verified = cp.verified;
+                                                            let first_char = cp_name.chars().next().unwrap_or('?').to_uppercase().to_string();
+                                                            let sel_id = cp_id.clone();
+                                                            let sel_id_check = cp_id.clone();
+
                                                             view! {
-                                                                <EmbeddingProviderCard
-                                                                    provider=p
-                                                                    is_selected=is_selected
-                                                                    on_click=move |_| {
-                                                                        set_selected_provider_id.set(Some(pid.clone()));
+                                                                <button
+                                                                    on:click=move |_| {
+                                                                        set_selected_provider_id.set(Some(sel_id.clone()));
                                                                         set_show_add_form.set(false);
                                                                     }
-                                                                />
+                                                                    class=move || {
+                                                                        let base = "text-left p-3 rounded-lg border transition-all";
+                                                                        let is_sel = selected_provider_id.get().as_deref() == Some(&sel_id_check);
+                                                                        if is_sel {
+                                                                            format!("{} bg-primary-subtle border-primary", base)
+                                                                        } else {
+                                                                            format!("{} bg-surface-raised border-border hover:border-primary/40", base)
+                                                                        }
+                                                                    }
+                                                                >
+                                                                    <div class="flex items-center gap-3">
+                                                                        <div
+                                                                            class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold shrink-0"
+                                                                            style="background-color: #808080"
+                                                                        >
+                                                                            {first_char}
+                                                                        </div>
+                                                                        <div class="min-w-0">
+                                                                            <div class="flex items-center gap-2">
+                                                                                <span class="font-medium text-text-primary text-sm truncate">
+                                                                                    {cp_name}
+                                                                                </span>
+                                                                                {if cp_is_active {
+                                                                                    view! {
+                                                                                        <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
+                                                                                            "Default"
+                                                                                        </span>
+                                                                                    }.into_any()
+                                                                                } else if cp_verified {
+                                                                                    view! {
+                                                                                        <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
+                                                                                            "Verified"
+                                                                                        </span>
+                                                                                    }.into_any()
+                                                                                } else {
+                                                                                    view! { <span></span> }.into_any()
+                                                                                }}
+                                                                            </div>
+                                                                            <div class="text-xs text-text-tertiary truncate">
+                                                                                {format!("{} · {}d", cp_model, cp_dims)}
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                </button>
                                                             }
                                                         }).collect_view()}
                                                     </div>
-                                                }.into_any()
-                                            }
-                                        }}
-                                    </div>
+                                                </div>
+                                            }.into_any()
+                                        }
+                                    }}
 
-                                    // Add Provider Button
+                                    // Add Custom Provider button
                                     <div class="pt-2">
                                         <button
                                             on:click=move |_| {
@@ -181,66 +323,6 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
 }
 
 // ============================================================================
-// Provider Card
-// ============================================================================
-
-#[component]
-fn EmbeddingProviderCard(
-    provider: EmbeddingProviderEntry,
-    is_selected: bool,
-    on_click: impl Fn(ev::MouseEvent) + 'static,
-) -> impl IntoView {
-    let is_active = provider.is_active;
-    let preset_label = provider.preset.clone();
-
-    view! {
-        <div
-            class=move || {
-                let base = "border rounded-lg p-4 hover:border-primary cursor-pointer transition-colors";
-                let selected = if is_selected { " ring-2 ring-primary/30 border-primary bg-primary-subtle" } else { " border-border" };
-                format!("{}{}", base, selected)
-            }
-            on:click=on_click
-        >
-            <div class="flex items-start justify-between mb-2">
-                <div>
-                    <h3 class="font-semibold text-text-primary">
-                        {provider.name.clone()}
-                    </h3>
-                    <span class="text-xs text-text-tertiary">{preset_label}</span>
-                </div>
-                <div class="flex gap-1">
-                    {if is_active {
-                        view! {
-                            <span class="px-2 py-1 text-xs font-medium bg-primary-subtle text-primary rounded">
-                                "Default"
-                            </span>
-                        }.into_any()
-                    } else {
-                        view! { <span></span> }.into_any()
-                    }}
-                    {if provider.verified {
-                        view! {
-                            <span class="px-2 py-1 text-xs font-medium bg-success-subtle text-success rounded">
-                                "Verified"
-                            </span>
-                        }.into_any()
-                    } else {
-                        view! { <span></span> }.into_any()
-                    }}
-                </div>
-            </div>
-
-            <div class="flex items-center gap-2 text-xs text-text-tertiary">
-                <span class="font-mono">{provider.model.clone()}</span>
-                <span>"\u{00B7}"</span>
-                <span>{format!("{}d", provider.dimensions)}</span>
-            </div>
-        </div>
-    }
-}
-
-// ============================================================================
 // Empty State
 // ============================================================================
 
@@ -285,13 +367,13 @@ fn ProviderDetailPanel(
     let dimensions = RwSignal::new(provider.dimensions);
 
     // Action states
-    let (deleting, set_deleting) = create_signal(false);
-    let (testing, set_testing) = create_signal(false);
-    let (saving, set_saving) = create_signal(false);
-    let (activating, set_activating) = create_signal(false);
-    let (action_error, set_action_error) = create_signal(Option::<String>::None);
-    let (test_result, set_test_result) = create_signal(Option::<(bool, String)>::None);
-    let (save_success, set_save_success) = create_signal(false);
+    let (deleting, set_deleting) = signal(false);
+    let (testing, set_testing) = signal(false);
+    let (saving, set_saving) = signal(false);
+    let (activating, set_activating) = signal(false);
+    let (action_error, set_action_error) = signal(Option::<String>::None);
+    let (test_result, set_test_result) = signal(Option::<(bool, String)>::None);
+    let (save_success, set_save_success) = signal(false);
 
     // Build config from current field values (captured clones, not provider directly)
     let build_config = {
@@ -604,9 +686,8 @@ fn ProviderDetailPanel(
                             Some(view! {
                                 <button
                                     on:click=handle_delete
-                                    disabled=move || deleting.get() || is_active
+                                    disabled=move || deleting.get()
                                     class="flex-1 px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50 transition-colors font-medium"
-                                    title=move || if is_active { "Cannot delete the active provider" } else { "" }
                                 >
                                     {move || if deleting.get() { "Deleting..." } else { "Delete" }}
                                 </button>
@@ -644,10 +725,10 @@ fn AddProviderPanel(
     let model_name = RwSignal::new(String::new());
     let dimensions = RwSignal::new(1024u32);
 
-    let (adding, set_adding) = create_signal(false);
-    let (testing, set_testing) = create_signal(false);
-    let (add_error, set_add_error) = create_signal(Option::<String>::None);
-    let (test_result, set_test_result) = create_signal(Option::<(bool, String)>::None);
+    let (adding, set_adding) = signal(false);
+    let (testing, set_testing) = signal(false);
+    let (add_error, set_add_error) = signal(Option::<String>::None);
+    let (test_result, set_test_result) = signal(Option::<(bool, String)>::None);
 
     // Build config from form
     let build_config = move || -> EmbeddingProviderConfig {

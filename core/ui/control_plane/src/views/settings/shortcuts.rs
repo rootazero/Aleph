@@ -96,7 +96,7 @@ fn SummonSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
     let save_error = RwSignal::new(Option::<String>::None);
     let save_success = RwSignal::new(false);
 
-    let save_config_fn = store_value(move || {
+    let save_config_fn = StoredValue::new(move || {
         saving.set(true);
         save_error.set(None);
         save_success.set(false);
@@ -187,7 +187,7 @@ fn CancelSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
     let save_error = RwSignal::new(Option::<String>::None);
     let save_success = RwSignal::new(false);
 
-    let save_config_fn = store_value(move || {
+    let save_config_fn = StoredValue::new(move || {
         saving.set(true);
         save_error.set(None);
         save_success.set(false);
@@ -282,7 +282,7 @@ fn CommandPromptSection(config: RwSignal<ShortcutsConfig>) -> impl IntoView {
     let save_error = RwSignal::new(Option::<String>::None);
     let save_success = RwSignal::new(false);
 
-    let save_config_fn = store_value(move || {
+    let save_config_fn = StoredValue::new(move || {
         saving.set(true);
         save_error.set(None);
         save_success.set(false);

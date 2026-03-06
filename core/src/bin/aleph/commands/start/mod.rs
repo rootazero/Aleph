@@ -278,6 +278,7 @@ async fn register_agent_handlers(
     router: Arc<AgentRouter>,
     full_config: &FullGatewayConfig,
     app_config: &alephcore::Config,
+    app_config_arc: Arc<tokio::sync::RwLock<alephcore::Config>>,
     memory_db: &alephcore::memory::store::MemoryBackend,
     daemon: bool,
 ) -> AgentHandlersResult {
@@ -474,13 +475,15 @@ async fn register_agent_handlers(
         let event_bus_clone = event_bus.clone();
         let router_clone = router.clone();
         let agent_registry_clone = agent_registry.clone();
+        let app_config_run = app_config_arc.clone();
         server.handlers_mut().register("agent.run", move |req| {
             let engine = engine_clone.clone();
             let event_bus = event_bus_clone.clone();
             let router = router_clone.clone();
             let agent_registry = agent_registry_clone.clone();
+            let cfg = app_config_run.clone();
             async move {
-                handle_run_with_engine(req, engine, event_bus, router, agent_registry).await
+                handle_run_with_engine(req, engine, event_bus, router, agent_registry, cfg).await
             }
         });
 
@@ -489,13 +492,15 @@ async fn register_agent_handlers(
         let event_bus_chat = event_bus.clone();
         let router_chat = router.clone();
         let agent_registry_chat = agent_registry.clone();
+        let app_config_chat = app_config_arc.clone();
         server.handlers_mut().register("chat.send", move |req| {
             let engine = engine_chat.clone();
             let event_bus = event_bus_chat.clone();
             let router = router_chat.clone();
             let agent_registry = agent_registry_chat.clone();
+            let cfg = app_config_chat.clone();
             async move {
-                handle_chat_send_with_engine(req, engine, event_bus, router, agent_registry).await
+                handle_chat_send_with_engine(req, engine, event_bus, router, agent_registry, cfg).await
             }
         });
 
@@ -1002,18 +1007,21 @@ async fn initialize_channels(
 /// Initialize InboundMessageRouter and start it.
 /// Connects the channel registry to the agent router for unified routing.
 /// When execution support is available, messages trigger real agent execution.
+/// When group chat support is available, `/groupchat` commands are intercepted.
 async fn initialize_inbound_router(
     channel_registry: Arc<ChannelRegistry>,
     router: Arc<AgentRouter>,
     execution_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>>,
     agent_registry: Option<Arc<AgentRegistry>>,
     pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore>,
+    group_chat_orch: alephcore::gateway::handlers::group_chat::SharedOrchestrator,
+    group_chat_executor: Option<Arc<GroupChatExecutor>>,
     daemon: bool,
 ) {
     let routing_config = RoutingConfig::default();
 
     // Use full execution support when available, otherwise basic routing
-    let inbound_router = match (execution_adapter, agent_registry) {
+    let mut inbound_router = match (execution_adapter, agent_registry) {
         (Some(ea), Some(ar)) => {
             if !daemon {
                 println!("  Inbound router: execution support enabled");
@@ -1039,6 +1047,14 @@ async fn initialize_inbound_router(
             .with_agent_router(router.clone())
         }
     };
+
+    // Wire group chat support if executor is available
+    if let Some(executor) = group_chat_executor {
+        inbound_router = inbound_router.with_group_chat(group_chat_orch, executor);
+        if !daemon {
+            println!("  Inbound router: group chat enabled (/groupchat commands)");
+        }
+    }
 
     // Default DM policy is Pairing — owner must approve each sender.
     // Channel-specific overrides can be registered here if needed.
@@ -1151,9 +1167,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &default_agent_id,
     ));
 
+    // Wrap app config in Arc<RwLock> early so agent handlers can read output_mode dynamically
+    let app_config = Arc::new(tokio::sync::RwLock::new(loaded_app_config));
+
     let agent_result = register_agent_handlers(
         &mut server, session_manager.clone(), event_bus.clone(),
-        router.clone(), &full_config, &loaded_app_config, &memory_db, args.daemon,
+        router.clone(), &full_config, &*app_config.read().await, app_config.clone(), &memory_db, args.daemon,
     ).await;
 
     register_poe_handlers(&mut server, event_bus.clone(), args.daemon).await;
@@ -1166,9 +1185,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     register_auth_handlers(&mut server, &auth_bundle.auth_ctx);
     register_guest_handlers(&mut server, &auth_bundle.invitation_manager, &auth_bundle.guest_session_manager, &event_bus);
     server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
-
-    // App config handler registration (reuse already-loaded config)
-    let app_config = Arc::new(tokio::sync::RwLock::new(loaded_app_config));
     let config_patcher = {
         let config_path = alephcore::Config::default_path();
         let backup = alephcore::ConfigBackup::new(
@@ -1270,7 +1286,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     // Initialize GroupChat Orchestrator + Executor
-    {
+    // (shared_orch and gc_executor are kept alive for both RPC handlers and InboundMessageRouter)
+    let (shared_orch, gc_executor) = {
         let app_cfg = app_config_for_channels.read().await;
         let gc_config = app_cfg.group_chat.clone();
         let persona_configs = app_cfg.personas.clone();
@@ -1281,7 +1298,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             Arc::new(tokio::sync::Mutex::new(orchestrator));
 
         // Create executor with default provider (if available)
-        let gc_executor = if can_create_provider_from_env() {
+        let gc_executor: Option<Arc<GroupChatExecutor>> = if can_create_provider_from_env() {
             create_provider_registry_from_env()
                 .ok()
                 .map(|reg| Arc::new(GroupChatExecutor::new(reg.default_provider())))
@@ -1289,13 +1306,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             None
         };
 
-        if let Some(executor) = gc_executor {
-            register_group_chat_handlers(&mut server, &shared_orch, &executor, args.daemon);
+        if let Some(ref executor) = gc_executor {
+            register_group_chat_handlers(&mut server, &shared_orch, executor, args.daemon);
         } else if !args.daemon {
             println!("Group Chat: Disabled (requires ANTHROPIC_API_KEY or OPENAI_API_KEY)");
             println!();
         }
-    }
+
+        (shared_orch, gc_executor)
+    };
 
     // Create channel pairing store (shared between InboundMessageRouter and RPC handlers)
     let channel_pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore> = {
@@ -1361,6 +1380,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         channel_registry, router,
         agent_result.execution_adapter, agent_result.agent_registry,
         channel_pairing_store,
+        shared_orch, gc_executor,
         args.daemon,
     ).await;
 

@@ -13,12 +13,12 @@ pub fn GenerationProvidersView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
     // State
-    let (providers, set_providers) = create_signal(Vec::<GenerationProviderEntry>::new());
-    let (selected_category, set_selected_category) = create_signal(GenerationType::Image);
-    let (selected_provider_id, set_selected_provider_id) = create_signal(Option::<String>::None);
-    let (show_add_form, set_show_add_form) = create_signal(false);
-    let (is_loading, set_is_loading) = create_signal(true);
-    let (error_message, set_error_message) = create_signal(Option::<String>::None);
+    let (providers, set_providers) = signal(Vec::<GenerationProviderEntry>::new());
+    let (selected_category, set_selected_category) = signal(GenerationType::Image);
+    let (selected_provider_id, set_selected_provider_id) = signal(Option::<String>::None);
+    let (show_add_form, set_show_add_form) = signal(false);
+    let (is_loading, set_is_loading) = signal(true);
+    let (error_message, set_error_message) = signal(Option::<String>::None);
 
     // Load providers on mount
     spawn_local(async move {
@@ -132,6 +132,95 @@ pub fn GenerationProvidersView() -> impl IntoView {
                                             }
                                         }).collect_view()}
                                     </div>
+
+                                    // Custom providers (not matching any preset in current category)
+                                    {move || {
+                                        let all_presets = PresetProviders::by_category(selected_category.get());
+                                        let preset_ids: Vec<String> = all_presets.iter().map(|p| p.id.clone()).collect();
+                                        let provider_list = providers.get();
+                                        let current_cat = selected_category.get();
+                                        let custom: Vec<_> = provider_list.into_iter()
+                                            .filter(|p| {
+                                                !preset_ids.contains(&p.name)
+                                                    && p.config.capabilities.contains(&current_cat)
+                                            })
+                                            .collect();
+                                        if custom.is_empty() {
+                                            view! { <div></div> }.into_any()
+                                        } else {
+                                            view! {
+                                                <div class="pt-2">
+                                                    <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+                                                        "Custom Providers"
+                                                    </h2>
+                                                    <div class="grid grid-cols-1 gap-3">
+                                                        {custom.into_iter().map(|cp| {
+                                                            let cp_name = cp.name.clone();
+                                                            let cp_name_click = cp_name.clone();
+                                                            let cp_name_check = cp_name.clone();
+                                                            let cp_model = cp.config.model.clone().unwrap_or_default();
+                                                            let cp_color = cp.config.color.clone();
+                                                            let is_default = !cp.is_default_for.is_empty();
+                                                            let verified = cp.config.verified;
+                                                            let first_char = cp_name.chars().next().unwrap_or('?').to_uppercase().to_string();
+
+                                                            view! {
+                                                                <button
+                                                                    on:click=move |_| {
+                                                                        set_selected_provider_id.set(Some(cp_name_click.clone()));
+                                                                        set_show_add_form.set(false);
+                                                                    }
+                                                                    class=move || {
+                                                                        let base = "text-left p-3 rounded-lg border transition-all";
+                                                                        let is_sel = selected_provider_id.get().as_deref() == Some(&cp_name_check);
+                                                                        if is_sel {
+                                                                            format!("{} bg-primary-subtle border-primary", base)
+                                                                        } else {
+                                                                            format!("{} bg-surface-raised border-border hover:border-primary/40", base)
+                                                                        }
+                                                                    }
+                                                                >
+                                                                    <div class="flex items-center gap-3">
+                                                                        <div
+                                                                            class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold shrink-0"
+                                                                            style=format!("background-color: {}", cp_color)
+                                                                        >
+                                                                            {first_char}
+                                                                        </div>
+                                                                        <div class="min-w-0">
+                                                                            <div class="flex items-center gap-2">
+                                                                                <span class="font-medium text-text-primary text-sm truncate">
+                                                                                    {cp_name}
+                                                                                </span>
+                                                                                {if is_default {
+                                                                                    view! {
+                                                                                        <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
+                                                                                            "Default"
+                                                                                        </span>
+                                                                                    }.into_any()
+                                                                                } else if verified {
+                                                                                    view! {
+                                                                                        <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
+                                                                                            "Active"
+                                                                                        </span>
+                                                                                    }.into_any()
+                                                                                } else {
+                                                                                    view! { <span></span> }.into_any()
+                                                                                }}
+                                                                            </div>
+                                                                            <div class="text-xs text-text-tertiary truncate">
+                                                                                {cp_model}
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                </button>
+                                                            }
+                                                        }).collect_view()}
+                                                    </div>
+                                                </div>
+                                            }.into_any()
+                                        }
+                                    }}
 
                                     // Add Custom Provider button
                                     <div class="pt-2">
@@ -309,7 +398,7 @@ fn ProviderDetailPanel(
     providers: ReadSignal<Vec<GenerationProviderEntry>>,
     on_reload: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
-    let state = expect_context::<DashboardState>();
+    let _state = expect_context::<DashboardState>();
 
     view! {
         <div class="h-full">
@@ -382,11 +471,11 @@ fn ProviderDetailView(
     let has_defaults = !is_default_for.is_empty();
 
     // State for actions
-    let (deleting, set_deleting) = create_signal(false);
-    let (testing, set_testing) = create_signal(false);
-    let (setting_default, set_setting_default) = create_signal(false);
-    let (action_error, set_action_error) = create_signal(Option::<String>::None);
-    let (test_result, set_test_result) = create_signal(Option::<(bool, String)>::None);
+    let (deleting, set_deleting) = signal(false);
+    let (testing, set_testing) = signal(false);
+    let (setting_default, set_setting_default) = signal(false);
+    let (action_error, set_action_error) = signal(Option::<String>::None);
+    let (test_result, set_test_result) = signal(Option::<(bool, String)>::None);
 
     // Delete handler
     let handle_delete = move |_| {
@@ -634,10 +723,10 @@ fn AddCustomProviderPanel(
     let cap_audio = RwSignal::new(false);
     let cap_speech = RwSignal::new(false);
 
-    let (adding, set_adding) = create_signal(false);
-    let (testing, set_testing) = create_signal(false);
-    let (add_error, set_add_error) = create_signal(Option::<String>::None);
-    let (test_result, set_test_result) = create_signal(Option::<(bool, String)>::None);
+    let (adding, set_adding) = signal(false);
+    let (testing, set_testing) = signal(false);
+    let (add_error, set_add_error) = signal(Option::<String>::None);
+    let (test_result, set_test_result) = signal(Option::<(bool, String)>::None);
 
     let build_capabilities = move || {
         let mut caps = Vec::new();

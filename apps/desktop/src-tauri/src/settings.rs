@@ -282,7 +282,7 @@ impl Default for BehaviorSettings {
     fn default() -> Self {
         Self {
             output_mode: "replace".to_string(),
-            typing_speed: 50,
+            typing_speed: 200,
             auto_dismiss_delay: 3,
             show_notifications: true,
             pii_masking: false,

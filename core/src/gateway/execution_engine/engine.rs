@@ -977,7 +977,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         summary.clone()
                     };
                     let entry = format!("\n## Session {}\n\n{}\n", time, truncated_summary);
-                    let mut loader = self.workspace_loader.lock().unwrap_or_else(|e| e.into_inner());
+                    let loader = self.workspace_loader.lock().unwrap_or_else(|e| e.into_inner());
                     if let Err(e) = loader.append_daily_memory(agent_workspace_dir, &date, &entry) {
                         tracing::warn!(error = %e, "Failed to append daily memory");
                     }
@@ -1033,10 +1033,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
         compressor: Arc<NoOpCompressor>,
         loop_config: LoopConfig,
-        context: RequestContext,
+        _context: RequestContext,
         allowed_tools: Vec<UnifiedTool>,
         identity: IdentityContext,
-        initial_history: Option<String>,
+        _initial_history: Option<String>,
         _callback: Arc<EventEmittingCallback<E>>,
     ) -> Result<String, ExecutionError> {
         use crate::dispatcher::planner::{LlmTaskPlanner, TaskPlanner};

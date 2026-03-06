@@ -31,7 +31,7 @@ pub use message_ops::SignalMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId,
     OutboundMessage, SendResult,
 };
 use async_trait::async_trait;

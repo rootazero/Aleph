@@ -4,7 +4,7 @@
 //! to render group chat messages in their native format and parse channel-specific
 //! commands into group chat requests.
 
-use super::protocol::{GroupChatMessage, GroupChatRequest, Persona, RenderedContent};
+use super::protocol::{GroupChatMessage, GroupChatRequest, Persona, PersonaSource, RenderedContent};
 
 /// Renders group chat messages in channel-specific format.
 ///
@@ -41,6 +41,177 @@ pub trait GroupChatCommandParser: Send + Sync {
     ///
     /// Returns `None` if the message is not a recognized group chat command.
     fn parse_group_chat_command(&self, raw_message: &str) -> Option<GroupChatRequest>;
+}
+
+// =============================================================================
+// DefaultGroupChatCommandParser
+// =============================================================================
+
+/// Default channel-agnostic parser for `/groupchat` commands.
+///
+/// Supported commands:
+///
+/// - `/groupchat start [--preset id1,id2] [--role "Name: prompt"] [--topic "..."] message`
+/// - `/groupchat end [session_id]`
+///
+/// This parser is used by the inbound router for any channel that doesn't
+/// provide its own parser.
+pub struct DefaultGroupChatCommandParser;
+
+impl GroupChatCommandParser for DefaultGroupChatCommandParser {
+    fn parse_group_chat_command(&self, raw_message: &str) -> Option<GroupChatRequest> {
+        let trimmed = raw_message.trim();
+        if !trimmed.starts_with("/groupchat") {
+            return None;
+        }
+
+        let after = trimmed.strip_prefix("/groupchat")?.trim();
+
+        if after.starts_with("start") {
+            let args = after.strip_prefix("start")?.trim();
+            parse_start_command(args)
+        } else if after.starts_with("end") {
+            let session_id = after.strip_prefix("end")?.trim().to_string();
+            Some(GroupChatRequest::End { session_id })
+        } else {
+            None
+        }
+    }
+}
+
+/// Parses the argument string for a `/groupchat start` command.
+///
+/// Supports:
+/// - `--preset id1,id2` -- comma-separated preset persona IDs
+/// - `--role "Name: prompt"` -- inline persona definition (repeatable)
+/// - `--topic "text"` or `--topic text` -- discussion topic
+/// - Remaining text after flags becomes the initial message
+fn parse_start_command(args: &str) -> Option<GroupChatRequest> {
+    let tokens = tokenize(args);
+    let mut personas: Vec<PersonaSource> = Vec::new();
+    let mut topic = String::new();
+    let mut message_parts: Vec<String> = Vec::new();
+    let mut i = 0;
+
+    while i < tokens.len() {
+        match tokens[i].as_str() {
+            "--preset" => {
+                i += 1;
+                if i < tokens.len() {
+                    for id in tokens[i].split(',') {
+                        let id = id.trim();
+                        if !id.is_empty() {
+                            personas.push(PersonaSource::Preset(id.to_string()));
+                        }
+                    }
+                }
+            }
+            "--role" => {
+                i += 1;
+                if i < tokens.len() {
+                    let role_spec = &tokens[i];
+                    if let Some(persona) = parse_inline_role(role_spec) {
+                        personas.push(PersonaSource::Inline(persona));
+                    }
+                }
+            }
+            "--topic" => {
+                i += 1;
+                if i < tokens.len() {
+                    topic = tokens[i].clone();
+                }
+            }
+            _ => {
+                message_parts.push(tokens[i].clone());
+            }
+        }
+        i += 1;
+    }
+
+    let initial_message = message_parts.join(" ");
+
+    Some(GroupChatRequest::Start {
+        personas,
+        topic,
+        initial_message,
+    })
+}
+
+/// Parses an inline role specification in the format `"Name: prompt"`.
+///
+/// The persona ID is derived from the name by lowercasing and replacing
+/// spaces and hyphens with underscores.
+fn parse_inline_role(spec: &str) -> Option<Persona> {
+    let (name, prompt) = spec.split_once(':')?;
+    let name = name.trim();
+    let prompt = prompt.trim();
+
+    if name.is_empty() {
+        return None;
+    }
+
+    let id = name
+        .to_lowercase()
+        .replace(' ', "_")
+        .replace('-', "_");
+
+    Some(Persona {
+        id,
+        name: name.to_string(),
+        system_prompt: prompt.to_string(),
+        provider: None,
+        model: None,
+        thinking_level: None,
+    })
+}
+
+/// Tokenizes a command string, respecting quoted segments.
+///
+/// Quoted segments (both `"..."` and `'...'`) are returned as single tokens
+/// with the quotes stripped. Unquoted words are split on whitespace.
+fn tokenize(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut chars = input.chars().peekable();
+    let mut current = String::new();
+
+    while let Some(&ch) = chars.peek() {
+        match ch {
+            '"' | '\'' => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+
+                let quote = ch;
+                chars.next();
+                let mut quoted = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c == quote {
+                        chars.next();
+                        break;
+                    }
+                    quoted.push(c);
+                    chars.next();
+                }
+                tokens.push(quoted);
+            }
+            c if c.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+                chars.next();
+            }
+            _ => {
+                current.push(ch);
+                chars.next();
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
 }
 
 // =============================================================================

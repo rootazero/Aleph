@@ -335,9 +335,10 @@ impl Channel for WhatsAppChannel {
         tracing::info!("Starting WhatsApp channel...");
 
         // 2. Start the bridge process
-        self.bridge_manager.start().await.map_err(|e| {
-            ChannelError::Internal(format!("Failed to start bridge: {}", e))
-        })?;
+        if let Err(e) = self.bridge_manager.start().await {
+            *self.pairing_state.write().await = PairingState::Idle;
+            return Err(ChannelError::Internal(format!("Failed to start bridge: {}", e)));
+        }
 
         // 3. Create event channel and RPC client
         let (event_tx, event_rx) = mpsc::channel(64);
@@ -345,17 +346,22 @@ impl Channel for WhatsAppChannel {
         let rpc_client = BridgeRpcClient::new(&socket_path, event_tx);
 
         // 4. Connect RPC client with retries
-        rpc_client.connect(5, 500).await.map_err(|e| {
-            ChannelError::Internal(format!("Failed to connect to bridge RPC: {}", e))
-        })?;
+        if let Err(e) = rpc_client.connect(5, 500).await {
+            let _ = self.bridge_manager.stop().await;
+            *self.pairing_state.write().await = PairingState::Idle;
+            return Err(ChannelError::Internal(format!("Failed to connect to bridge RPC: {}", e)));
+        }
 
         // 5. Tell the bridge to connect to WhatsApp
-        let _: serde_json::Value = rpc_client
+        let connect_result: Result<serde_json::Value, _> = rpc_client
             .call("bridge.connect", None)
-            .await
-            .map_err(|e| {
-                ChannelError::Internal(format!("bridge.connect RPC failed: {}", e))
-            })?;
+            .await;
+        if let Err(e) = connect_result {
+            rpc_client.disconnect().await;
+            let _ = self.bridge_manager.stop().await;
+            *self.pairing_state.write().await = PairingState::Idle;
+            return Err(ChannelError::Internal(format!("bridge.connect RPC failed: {}", e)));
+        }
 
         // 6. Spawn event loop
         let (shutdown_tx, shutdown_rx) = oneshot::channel();

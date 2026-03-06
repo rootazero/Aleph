@@ -96,3 +96,7 @@ lru = "0.12"
 mdns-sd = "0.11"
 
 # UniFFI removed - using Gateway WebSocket architecture
+
+# Release profile
+[profile.release]
+strip = true

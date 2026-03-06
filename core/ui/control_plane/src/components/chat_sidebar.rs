@@ -11,6 +11,7 @@ use crate::views::chat::state::ChatState;
 use crate::api::chat::ChatApi;
 
 /// A session entry returned by the backend.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionEntry {

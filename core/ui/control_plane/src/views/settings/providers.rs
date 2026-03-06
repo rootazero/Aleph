@@ -179,6 +179,17 @@ fn find_preset(name: &str) -> Option<&'static ProviderPreset> {
     PRESETS.iter().chain(OAUTH_PRESETS.iter()).find(|p| p.name == name)
 }
 
+/// Map OAuth preset name to the canonical name used in config (e.g. "codex" → "chatgpt").
+fn canonical_oauth_name(name: &str) -> &'static str {
+    match name {
+        "codex" => "chatgpt",
+        other => {
+            // Return a static str — for known presets only
+            OAUTH_PRESETS.iter().find(|p| p.name == other).map(|p| p.name).unwrap_or("chatgpt")
+        }
+    }
+}
+
 // ============================================================================
 // Main View
 // ============================================================================
@@ -234,11 +245,21 @@ pub fn ProvidersView() -> impl IntoView {
                     // Subscription login section (OAuth providers)
                     <SubscriptionLoginSection providers=providers selected=selected />
 
-                    // Preset grid
+                    // Preset grid (badges shown inline for configured providers)
                     <PresetGrid providers=providers selected=selected />
 
-                    // Configured providers list
-                    <ConfiguredProviders providers=providers selected=selected loading=loading />
+                    // Custom providers (not matching any preset)
+                    <CustomProvidersList providers=providers selected=selected />
+
+                    // Add Custom Provider button
+                    <div class="pt-2">
+                        <button
+                            on:click=move |_| selected.set(Some("__new__".to_string()))
+                            class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors"
+                        >
+                            "+ Add Custom Provider"
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -263,25 +284,60 @@ fn SubscriptionLoginSection(
     providers: RwSignal<Vec<ProviderInfo>>,
     selected: RwSignal<Option<String>>,
 ) -> impl IntoView {
+    // Track OAuth connection status for each OAuth preset
+    let oauth_statuses: Vec<(&'static str, RwSignal<Option<bool>>)> = OAUTH_PRESETS.iter()
+        .map(|preset| (preset.name, RwSignal::new(None::<bool>)))
+        .collect();
+    let oauth_statuses = std::rc::Rc::new(oauth_statuses);
+
+    // Query OAuth status on mount and when providers change
+    {
+        let oauth_statuses = oauth_statuses.clone();
+        Effect::new(move || {
+            let _ = providers.get(); // track providers changes
+            let state = expect_context::<DashboardState>();
+            for (name, status_signal) in oauth_statuses.iter() {
+                let name = name.to_string();
+                let status_signal = *status_signal;
+                spawn_local(async move {
+                    match ProvidersApi::oauth_status(&state, name).await {
+                        Ok(status) => status_signal.set(Some(status.connected)),
+                        Err(_) => status_signal.set(Some(false)),
+                    }
+                });
+            }
+        });
+    }
+
+    let oauth_statuses_view = oauth_statuses.clone();
     view! {
         <div>
             <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
                 "Subscription Login"
             </h2>
             <div class="space-y-2">
-                {OAUTH_PRESETS.iter().map(|preset| {
+                {OAUTH_PRESETS.iter().enumerate().map(|(idx, preset)| {
                     let name = preset.name;
                     let description = preset.description;
                     let icon_color = preset.icon_color;
                     let first_char = preset.name.chars().next().unwrap_or('?').to_uppercase().to_string();
+                    let oauth_connected = oauth_statuses_view[idx].1;
+
+                    // OAuth providers may be stored under canonical name (e.g. "chatgpt" for "codex")
+                    let canonical = canonical_oauth_name(name);
 
                     let is_configured = move || {
-                        providers.get().iter().any(|p| p.name == name)
+                        providers.get().iter().any(|p| p.name == name || p.name == canonical)
                     };
 
                     let on_click = move |_| {
                         if is_configured() {
-                            selected.set(Some(name.to_string()));
+                            // Select by the name that actually exists in providers list
+                            let actual_name = providers.get().iter()
+                                .find(|p| p.name == name || p.name == canonical)
+                                .map(|p| p.name.clone())
+                                .unwrap_or_else(|| name.to_string());
+                            selected.set(Some(actual_name));
                         } else {
                             selected.set(Some(format!("__preset__{}", name)));
                         }
@@ -294,10 +350,12 @@ fn SubscriptionLoginSection(
                                 let base = "w-full text-left p-4 rounded-xl border-2 transition-all";
                                 let sel = selected.get();
                                 let is_sel = sel.as_deref() == Some(name)
+                                    || sel.as_deref() == Some(canonical)
                                     || sel.as_deref() == Some(&format!("__preset__{}", name));
+                                let connected = oauth_connected.get().unwrap_or(false);
                                 if is_sel {
                                     format!("{} bg-primary-subtle border-primary", base)
-                                } else if is_configured() {
+                                } else if connected {
                                     format!("{} bg-surface-raised border-success/30 hover:border-primary/40", base)
                                 } else {
                                     format!("{} bg-surface-raised border-border hover:border-primary/40", base)
@@ -317,28 +375,22 @@ fn SubscriptionLoginSection(
                                             {name}
                                         </span>
                                         {move || {
+                                            let connected = oauth_connected.get().unwrap_or(false);
                                             let list = providers.get();
-                                            let provider = list.iter().find(|p| p.name == name);
-                                            if let Some(p) = provider {
-                                                if p.is_default {
-                                                    view! {
-                                                        <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                            "Default"
-                                                        </span>
-                                                    }.into_any()
-                                                } else if p.verified {
-                                                    view! {
-                                                        <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                            "Connected"
-                                                        </span>
-                                                    }.into_any()
-                                                } else {
-                                                    view! {
-                                                        <span class="px-1.5 py-0.5 bg-surface-sunken text-text-tertiary text-xs rounded shrink-0">
-                                                            "Not connected"
-                                                        </span>
-                                                    }.into_any()
-                                                }
+                                            let provider = list.iter().find(|p| p.name == name || p.name == canonical);
+                                            let is_default = provider.map_or(false, |p| p.is_default);
+                                            if is_default {
+                                                view! {
+                                                    <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
+                                                        "Default"
+                                                    </span>
+                                                }.into_any()
+                                            } else if connected {
+                                                view! {
+                                                    <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
+                                                        "Connected"
+                                                    </span>
+                                                }.into_any()
                                             } else {
                                                 view! {
                                                     <span class="px-1.5 py-0.5 bg-surface-sunken text-text-tertiary text-xs rounded shrink-0">
@@ -463,76 +515,72 @@ fn PresetGrid(
 }
 
 // ============================================================================
-// Configured Providers List
+// Custom Providers List (non-preset providers)
 // ============================================================================
 
 #[component]
-fn ConfiguredProviders(
+fn CustomProvidersList(
     providers: RwSignal<Vec<ProviderInfo>>,
     selected: RwSignal<Option<String>>,
-    loading: RwSignal<bool>,
 ) -> impl IntoView {
-    let on_add_custom = move |_| {
-        selected.set(Some("__new__".to_string()));
-    };
+    let mut preset_names: Vec<&str> = PRESETS.iter().chain(OAUTH_PRESETS.iter()).map(|p| p.name).collect();
+    // Also exclude canonical OAuth names (e.g. "chatgpt" for "codex")
+    for preset in OAUTH_PRESETS.iter() {
+        let canonical = canonical_oauth_name(preset.name);
+        if !preset_names.contains(&canonical) {
+            preset_names.push(canonical);
+        }
+    }
 
     view! {
-        <div>
-            <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                "Configured Providers"
-            </h2>
+        {move || {
+            let list = providers.get();
+            let custom: Vec<_> = list.into_iter()
+                .filter(|p| !preset_names.contains(&p.name.as_str()))
+                .collect();
+            if custom.is_empty() {
+                view! { <div></div> }.into_any()
+            } else {
+                view! {
+                    <div>
+                        <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+                            "Custom Providers"
+                        </h2>
+                        <div class="grid grid-cols-1 gap-2">
+                            {custom.into_iter().map(|p| {
+                                let name = p.name.clone();
+                                let name_click = name.clone();
+                                let name_check = name.clone();
+                                let model = p.model.clone();
+                                let color = p.color.clone();
+                                let is_default = p.is_default;
+                                let verified = p.verified;
+                                let first_char = name.chars().next().unwrap_or('?').to_uppercase().to_string();
 
-            {move || {
-                if loading.get() {
-                    view! {
-                        <div class="text-center py-6 text-text-tertiary text-sm">"Loading..."</div>
-                    }.into_any()
-                } else {
-                    let list = providers.get();
-                    if list.is_empty() {
-                        view! {
-                            <div class="text-center py-6 text-text-tertiary text-sm border border-dashed border-border rounded-lg">
-                                "No providers configured yet. Click a preset above to get started."
-                            </div>
-                        }.into_any()
-                    } else {
-                        view! {
-                            <div class="space-y-2">
-                                {move || providers.get().into_iter().map(|provider| {
-                                    let name = provider.name.clone();
-                                    let name_sel = name.clone();
-                                    let name_click = name.clone();
-                                    let model = provider.model.clone();
-                                    let verified = provider.verified;
-                                    let is_default = provider.is_default;
-                                    let protocol = provider.provider_type.clone().unwrap_or_default();
-
-                                    let preset = find_preset(&name);
-                                    let icon_color = preset.map(|p| p.icon_color).unwrap_or("#808080");
-                                    let first_char = name.chars().next().unwrap_or('?').to_uppercase().to_string();
-
-                                    view! {
-                                        <button
-                                            on:click=move |_| selected.set(Some(name_click.clone()))
-                                            class=move || {
-                                                let base = "w-full text-left p-3 rounded-lg border transition-all flex items-center gap-3";
-                                                if selected.get().as_deref() == Some(&name_sel) {
-                                                    format!("{} bg-primary-subtle border-primary", base)
-                                                } else {
-                                                    format!("{} bg-surface-raised border-border hover:border-primary/40", base)
-                                                }
+                                view! {
+                                    <button
+                                        on:click=move |_| selected.set(Some(name_click.clone()))
+                                        class=move || {
+                                            let base = "text-left p-3 rounded-lg border transition-all";
+                                            let is_sel = selected.get().as_deref() == Some(&name_check);
+                                            if is_sel {
+                                                format!("{} bg-primary-subtle border-primary", base)
+                                            } else {
+                                                format!("{} bg-surface-raised border-border hover:border-primary/40", base)
                                             }
-                                        >
+                                        }
+                                    >
+                                        <div class="flex items-center gap-3">
                                             <div
                                                 class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold shrink-0"
-                                                style=format!("background-color: {}", icon_color)
+                                                style=format!("background-color: {}", color)
                                             >
-                                                {first_char.clone()}
+                                                {first_char}
                                             </div>
-                                            <div class="flex-1 min-w-0">
+                                            <div class="min-w-0">
                                                 <div class="flex items-center gap-2">
                                                     <span class="font-medium text-text-primary text-sm truncate">
-                                                        {name.clone()}
+                                                        {name}
                                                     </span>
                                                     {if is_default {
                                                         view! {
@@ -549,41 +597,20 @@ fn ConfiguredProviders(
                                                     } else {
                                                         view! { <span></span> }.into_any()
                                                     }}
-                                                    {if !protocol.is_empty() {
-                                                        view! {
-                                                            <span class="px-1.5 py-0.5 bg-surface-sunken text-text-tertiary text-xs rounded shrink-0">
-                                                                {protocol}
-                                                            </span>
-                                                        }.into_any()
-                                                    } else {
-                                                        view! { <span></span> }.into_any()
-                                                    }}
                                                 </div>
-                                                <div class="text-xs text-text-tertiary truncate">{model}</div>
+                                                <div class="text-xs text-text-tertiary truncate">
+                                                    {model}
+                                                </div>
                                             </div>
-                                            <div class=move || {
-                                                if verified { "w-2 h-2 rounded-full bg-success shrink-0" }
-                                                else { "w-2 h-2 rounded-full bg-text-tertiary shrink-0" }
-                                            }></div>
-                                        </button>
-                                    }
-                                }).collect_view()}
-                            </div>
-                        }.into_any()
-                    }
-                }
-            }}
-
-            // Add Custom Provider button
-            <div class="pt-2">
-                <button
-                    on:click=on_add_custom
-                    class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors"
-                >
-                    "+ Add Custom Provider"
-                </button>
-            </div>
-        </div>
+                                        </div>
+                                    </button>
+                                }
+                            }).collect_view()}
+                        </div>
+                    </div>
+                }.into_any()
+            }
+        }}
     }
 }
 

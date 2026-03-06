@@ -208,6 +208,7 @@ Now, break down the following user request into tasks:
 "#;
 
 /// Get the planning system prompt, checking override first
+#[allow(dead_code)]
 pub fn get_planning_system_prompt(
     overrides: &crate::config::prompts_override::PromptsOverride,
 ) -> &str {

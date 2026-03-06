@@ -205,8 +205,8 @@ impl DashboardState {
                 let stream = connector.receive();
 
                 // Create channels
-                let (rpc_tx, mut rpc_rx) = mpsc::unbounded::<RpcRequest>();
-                let (disconnect_tx, mut disconnect_rx) = oneshot::channel::<()>();
+                let (rpc_tx, rpc_rx) = mpsc::unbounded::<RpcRequest>();
+                let (disconnect_tx, disconnect_rx) = oneshot::channel::<()>();
 
                 // Store channels
                 self.rpc_tx.set_value(Some(rpc_tx));

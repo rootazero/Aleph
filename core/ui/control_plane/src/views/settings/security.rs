@@ -16,8 +16,8 @@ use crate::context::DashboardState;
 pub fn SecurityView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
-    let config = create_rw_signal(Option::<SecurityConfig>::None);
-    let devices = create_rw_signal(Vec::<DeviceInfo>::new());
+    let config = RwSignal::new(Option::<SecurityConfig>::None);
+    let devices = RwSignal::new(Vec::<DeviceInfo>::new());
     let search_config = RwSignal::new(SearchConfig {
         enabled: false,
         default_provider: String::new(),
@@ -30,12 +30,12 @@ pub fn SecurityView() -> impl IntoView {
         pii_scrub_credit_card: true,
         backends: Vec::new(),
     });
-    let loading = create_rw_signal(true);
-    let saving = create_rw_signal(false);
-    let error = create_rw_signal(Option::<String>::None);
+    let loading = RwSignal::new(true);
+    let saving = RwSignal::new(false);
+    let error = RwSignal::new(Option::<String>::None);
 
     // Load config and devices on mount
-    create_effect(move |_| {
+    Effect::new(move || {
         if state.is_connected.get() {
             spawn_local(async move {
                 loading.set(true);
@@ -296,7 +296,7 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
     let save_error = RwSignal::new(Option::<String>::None);
     let save_success = RwSignal::new(false);
 
-    let save_config_fn = store_value(move || {
+    let save_config_fn = StoredValue::new(move || {
         saving.set(true);
         save_error.set(None);
         save_success.set(false);
