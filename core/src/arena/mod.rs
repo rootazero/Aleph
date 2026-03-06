@@ -4,7 +4,9 @@
 //! a structured workspace where multiple agents collaborate on a shared goal.
 
 pub mod arena;
+pub mod events;
 pub mod types;
 
 pub use arena::*;
+pub use events::*;
 pub use types::*;
