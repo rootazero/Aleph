@@ -26,6 +26,7 @@ use query::ToolQuery;
 use registration::ToolRegistrar;
 use state::ToolState;
 use types::ToolStorage;
+pub use types::ResolvedCommand;
 
 // Re-export helpers for tests
 
@@ -266,6 +267,11 @@ impl ToolRegistry {
     /// List active tools visible to a specific channel
     pub async fn list_for_channel(&self, channel: ChannelType) -> Vec<UnifiedTool> {
         self.query.list_for_channel(channel).await
+    }
+
+    /// Resolve a slash command input to a registered tool
+    pub async fn resolve_command(&self, input: &str) -> Option<types::ResolvedCommand> {
+        self.query.resolve_command(input).await
     }
 
     /// List root-level commands for UI (Flat Namespace Mode)
@@ -968,5 +974,73 @@ mod tests {
 
         let telegram_tools = registry.list_for_channel(ChannelType::Telegram).await;
         assert_eq!(telegram_tools.len(), 0);
+    }
+
+    // =========================================================================
+    // Command Resolution Tests (Task 3)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_resolve_command_found() {
+        let registry = ToolRegistry::new();
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/search".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Search the web".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
+
+        let resolved = registry.resolve_command("/search rust async").await;
+        assert!(resolved.is_some());
+        let resolved = resolved.unwrap();
+        assert_eq!(resolved.tool.name, "search");
+        assert_eq!(resolved.arguments, Some("rust async".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_command_not_found() {
+        let registry = ToolRegistry::new();
+        let resolved = registry.resolve_command("/nonexistent").await;
+        assert!(resolved.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_resolve_command_not_slash() {
+        let registry = ToolRegistry::new();
+        let resolved = registry.resolve_command("hello world").await;
+        assert!(resolved.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_resolve_command_case_insensitive() {
+        let registry = ToolRegistry::new();
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/search".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Search".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
+
+        let resolved = registry.resolve_command("/SEARCH query").await;
+        assert!(resolved.is_some());
+        assert_eq!(resolved.unwrap().tool.name, "search");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_command_no_args() {
+        let registry = ToolRegistry::new();
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/help".to_string(),
+            provider: None,
+            system_prompt: Some("Help".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
+
+        let resolved = registry.resolve_command("/help").await;
+        assert!(resolved.is_some());
+        assert!(resolved.unwrap().arguments.is_none());
     }
 }

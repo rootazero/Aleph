@@ -136,6 +136,49 @@ impl ToolQuery {
         result
     }
 
+    /// Resolve a slash command input to a registered tool
+    ///
+    /// Parses `/command_name args` and looks up the command in the registry.
+    /// Returns None if input doesn't start with `/` or command is not found.
+    pub async fn resolve_command(&self, input: &str) -> Option<super::types::ResolvedCommand> {
+        let trimmed = input.trim();
+        if !trimmed.starts_with('/') {
+            return None;
+        }
+
+        let without_slash = &trimmed[1..];
+        if without_slash.is_empty() {
+            return None;
+        }
+
+        let (cmd_name, arguments) = match without_slash.split_once(char::is_whitespace) {
+            Some((name, rest)) => {
+                let args = rest.trim();
+                (
+                    name.to_lowercase(),
+                    if args.is_empty() { None } else { Some(args.to_string()) },
+                )
+            }
+            None => (without_slash.to_lowercase(), None),
+        };
+
+        let tools = self.tools.read().await;
+        let tool = tools
+            .values()
+            .filter(|t| t.is_active && t.name.to_lowercase() == cmd_name)
+            .max_by(|a, b| {
+                a.source.priority().cmp(&b.source.priority())
+                    .then_with(|| b.id.cmp(&a.id))
+            })
+            .cloned()?;
+
+        Some(super::types::ResolvedCommand {
+            tool,
+            arguments,
+            raw_input: input.to_string(),
+        })
+    }
+
     /// List root-level commands for UI (Flat Namespace Mode)
     ///
     /// Returns all active tools from all sources for command completion.
