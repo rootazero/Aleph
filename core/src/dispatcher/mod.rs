@@ -102,10 +102,12 @@ pub use integration::{
     DispatcherIntegration, DispatcherResult,
 };
 pub use registry::ToolRegistry;
+pub use registry::ResolvedCommand;
 pub use types::{
-    ConflictInfo, ConflictResolution, RoutingLayer, StructuredToolMeta, ToolCategory,
-    ToolDefinition, ToolDiff, ToolIndex, ToolIndexCategory, ToolIndexEntry, ToolPriority,
-    ToolResult, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
+    ChannelType, ConflictInfo, ConflictResolution, DispatchMode, RoutingLayer, StructuredToolMeta,
+    ToolCategory, ToolDefinition, ToolDiff, ToolIndex, ToolIndexCategory, ToolIndexEntry,
+    ToolPriority, ToolResult, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool,
+    UnifiedToolInfo,
 };
 // Note: types::Capability is NOT re-exported here to avoid conflict with model_router::Capability
 // Use types::Capability directly if needed for structured tool descriptions
