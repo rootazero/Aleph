@@ -266,6 +266,7 @@ struct AgentHandlersResult {
     execution_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>>,
     agent_registry: Option<Arc<AgentRegistry>>,
     switch_agent_handle: Option<Arc<tokio::sync::RwLock<Option<alephcore::builtin_tools::SwitchAgentTool>>>>,
+    default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -287,6 +288,7 @@ async fn register_agent_handlers(
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
     let mut switch_handle: Option<Arc<tokio::sync::RwLock<Option<alephcore::builtin_tools::SwitchAgentTool>>>> = None;
+    let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;
 
     // Try to create provider: env vars first, then app config
     let provider_registry = if can_create_provider_from_env() {
@@ -399,6 +401,9 @@ async fn register_agent_handlers(
             );
             None
         };
+
+        // Capture default provider before provider_registry is moved into engine
+        default_prov = Some(provider_registry.default_provider());
 
         let mut engine = ExecutionEngine::new(
             ExecutionEngineConfig::default(),
@@ -585,6 +590,7 @@ async fn register_agent_handlers(
         execution_adapter: exec_adapter,
         agent_registry: agent_reg,
         switch_agent_handle: switch_handle,
+        default_provider: default_prov,
     }
 }
 
@@ -1023,6 +1029,7 @@ async fn initialize_inbound_router(
     group_chat_orch: alephcore::gateway::handlers::group_chat::SharedOrchestrator,
     group_chat_executor: Option<Arc<GroupChatExecutor>>,
     workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
+    default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
     daemon: bool,
 ) {
     let routing_config = RoutingConfig::default();
@@ -1066,6 +1073,20 @@ async fn initialize_inbound_router(
     // Wire workspace manager for /switch command and channel-level agent routing
     if let Some(wm) = workspace_manager {
         inbound_router = inbound_router.with_workspace_manager(wm);
+    }
+
+    // Wire intent detector for natural language agent switching
+    {
+        use alephcore::gateway::IntentDetector;
+        let detector = IntentDetector::new();
+        // TODO: LLM classify function can be wired here for ambiguous messages
+        inbound_router = inbound_router.with_intent_detector(detector);
+        if let Some(provider) = default_provider {
+            inbound_router = inbound_router.with_llm_provider(provider);
+        }
+        if !daemon {
+            println!("  Inbound router: intent detection enabled (dynamic agent switching)");
+        }
     }
 
     // Default DM policy is Pairing — owner must approve each sender.
@@ -1403,6 +1424,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         channel_pairing_store,
         shared_orch, gc_executor,
         workspace_manager,
+        agent_result.default_provider,
         args.daemon,
     ).await;
 
