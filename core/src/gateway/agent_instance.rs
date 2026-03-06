@@ -554,6 +554,59 @@ impl AgentRegistry {
     pub fn default_agent_id(&self) -> &str {
         &self.default_agent
     }
+
+    /// Dynamically create and register a new agent at runtime.
+    ///
+    /// Creates `~/.aleph/workspaces/{id}/SOUL.md` and registers an `AgentInstance`.
+    pub async fn create_dynamic(
+        &self,
+        id: &str,
+        soul_content: &str,
+        session_manager: Option<Arc<super::session_manager::SessionManager>>,
+    ) -> Result<Arc<AgentInstance>, AgentInstanceError> {
+        if self.get(id).await.is_some() {
+            return Err(AgentInstanceError::InitFailed(
+                format!("Agent '{}' already exists", id),
+            ));
+        }
+
+        let workspace_root = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+            .join(".aleph/workspaces");
+        let workspace_path = workspace_root.join(id);
+
+        std::fs::create_dir_all(&workspace_path).map_err(|e| {
+            AgentInstanceError::InitFailed(format!(
+                "Failed to create workspace for '{}': {}", id, e
+            ))
+        })?;
+
+        let soul_path = workspace_path.join("SOUL.md");
+        if !soul_path.exists() {
+            std::fs::write(&soul_path, soul_content).map_err(|e| {
+                AgentInstanceError::InitFailed(format!(
+                    "Failed to write SOUL.md for '{}': {}", id, e
+                ))
+            })?;
+        }
+
+        let config = AgentInstanceConfig {
+            agent_id: id.to_string(),
+            workspace: workspace_path,
+            ..Default::default()
+        };
+
+        let instance = if let Some(sm) = session_manager {
+            AgentInstance::with_session_manager(config, sm)?
+        } else {
+            AgentInstance::new(config)?
+        };
+
+        self.register(instance).await;
+        let agent = self.get(id).await.unwrap();
+        info!("Dynamically created agent: {}", id);
+        Ok(agent)
+    }
 }
 
 impl Default for AgentRegistry {
@@ -662,6 +715,34 @@ mod tests {
         let agents = registry.list().await;
         assert_eq!(agents.len(), 1);
         assert!(agents.contains(&"main".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_create_dynamic_agent() {
+        let registry = AgentRegistry::new();
+        let result = registry
+            .create_dynamic("trading", "You are a trading assistant.", None)
+            .await;
+        assert!(result.is_ok());
+        let agent = registry.get("trading").await;
+        assert!(agent.is_some());
+        assert_eq!(agent.unwrap().id(), "trading");
+    }
+
+    #[tokio::test]
+    async fn test_create_dynamic_already_exists() {
+        let temp = tempdir().unwrap();
+        let registry = AgentRegistry::new();
+        let config = AgentInstanceConfig {
+            agent_id: "main".to_string(),
+            workspace: temp.path().join("main"),
+            ..Default::default()
+        };
+        registry
+            .register(AgentInstance::new(config).unwrap())
+            .await;
+        let result = registry.create_dynamic("main", "soul", None).await;
+        assert!(result.is_err());
     }
 
     #[test]
