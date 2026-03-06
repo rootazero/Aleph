@@ -925,7 +925,7 @@ mod tests {
     #[test]
     fn test_poe_outcome() {
         let verdict = Verdict::success("All checks passed");
-        let outcome = PoeOutcome::success(verdict);
+        let outcome = PoeOutcome::success(verdict, "");
         assert!(outcome.is_success());
 
         let switch = PoeOutcome::strategy_switch("Too complex", "Try smaller steps");
