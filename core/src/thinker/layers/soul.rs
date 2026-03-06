@@ -13,6 +13,15 @@ impl PromptLayer for SoulLayer {
         &[AssemblyPath::Soul]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
+        // Priority 1: workspace SOUL.md
+        if let Some(soul_content) = input.workspace_file("SOUL.md") {
+            output.push_str("# Soul\n\n");
+            output.push_str(soul_content);
+            output.push_str("\n\n---\n\n");
+            return;
+        }
+
+        // Priority 2: SoulManifest (legacy fallback)
         let soul = match input.soul {
             Some(s) => s,
             None => return,
@@ -113,6 +122,8 @@ mod tests {
     use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::prompt_mode::PromptMode;
     use crate::thinker::soul::{SoulManifest, SoulVoice, Verbosity};
+    use crate::thinker::workspace_files::{WorkspaceFile, WorkspaceFiles};
+    use std::path::PathBuf;
 
     #[test]
     fn test_soul_basic() {
@@ -200,5 +211,71 @@ mod tests {
         // Should NOT contain communication style or directives
         assert!(!out.contains("Communication Style"), "Should not contain style in Minimal");
         assert!(!out.contains("Always help"), "Should not contain directives in Minimal");
+    }
+
+    #[test]
+    fn prefers_workspace_soul_over_manifest() {
+        let layer = SoulLayer;
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let soul = SoulManifest {
+            identity: "I am Aleph.".to_string(),
+            voice: SoulVoice {
+                tone: "friendly".to_string(),
+                verbosity: Verbosity::Balanced,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let workspace = WorkspaceFiles {
+            workspace_dir: PathBuf::from("/tmp/test"),
+            files: vec![WorkspaceFile {
+                name: "SOUL.md",
+                content: Some("You are a custom soul from workspace.".to_string()),
+                truncated: false,
+                original_size: 37,
+            }],
+        };
+        let input = LayerInput::soul(&config, &tools, &soul)
+            .with_workspace(&workspace);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        // Workspace SOUL.md should be used
+        assert!(out.contains("# Soul"), "Should have Soul header");
+        assert!(out.contains("custom soul from workspace"), "Should contain workspace SOUL.md content");
+        // SoulManifest should NOT be used
+        assert!(!out.contains("# Identity"), "Should not contain manifest Identity header");
+        assert!(!out.contains("I am Aleph"), "Should not contain manifest identity");
+    }
+
+    #[test]
+    fn falls_back_to_manifest_when_no_workspace_soul() {
+        let layer = SoulLayer;
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let soul = SoulManifest {
+            identity: "I am Aleph.".to_string(),
+            voice: SoulVoice {
+                tone: "friendly".to_string(),
+                verbosity: Verbosity::Balanced,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // Workspace with no SOUL.md
+        let workspace = WorkspaceFiles {
+            workspace_dir: PathBuf::from("/tmp/test"),
+            files: vec![],
+        };
+        let input = LayerInput::soul(&config, &tools, &soul)
+            .with_workspace(&workspace);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        // SoulManifest fallback should be used
+        assert!(out.contains("# Identity"), "Should contain manifest Identity header");
+        assert!(out.contains("I am Aleph"), "Should contain manifest identity");
+        assert!(!out.contains("# Soul"), "Should not contain workspace Soul header");
     }
 }

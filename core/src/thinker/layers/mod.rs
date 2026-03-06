@@ -28,12 +28,16 @@ pub mod profile;
 mod tools;
 
 // --- Context layers ---
+mod inbound_context;
 mod runtime_context;
 mod environment;
 mod security;
 mod protocol_tokens;
 mod heartbeat;
 mod operational_guidelines;
+
+// --- Workspace files layer ---
+mod workspace_files;
 
 // --- Bootstrap layer ---
 pub mod bootstrap;
@@ -60,10 +64,12 @@ pub use profile::ProfileLayer;
 pub use tools::ToolsLayer;
 pub use tools::HydratedToolsLayer;
 
+pub use inbound_context::InboundContextLayer;
 pub use runtime_context::RuntimeContextLayer;
 pub use environment::EnvironmentLayer;
 pub use security::SecurityLayer;
 pub use protocol_tokens::ProtocolTokensLayer;
 pub use heartbeat::HeartbeatLayer;
 pub use operational_guidelines::OperationalGuidelinesLayer;
+pub use workspace_files::WorkspaceFilesLayer;
 pub use bootstrap::BootstrapLayer;
