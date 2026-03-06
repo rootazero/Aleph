@@ -315,6 +315,22 @@ impl ToolQuery {
         results
     }
 
+    /// Filter active tools by name prefix (case-insensitive)
+    pub async fn filter_by_prefix(&self, prefix: &str) -> Vec<UnifiedTool> {
+        if prefix.is_empty() {
+            return self.list_all().await;
+        }
+        let prefix_lower = prefix.to_lowercase();
+        let tools = self.tools.read().await;
+        let mut result: Vec<_> = tools
+            .values()
+            .filter(|t| t.is_active && t.name.to_lowercase().starts_with(&prefix_lower))
+            .cloned()
+            .collect();
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        result
+    }
+
     /// Get total tool count
     pub async fn count(&self) -> usize {
         let tools = self.tools.read().await;
