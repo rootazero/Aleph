@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::command::{CommandNode, CommandType};
-use crate::dispatcher::ToolSourceType;
+use crate::dispatcher::{ToolRegistry, ToolSourceType, UnifiedTool};
 
 /// Command info for JSON serialization
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +55,37 @@ fn source_type_to_string(st: ToolSourceType) -> String {
         ToolSourceType::Skill => "skill".to_string(),
         ToolSourceType::Custom => "custom".to_string(),
     }
+}
+
+impl From<UnifiedTool> for CommandInfo {
+    fn from(tool: UnifiedTool) -> Self {
+        Self {
+            key: tool.name,
+            description: tool.description,
+            icon: tool.icon.unwrap_or_else(|| "bolt".to_string()),
+            hint: tool.usage,
+            command_type: "action".to_string(),
+            has_children: tool.has_subtools,
+            source_id: Some(tool.id),
+            source_type: tool.source.label().to_lowercase(),
+        }
+    }
+}
+
+/// List all registered commands from ToolRegistry
+pub async fn handle_list_from_registry(
+    request: JsonRpcRequest,
+    tool_registry: &ToolRegistry,
+) -> JsonRpcResponse {
+    let tools: Vec<UnifiedTool> = tool_registry.list_root_commands().await;
+    let command_infos: Vec<CommandInfo> = tools.into_iter().map(CommandInfo::from).collect();
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "commands": command_infos
+        }),
+    )
 }
 
 /// List all registered commands
@@ -130,6 +161,29 @@ mod tests {
         assert!(first["key"].is_string());
         assert!(first["description"].is_string());
         assert!(first["source_type"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_list_from_registry() {
+        use crate::config::RoutingRuleConfig;
+
+        let registry = ToolRegistry::new();
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/search".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Search the web".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
+
+        let request = JsonRpcRequest::with_id("commands.list", None, json!(1));
+        let response = handle_list_from_registry(request, &registry).await;
+
+        assert!(response.is_success());
+        let result = response.result.unwrap();
+        let commands = result["commands"].as_array().unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0]["key"], "search");
     }
 
     #[test]
