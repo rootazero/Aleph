@@ -309,6 +309,11 @@ impl ToolRegistry {
         self.query.search(query).await
     }
 
+    /// Filter active tools by name prefix (case-insensitive)
+    pub async fn filter_by_prefix(&self, prefix: &str) -> Vec<UnifiedTool> {
+        self.query.filter_by_prefix(prefix).await
+    }
+
     /// Get total tool count
     pub async fn count(&self) -> usize {
         self.query.count().await
@@ -1042,5 +1047,47 @@ mod tests {
         let resolved = registry.resolve_command("/help").await;
         assert!(resolved.is_some());
         assert!(resolved.unwrap().arguments.is_none());
+    }
+
+    // =========================================================================
+    // Prefix Filtering Tests (Task 4)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_filter_by_prefix() {
+        let registry = ToolRegistry::new();
+        let rules = vec![
+            RoutingRuleConfig {
+                regex: "^/search".to_string(),
+                provider: Some("openai".to_string()),
+                system_prompt: Some("Search".to_string()),
+                ..Default::default()
+            },
+            RoutingRuleConfig {
+                regex: "^/settings".to_string(),
+                provider: Some("openai".to_string()),
+                system_prompt: Some("Settings".to_string()),
+                ..Default::default()
+            },
+            RoutingRuleConfig {
+                regex: "^/translate".to_string(),
+                provider: Some("openai".to_string()),
+                system_prompt: Some("Translate".to_string()),
+                ..Default::default()
+            },
+        ];
+        registry.register_custom_commands(&rules).await;
+
+        let results = registry.filter_by_prefix("se").await;
+        assert_eq!(results.len(), 2);
+
+        let results = registry.filter_by_prefix("SE").await;
+        assert_eq!(results.len(), 2);
+
+        let results = registry.filter_by_prefix("").await;
+        assert_eq!(results.len(), 3);
+
+        let results = registry.filter_by_prefix("xyz").await;
+        assert_eq!(results.len(), 0);
     }
 }
