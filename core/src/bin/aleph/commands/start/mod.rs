@@ -265,6 +265,7 @@ struct AgentHandlersResult {
     _run_manager: Arc<AgentRunManager>,
     execution_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>>,
     agent_registry: Option<Arc<AgentRegistry>>,
+    switch_agent_handle: Option<Arc<tokio::sync::RwLock<Option<alephcore::builtin_tools::SwitchAgentTool>>>>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -285,6 +286,7 @@ async fn register_agent_handlers(
     let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
+    let mut switch_handle: Option<Arc<tokio::sync::RwLock<Option<alephcore::builtin_tools::SwitchAgentTool>>>> = None;
 
     // Try to create provider: env vars first, then app config
     let provider_registry = if can_create_provider_from_env() {
@@ -330,7 +332,9 @@ async fn register_agent_handlers(
             tavily_api_key,
             ..Default::default()
         };
-        let tool_registry = Arc::new(BuiltinToolRegistry::with_config(tool_config));
+        let tool_registry = BuiltinToolRegistry::with_config(tool_config);
+        let switch_agent_handle = tool_registry.switch_agent_handle();
+        let tool_registry = Arc::new(tool_registry);
 
         use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
         use alephcore::dispatcher::{UnifiedTool, ToolSource};
@@ -507,6 +511,7 @@ async fn register_agent_handlers(
         // Capture for inbound router
         exec_adapter = Some(engine as Arc<dyn alephcore::gateway::ExecutionAdapter>);
         agent_reg = Some(agent_registry);
+        switch_handle = Some(switch_agent_handle);
     } else {
         if !daemon {
             println!("  Mode: Simulated (set ANTHROPIC_API_KEY or OPENAI_API_KEY for real execution)");
@@ -579,6 +584,7 @@ async fn register_agent_handlers(
         _run_manager: run_manager,
         execution_adapter: exec_adapter,
         agent_registry: agent_reg,
+        switch_agent_handle: switch_handle,
     }
 }
 
@@ -1016,6 +1022,7 @@ async fn initialize_inbound_router(
     pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore>,
     group_chat_orch: alephcore::gateway::handlers::group_chat::SharedOrchestrator,
     group_chat_executor: Option<Arc<GroupChatExecutor>>,
+    workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
     daemon: bool,
 ) {
     let routing_config = RoutingConfig::default();
@@ -1054,6 +1061,11 @@ async fn initialize_inbound_router(
         if !daemon {
             println!("  Inbound router: group chat enabled (/groupchat commands)");
         }
+    }
+
+    // Wire workspace manager for /switch command and channel-level agent routing
+    if let Some(wm) = workspace_manager {
+        inbound_router = inbound_router.with_workspace_manager(wm);
     }
 
     // Default DM policy is Pairing — owner must approve each sender.
@@ -1243,6 +1255,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
     }
 
+    // Late-bind switch_agent tool now that both workspace_manager and agent_registry are available
+    if let (Some(ref wm), Some(ref ar), Some(ref handle)) = (&workspace_manager, &agent_result.agent_registry, &agent_result.switch_agent_handle) {
+        let tool = alephcore::builtin_tools::SwitchAgentTool::new(Arc::clone(wm), Arc::clone(ar));
+        *handle.write().await = Some(tool);
+        if !args.daemon {
+            println!("switch_agent tool bound (workspace_manager + agent_registry)");
+        }
+    }
+
     // Identity resolver (shared for session-level overrides)
     let identity_resolver: alephcore::gateway::handlers::identity::SharedIdentityResolver = Arc::new(
         tokio::sync::RwLock::new(
@@ -1381,6 +1402,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.execution_adapter, agent_result.agent_registry,
         channel_pairing_store,
         shared_orch, gc_executor,
+        workspace_manager,
         args.daemon,
     ).await;
 
