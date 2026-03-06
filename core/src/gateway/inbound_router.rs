@@ -20,6 +20,7 @@ use super::pairing_store::{PairingError, PairingStore};
 use super::reply_emitter::ReplyEmitter;
 use super::router::{AgentRouter, SessionKey};
 use super::routing_config::{DmScope, RoutingConfig};
+use super::workspace::WorkspaceManager;
 
 #[cfg(target_os = "macos")]
 use super::interfaces::imessage::normalize_phone;
@@ -157,6 +158,8 @@ pub struct InboundMessageRouter {
     execution_adapter: Option<Arc<dyn ExecutionAdapter>>,
     /// Agent router for binding-based agent selection (unified with WS routing)
     agent_router: Option<Arc<AgentRouter>>,
+    /// Workspace manager for channel-level active agent lookup
+    workspace_manager: Option<Arc<WorkspaceManager>>,
     /// Inbound message deduplication tracker
     dedup_tracker: Mutex<InboundDedupTracker>,
 }
@@ -248,6 +251,7 @@ impl InboundMessageRouter {
             agent_registry: None,
             execution_adapter: None,
             agent_router: None,
+            workspace_manager: None,
             dedup_tracker: Mutex::new(InboundDedupTracker::new()),
         }
     }
@@ -271,6 +275,7 @@ impl InboundMessageRouter {
             agent_registry: Some(agent_registry),
             execution_adapter: Some(execution_adapter),
             agent_router: None,
+            workspace_manager: None,
             dedup_tracker: Mutex::new(InboundDedupTracker::new()),
         }
     }
@@ -296,6 +301,7 @@ impl InboundMessageRouter {
             agent_registry: Some(agent_registry),
             execution_adapter: Some(execution_adapter),
             agent_router: Some(agent_router),
+            workspace_manager: None,
             dedup_tracker: Mutex::new(InboundDedupTracker::new()),
         }
     }
@@ -306,6 +312,15 @@ impl InboundMessageRouter {
     /// which agent handles each inbound message (same logic as WS agent.run).
     pub fn with_agent_router(mut self, router: Arc<AgentRouter>) -> Self {
         self.agent_router = Some(router);
+        self
+    }
+
+    /// Set the workspace manager for channel-level active agent lookup
+    ///
+    /// When set, the router checks `channel_active_agent` after route bindings
+    /// but before the default agent fallback, enabling per-channel agent switching.
+    pub fn with_workspace_manager(mut self, manager: Arc<WorkspaceManager>) -> Self {
+        self.workspace_manager = Some(manager);
         self
     }
 
@@ -368,7 +383,8 @@ impl InboundMessageRouter {
         );
 
         // Resolve agent ID using unified routing (async)
-        let agent_id = self.resolve_agent_id_async(channel_id).await;
+        let sender_id = msg.sender_id.as_str();
+        let agent_id = self.resolve_agent_id_async(channel_id, sender_id).await;
 
         // Build context with resolved agent
         let ctx = self.build_context_with_agent(&msg, &agent_id);
@@ -519,17 +535,36 @@ impl InboundMessageRouter {
         }
     }
 
-    /// Resolve agent ID from channel using AgentRouter bindings (async)
+    /// Resolve agent ID from channel using AgentRouter bindings and workspace manager (async)
     ///
-    /// This provides unified routing behavior between inbound channel messages
-    /// and WS agent.run calls. If no router is configured, falls back to
-    /// the default_agent from RoutingConfig.
-    async fn resolve_agent_id_async(&self, channel: &str) -> String {
+    /// Resolution priority:
+    /// 1. Route bindings (AgentRouter) — explicit channel-to-agent mappings
+    /// 2. channel_active_agent (WorkspaceManager) — user's manual agent switch
+    /// 3. default_agent (RoutingConfig) — lowest priority fallback
+    async fn resolve_agent_id_async(&self, channel: &str, sender_id: &str) -> String {
+        // 1. Check route bindings first (highest priority)
         if let Some(router) = &self.agent_router {
-            router.route(None, Some(channel), None).await.agent_id().to_string()
-        } else {
-            self.config.default_agent.clone()
+            let resolved = router.route(None, Some(channel), None).await;
+            let resolved_id = resolved.agent_id();
+            // Only use if it differs from the default (meaning a binding matched)
+            if resolved_id != router.default_agent() {
+                return resolved_id.to_string();
+            }
         }
+
+        // 2. Check channel_active_agent from workspace manager (user's manual switch)
+        if let Some(ref manager) = self.workspace_manager {
+            if let Ok(Some(agent_id)) = manager.get_active_agent(channel, sender_id) {
+                debug!(
+                    "Using channel_active_agent '{}' for {}:{}",
+                    agent_id, channel, sender_id
+                );
+                return agent_id;
+            }
+        }
+
+        // 3. Fall back to default agent
+        self.config.default_agent.clone()
     }
 
     /// Check if message is permitted
