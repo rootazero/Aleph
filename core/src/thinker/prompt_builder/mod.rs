@@ -16,11 +16,13 @@ use crate::config::ProfileConfig;
 use crate::dispatcher::tool_index::HydrationResult;
 use crate::agent_loop::ToolInfo;
 
+use super::inbound_context::InboundContext;
 use super::prompt_budget::{TokenBudget, PromptResult};
 use super::prompt_layer::{AssemblyPath, LayerInput};
 use super::prompt_mode::PromptMode;
 use super::prompt_pipeline::PromptPipeline;
 use super::soul::SoulManifest;
+use super::workspace_files::WorkspaceFiles;
 
 /// System prompt part with optional cache flag
 ///
@@ -211,6 +213,25 @@ impl PromptBuilder {
             .with_profile(profile)
             .with_mode(mode);
         self.pipeline.assemble(AssemblyPath::Soul, &input, mode, budget)
+    }
+
+    /// Build system prompt with full context (soul + profile + workspace + inbound).
+    ///
+    /// This is the comprehensive entry point that passes all available context
+    /// through to the prompt pipeline via LayerInput.
+    pub fn build_system_prompt_with_full_context(
+        &self,
+        tools: &[ToolInfo],
+        soul: &SoulManifest,
+        profile: Option<&ProfileConfig>,
+        workspace: Option<&WorkspaceFiles>,
+        inbound: Option<&InboundContext>,
+    ) -> String {
+        let input = LayerInput::soul(&self.config, tools, soul)
+            .with_profile(profile)
+            .with_workspace_opt(workspace)
+            .with_inbound_opt(inbound);
+        self.pipeline.execute(AssemblyPath::Soul, &input)
     }
 
     /// Build system prompt using ResolvedContext
