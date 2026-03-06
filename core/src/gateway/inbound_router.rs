@@ -11,6 +11,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::agent_instance::AgentRegistry;
+use super::intent_detector::{IntentDetector, DetectedIntent, build_id_resolve_prompt, build_soul_generation_prompt};
 use super::channel::{InboundMessage, OutboundMessage};
 use super::channel_registry::ChannelRegistry;
 use super::execution_adapter::ExecutionAdapter;
@@ -173,6 +174,10 @@ pub struct InboundMessageRouter {
     group_chat_executor: Option<Arc<GroupChatExecutor>>,
     /// Active group chat sessions: "channel_id:conversation_id" -> session_id
     active_group_sessions: Mutex<HashMap<String, String>>,
+    /// Intent detector for natural language agent switching
+    intent_detector: Option<IntentDetector>,
+    /// LLM provider for intent classification and soul generation
+    llm_provider: Option<Arc<dyn crate::providers::AiProvider>>,
 }
 
 /// Unified channel config for permission checking
@@ -267,6 +272,8 @@ impl InboundMessageRouter {
             group_chat_orch: None,
             group_chat_executor: None,
             active_group_sessions: Mutex::new(HashMap::new()),
+            intent_detector: None,
+            llm_provider: None,
         }
     }
 
@@ -294,6 +301,8 @@ impl InboundMessageRouter {
             group_chat_orch: None,
             group_chat_executor: None,
             active_group_sessions: Mutex::new(HashMap::new()),
+            intent_detector: None,
+            llm_provider: None,
         }
     }
 
@@ -323,6 +332,8 @@ impl InboundMessageRouter {
             group_chat_orch: None,
             group_chat_executor: None,
             active_group_sessions: Mutex::new(HashMap::new()),
+            intent_detector: None,
+            llm_provider: None,
         }
     }
 
@@ -356,6 +367,18 @@ impl InboundMessageRouter {
     ) -> Self {
         self.group_chat_orch = Some(orch);
         self.group_chat_executor = Some(executor);
+        self
+    }
+
+    /// Set the intent detector for natural language agent switching
+    pub fn with_intent_detector(mut self, detector: IntentDetector) -> Self {
+        self.intent_detector = Some(detector);
+        self
+    }
+
+    /// Set the LLM provider for intent classification and soul generation
+    pub fn with_llm_provider(mut self, provider: Arc<dyn crate::providers::AiProvider>) -> Self {
+        self.llm_provider = Some(provider);
         self
     }
 
@@ -478,6 +501,11 @@ impl InboundMessageRouter {
             }
         }
 
+        // Natural language switch intent detection
+        if let Some(result) = self.try_handle_switch_intent(&msg).await {
+            return result;
+        }
+
         // Group chat interception: check for /groupchat commands or active sessions
         if self.group_chat_orch.is_some() {
             if let Some(handled) = self.try_handle_group_chat(&msg).await {
@@ -500,6 +528,96 @@ impl InboundMessageRouter {
         self.execute_for_context(&ctx).await?;
 
         Ok(())
+    }
+
+    /// Try to handle a switch intent from the message.
+    /// Returns Some(Ok(())) if handled (message consumed), None if not a switch intent.
+    async fn try_handle_switch_intent(
+        &self,
+        msg: &InboundMessage,
+    ) -> Option<Result<(), RoutingError>> {
+        let detector = self.intent_detector.as_ref()?;
+        let manager = self.workspace_manager.as_ref()?;
+        let registry = self.agent_registry.as_ref()?;
+
+        let mut intent = detector.detect(&msg.text).await;
+
+        // If keyword matched but id is empty, resolve via LLM
+        if let DetectedIntent::SwitchAgent { ref id, ref name } = intent {
+            if id.is_empty() {
+                if let Some(ref provider) = self.llm_provider {
+                    let prompt = build_id_resolve_prompt(name);
+                    match provider.process(&prompt, None).await {
+                        Ok(response) => {
+                            let resolved_id = response.trim().to_lowercase().replace(' ', "_");
+                            if !resolved_id.is_empty() {
+                                intent = DetectedIntent::SwitchAgent {
+                                    id: resolved_id,
+                                    name: name.clone(),
+                                };
+                            }
+                        }
+                        Err(e) => {
+                            warn!("[Router] Failed to resolve agent id: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+
+        match intent {
+            DetectedIntent::SwitchAgent { ref id, ref name } if !id.is_empty() => {
+                let channel_id = msg.channel_id.as_str();
+                let sender_id = msg.sender_id.as_str();
+
+                // Create agent dynamically if it doesn't exist
+                if registry.get(id).await.is_none() {
+                    info!("[Router] Agent '{}' not found, creating dynamically", id);
+
+                    let soul_content = if let Some(ref provider) = self.llm_provider {
+                        let prompt = build_soul_generation_prompt(id, name);
+                        match provider.process(&prompt, None).await {
+                            Ok(content) => content,
+                            Err(e) => {
+                                warn!("[Router] Failed to generate soul: {}, using default", e);
+                                format!("You are {}, an AI assistant.", name)
+                            }
+                        }
+                    } else {
+                        format!("You are {}, an AI assistant.", name)
+                    };
+
+                    if let Err(e) = registry.create_dynamic(id, &soul_content, None).await {
+                        let reply = OutboundMessage::text(
+                            msg.conversation_id.as_str(),
+                            format!("Failed to create agent '{}': {}", id, e),
+                        );
+                        let _ = self.channel_registry.send(&msg.channel_id, reply).await;
+                        return Some(Ok(()));
+                    }
+                }
+
+                // Switch active agent
+                let reply_text = match manager.set_active_agent(channel_id, sender_id, id) {
+                    Ok(()) => {
+                        info!("[Router] Switched agent for {}:{} -> {} ({})", channel_id, sender_id, id, name);
+                        format!("✅ Switched to {} ({})", name, id)
+                    }
+                    Err(e) => {
+                        error!("[Router] Failed to switch agent: {}", e);
+                        format!("❌ Failed to switch: {}", e)
+                    }
+                };
+
+                let reply = OutboundMessage::text(msg.conversation_id.as_str(), reply_text);
+                if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
+                    error!("[Router] Failed to send switch reply: {}", e);
+                }
+
+                Some(Ok(()))
+            }
+            _ => None,
+        }
     }
 
     /// Build InboundContext from message with pre-resolved agent ID
