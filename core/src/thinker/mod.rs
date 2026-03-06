@@ -33,6 +33,7 @@ pub mod cache;
 pub mod channel_behavior;
 pub mod context;
 pub mod decision_parser;
+pub mod hooks;
 pub mod identity;
 pub mod inbound_context;
 pub mod interaction;
