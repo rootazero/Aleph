@@ -143,7 +143,11 @@ pub struct AgentDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
-    /// Workspace directory for this agent
+    /// Workspace directory for this agent.
+    ///
+    /// **Deprecated**: This field is ignored at runtime. The workspace directory
+    /// is always `{workspace_root}/{agent_id}` (1:1 binding). Kept for backward
+    /// compatibility with existing TOML configs; will be removed in a future version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<PathBuf>,
 

@@ -141,18 +141,29 @@ impl AgentDefinitionResolver {
 
     /// Resolve workspace path for an agent.
     ///
-    /// Priority: explicit agent workspace > auto-layout (`{workspace_root}/{agent_id}`).
+    /// Workspace directory name is always equal to agent_id (1:1 binding).
+    /// The `AgentDefinition.workspace` field is deprecated and ignored.
     pub fn resolve_workspace_path(
         &self,
         agent: &AgentDefinition,
         defaults: &AgentDefaults,
     ) -> PathBuf {
-        // Explicit workspace path on the agent takes priority
-        if let Some(ref workspace) = agent.workspace {
-            return resolve_user_path(workspace);
+        // Warn if explicit workspace is set (deprecated, ignored)
+        if agent.workspace.is_some() {
+            let root = defaults
+                .workspace_root
+                .as_ref()
+                .map(|p| resolve_user_path(p))
+                .unwrap_or_else(default_workspace_root);
+            tracing::warn!(
+                "Agent '{}': explicit workspace path is deprecated, using {}/{}",
+                agent.id,
+                root.display(),
+                agent.id
+            );
         }
 
-        // Auto-layout: {workspace_root}/{agent_id}
+        // Enforce 1:1 binding: workspace dir = agent_id
         let root = defaults
             .workspace_root
             .as_ref()
@@ -310,17 +321,23 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_resolve_workspace_path_explicit() {
+    fn test_resolve_workspace_path_explicit_ignored() {
+        // Explicit workspace path is deprecated and ignored;
+        // workspace dir always equals agent_id.
         let resolver = AgentDefinitionResolver::new();
         let agent = AgentDefinition {
             id: "coder".to_string(),
             workspace: Some(PathBuf::from("/custom/workspace")),
             ..Default::default()
         };
-        let defaults = AgentDefaults::default();
+        let defaults = AgentDefaults {
+            workspace_root: Some(PathBuf::from("/home/user/workspaces")),
+            ..Default::default()
+        };
 
         let result = resolver.resolve_workspace_path(&agent, &defaults);
-        assert_eq!(result, PathBuf::from("/custom/workspace"));
+        // Should use {root}/{agent_id}, NOT the explicit path
+        assert_eq!(result, PathBuf::from("/home/user/workspaces/coder"));
     }
 
     #[test]
