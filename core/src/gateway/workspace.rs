@@ -748,6 +748,53 @@ impl WorkspaceManager {
         Ok(workspaces)
     }
 
+    /// Update workspace metadata (name, description, icon)
+    ///
+    /// Only non-None fields are applied. Uses COALESCE to preserve existing
+    /// values for fields not provided. Returns the updated workspace,
+    /// or None if the workspace was not found.
+    pub async fn update(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        icon: Option<&str>,
+    ) -> Result<Option<Workspace>, WorkspaceError> {
+        if id == "global" {
+            return Err(WorkspaceError::CannotModifyGlobal);
+        }
+
+        // Scope the MutexGuard so it is dropped before any .await
+        let affected = {
+            let conn = self.conn.lock().map_err(|e| {
+                WorkspaceError::Database(format!("Lock error: {}", e))
+            })?;
+
+            let now = Utc::now().timestamp();
+            let name_owned = name.map(|s| s.to_string());
+            let desc_owned = description.map(|s| s.to_string());
+            let icon_owned = icon.map(|s| s.to_string());
+
+            conn.execute(
+                "UPDATE workspaces SET
+                    name = COALESCE(?1, name),
+                    description = COALESCE(?2, description),
+                    icon = COALESCE(?3, icon),
+                    last_active_at = ?4
+                 WHERE id = ?5",
+                params![name_owned, desc_owned, icon_owned, now, id],
+            )
+            .map_err(|e| WorkspaceError::Database(format!("Update failed: {}", e)))?
+        };
+
+        if affected == 0 {
+            return Ok(None);
+        }
+
+        debug!("Updated workspace '{}' metadata", id);
+        self.get(id).await
+    }
+
     /// Update workspace's last active timestamp
     pub async fn touch(&self, id: &str) -> Result<(), WorkspaceError> {
         let conn = self.conn.lock().map_err(|e| {

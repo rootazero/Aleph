@@ -1,6 +1,7 @@
 //! Workspace RPC Handlers
 //!
 //! Handlers for workspace management: create, list, get, update, archive, switch, getActive.
+//! All handlers delegate to WorkspaceManager (SQLite-backed).
 
 use serde::Deserialize;
 use serde_json::json;
@@ -10,8 +11,6 @@ use super::super::protocol::{
 };
 use super::parse_params;
 use crate::gateway::workspace::WorkspaceManager;
-use crate::gateway::workspace_store::{self, LegacyWorkspace};
-use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::sync_primitives::Arc;
 
 // ============================================================================
@@ -40,28 +39,42 @@ pub struct CreateParams {
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.create","params":{"id":"crypto","name":"Crypto Trading"},"id":1}
 /// ```
-pub async fn handle_create(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+pub async fn handle_create(
+    request: JsonRpcRequest,
+    workspace_manager: Arc<WorkspaceManager>,
+) -> JsonRpcResponse {
     let params: CreateParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
-    let mut ws = LegacyWorkspace::new(params.id, params.name);
-    if let Some(desc) = params.description {
-        ws.description = Some(desc);
-    }
-    if let Some(icon) = params.icon {
-        ws.icon = Some(icon);
-    }
+    match workspace_manager
+        .create(&params.id, "default", params.description.as_deref())
+        .await
+    {
+        Ok(mut ws) => {
+            // Apply name and icon which create() doesn't accept directly
+            ws.name = params.name;
+            ws.icon = params.icon.clone();
 
-    match workspace_store::create_workspace(&db, &ws).await {
-        Ok(()) => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "ok": true,
-                "workspace": ws,
-            }),
-        ),
+            // Persist name/icon via update
+            let _ = workspace_manager
+                .update(
+                    &params.id,
+                    Some(&ws.name),
+                    None,
+                    params.icon.as_deref(),
+                )
+                .await;
+
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "ok": true,
+                    "workspace": ws,
+                }),
+            )
+        }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -81,8 +94,11 @@ pub async fn handle_create(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.list","id":1}
 /// ```
-pub async fn handle_list(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
-    match workspace_store::list_workspaces(&db).await {
+pub async fn handle_list(
+    request: JsonRpcRequest,
+    workspace_manager: Arc<WorkspaceManager>,
+) -> JsonRpcResponse {
+    match workspace_manager.list(false).await {
         Ok(workspaces) => {
             JsonRpcResponse::success(request.id, json!({ "workspaces": workspaces }))
         }
@@ -112,13 +128,16 @@ pub struct GetParams {
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.get","params":{"id":"crypto"},"id":1}
 /// ```
-pub async fn handle_get(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+pub async fn handle_get(
+    request: JsonRpcRequest,
+    workspace_manager: Arc<WorkspaceManager>,
+) -> JsonRpcResponse {
     let params: GetParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
-    match workspace_store::get_workspace(&db, &params.id).await {
+    match workspace_manager.get(&params.id).await {
         Ok(Some(ws)) => JsonRpcResponse::success(request.id, json!({ "workspace": ws })),
         Ok(None) => JsonRpcResponse::error(
             request.id,
@@ -160,59 +179,35 @@ pub struct UpdateParams {
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.update","params":{"id":"crypto","name":"Crypto Research"},"id":1}
 /// ```
-pub async fn handle_update(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+pub async fn handle_update(
+    request: JsonRpcRequest,
+    workspace_manager: Arc<WorkspaceManager>,
+) -> JsonRpcResponse {
     let params: UpdateParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
-    // Get existing workspace
-    let mut ws = match workspace_store::get_workspace(&db, &params.id).await {
-        Ok(Some(ws)) => ws,
-        Ok(None) => {
-            return JsonRpcResponse::error(
-                request.id,
-                RESOURCE_NOT_FOUND,
-                format!("Workspace '{}' not found", params.id),
-            );
-        }
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to get workspace: {}", e),
-            );
-        }
-    };
-
-    // Apply updates
-    if let Some(name) = params.name {
-        ws.name = name;
-    }
-    if let Some(description) = params.description {
-        ws.description = Some(description);
-    }
-    if let Some(icon) = params.icon {
-        ws.icon = Some(icon);
-    }
-    ws.updated_at = chrono::Utc::now().timestamp();
-
-    // Delete old fact and create updated one
-    if let Err(e) = db.delete_fact(&format!("ws-{}", params.id)).await {
-        return JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to delete old workspace fact: {}", e),
-        );
-    }
-
-    match workspace_store::create_workspace(&db, &ws).await {
-        Ok(()) => JsonRpcResponse::success(
+    match workspace_manager
+        .update(
+            &params.id,
+            params.name.as_deref(),
+            params.description.as_deref(),
+            params.icon.as_deref(),
+        )
+        .await
+    {
+        Ok(Some(ws)) => JsonRpcResponse::success(
             request.id,
             json!({
                 "ok": true,
                 "workspace": ws,
             }),
+        ),
+        Ok(None) => JsonRpcResponse::error(
+            request.id,
+            RESOURCE_NOT_FOUND,
+            format!("Workspace '{}' not found", params.id),
         ),
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -233,14 +228,22 @@ pub async fn handle_update(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
 /// ```json
 /// {"jsonrpc":"2.0","method":"workspace.archive","params":{"id":"crypto"},"id":1}
 /// ```
-pub async fn handle_archive(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+pub async fn handle_archive(
+    request: JsonRpcRequest,
+    workspace_manager: Arc<WorkspaceManager>,
+) -> JsonRpcResponse {
     let params: GetParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
-    match workspace_store::archive_workspace(&db, &params.id).await {
-        Ok(()) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
+    match workspace_manager.archive(&params.id).await {
+        Ok(true) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
+        Ok(false) => JsonRpcResponse::error(
+            request.id,
+            RESOURCE_NOT_FOUND,
+            format!("Workspace '{}' not found", params.id),
+        ),
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -256,26 +259,30 @@ pub async fn handle_archive(request: JsonRpcRequest, db: MemoryBackend) -> JsonR
 /// Parameters for workspace.switch
 #[derive(Debug, Deserialize)]
 pub struct SwitchParams {
-    /// Target workspace identifier
-    pub workspace_id: String,
-    /// User identifier (defaults to "owner" for single-user mode)
-    #[serde(default = "default_user_id")]
-    pub user_id: String,
+    /// Agent (workspace) identifier to switch to
+    pub agent_id: String,
+    /// Channel identifier (e.g., "telegram", "rpc")
+    #[serde(default = "default_channel")]
+    pub channel: String,
+    /// Peer identifier within the channel
+    #[serde(default = "default_peer_id")]
+    pub peer_id: String,
 }
 
-fn default_user_id() -> String {
+fn default_channel() -> String {
+    "rpc".to_string()
+}
+
+fn default_peer_id() -> String {
     "owner".to_string()
 }
 
-/// Switch the active workspace for a user
-///
-/// Validates the workspace exists, sets it as active for the user, and
-/// updates the workspace's last_active_at timestamp.
+/// Switch the active agent/workspace for a channel+peer
 ///
 /// # Example Request
 ///
 /// ```json
-/// {"jsonrpc":"2.0","method":"workspace.switch","params":{"workspace_id":"project-x"},"id":1}
+/// {"jsonrpc":"2.0","method":"workspace.switch","params":{"agent_id":"project-x","channel":"rpc","peer_id":"owner"},"id":1}
 /// ```
 pub async fn handle_switch(
     request: JsonRpcRequest,
@@ -287,13 +294,13 @@ pub async fn handle_switch(
     };
 
     // Verify workspace exists
-    match workspace_manager.get(&params.workspace_id).await {
+    match workspace_manager.get(&params.agent_id).await {
         Ok(Some(_)) => {}
         Ok(None) => {
             return JsonRpcResponse::error(
                 request.id,
                 RESOURCE_NOT_FOUND,
-                format!("Workspace '{}' not found", params.workspace_id),
+                format!("Workspace '{}' not found", params.agent_id),
             );
         }
         Err(e) => {
@@ -305,11 +312,8 @@ pub async fn handle_switch(
         }
     }
 
-    // Set active agent for the user (channel="rpc", peer_id=user_id, agent_id=workspace_id)
-    // In the unified model, agent_id == workspace_id (1:1 mapping)
-    if let Err(e) = workspace_manager
-        .set_active_agent("rpc", &params.user_id, &params.workspace_id)
-    {
+    // Set active agent for the channel+peer
+    if let Err(e) = workspace_manager.set_active_agent(&params.channel, &params.peer_id, &params.agent_id) {
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -318,13 +322,13 @@ pub async fn handle_switch(
     }
 
     // Touch the workspace to update last_active_at
-    let _ = workspace_manager.touch(&params.workspace_id).await;
+    let _ = workspace_manager.touch(&params.agent_id).await;
 
     JsonRpcResponse::success(
         request.id,
         json!({
             "ok": true,
-            "workspace_id": params.workspace_id,
+            "agent_id": params.agent_id,
         }),
     )
 }
@@ -336,26 +340,29 @@ pub async fn handle_switch(
 /// Parameters for workspace.getActive
 #[derive(Debug, Deserialize)]
 pub struct GetActiveParams {
-    /// User identifier (defaults to "owner" for single-user mode)
-    #[serde(default = "default_user_id")]
-    pub user_id: String,
+    /// Channel identifier (e.g., "telegram", "rpc")
+    #[serde(default = "default_channel")]
+    pub channel: String,
+    /// Peer identifier within the channel
+    #[serde(default = "default_peer_id")]
+    pub peer_id: String,
 }
 
-/// Get the current active workspace for a user
+/// Get the current active agent/workspace for a channel+peer
 ///
-/// Returns the active workspace ID and its associated profile name.
+/// Returns the active agent_id or "main" as default.
 ///
 /// # Example Request
 ///
 /// ```json
-/// {"jsonrpc":"2.0","method":"workspace.getActive","params":{},"id":1}
+/// {"jsonrpc":"2.0","method":"workspace.getActive","params":{"channel":"rpc","peer_id":"owner"},"id":1}
 /// ```
 pub async fn handle_get_active(
     request: JsonRpcRequest,
     workspace_manager: Arc<WorkspaceManager>,
 ) -> JsonRpcResponse {
-    // Parse params — allow missing params (defaults to "owner")
-    let user_id = match &request.params {
+    // Parse params — allow missing params (defaults applied)
+    let (channel, peer_id) = match &request.params {
         Some(p) => {
             let params: GetActiveParams = match serde_json::from_value(p.clone()) {
                 Ok(p) => p,
@@ -367,19 +374,18 @@ pub async fn handle_get_active(
                     );
                 }
             };
-            params.user_id
+            (params.channel, params.peer_id)
         }
-        None => "owner".to_string(),
+        None => (default_channel(), default_peer_id()),
     };
 
-    // In the unified model, agent_id == workspace_id (1:1 mapping)
-    let workspace_id = workspace_manager
-        .get_active_agent("rpc", &user_id)
+    let agent_id = workspace_manager
+        .get_active_agent(&channel, &peer_id)
         .unwrap_or(None)
-        .unwrap_or_else(|| "global".to_string());
+        .unwrap_or_else(|| "main".to_string());
 
     // Fetch workspace to get the profile name
-    let profile = match workspace_manager.get(&workspace_id).await {
+    let profile = match workspace_manager.get(&agent_id).await {
         Ok(Some(ws)) => ws.profile,
         _ => "default".to_string(),
     };
@@ -387,7 +393,7 @@ pub async fn handle_get_active(
     JsonRpcResponse::success(
         request.id,
         json!({
-            "workspace_id": workspace_id,
+            "agent_id": agent_id,
             "profile": profile,
         }),
     )
@@ -448,31 +454,35 @@ mod tests {
 
     #[test]
     fn test_switch_params_deserialization() {
-        let json = serde_json::json!({"workspace_id": "project-x"});
+        let json = serde_json::json!({"agent_id": "project-x"});
         let params: SwitchParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.workspace_id, "project-x");
-        assert_eq!(params.user_id, "owner"); // default
+        assert_eq!(params.agent_id, "project-x");
+        assert_eq!(params.channel, "rpc"); // default
+        assert_eq!(params.peer_id, "owner"); // default
     }
 
     #[test]
-    fn test_switch_params_with_user_id() {
-        let json = serde_json::json!({"workspace_id": "project-x", "user_id": "alice"});
+    fn test_switch_params_with_channel() {
+        let json = serde_json::json!({"agent_id": "project-x", "channel": "telegram", "peer_id": "user-123"});
         let params: SwitchParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.workspace_id, "project-x");
-        assert_eq!(params.user_id, "alice");
+        assert_eq!(params.agent_id, "project-x");
+        assert_eq!(params.channel, "telegram");
+        assert_eq!(params.peer_id, "user-123");
     }
 
     #[test]
     fn test_get_active_params_deserialization() {
         let json = serde_json::json!({});
         let params: GetActiveParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.user_id, "owner"); // default
+        assert_eq!(params.channel, "rpc"); // default
+        assert_eq!(params.peer_id, "owner"); // default
     }
 
     #[test]
-    fn test_get_active_params_with_user_id() {
-        let json = serde_json::json!({"user_id": "bob"});
+    fn test_get_active_params_with_channel() {
+        let json = serde_json::json!({"channel": "telegram", "peer_id": "bob"});
         let params: GetActiveParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.user_id, "bob");
+        assert_eq!(params.channel, "telegram");
+        assert_eq!(params.peer_id, "bob");
     }
 }

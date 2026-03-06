@@ -399,40 +399,40 @@ impl HandlerRegistry {
             )
         });
 
-        // Workspace handlers (placeholders - actual handlers wired with MemoryBackend)
+        // Workspace handlers (placeholders - actual handlers wired with WorkspaceManager)
         registry.register("workspace.create", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "workspace.create requires MemoryBackend - wire Gateway runtime first".to_string(),
+                "workspace.create requires WorkspaceManager - wire Gateway runtime first".to_string(),
             )
         });
         registry.register("workspace.list", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "workspace.list requires MemoryBackend - wire Gateway runtime first".to_string(),
+                "workspace.list requires WorkspaceManager - wire Gateway runtime first".to_string(),
             )
         });
         registry.register("workspace.get", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "workspace.get requires MemoryBackend - wire Gateway runtime first".to_string(),
+                "workspace.get requires WorkspaceManager - wire Gateway runtime first".to_string(),
             )
         });
         registry.register("workspace.update", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "workspace.update requires MemoryBackend - wire Gateway runtime first".to_string(),
+                "workspace.update requires WorkspaceManager - wire Gateway runtime first".to_string(),
             )
         });
         registry.register("workspace.archive", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "workspace.archive requires MemoryBackend - wire Gateway runtime first".to_string(),
+                "workspace.archive requires WorkspaceManager - wire Gateway runtime first".to_string(),
             )
         });
         registry.register("workspace.switch", |req| async move {

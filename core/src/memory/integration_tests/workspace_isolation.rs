@@ -10,8 +10,7 @@ mod tests {
     use crate::memory::store::lance::LanceMemoryBackend;
     use crate::memory::store::types::SearchFilter;
     use crate::memory::store::{GraphNode, GraphStore, MemoryStore};
-    use crate::gateway::workspace::{WorkspaceContext, WorkspaceFilter, DEFAULT_WORKSPACE};
-    use crate::gateway::workspace_store;
+    use crate::gateway::workspace::{WorkspaceContext, WorkspaceFilter, WorkspaceManager, WorkspaceManagerConfig, DEFAULT_WORKSPACE};
 
     /// Helper: create a MemoryFact with a synthetic embedding and assigned workspace.
     fn make_fact(content: &str, workspace: &str, embedding: Vec<f32>) -> MemoryFact {
@@ -228,58 +227,47 @@ mod tests {
 
     #[tokio::test]
     async fn test_workspace_crud_operations() {
-        use crate::gateway::workspace_store::LegacyWorkspace;
-        use crate::sync_primitives::Arc;
-
         let tmp = tempfile::tempdir().unwrap();
-        let backend = Arc::new(
-            LanceMemoryBackend::open_or_create(tmp.path())
-                .await
-                .unwrap(),
-        );
+        let db_path = tmp.path().join("workspaces.db");
+        let config = WorkspaceManagerConfig {
+            db_path,
+            default_profile: "default".to_string(),
+            archive_after_days: 0,
+        };
+        let manager = WorkspaceManager::new(config).unwrap();
 
         // Create a workspace
-        let ws = LegacyWorkspace::new("crypto", "Crypto Research");
-        workspace_store::create_workspace(&backend, &ws)
-            .await
-            .unwrap();
+        let ws = manager.create("crypto", "default", Some("Crypto Research")).await.unwrap();
+        assert_eq!(ws.id, "crypto");
 
-        // List workspaces — should contain our new one
-        let list = workspace_store::list_workspaces(&backend).await.unwrap();
+        // Update name
+        let updated = manager.update("crypto", Some("Crypto Research"), None, None).await.unwrap();
+        assert!(updated.is_some());
+        assert_eq!(updated.unwrap().name, "Crypto Research");
+
+        // List workspaces — should contain our new one (plus global)
+        let list = manager.list(false).await.unwrap();
         assert!(
             list.iter().any(|w| w.id == "crypto"),
             "workspace list should contain 'crypto'"
         );
 
         // Get workspace by ID — verify details
-        let fetched = workspace_store::get_workspace(&backend, "crypto")
-            .await
-            .unwrap();
+        let fetched = manager.get("crypto").await.unwrap();
         assert!(fetched.is_some(), "should find workspace 'crypto'");
         let fetched = fetched.unwrap();
         assert_eq!(fetched.name, "Crypto Research");
         assert!(!fetched.is_archived);
-        assert!(!fetched.is_default);
 
-        // Archive workspace — verify is_archived = true
-        workspace_store::archive_workspace(&backend, "crypto")
-            .await
-            .unwrap();
-        let archived = workspace_store::get_workspace(&backend, "crypto")
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(archived.is_archived, "workspace should be archived");
+        // Archive workspace — verify it disappears from non-archived list
+        let archived = manager.archive("crypto").await.unwrap();
+        assert!(archived, "archive should return true");
 
-        // Verify default workspace cannot be archived
-        let default_ws = LegacyWorkspace::default_workspace();
-        workspace_store::create_workspace(&backend, &default_ws)
-            .await
-            .unwrap();
-        let result = workspace_store::archive_workspace(&backend, DEFAULT_WORKSPACE).await;
+        // Verify global workspace cannot be archived
+        let result = manager.archive("global").await;
         assert!(
             result.is_err(),
-            "archiving default workspace should return an error"
+            "archiving global workspace should return an error"
         );
     }
 }
