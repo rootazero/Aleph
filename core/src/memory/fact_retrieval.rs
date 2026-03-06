@@ -143,7 +143,7 @@ impl FactRetrieval {
         query: &str,
         workspace: &str,
     ) -> Result<RetrievalResult, AlephError> {
-        use crate::memory::workspace::WorkspaceFilter;
+        use crate::gateway::workspace::WorkspaceFilter;
         self.retrieve_with_filter(query, WorkspaceFilter::Single(workspace.to_string()))
             .await
     }
@@ -155,7 +155,7 @@ impl FactRetrieval {
     pub async fn retrieve_with_filter(
         &self,
         query: &str,
-        filter: crate::memory::workspace::WorkspaceFilter,
+        filter: crate::gateway::workspace::WorkspaceFilter,
     ) -> Result<RetrievalResult, AlephError> {
         let query_embedding = self
             .embedder
@@ -329,7 +329,7 @@ impl FactRetrieval {
         primary_workspace: &str,
         config: &crate::config::types::profile::SmartRecallConfig,
     ) -> Result<SmartRetrievalResult, AlephError> {
-        use crate::memory::workspace::WorkspaceFilter;
+        use crate::gateway::workspace::WorkspaceFilter;
         use tracing::debug;
 
         // Phase 1: Search primary workspace

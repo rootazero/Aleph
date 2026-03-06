@@ -11,6 +11,8 @@ use super::super::protocol::{
 use super::parse_params;
 use crate::gateway::workspace::WorkspaceManager;
 use crate::memory::store::{MemoryBackend, MemoryStore};
+// CRUD handlers still use workspace_store which operates on memory::workspace::Workspace.
+// This will be migrated to WorkspaceManager in T6.
 use crate::memory::workspace::Workspace;
 use crate::memory::workspace_store;
 use crate::sync_primitives::Arc;
@@ -306,10 +308,10 @@ pub async fn handle_switch(
         }
     }
 
-    // Set active workspace for the user
+    // Set active agent for the user (channel="rpc", peer_id=user_id, agent_id=workspace_id)
+    // In the unified model, agent_id == workspace_id (1:1 mapping)
     if let Err(e) = workspace_manager
-        .set_active(&params.user_id, &params.workspace_id)
-        .await
+        .set_active_agent("rpc", &params.user_id, &params.workspace_id)
     {
         return JsonRpcResponse::error(
             request.id,
@@ -373,7 +375,11 @@ pub async fn handle_get_active(
         None => "owner".to_string(),
     };
 
-    let workspace_id = workspace_manager.get_active_id(&user_id).await;
+    // In the unified model, agent_id == workspace_id (1:1 mapping)
+    let workspace_id = workspace_manager
+        .get_active_agent("rpc", &user_id)
+        .unwrap_or(None)
+        .unwrap_or_else(|| "global".to_string());
 
     // Fetch workspace to get the profile name
     let profile = match workspace_manager.get(&workspace_id).await {

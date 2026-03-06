@@ -291,52 +291,6 @@ mod tests {
 // WorkspaceContext — runtime context for active workspace
 // ---------------------------------------------------------------------------
 
-use crate::memory::namespace::NamespaceScope;
-use crate::memory::store::types::SearchFilter;
-
-/// Runtime context for the active workspace.
-///
-/// Created from a Session, flows through the Agent Loop to all memory
-/// operations.  Carries the workspace identifier and namespace scope so
-/// that every store call is automatically scoped.
-#[derive(Debug, Clone)]
-pub struct WorkspaceContext {
-    /// Active workspace identifier.
-    pub workspace_id: String,
-    /// Namespace scope for access control.
-    pub namespace: NamespaceScope,
-}
-
-impl WorkspaceContext {
-    /// Create a new workspace context.
-    pub fn new(workspace_id: impl Into<String>, namespace: NamespaceScope) -> Self {
-        Self {
-            workspace_id: workspace_id.into(),
-            namespace,
-        }
-    }
-
-    /// Convenience constructor for the default owner context.
-    ///
-    /// Uses `DEFAULT_WORKSPACE` ("default") and `NamespaceScope::Owner`.
-    pub fn default_owner() -> Self {
-        Self {
-            workspace_id: DEFAULT_WORKSPACE.to_string(),
-            namespace: NamespaceScope::Owner,
-        }
-    }
-
-    /// Build a `SearchFilter` pre-populated with this context's workspace
-    /// and namespace, restricted to valid facts only.
-    pub fn to_search_filter(&self) -> SearchFilter {
-        SearchFilter::new()
-            .with_namespace(self.namespace.clone())
-            .with_workspace(WorkspaceFilter::Single(self.workspace_id.clone()))
-            .with_valid_only()
-    }
-
-    /// Return a reference to the workspace identifier.
-    pub fn workspace_id(&self) -> &str {
-        &self.workspace_id
-    }
-}
+// WorkspaceContext has been moved to crate::gateway::workspace.
+// Re-export for backward compatibility until this file is deleted in T5.
+pub use crate::gateway::workspace::WorkspaceContext;

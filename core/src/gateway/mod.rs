@@ -140,7 +140,7 @@ pub use run_event_bus::{
 };
 pub use workspace::{
     Workspace, WorkspaceManager, WorkspaceManagerConfig, WorkspaceError,
-    CacheState, UserActiveWorkspace, ActiveWorkspace,
+    CacheState, ActiveWorkspace, WorkspaceFilter, WorkspaceContext, DEFAULT_WORKSPACE,
 };
 
 // Property-based tests

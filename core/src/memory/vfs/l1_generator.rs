@@ -11,7 +11,7 @@ use crate::memory::namespace::NamespaceScope;
 use crate::memory::EmbeddingProvider;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::vfs::compute_directory_hash;
-use crate::memory::workspace::WorkspaceFilter;
+use crate::gateway::workspace::WorkspaceFilter;
 use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter};
 use crate::providers::AiProvider;
 use std::collections::HashSet;

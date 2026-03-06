@@ -139,5 +139,6 @@ pub use vfs::{compute_directory_hash, L1Generator, bootstrap_agent_context, migr
 pub use store::lance::LanceMemoryBackend;
 pub use store::types::{SearchFilter, ScoredFact, MemoryFilter};
 pub use store::MemoryBackend;
-pub use workspace::{Workspace, WorkspaceConfig, WorkspaceContext, WorkspaceFilter, DEFAULT_WORKSPACE};
+// Workspace types are now canonical in gateway::workspace; re-export for backward compatibility
+pub use crate::gateway::workspace::{Workspace, WorkspaceContext, WorkspaceFilter, DEFAULT_WORKSPACE};
 pub use scoring_pipeline::{ScoringPipeline, ScoringPipelineConfig, ScoringContext};

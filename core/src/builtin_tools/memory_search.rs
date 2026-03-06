@@ -192,7 +192,7 @@ impl MemorySearchTool {
     ) -> std::result::Result<MemorySearchOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
-        use crate::memory::workspace::WorkspaceFilter;
+        use crate::gateway::workspace::WorkspaceFilter;
 
         // Resolve workspace filter with priority:
         // cross_workspace: true → All
