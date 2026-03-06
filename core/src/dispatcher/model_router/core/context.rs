@@ -450,6 +450,7 @@ fn task_type_to_string(task_type: &TaskType) -> String {
         TaskType::ImageGeneration(_) => "image_generation".to_string(),
         TaskType::VideoGeneration(_) => "video_generation".to_string(),
         TaskType::AudioGeneration(_) => "audio_generation".to_string(),
+        TaskType::Collaborative(_) => "collaborative".to_string(),
     }
 }
 

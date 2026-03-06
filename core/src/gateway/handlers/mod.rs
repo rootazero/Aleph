@@ -40,6 +40,7 @@
 //! | identity | Identity/soul management |
 //! | workspace | Workspace isolation management |
 //! | daemon | Daemon status, shutdown, logs |
+//! | arena | Multi-agent arena lifecycle |
 //! | guests | Guest invitation management |
 
 pub mod health;
@@ -97,6 +98,7 @@ pub mod daemon_control;
 pub mod discord_panel;
 pub mod oauth;
 pub mod vault_config;
+pub mod arena;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
 pub use identity::SharedIdentityResolver;
@@ -477,6 +479,29 @@ impl HandlerRegistry {
             )
         });
 
+        // Arena handlers (placeholders - actual handlers wired with ArenaManager)
+        registry.register("arena.create", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "arena.create requires ArenaManager - wire SharedArenaManager first".to_string(),
+            )
+        });
+        registry.register("arena.query", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "arena.query requires ArenaManager - wire SharedArenaManager first".to_string(),
+            )
+        });
+        registry.register("arena.settle", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "arena.settle requires ArenaManager - wire SharedArenaManager first".to_string(),
+            )
+        });
+
         // Vault configuration handlers (stateless — keychain + file I/O)
         registry.register("vault.status", vault_config::handle_status);
         registry.register("vault.storeKey", vault_config::handle_store_key);
@@ -725,6 +750,14 @@ mod tests {
         assert!(registry.has_method("identity.set"));
         assert!(registry.has_method("identity.clear"));
         assert!(registry.has_method("identity.list"));
+    }
+
+    #[test]
+    fn test_arena_handlers_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(registry.has_method("arena.create"));
+        assert!(registry.has_method("arena.query"));
+        assert!(registry.has_method("arena.settle"));
     }
 
     #[test]

@@ -143,6 +143,9 @@ pub enum TaskType {
 
     /// Audio generation task (uses specific provider/model)
     AudioGeneration(AudioGenTask),
+
+    /// Collaborative multi-agent task (uses SharedArena)
+    Collaborative(CollaborativeTask),
 }
 
 impl TaskType {
@@ -157,6 +160,7 @@ impl TaskType {
             TaskType::ImageGeneration(_) => "image_generation",
             TaskType::VideoGeneration(_) => "video_generation",
             TaskType::AudioGeneration(_) => "audio_generation",
+            TaskType::Collaborative(_) => "collaborative",
         }
     }
 }
@@ -325,6 +329,32 @@ pub struct AudioGenTask {
 
     /// Voice name for TTS (if applicable)
     pub voice: Option<String>,
+}
+
+/// Collaborative multi-agent task
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CollaborativeTask {
+    /// Description of the collaborative task
+    pub description: String,
+    /// Agent IDs to participate
+    pub agents: Vec<String>,
+    /// Coordination strategy: "peer" or "pipeline"
+    pub strategy: String,
+    /// For peer strategy: which agent coordinates
+    pub coordinator: Option<String>,
+    /// For pipeline strategy: stage specifications
+    pub stages: Option<Vec<CollaborativeStage>>,
+}
+
+/// A stage in a collaborative pipeline
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CollaborativeStage {
+    /// The agent assigned to this stage
+    pub agent_id: String,
+    /// Human-readable description of this stage's purpose
+    pub description: String,
+    /// Agent IDs that must complete before this stage can begin
+    pub depends_on: Vec<String>,
 }
 
 /// Current execution status of a task

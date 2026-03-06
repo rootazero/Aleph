@@ -162,6 +162,19 @@ pub enum ImportantEvent {
         #[serde(default = "current_timestamp")]
         timestamp: u64,
     },
+
+    /// Arena state update for team awareness
+    ArenaStateUpdate {
+        arena_id: String,
+        goal: String,
+        active_agents: Vec<String>,
+        completed_steps: usize,
+        total_steps: usize,
+        /// Brief descriptions of recent artifacts
+        latest_artifacts: Vec<String>,
+        #[serde(default = "current_timestamp")]
+        timestamp: u64,
+    },
 }
 
 impl ImportantEvent {
@@ -173,6 +186,7 @@ impl ImportantEvent {
             Self::SwarmStateSummary { timestamp, .. } => *timestamp,
             Self::ToolExecuted { timestamp, .. } => *timestamp,
             Self::DecisionBroadcast { timestamp, .. } => *timestamp,
+            Self::ArenaStateUpdate { timestamp, .. } => *timestamp,
         }
     }
 }
@@ -309,5 +323,44 @@ mod tests {
         });
 
         assert_eq!(event.timestamp(), 9999);
+    }
+
+    #[test]
+    fn test_arena_state_update_serialization() {
+        let event = AgentEvent::Important(ImportantEvent::ArenaStateUpdate {
+            arena_id: "arena-123".into(),
+            goal: "Fix auth bugs".into(),
+            active_agents: vec!["agent-a".into(), "agent-b".into()],
+            completed_steps: 3,
+            total_steps: 10,
+            latest_artifacts: vec!["Text: art-1".into(), "Code: art-2".into()],
+            timestamp: 1234567890,
+        });
+
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: AgentEvent = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(event.tier(), deserialized.tier());
+        assert_eq!(deserialized.timestamp(), 1234567890);
+
+        // Verify JSON contains expected fields
+        assert!(json.contains("\"arena_state_update\""));
+        assert!(json.contains("arena-123"));
+        assert!(json.contains("Fix auth bugs"));
+    }
+
+    #[test]
+    fn test_arena_state_update_timestamp() {
+        let event = ImportantEvent::ArenaStateUpdate {
+            arena_id: "arena-1".into(),
+            goal: "test".into(),
+            active_agents: vec![],
+            completed_steps: 0,
+            total_steps: 0,
+            latest_artifacts: vec![],
+            timestamp: 42,
+        };
+
+        assert_eq!(event.timestamp(), 42);
     }
 }
