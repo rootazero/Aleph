@@ -68,6 +68,38 @@ pub struct Workspace {
 
     /// Optional description
     pub description: Option<String>,
+
+    /// Human-readable display name (defaults to id)
+    #[serde(default)]
+    pub name: String,
+
+    /// Optional emoji or icon identifier
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+
+    /// Whether this workspace is archived (soft-deleted)
+    #[serde(default)]
+    pub is_archived: bool,
+
+    /// Memory decay rate override (0.0 = no decay, 1.0 = maximum decay)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decay_rate: Option<f64>,
+
+    /// Fact types that should never decay in this workspace (stored as JSON array of strings)
+    #[serde(default)]
+    pub permanent_fact_types: Vec<String>,
+
+    /// Default model override (e.g., "claude-sonnet-4-20250514")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+
+    /// System prompt override for this workspace
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt_override: Option<String>,
+
+    /// Allowlist of tool names available in this workspace (empty = all tools)
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
 }
 
 impl Workspace {
@@ -84,6 +116,14 @@ impl Workspace {
             cache_state: CacheState::None,
             env_vars: HashMap::new(),
             description: None,
+            name: id,
+            icon: None,
+            is_archived: false,
+            decay_rate: None,
+            permanent_fact_types: Vec::new(),
+            default_model: None,
+            system_prompt_override: None,
+            allowed_tools: Vec::new(),
         }
     }
 
@@ -379,7 +419,15 @@ impl WorkspaceManager {
                 cache_state TEXT,
                 env_vars TEXT,
                 description TEXT,
-                archived INTEGER DEFAULT 0
+                archived INTEGER DEFAULT 0,
+                name TEXT NOT NULL DEFAULT '',
+                icon TEXT,
+                is_archived INTEGER DEFAULT 0,
+                decay_rate REAL,
+                permanent_fact_types TEXT,
+                default_model TEXT,
+                system_prompt_override TEXT,
+                allowed_tools TEXT
             );
 
             CREATE TABLE IF NOT EXISTS user_active_workspace (
@@ -398,8 +446,8 @@ impl WorkspaceManager {
         // Ensure global workspace exists
         let now = Utc::now().timestamp();
         conn.execute(
-            "INSERT OR IGNORE INTO workspaces (id, profile, created_at, last_active_at, description)
-             VALUES ('global', 'default', ?, ?, 'Default global workspace')",
+            "INSERT OR IGNORE INTO workspaces (id, profile, created_at, last_active_at, description, name)
+             VALUES ('global', 'default', ?, ?, 'Default global workspace', 'global')",
             params![now, now],
         )
         .ok();
@@ -455,6 +503,14 @@ impl WorkspaceManager {
             cache_state: CacheState::None,
             env_vars: HashMap::new(),
             description: description.map(String::from),
+            name: id.to_string(),
+            icon: None,
+            is_archived: false,
+            decay_rate: None,
+            permanent_fact_types: Vec::new(),
+            default_model: None,
+            system_prompt_override: None,
+            allowed_tools: Vec::new(),
         };
 
         let conn = self.conn.lock().map_err(|e| {
@@ -462,14 +518,15 @@ impl WorkspaceManager {
         })?;
 
         conn.execute(
-            "INSERT INTO workspaces (id, profile, created_at, last_active_at, description)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO workspaces (id, profile, created_at, last_active_at, description, name)
+             VALUES (?, ?, ?, ?, ?, ?)",
             params![
                 &workspace.id,
                 &workspace.profile,
                 now.timestamp(),
                 now.timestamp(),
                 &workspace.description,
+                &workspace.name,
             ],
         )
         .map_err(|e| {
@@ -492,15 +549,22 @@ impl WorkspaceManager {
         })?;
 
         let result = conn.query_row(
-            "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description
+            "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
+                    name, icon, is_archived, decay_rate, permanent_fact_types,
+                    default_model, system_prompt_override, allowed_tools
              FROM workspaces WHERE id = ? AND archived = 0",
             params![id],
             |row| {
                 let cache_state_json: Option<String> = row.get(4)?;
                 let env_vars_json: Option<String> = row.get(5)?;
+                let permanent_fact_types_json: Option<String> = row.get(11)?;
+                let allowed_tools_json: Option<String> = row.get(14)?;
+                let ws_id: String = row.get(0)?;
+                let name: String = row.get::<_, Option<String>>(7)?
+                    .unwrap_or_else(|| ws_id.clone());
 
                 Ok(Workspace {
-                    id: row.get(0)?,
+                    id: ws_id,
                     profile: row.get(1)?,
                     created_at: DateTime::from_timestamp(row.get::<_, i64>(2)?, 0)
                         .unwrap_or_else(Utc::now),
@@ -513,6 +577,18 @@ impl WorkspaceManager {
                         .and_then(|j| serde_json::from_str(&j).ok())
                         .unwrap_or_default(),
                     description: row.get(6)?,
+                    name,
+                    icon: row.get(8)?,
+                    is_archived: row.get::<_, i32>(9).unwrap_or(0) != 0,
+                    decay_rate: row.get(10)?,
+                    permanent_fact_types: permanent_fact_types_json
+                        .and_then(|j| serde_json::from_str(&j).ok())
+                        .unwrap_or_default(),
+                    default_model: row.get(12)?,
+                    system_prompt_override: row.get(13)?,
+                    allowed_tools: allowed_tools_json
+                        .and_then(|j| serde_json::from_str(&j).ok())
+                        .unwrap_or_default(),
                 })
             },
         );
@@ -531,10 +607,14 @@ impl WorkspaceManager {
         })?;
 
         let query = if include_archived {
-            "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description
+            "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
+                    name, icon, is_archived, decay_rate, permanent_fact_types,
+                    default_model, system_prompt_override, allowed_tools
              FROM workspaces ORDER BY last_active_at DESC"
         } else {
-            "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description
+            "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
+                    name, icon, is_archived, decay_rate, permanent_fact_types,
+                    default_model, system_prompt_override, allowed_tools
              FROM workspaces WHERE archived = 0 ORDER BY last_active_at DESC"
         };
 
@@ -545,9 +625,14 @@ impl WorkspaceManager {
             .query_map([], |row| {
                 let cache_state_json: Option<String> = row.get(4)?;
                 let env_vars_json: Option<String> = row.get(5)?;
+                let permanent_fact_types_json: Option<String> = row.get(11)?;
+                let allowed_tools_json: Option<String> = row.get(14)?;
+                let ws_id: String = row.get(0)?;
+                let name: String = row.get::<_, Option<String>>(7)?
+                    .unwrap_or_else(|| ws_id.clone());
 
                 Ok(Workspace {
-                    id: row.get(0)?,
+                    id: ws_id,
                     profile: row.get(1)?,
                     created_at: DateTime::from_timestamp(row.get::<_, i64>(2)?, 0)
                         .unwrap_or_else(Utc::now),
@@ -560,6 +645,18 @@ impl WorkspaceManager {
                         .and_then(|j| serde_json::from_str(&j).ok())
                         .unwrap_or_default(),
                     description: row.get(6)?,
+                    name,
+                    icon: row.get(8)?,
+                    is_archived: row.get::<_, i32>(9).unwrap_or(0) != 0,
+                    decay_rate: row.get(10)?,
+                    permanent_fact_types: permanent_fact_types_json
+                        .and_then(|j| serde_json::from_str(&j).ok())
+                        .unwrap_or_default(),
+                    default_model: row.get(12)?,
+                    system_prompt_override: row.get(13)?,
+                    allowed_tools: allowed_tools_json
+                        .and_then(|j| serde_json::from_str(&j).ok())
+                        .unwrap_or_default(),
                 })
             })
             .map_err(|e| WorkspaceError::Database(e.to_string()))?
