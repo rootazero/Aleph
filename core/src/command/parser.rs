@@ -75,14 +75,9 @@ impl CommandParser {
     ///
     /// Returns `Some(ParsedCommand)` if the input matches a registered command.
     pub async fn parse_async(&self, input: &str) -> Option<ParsedCommand> {
-        let trimmed = input.trim();
-        if !trimmed.starts_with('/') {
-            return None;
-        }
+        let resolved = self.tool_registry.resolve_command(input).await?;
 
-        let resolved = self.tool_registry.resolve_command(trimmed).await?;
-
-        let source_type = tool_source_to_source_type(&resolved.tool.source);
+        let source_type = ToolSourceType::from(&resolved.tool.source);
         let context = tool_to_command_context(&resolved.tool);
 
         Some(ParsedCommand {
@@ -112,17 +107,6 @@ impl CommandParser {
     /// Get a reference to the underlying ToolRegistry
     pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
         &self.tool_registry
-    }
-}
-
-/// Convert ToolSource to ToolSourceType
-fn tool_source_to_source_type(source: &ToolSource) -> ToolSourceType {
-    match source {
-        ToolSource::Builtin => ToolSourceType::Builtin,
-        ToolSource::Native => ToolSourceType::Native,
-        ToolSource::Mcp { .. } => ToolSourceType::Mcp,
-        ToolSource::Skill { .. } => ToolSourceType::Skill,
-        ToolSource::Custom { .. } => ToolSourceType::Custom,
     }
 }
 
