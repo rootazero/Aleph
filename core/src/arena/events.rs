@@ -46,6 +46,34 @@ pub enum ArenaEvent {
 }
 
 impl ArenaEvent {
+    /// Convert to a swarm ImportantEvent for bus publishing.
+    ///
+    /// Provides a summary view of the arena event suitable for team awareness
+    /// context injection during the Think phase.
+    pub fn to_swarm_event(
+        &self,
+        goal: &str,
+        active_agents: Vec<String>,
+        completed_steps: usize,
+        total_steps: usize,
+        latest_artifacts: Vec<String>,
+    ) -> crate::agents::swarm::events::ImportantEvent {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        crate::agents::swarm::events::ImportantEvent::ArenaStateUpdate {
+            arena_id: self.arena_id().to_string(),
+            goal: goal.to_string(),
+            active_agents,
+            completed_steps,
+            total_steps,
+            latest_artifacts,
+            timestamp,
+        }
+    }
+
     /// Returns the tier classification for this event.
     pub fn tier(&self) -> ArenaEventTier {
         match self {
@@ -151,5 +179,43 @@ mod tests {
             arena_id: arena_id.clone(),
         };
         assert_eq!(settling.tier(), ArenaEventTier::Important);
+    }
+
+    #[test]
+    fn arena_event_to_swarm_event_conversion() {
+        let event = ArenaEvent::ProgressUpdated {
+            arena_id: ArenaId::from_string("arena-42"),
+            agent_id: "agent-alpha".to_string(),
+            current: "analyzing code".to_string(),
+        };
+
+        let swarm_event = event.to_swarm_event(
+            "Fix auth bugs",
+            vec!["agent-alpha".to_string(), "agent-beta".to_string()],
+            3,
+            10,
+            vec!["Text: art-1".to_string()],
+        );
+
+        match swarm_event {
+            crate::agents::swarm::events::ImportantEvent::ArenaStateUpdate {
+                arena_id,
+                goal,
+                active_agents,
+                completed_steps,
+                total_steps,
+                latest_artifacts,
+                timestamp,
+            } => {
+                assert_eq!(arena_id, "arena-42");
+                assert_eq!(goal, "Fix auth bugs");
+                assert_eq!(active_agents.len(), 2);
+                assert_eq!(completed_steps, 3);
+                assert_eq!(total_steps, 10);
+                assert_eq!(latest_artifacts.len(), 1);
+                assert!(timestamp > 0);
+            }
+            _ => panic!("Expected ArenaStateUpdate variant"),
+        }
     }
 }
