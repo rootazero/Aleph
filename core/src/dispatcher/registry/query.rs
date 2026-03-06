@@ -4,7 +4,7 @@
 
 use crate::config::RoutingRuleConfig;
 
-use super::super::types::{ToolSource, UnifiedTool};
+use super::super::types::{ChannelType, ToolSource, UnifiedTool};
 use super::types::ToolStorage;
 
 /// Query functionality for ToolRegistry
@@ -113,6 +113,25 @@ impl ToolQuery {
     pub async fn list_all_for_ui(&self) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
         let mut result: Vec<_> = tools.values().filter(|t| t.is_active).cloned().collect();
+        result.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then(a.name.cmp(&b.name)));
+        result
+    }
+
+    /// List active tools visible to a specific channel
+    ///
+    /// Tools with empty `visible_channels` are visible to all channels.
+    /// Tools with non-empty `visible_channels` are only visible to listed channels.
+    pub async fn list_for_channel(&self, channel: ChannelType) -> Vec<UnifiedTool> {
+        let tools = self.tools.read().await;
+        let mut result: Vec<_> = tools
+            .values()
+            .filter(|t| {
+                t.is_active
+                    && (t.visible_channels.is_empty()
+                        || t.visible_channels.contains(&channel))
+            })
+            .cloned()
+            .collect();
         result.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then(a.name.cmp(&b.name)));
         result
     }
