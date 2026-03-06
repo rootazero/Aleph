@@ -364,7 +364,7 @@ impl ToolRegistry {
 mod tests {
     use super::*;
     use crate::dispatcher::types::ToolPriority;
-    use super::super::types::{ChannelType, ConflictInfo, ConflictResolution, DispatchMode, ToolSource};
+    use super::super::types::{ChannelType, ConflictInfo, ConflictResolution, DispatchMode, ToolSafetyLevel, ToolSource};
 
     #[tokio::test]
     async fn test_registry_new() {
@@ -1089,5 +1089,27 @@ mod tests {
 
         let results = registry.filter_by_prefix("xyz").await;
         assert_eq!(results.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_high_risk_tool_channel_restriction() {
+        let registry = ToolRegistry::new();
+
+        let tool = UnifiedTool::new(
+            "mcp:server:delete_all",
+            "delete_all",
+            "Delete everything",
+            ToolSource::Mcp { server: "server".into() },
+        )
+        .with_safety_level(ToolSafetyLevel::IrreversibleHighRisk)
+        .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
+
+        registry.register_with_conflict_resolution(tool).await;
+
+        let telegram = registry.list_for_channel(ChannelType::Telegram).await;
+        assert!(!telegram.iter().any(|t| t.name == "delete_all"));
+
+        let panel = registry.list_for_channel(ChannelType::Panel).await;
+        assert!(panel.iter().any(|t| t.name == "delete_all"));
     }
 }
