@@ -70,10 +70,12 @@ mod tests {
             ..Default::default()
         };
         let ws = WorkspaceFiles {
-            root: PathBuf::from("/tmp"),
+            workspace_dir: PathBuf::from("/tmp"),
             files: vec![WorkspaceFile {
                 name: "IDENTITY.md",
-                content: "You are Aleph.".to_string(),
+                content: Some("You are Aleph.".to_string()),
+                truncated: false,
+                original_size: 14,
             }],
         };
         let tools = vec![];

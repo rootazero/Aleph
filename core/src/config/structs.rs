@@ -114,6 +114,9 @@ pub struct Config {
     /// Top-level secrets subsystem settings
     #[serde(default)]
     pub secrets_config: SecretsConfig,
+    /// Prompt customization (extra files injection, etc.)
+    #[serde(default)]
+    pub prompt: PromptSectionConfig,
     /// Channel configurations (runtime channel control)
     /// Each key is a channel name (e.g. "telegram", "discord"), value is channel-specific config.
     /// This uses opaque JSON values since each channel has a different schema.
@@ -234,6 +237,7 @@ impl Default for Config {
             secret_providers: HashMap::new(),
             secrets: HashMap::new(),
             secrets_config: SecretsConfig::default(),
+            prompt: PromptSectionConfig::default(),
             channels: HashMap::new(),
             agents: AgentsConfig::default(),
             bindings: Vec::new(),
