@@ -246,6 +246,26 @@ impl ContextInjector {
                     )
                 }
             }
+            ImportantEvent::ArenaStateUpdate {
+                arena_id,
+                goal,
+                active_agents,
+                completed_steps,
+                total_steps,
+                latest_artifacts,
+                ..
+            } => {
+                let agents_str = active_agents.join(", ");
+                let artifacts_str = if latest_artifacts.is_empty() {
+                    "none yet".to_string()
+                } else {
+                    latest_artifacts.join("; ")
+                };
+                format!(
+                    "Arena '{}': {} ({}/{} steps done, agents: [{}], recent: {})",
+                    goal, arena_id, completed_steps, total_steps, agents_str, artifacts_str
+                )
+            }
         }
     }
 
@@ -439,5 +459,48 @@ mod tests {
 
         injector.clear_context().await;
         assert_eq!(injector.window_size().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_format_arena_state_update() {
+        let bus = Arc::new(AgentMessageBus::new());
+        let injector = ContextInjector::new(bus);
+
+        let event = ImportantEvent::ArenaStateUpdate {
+            arena_id: "arena-42".into(),
+            goal: "Fix auth bugs".into(),
+            active_agents: vec!["agent-a".into(), "agent-b".into()],
+            completed_steps: 3,
+            total_steps: 10,
+            latest_artifacts: vec!["Text: art-1".into(), "Code: art-2".into()],
+            timestamp: 0,
+        };
+
+        let formatted = injector.format_important_event(&event);
+        assert!(formatted.contains("Fix auth bugs"));
+        assert!(formatted.contains("arena-42"));
+        assert!(formatted.contains("3/10 steps done"));
+        assert!(formatted.contains("agent-a, agent-b"));
+        assert!(formatted.contains("Text: art-1; Code: art-2"));
+    }
+
+    #[tokio::test]
+    async fn test_format_arena_state_update_no_artifacts() {
+        let bus = Arc::new(AgentMessageBus::new());
+        let injector = ContextInjector::new(bus);
+
+        let event = ImportantEvent::ArenaStateUpdate {
+            arena_id: "arena-1".into(),
+            goal: "Research task".into(),
+            active_agents: vec!["agent-x".into()],
+            completed_steps: 0,
+            total_steps: 5,
+            latest_artifacts: vec![],
+            timestamp: 0,
+        };
+
+        let formatted = injector.format_important_event(&event);
+        assert!(formatted.contains("none yet"));
+        assert!(formatted.contains("0/5 steps done"));
     }
 }

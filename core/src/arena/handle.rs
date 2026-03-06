@@ -3,6 +3,7 @@
 //! Each agent receives an `ArenaHandle` that wraps `Arc<RwLock<SharedArena>>`
 //! and enforces permission checks before delegating to the underlying arena.
 
+use crate::domain::Entity;
 use crate::sync_primitives::{Arc, RwLock};
 
 use super::arena::SharedArena;
@@ -108,6 +109,28 @@ impl ArenaHandle {
 
         let mut arena = self.arena.write().unwrap_or_else(|e| e.into_inner());
         arena.add_shared_fact(fact)
+    }
+
+    /// Create a snapshot of the arena state suitable for swarm context injection.
+    ///
+    /// Returns `(arena_id, goal, active_agents, completed_steps, total_steps, latest_artifacts)`.
+    pub fn snapshot_for_context(
+        &self,
+    ) -> (String, String, Vec<String>, usize, usize, Vec<String>) {
+        let arena = self.arena.read().unwrap_or_else(|e| e.into_inner());
+        let arena_id = arena.id().to_string();
+        let goal = arena.manifest().goal.clone();
+        let active_agents: Vec<String> = arena.slots().keys().cloned().collect();
+        let completed = arena.progress().completed_steps;
+        let total = arena.progress().total_steps;
+        let artifacts: Vec<String> = arena
+            .slots()
+            .values()
+            .flat_map(|s| s.artifacts.iter())
+            .map(|a| format!("{:?}: {}", a.kind, a.id))
+            .take(5) // limit to 5 most recent
+            .collect();
+        (arena_id, goal, active_agents, completed, total, artifacts)
     }
 
     /// Begin the settling phase (coordinator only).
@@ -246,5 +269,34 @@ mod tests {
         let coord_handle = make_handle(&arena, "coordinator", ParticipantRole::Coordinator);
         let result = coord_handle.begin_settling();
         assert!(result.is_ok(), "Coordinator should be able to begin settling");
+    }
+
+    #[test]
+    fn snapshot_for_context_returns_correct_data() {
+        let arena = setup_arena(&[
+            ("coordinator", ParticipantRole::Coordinator),
+            ("worker-1", ParticipantRole::Worker),
+        ]);
+
+        // Put an artifact via the coordinator handle
+        let coord_handle = make_handle(&arena, "coordinator", ParticipantRole::Coordinator);
+        coord_handle.put_artifact(test_artifact()).unwrap();
+
+        // Report some progress
+        coord_handle.report_progress(Some("analyzing".to_string()), Some(1)).unwrap();
+
+        let worker_handle = make_handle(&arena, "worker-1", ParticipantRole::Worker);
+        let (arena_id, goal, active_agents, completed, total, artifacts) =
+            worker_handle.snapshot_for_context();
+
+        assert!(!arena_id.is_empty());
+        assert_eq!(goal, "Test goal");
+        assert_eq!(active_agents.len(), 2);
+        assert!(active_agents.contains(&"coordinator".to_string()));
+        assert!(active_agents.contains(&"worker-1".to_string()));
+        assert_eq!(completed, 1);
+        assert_eq!(total, 0); // total_steps was never set
+        assert_eq!(artifacts.len(), 1);
+        assert!(artifacts[0].contains("Text"));
     }
 }
