@@ -147,6 +147,71 @@ impl Default for IntentDetector {
     }
 }
 
+// ---------------------------------------------------------------------------
+// LLM prompt builders & response parser
+// ---------------------------------------------------------------------------
+
+/// Build prompt for LLM intent classification (keyword miss fallback)
+pub fn build_intent_classify_prompt(message: &str) -> String {
+    format!(
+        r#"Classify this message. If the user wants to switch to a different AI agent/persona, return JSON:
+{{"intent":"switch","id":"english_snake_case","name":"display name"}}
+Otherwise return:
+{{"intent":"normal"}}
+
+Rules for id: lowercase English, use underscores, short (1-2 words). Examples:
+- "交易助手" -> id: "trading"
+- "健康顾问" -> id: "health"
+- "coding expert" -> id: "coding"
+
+Message: {}"#,
+        message
+    )
+}
+
+/// Build prompt to resolve an English id from a display name
+pub fn build_id_resolve_prompt(name: &str) -> String {
+    format!(
+        r#"Given this AI agent name, return ONLY a short English snake_case id (no quotes, no explanation).
+Examples: "交易助手" -> trading, "健康顾问" -> health, "Code Expert" -> coding, "主助手" -> main
+Name: {}"#,
+        name
+    )
+}
+
+/// Build prompt to generate SOUL.md content for a new agent
+pub fn build_soul_generation_prompt(id: &str, name: &str) -> String {
+    format!(
+        r#"Generate a concise AI persona description for an agent named "{name}" (id: {id}).
+Write 3-5 sentences describing this agent's expertise, communication style, and personality.
+Write in the same language as the name. Be specific to the domain.
+Output ONLY the persona description, no headers or markdown formatting."#
+    )
+}
+
+/// Parse LLM response for intent classification
+pub fn parse_intent_response(response: &str) -> Option<DetectedIntent> {
+    let text = response.trim();
+    let start = text.find('{')?;
+    let end = text.rfind('}')? + 1;
+    let json_str = text.get(start..end)?;
+
+    let value: serde_json::Value = serde_json::from_str(json_str).ok()?;
+
+    match value.get("intent")?.as_str()? {
+        "switch" => {
+            let id = value.get("id")?.as_str()?.to_string();
+            let name = value.get("name")?.as_str()?.to_string();
+            if id.is_empty() || name.is_empty() {
+                return None;
+            }
+            Some(DetectedIntent::SwitchAgent { id, name })
+        }
+        "normal" => Some(DetectedIntent::Normal),
+        _ => None,
+    }
+}
+
 /// Helper to extract the name for logging.
 fn intent_name(intent: &DetectedIntent) -> &str {
     match intent {
@@ -392,5 +457,47 @@ mod tests {
         let detector = IntentDetector::new();
         assert_eq!(detector.detect("").await, DetectedIntent::Normal);
         assert_eq!(detector.detect("   ").await, DetectedIntent::Normal);
+    }
+
+    // -- LLM prompt builders & parser --
+
+    #[test]
+    fn parse_intent_switch() {
+        let resp = r#"{"intent":"switch","id":"trading","name":"交易助手"}"#;
+        assert_eq!(
+            parse_intent_response(resp),
+            Some(DetectedIntent::SwitchAgent {
+                id: "trading".into(),
+                name: "交易助手".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_intent_normal() {
+        let resp = r#"{"intent":"normal"}"#;
+        assert_eq!(parse_intent_response(resp), Some(DetectedIntent::Normal));
+    }
+
+    #[test]
+    fn parse_intent_with_surrounding_text() {
+        let resp = r#"Based on analysis: {"intent":"switch","id":"health","name":"健康顾问"} end."#;
+        assert!(matches!(
+            parse_intent_response(resp),
+            Some(DetectedIntent::SwitchAgent { .. })
+        ));
+    }
+
+    #[test]
+    fn parse_intent_invalid() {
+        assert_eq!(parse_intent_response("not json"), None);
+        assert_eq!(parse_intent_response(r#"{"intent":"unknown"}"#), None);
+    }
+
+    #[test]
+    fn build_prompts_not_empty() {
+        assert!(!build_intent_classify_prompt("hello").is_empty());
+        assert!(!build_id_resolve_prompt("交易助手").is_empty());
+        assert!(!build_soul_generation_prompt("trading", "交易助手").is_empty());
     }
 }
