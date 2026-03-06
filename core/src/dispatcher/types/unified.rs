@@ -13,6 +13,31 @@ use crate::config::ToolSafetyPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// How a command is dispatched when invoked by user
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DispatchMode {
+    /// Execute directly, bypass Agent Loop (e.g., /help, /status)
+    Direct,
+    /// Inject into Agent Loop with context (e.g., /search, /translate)
+    AgentLoop,
+}
+
+impl Default for DispatchMode {
+    fn default() -> Self {
+        DispatchMode::AgentLoop
+    }
+}
+
+/// Channel types for visibility filtering
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ChannelType {
+    Panel,
+    Telegram,
+    Discord,
+    IMessage,
+    Cli,
+}
+
 /// Unified tool representation
 ///
 /// All tools (Native, MCP, Skills, Custom, Builtin) are normalized to this structure
@@ -151,6 +176,17 @@ pub struct UnifiedTool {
     pub was_renamed: bool,
 
     // =========================================================================
+    // Command Dispatch & Channel Visibility
+    // =========================================================================
+    /// Dispatch mode: Direct (bypass LLM) or AgentLoop (inject into agent)
+    #[serde(default)]
+    pub dispatch_mode: DispatchMode,
+
+    /// Channels that can see this command (empty = all channels)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_channels: Vec<ChannelType>,
+
+    // =========================================================================
     // Structured Tool Description Fields (for LLM tool selection)
     // =========================================================================
     /// Structured metadata for enhanced tool descriptions
@@ -202,6 +238,9 @@ impl UnifiedTool {
             // Conflict resolution defaults
             original_name: None,
             was_renamed: false,
+            // Dispatch & visibility defaults
+            dispatch_mode: DispatchMode::default(),
+            visible_channels: Vec::new(),
             // Structured description defaults
             structured_meta: None,
         }
@@ -365,6 +404,22 @@ impl UnifiedTool {
     /// Builder method: mark as renamed due to conflict
     pub fn with_was_renamed(mut self, renamed: bool) -> Self {
         self.was_renamed = renamed;
+        self
+    }
+
+    // =========================================================================
+    // Dispatch & Visibility Builder Methods
+    // =========================================================================
+
+    /// Builder method: set dispatch mode
+    pub fn with_dispatch_mode(mut self, mode: DispatchMode) -> Self {
+        self.dispatch_mode = mode;
+        self
+    }
+
+    /// Builder method: set visible channels
+    pub fn with_visible_channels(mut self, channels: Vec<ChannelType>) -> Self {
+        self.visible_channels = channels;
         self
     }
 
@@ -967,5 +1022,39 @@ mod tests {
         assert_eq!(entry.name, "search");
         assert_eq!(entry.category, ToolIndexCategory::Core);
         assert!(entry.is_core);
+    }
+
+    #[test]
+    fn test_dispatch_mode_default() {
+        let tool = UnifiedTool::new(
+            "custom:test",
+            "test",
+            "Test tool",
+            ToolSource::Custom { rule_index: 0 },
+        );
+        assert_eq!(tool.dispatch_mode, DispatchMode::AgentLoop);
+        assert!(tool.visible_channels.is_empty());
+    }
+
+    #[test]
+    fn test_dispatch_mode_builder() {
+        let tool = UnifiedTool::new(
+            "builtin:help",
+            "help",
+            "Show help",
+            ToolSource::Builtin,
+        )
+        .with_dispatch_mode(DispatchMode::Direct)
+        .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
+
+        assert_eq!(tool.dispatch_mode, DispatchMode::Direct);
+        assert_eq!(tool.visible_channels.len(), 2);
+        assert!(tool.visible_channels.contains(&ChannelType::Panel));
+    }
+
+    #[test]
+    fn test_channel_type_equality() {
+        assert_eq!(ChannelType::Panel, ChannelType::Panel);
+        assert_ne!(ChannelType::Panel, ChannelType::Telegram);
     }
 }

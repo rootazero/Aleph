@@ -48,6 +48,9 @@ pub use conflict::{ConflictInfo, ConflictResolution, ToolPriority, ToolSource};
 // Unified Tool
 pub use unified::UnifiedTool;
 
+// Dispatch & Channel Types
+pub use unified::{ChannelType, DispatchMode};
+
 // Routing Layer
 pub use routing::RoutingLayer;
 
