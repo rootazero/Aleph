@@ -94,7 +94,7 @@ impl PromptPipeline {
         let refs: Vec<(u32, &str, &str)> = sections.iter()
             .map(|(p, n, c)| (*p, *n, c.as_str()))
             .collect();
-        let protected = &[50u32, 75, 100, 500, 501, 1200];
+        let protected = &[50u32, 55, 75, 100, 500, 501, 1200];
         let (prompt, stats) = enforce_budget(&refs, budget.max_total_chars, protected);
 
         PromptResult {
@@ -104,10 +104,11 @@ impl PromptPipeline {
         }
     }
 
-    /// Create a pipeline pre-loaded with the 23 default layers.
+    /// Create a pipeline pre-loaded with the 25 default layers.
     ///
     /// Layer order (by priority):
     ///   50  SoulLayer
+    ///   55  InboundContextLayer
     ///   75  ProfileLayer
     ///  100  RoleLayer
     ///  200  RuntimeContextLayer
@@ -128,10 +129,12 @@ impl PromptPipeline {
     /// 1350  ThinkingGuidanceLayer
     /// 1400  SkillModeLayer
     /// 1500  CustomInstructionsLayer
+    /// 1550  WorkspaceFilesLayer
     /// 1600  LanguageLayer
     pub fn default_layers() -> Self {
         Self::new(vec![
             Box::new(SoulLayer),
+            Box::new(InboundContextLayer),
             Box::new(ProfileLayer),
             Box::new(RoleLayer),
             Box::new(RuntimeContextLayer),
@@ -153,6 +156,7 @@ impl PromptPipeline {
             Box::new(ThinkingGuidanceLayer),
             Box::new(SkillModeLayer),
             Box::new(CustomInstructionsLayer),
+            Box::new(WorkspaceFilesLayer),
             Box::new(LanguageLayer),
         ])
     }
@@ -259,7 +263,7 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        assert_eq!(pipeline.layer_count(), 23);
+        assert_eq!(pipeline.layer_count(), 25);
     }
 
     #[test]
