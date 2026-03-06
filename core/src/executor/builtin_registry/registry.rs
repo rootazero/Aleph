@@ -11,7 +11,7 @@ use crate::agents::sub_agents::SubAgentDispatcher;
 use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
 use crate::error::{AlephError, Result};
 use crate::generation::GenerationProviderRegistry;
-use crate::builtin_tools::{BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PimTool, ProfileUpdateTool, ScratchpadTool, SearchTool, SoulUpdateTool, WebFetchTool, YouTubeTool};
+use crate::builtin_tools::{BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PimTool, ProfileUpdateTool, ScratchpadTool, SearchTool, SoulUpdateTool, SwitchAgentTool, WebFetchTool, YouTubeTool};
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::builtin_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillListTool};
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
@@ -77,6 +77,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) sub_agent_dispatcher: Option<Arc<RwLock<SubAgentDispatcher>>>,
     /// Gateway context for sessions tools (sessions_list, sessions_send)
     pub(crate) gateway_context: Option<Arc<GatewayContext>>,
+    /// Switch agent tool instance (late-bound — requires workspace_manager + agent_registry)
+    pub(crate) switch_agent_tool: Arc<RwLock<Option<SwitchAgentTool>>>,
     /// Tool metadata for lookup
     tools: HashMap<String, UnifiedTool>,
 }
@@ -453,6 +455,18 @@ impl BuiltinToolRegistry {
             info!("Registered delegate tool in BuiltinToolRegistry");
         }
 
+        // switch_agent tool is always registered (metadata only), late-bound at startup
+        let switch_agent_tool = Arc::new(RwLock::new(None));
+        tools.insert(
+            "switch_agent".to_string(),
+            UnifiedTool::new(
+                "builtin:switch_agent",
+                "switch_agent",
+                SwitchAgentTool::DESCRIPTION,
+                ToolSource::Builtin,
+            ),
+        );
+
         // Add sessions tools (if gateway_context is provided)
         let gateway_context = config.gateway_context.clone();
         if gateway_context.is_some() {
@@ -504,8 +518,14 @@ impl BuiltinToolRegistry {
             dispatcher_registry,
             sub_agent_dispatcher,
             gateway_context,
+            switch_agent_tool,
             tools,
         }
+    }
+
+    /// Get a handle for late-binding the switch_agent tool
+    pub fn switch_agent_handle(&self) -> Arc<RwLock<Option<SwitchAgentTool>>> {
+        Arc::clone(&self.switch_agent_tool)
     }
 
     /// Check if an operation is permitted
@@ -629,6 +649,15 @@ impl ToolRegistry for BuiltinToolRegistry {
             "memory_browse" => Box::pin(async move {
                 let tool = self.memory_browse_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("memory_browse not available: no memory backend configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+
+            // Switch agent tool (late-bound)
+            "switch_agent" => Box::pin(async move {
+                let guard = self.switch_agent_tool.read().await;
+                let tool = guard.as_ref().ok_or_else(|| {
+                    AlephError::tool("switch_agent not available: no workspace manager or agent registry configured")
                 })?;
                 tool.call_json(arguments).await
             }),
