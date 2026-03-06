@@ -19,6 +19,15 @@ impl PromptLayer for ProfileLayer {
         &[AssemblyPath::Soul, AssemblyPath::Context]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
+        // Priority 1: workspace AGENTS.md
+        if let Some(agents_content) = input.workspace_file("AGENTS.md") {
+            output.push_str("## Project Context\n\n");
+            output.push_str(agents_content);
+            output.push_str("\n\n");
+            return;
+        }
+
+        // Priority 2: ProfileConfig.system_prompt (legacy fallback)
         let profile = match input.profile {
             Some(p) => p,
             None => return,
@@ -41,6 +50,8 @@ mod tests {
     use crate::config::ProfileConfig;
     use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::soul::SoulManifest;
+    use crate::thinker::workspace_files::{WorkspaceFile, WorkspaceFiles};
+    use std::path::PathBuf;
 
     #[test]
     fn test_injects_when_prompt_exists() {
@@ -108,6 +119,70 @@ mod tests {
         layer.inject(&mut out, &input);
 
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn prefers_workspace_agents_over_profile_prompt() {
+        let layer = ProfileLayer;
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let soul = SoulManifest::default();
+        let profile = ProfileConfig {
+            system_prompt: Some("You are a senior Rust engineer.".to_string()),
+            ..Default::default()
+        };
+        let ws = WorkspaceFiles {
+            workspace_dir: PathBuf::from("/tmp/test"),
+            files: vec![WorkspaceFile {
+                name: "AGENTS.md",
+                content: Some("Custom agent instructions".to_string()),
+                truncated: false,
+                original_size: 24,
+            }],
+        };
+        let input = LayerInput::soul(&config, &tools, &soul)
+            .with_profile(Some(&profile))
+            .with_workspace(&ws);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        // Should use AGENTS.md, not ProfileConfig
+        assert!(out.contains("## Project Context"));
+        assert!(out.contains("Custom agent instructions"));
+        assert!(!out.contains("## Current Role Context"));
+        assert!(!out.contains("senior Rust engineer"));
+    }
+
+    #[test]
+    fn falls_back_to_profile_when_no_workspace_agents() {
+        let layer = ProfileLayer;
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let soul = SoulManifest::default();
+        let profile = ProfileConfig {
+            system_prompt: Some("You are a senior Rust engineer.".to_string()),
+            ..Default::default()
+        };
+        // Workspace exists but has no AGENTS.md
+        let ws = WorkspaceFiles {
+            workspace_dir: PathBuf::from("/tmp/test"),
+            files: vec![WorkspaceFile {
+                name: "IDENTITY.md",
+                content: Some("identity content".to_string()),
+                truncated: false,
+                original_size: 16,
+            }],
+        };
+        let input = LayerInput::soul(&config, &tools, &soul)
+            .with_profile(Some(&profile))
+            .with_workspace(&ws);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        // Should fall back to ProfileConfig.system_prompt
+        assert!(out.contains("## Current Role Context"));
+        assert!(out.contains("You are a senior Rust engineer."));
+        assert!(!out.contains("## Project Context"));
     }
 
     #[test]
