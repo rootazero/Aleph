@@ -56,7 +56,7 @@ fn peer_collaboration_full_lifecycle() {
     };
     researcher_handle.put_artifact(researcher_artifact).unwrap();
     researcher_handle
-        .report_progress(Some("Analyzed report sections 1-3".to_string()), 1)
+        .report_progress(Some("Analyzed report sections 1-3".to_string()), Some(1))
         .unwrap();
 
     // 3. Coder puts Code artifact ("fn verify() { ... }"), reports progress
@@ -69,7 +69,7 @@ fn peer_collaboration_full_lifecycle() {
     };
     coder_handle.put_artifact(coder_artifact).unwrap();
     coder_handle
-        .report_progress(Some("Wrote verification function".to_string()), 1)
+        .report_progress(Some("Wrote verification function".to_string()), Some(1))
         .unwrap();
 
     // 4. Researcher adds SharedFact ("Report identifies 3 critical risks")
@@ -99,10 +99,7 @@ fn peer_collaboration_full_lifecycle() {
     let progress = main_handle.get_progress();
     assert_eq!(progress.completed_steps, 2);
 
-    // 7. Coordinator calls begin_settling()
-    main_handle.begin_settling().unwrap();
-
-    // 8. Manager settle_with_facts() → report.facts_persisted==1, artifacts_archived==2
+    // 7. Manager settle_with_facts() handles Active → Settling → Archived internally
     let (report, facts) = manager.settle_with_facts(&arena_id).unwrap();
     assert_eq!(report.facts_persisted, 1);
     assert_eq!(report.artifacts_archived, 2);
@@ -192,10 +189,7 @@ fn pipeline_collaboration_full_lifecycle() {
     };
     polisher_handle.put_artifact(polished_artifact).unwrap();
 
-    // 6. Translator (as coordinator) calls begin_settling()
-    translator_handle.begin_settling().unwrap();
-
-    // 7. Manager settle_with_facts() → report.facts_persisted==1, artifacts_archived==2
+    // 6. Manager settle_with_facts() handles Active → Settling → Archived internally
     let (report, facts) = manager.settle_with_facts(&arena_id).unwrap();
     assert_eq!(report.facts_persisted, 1);
     assert_eq!(report.artifacts_archived, 2);

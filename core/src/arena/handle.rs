@@ -82,7 +82,7 @@ impl ArenaHandle {
     pub fn report_progress(
         &self,
         current: Option<String>,
-        completed: usize,
+        completed: Option<usize>,
     ) -> Result<(), String> {
         let mut arena = self.arena.write().unwrap_or_else(|e| e.into_inner());
         arena.report_progress(&self.agent_id, current, completed);
@@ -107,8 +107,7 @@ impl ArenaHandle {
         }
 
         let mut arena = self.arena.write().unwrap_or_else(|e| e.into_inner());
-        arena.add_shared_fact(fact);
-        Ok(())
+        arena.add_shared_fact(fact)
     }
 
     /// Begin the settling phase (coordinator only).
