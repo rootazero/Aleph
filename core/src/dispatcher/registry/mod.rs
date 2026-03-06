@@ -19,7 +19,7 @@ use crate::config::RoutingRuleConfig;
 use crate::mcp::types::McpToolInfo;
 use crate::skills::SkillInfo;
 
-use super::types::{ToolIndex, ToolIndexEntry, ToolSourceType, UnifiedTool};
+use super::types::{ChannelType, ToolIndex, ToolIndexEntry, ToolSourceType, UnifiedTool};
 use conflict::ConflictResolver;
 use discovery::ToolDiscovery;
 use query::ToolQuery;
@@ -263,6 +263,11 @@ impl ToolRegistry {
         self.query.list_all_for_ui().await
     }
 
+    /// List active tools visible to a specific channel
+    pub async fn list_for_channel(&self, channel: ChannelType) -> Vec<UnifiedTool> {
+        self.query.list_for_channel(channel).await
+    }
+
     /// List root-level commands for UI (Flat Namespace Mode)
     pub async fn list_root_commands(&self) -> Vec<UnifiedTool> {
         self.query.list_root_commands().await
@@ -348,7 +353,7 @@ impl ToolRegistry {
 mod tests {
     use super::*;
     use crate::dispatcher::types::ToolPriority;
-    use super::super::types::{ConflictInfo, ConflictResolution, ToolSource};
+    use super::super::types::{ChannelType, ConflictInfo, ConflictResolution, DispatchMode, ToolSource};
 
     #[tokio::test]
     async fn test_registry_new() {
@@ -926,5 +931,42 @@ mod tests {
         assert_eq!(retrieved.icon, Some("star.fill".to_string()));
         assert_eq!(retrieved.usage, Some("/mytool [args]".to_string()));
         assert!(retrieved.requires_confirmation);
+    }
+
+    // =========================================================================
+    // Channel Filtering Tests (Task 2)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_list_for_channel_all_visible() {
+        let registry = ToolRegistry::new();
+        registry.register_builtin_tools().await;
+
+        let panel_tools = registry.list_for_channel(ChannelType::Panel).await;
+        let telegram_tools = registry.list_for_channel(ChannelType::Telegram).await;
+
+        assert_eq!(panel_tools.len(), telegram_tools.len());
+        assert!(!panel_tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_for_channel_filtered() {
+        let registry = ToolRegistry::new();
+
+        let tool = UnifiedTool::new(
+            "custom:panel-only",
+            "panel-only",
+            "Panel only tool",
+            ToolSource::Custom { rule_index: 0 },
+        )
+        .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
+
+        registry.register_with_conflict_resolution(tool).await;
+
+        let panel_tools = registry.list_for_channel(ChannelType::Panel).await;
+        assert_eq!(panel_tools.len(), 1);
+
+        let telegram_tools = registry.list_for_channel(ChannelType::Telegram).await;
+        assert_eq!(telegram_tools.len(), 0);
     }
 }
