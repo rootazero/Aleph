@@ -408,14 +408,14 @@ pub(in crate::commands::start) fn register_models_handlers(
 pub(in crate::commands::start) fn register_workspace_handlers(
     server: &mut GatewayServer,
     workspace_manager: &Arc<WorkspaceManager>,
-    memory_db: &MemoryBackend,
+    _memory_db: &MemoryBackend,
     daemon: bool,
 ) {
-    register_handler!(server, "workspace.create", workspace_handlers::handle_create, memory_db);
-    register_handler!(server, "workspace.list", workspace_handlers::handle_list, memory_db);
-    register_handler!(server, "workspace.get", workspace_handlers::handle_get, memory_db);
-    register_handler!(server, "workspace.update", workspace_handlers::handle_update, memory_db);
-    register_handler!(server, "workspace.archive", workspace_handlers::handle_archive, memory_db);
+    register_handler!(server, "workspace.create", workspace_handlers::handle_create, workspace_manager);
+    register_handler!(server, "workspace.list", workspace_handlers::handle_list, workspace_manager);
+    register_handler!(server, "workspace.get", workspace_handlers::handle_get, workspace_manager);
+    register_handler!(server, "workspace.update", workspace_handlers::handle_update, workspace_manager);
+    register_handler!(server, "workspace.archive", workspace_handlers::handle_archive, workspace_manager);
     register_handler!(server, "workspace.switch", workspace_handlers::handle_switch, workspace_manager);
     register_handler!(server, "workspace.getActive", workspace_handlers::handle_get_active, workspace_manager);
 

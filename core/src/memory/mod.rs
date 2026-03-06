@@ -52,7 +52,7 @@ pub mod cortex;
 pub mod store;
 pub mod scoring_pipeline;
 pub mod vfs;
-// workspace and workspace_store have been moved to gateway::workspace / gateway::workspace_store
+// workspace has been moved to gateway::workspace (WorkspaceManager, SQLite-backed)
 
 #[cfg(test)]
 mod integration_tests;
