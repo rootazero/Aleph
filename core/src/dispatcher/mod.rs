@@ -118,9 +118,10 @@ pub use callback::{
     UserDecision,
 };
 pub use agent_types::{
-    AiTask, AppAuto, AudioGenTask, CodeExec, DocGen, ExecutionSummary, FileOp,
-    GraphValidationError, ImageGenTask, Language, Task, TaskCountByStatus, TaskDependency,
-    TaskGraph, TaskGraphMeta, TaskResult as CoworkTaskResult, TaskStatus, TaskType, VideoGenTask,
+    AiTask, AppAuto, AudioGenTask, CodeExec, CollaborativeStage, CollaborativeTask, DocGen,
+    ExecutionSummary, FileOp, GraphValidationError, ImageGenTask, Language, Task,
+    TaskCountByStatus, TaskDependency, TaskGraph, TaskGraphMeta,
+    TaskResult as CoworkTaskResult, TaskStatus, TaskType, VideoGenTask,
 };
 pub use engine::{
     AgentConfig, AgentEngine, ExecutionState, DEFAULT_ALLOW_NETWORK, DEFAULT_CODE_EXEC_ENABLED,
@@ -131,7 +132,9 @@ pub use engine::{
     DEFAULT_SANDBOX_ENABLED, MAX_PARALLELISM, MAX_STDERR_SIZE, MAX_STDOUT_SIZE, MAX_TASK_RETRIES,
     REQUIRE_CONFIRMATION,
 };
-pub use executor::{ExecutionContext, ExecutorRegistry, NoopExecutor, TaskExecutor};
+pub use executor::{
+    CollaborativeExecutor, ExecutionContext, ExecutorRegistry, NoopExecutor, TaskExecutor,
+};
 pub use model_router::{
     Capability, CostStrategy, CostTier, FallbackProvider, LatencyTier, ModelMatcher, ModelProfile,
     ModelRouter, ModelRoutingRules, RoutingError, StageResult, TaskContextManager, TaskIntent,

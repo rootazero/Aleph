@@ -33,6 +33,7 @@ use once_cell::sync::Lazy;
 use crate::sync_primitives::{Arc, Mutex};
 use tracing::debug;
 
+pub mod arena;
 pub mod atomic_ops;
 pub mod bash_exec;
 pub mod code_exec;
@@ -64,7 +65,10 @@ pub mod soul_update;
 pub mod vision;
 pub mod escalate_task;
 
-
+pub use arena::{
+    ArenaCreateArgs, ArenaCreateOutput, ArenaCreateTool, ArenaQueryArgs, ArenaQueryOutput,
+    ArenaQueryTool, ArenaSettleArgs, ArenaSettleOutput, ArenaSettleTool, SlotSummary,
+};
 pub use atomic_ops::{AtomicOpsArgs, AtomicOpsOutput, AtomicOpsTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};
 pub use code_exec::{CodeExecArgs, CodeExecTool};
