@@ -9,10 +9,12 @@
 //
 // The command tree is exposed via UniFFI for Swift UI rendering.
 
+mod dispatcher;
 mod parser;
 mod registry;
 mod types;
 
+pub use dispatcher::{CommandDispatcher, DirectHandler};
 pub use parser::{CommandContext, CommandParser, ParsedCommand};
 pub use registry::CommandRegistry;
 pub use types::{CommandExecutionResult, CommandNode, CommandTriggers, CommandType};
