@@ -8,10 +8,30 @@ use crate::config::RoutingRuleConfig;
 use crate::mcp::types::McpToolInfo;
 use crate::skills::SkillInfo;
 
-use super::super::types::{ToolSource, UnifiedTool};
+use super::super::types::{ChannelType, ToolSafetyLevel, ToolSource, UnifiedTool};
 use super::conflict::ConflictResolver;
 use super::helpers::{extract_command_name, truncate_description};
 use super::types::ToolStorage;
+
+/// Infer default visible_channels based on safety level
+fn infer_visible_channels(tool: &UnifiedTool) -> Vec<ChannelType> {
+    match tool.safety_level {
+        ToolSafetyLevel::IrreversibleHighRisk => {
+            // Dangerous ops only via Panel and CLI
+            vec![ChannelType::Panel, ChannelType::Cli]
+        }
+        _ if tool.requires_confirmation => {
+            // Tools requiring confirmation excluded from iMessage (no confirmation UI)
+            vec![
+                ChannelType::Panel,
+                ChannelType::Telegram,
+                ChannelType::Discord,
+                ChannelType::Cli,
+            ]
+        }
+        _ => Vec::new(), // All channels
+    }
+}
 
 /// Registration functionality for ToolRegistry
 pub struct ToolRegistrar {
@@ -166,6 +186,14 @@ impl ToolRegistrar {
                 tool.with_display_name(&tool_info.name)
             };
 
+            // Infer channel visibility from safety level
+            let visible = infer_visible_channels(&tool);
+            let tool = if !visible.is_empty() {
+                tool.with_visible_channels(visible)
+            } else {
+                tool
+            };
+
             // Register with automatic conflict resolution
             conflict_resolver
                 .register_with_conflict_resolution(tool)
@@ -226,6 +254,14 @@ impl ToolRegistrar {
             .with_routing_intent_type("skills")
             .with_routing_capabilities(vec!["skills".to_string(), "memory".to_string()])
             .with_routing_strip_prefix(true);
+
+            // Infer channel visibility from safety level
+            let visible = infer_visible_channels(&tool);
+            let tool = if !visible.is_empty() {
+                tool.with_visible_channels(visible)
+            } else {
+                tool
+            };
 
             // Register with automatic conflict resolution
             conflict_resolver
