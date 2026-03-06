@@ -40,6 +40,7 @@ pub mod model_router;
 pub mod prompt_budget;
 pub mod prompt_builder;
 pub mod prompt_hooks;
+pub mod prompt_hooks_v2;
 pub mod prompt_layer;
 pub mod prompt_mode;
 pub mod prompt_pipeline;
