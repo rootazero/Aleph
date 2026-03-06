@@ -34,6 +34,7 @@ pub mod channel_behavior;
 pub mod context;
 pub mod decision_parser;
 pub mod identity;
+pub mod inbound_context;
 pub mod interaction;
 pub mod model_router;
 pub mod prompt_budget;
@@ -52,6 +53,7 @@ pub mod streaming;
 pub mod tool_filter;
 pub mod user_profile;
 pub mod virtual_tools;
+pub mod workspace_files;
 
 use crate::sync_primitives::Arc;
 
