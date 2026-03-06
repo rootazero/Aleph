@@ -125,11 +125,19 @@ impl SharedArena {
     // =========================================================================
 
     /// Add an artifact to the specified agent's slot, marking it as Working.
+    ///
+    /// Only allowed when arena is Active.
     pub fn put_artifact(
         &mut self,
         agent_id: &AgentId,
         artifact: Artifact,
     ) -> Result<(), String> {
+        if self.status != ArenaStatus::Active {
+            return Err(format!(
+                "Cannot put artifact: arena is {:?}, not Active",
+                self.status
+            ));
+        }
         let slot = self
             .slots
             .get_mut(agent_id)
@@ -160,7 +168,7 @@ impl SharedArena {
         &mut self,
         agent_id: &AgentId,
         current: Option<String>,
-        completed: usize,
+        completed: Option<usize>,
     ) {
         let agent_prog = self
             .progress
@@ -168,8 +176,10 @@ impl SharedArena {
             .entry(agent_id.clone())
             .or_default();
         agent_prog.current = current;
-        agent_prog.completed = completed;
-        self.progress.completed_steps += 1;
+        if let Some(c) = completed {
+            agent_prog.completed = c;
+            self.progress.completed_steps += 1;
+        }
     }
 
     // =========================================================================
@@ -177,8 +187,17 @@ impl SharedArena {
     // =========================================================================
 
     /// Add a shared fact to the arena's knowledge base.
-    pub fn add_shared_fact(&mut self, fact: SharedFact) {
+    ///
+    /// Only allowed when arena is Active.
+    pub fn add_shared_fact(&mut self, fact: SharedFact) -> Result<(), String> {
+        if self.status != ArenaStatus::Active {
+            return Err(format!(
+                "Cannot add shared fact: arena is {:?}, not Active",
+                self.status
+            ));
+        }
         self.shared_facts.push(fact);
+        Ok(())
     }
 
     /// Returns a reference to the shared facts.
@@ -282,6 +301,7 @@ mod tests {
     #[test]
     fn put_artifact_to_own_slot() {
         let mut arena = SharedArena::new(test_manifest(&["agent-a"]));
+        arena.activate().unwrap();
         let artifact = test_artifact();
 
         assert!(arena.put_artifact(&"agent-a".to_string(), artifact).is_ok());
@@ -295,6 +315,7 @@ mod tests {
     #[test]
     fn put_artifact_fails_for_unknown_agent() {
         let mut arena = SharedArena::new(test_manifest(&["agent-a"]));
+        arena.activate().unwrap();
         let artifact = test_artifact();
 
         let result = arena.put_artifact(&"unknown-agent".to_string(), artifact);
@@ -323,6 +344,7 @@ mod tests {
     #[test]
     fn shared_facts_accumulate_and_drain_empties_list() {
         let mut arena = SharedArena::new(test_manifest(&["agent-a"]));
+        arena.activate().unwrap();
 
         let fact = SharedFact {
             content: "The sky is blue".to_string(),
@@ -332,7 +354,7 @@ mod tests {
             created_at: Utc::now(),
         };
 
-        arena.add_shared_fact(fact);
+        arena.add_shared_fact(fact).unwrap();
         assert_eq!(arena.shared_facts().len(), 1);
         assert_eq!(arena.shared_facts()[0].content, "The sky is blue");
 

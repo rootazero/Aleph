@@ -525,14 +525,6 @@ impl StateDatabase {
                 settle_report TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS arena_slots (
-                arena_id      TEXT NOT NULL,
-                agent_id      TEXT NOT NULL,
-                status        TEXT NOT NULL DEFAULT 'idle',
-                updated_at    TEXT NOT NULL,
-                PRIMARY KEY (arena_id, agent_id)
-            );
-
             CREATE TABLE IF NOT EXISTS arena_artifacts (
                 id            TEXT PRIMARY KEY,
                 arena_id      TEXT NOT NULL,

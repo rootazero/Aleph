@@ -127,6 +127,17 @@ impl ArenaManager {
 
         let mut arena = shared.write().unwrap_or_else(|e| e.into_inner());
 
+        // Ensure arena is in Settling state before proceeding
+        match arena.status() {
+            ArenaStatus::Active => {
+                arena.begin_settling()?;
+            }
+            ArenaStatus::Settling => { /* already settling, proceed */ }
+            other => {
+                return Err(format!("Cannot settle arena in {:?} state", other));
+            }
+        }
+
         // Drain shared facts before archiving
         let facts = arena.drain_shared_facts();
 
@@ -261,10 +272,7 @@ mod tests {
         };
         handle_a.add_shared_fact(fact).unwrap();
 
-        // Transition to Settling via coordinator handle
-        handle_a.begin_settling().unwrap();
-
-        // Settle the arena
+        // Settle the arena (settle_with_facts handles Active → Settling internally)
         let (report, facts) = manager.settle_with_facts(&arena_id).unwrap();
 
         assert_eq!(report.facts_persisted, 1);
