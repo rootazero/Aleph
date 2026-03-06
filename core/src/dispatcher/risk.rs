@@ -110,6 +110,9 @@ impl RiskEvaluator {
             TaskType::ImageGeneration(_) => RiskLevel::Low,
             TaskType::VideoGeneration(_) => RiskLevel::Low,
             TaskType::AudioGeneration(_) => RiskLevel::Low,
+
+            // Collaborative tasks are low risk (arena creation only, no direct execution)
+            TaskType::Collaborative(_) => RiskLevel::Low,
         }
     }
 
