@@ -63,7 +63,7 @@ pub mod scratchpad;
 pub mod soul_update;
 pub mod vision;
 pub mod escalate_task;
-pub mod switch_agent;
+
 
 pub use atomic_ops::{AtomicOpsArgs, AtomicOpsOutput, AtomicOpsTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};
@@ -99,7 +99,7 @@ pub use scratchpad::{ScratchpadAction, ScratchpadArgs, ScratchpadOutput, Scratch
 pub use soul_update::{SoulField, SoulOperation, SoulUpdateArgs, SoulUpdateOutput, SoulUpdateTool};
 pub use vision::{VisionAction, VisionArgs, VisionOutput, VisionTool};
 pub use escalate_task::{EscalateTaskArgs, EscalateTaskOutput, EscalateTaskTool};
-pub use switch_agent::{SwitchAgentArgs, SwitchAgentOutput, SwitchAgentTool};
+
 
 // Message tool re-exports
 pub use message::{
