@@ -33,12 +33,15 @@ pub mod cache;
 pub mod channel_behavior;
 pub mod context;
 pub mod decision_parser;
+pub mod hooks;
 pub mod identity;
+pub mod inbound_context;
 pub mod interaction;
 pub mod model_router;
 pub mod prompt_budget;
 pub mod prompt_builder;
 pub mod prompt_hooks;
+pub mod prompt_hooks_v2;
 pub mod prompt_layer;
 pub mod prompt_mode;
 pub mod prompt_pipeline;
@@ -52,6 +55,7 @@ pub mod streaming;
 pub mod tool_filter;
 pub mod user_profile;
 pub mod virtual_tools;
+pub mod workspace_files;
 
 use crate::sync_primitives::Arc;
 
@@ -135,6 +139,10 @@ pub struct ThinkerConfig {
     pub active_profile: Option<crate::config::ProfileConfig>,
     /// Workspace root for bootstrap file loading. When set, enables BootstrapLayer.
     pub bootstrap_workspace: Option<std::path::PathBuf>,
+    /// Loaded workspace files (SOUL.md, IDENTITY.md, etc.) for prompt injection.
+    pub workspace_files: Option<workspace_files::WorkspaceFiles>,
+    /// Per-request inbound context (sender, channel, session metadata).
+    pub inbound_context: Option<inbound_context::InboundContext>,
 }
 
 
@@ -263,10 +271,12 @@ impl<P: ProviderRegistry> Thinker<P> {
     /// injected between Soul (priority 50) and Role (priority 100).
     fn build_prompt(&self, state: &LoopState, tools: &[ToolInfo], observation: &Observation) -> (String, Vec<Message>) {
         let system = if let Some(ref soul) = self.config.soul {
-            self.prompt_builder.build_system_prompt_with_soul(
+            self.prompt_builder.build_system_prompt_with_full_context(
                 tools,
                 soul,
                 self.config.active_profile.as_ref(),
+                self.config.workspace_files.as_ref(),
+                self.config.inbound_context.as_ref(),
             )
         } else {
             self.prompt_builder.build_system_prompt(tools)
@@ -539,10 +549,12 @@ impl<P: ProviderRegistry> Thinker<P> {
         let native_config = self.native_prompt_config();
         let native_builder = PromptBuilder::new(native_config);
         let system = if let Some(ref soul) = self.config.soul {
-            native_builder.build_system_prompt_with_soul(
+            native_builder.build_system_prompt_with_full_context(
                 tools,
                 soul,
                 self.config.active_profile.as_ref(),
+                self.config.workspace_files.as_ref(),
+                self.config.inbound_context.as_ref(),
             )
         } else {
             native_builder.build_system_prompt(tools)

@@ -4,9 +4,11 @@ use crate::agent_loop::ToolInfo;
 use crate::dispatcher::tool_index::HydrationResult;
 use crate::poe::PoePromptContext;
 use super::context::ResolvedContext;
+use super::inbound_context::InboundContext;
 use super::prompt_builder::PromptConfig;
 use super::prompt_mode::PromptMode;
 use super::soul::SoulManifest;
+use super::workspace_files::WorkspaceFiles;
 
 /// Which assembly path a layer participates in.
 ///
@@ -42,27 +44,31 @@ pub struct LayerInput<'a> {
     pub profile: Option<&'a crate::config::ProfileConfig>,
     /// Prompt mode for this assembly (default: Full)
     pub mode: PromptMode,
+    /// Per-request inbound context (sender, channel, session metadata)
+    pub inbound: Option<&'a InboundContext>,
+    /// Loaded workspace files (SOUL.md, IDENTITY.md, etc.)
+    pub workspace: Option<&'a WorkspaceFiles>,
 }
 
 impl<'a> LayerInput<'a> {
     /// Input for the `Basic` path — config + tool list.
     pub fn basic(config: &'a PromptConfig, tools: &'a [ToolInfo]) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, poe: None, profile: None, mode: PromptMode::Full }
+        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None }
     }
 
     /// Input for the `Hydration` path — config + hydration result.
     pub fn hydration(config: &'a PromptConfig, hydration: &'a HydrationResult) -> Self {
-        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, poe: None, profile: None, mode: PromptMode::Full }
+        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None }
     }
 
     /// Input for the `Soul` path — config + tools + soul manifest.
     pub fn soul(config: &'a PromptConfig, tools: &'a [ToolInfo], soul: &'a SoulManifest) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, poe: None, profile: None, mode: PromptMode::Full }
+        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None }
     }
 
     /// Input for the `Context` path — config + resolved context.
     pub fn context(config: &'a PromptConfig, ctx: &'a ResolvedContext) -> Self {
-        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), poe: None, profile: None, mode: PromptMode::Full }
+        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None }
     }
 
     /// Attach POE context to this input.
@@ -92,6 +98,35 @@ impl<'a> LayerInput<'a> {
     pub fn poe_hint(&self) -> Option<&str> {
         self.poe.and_then(|p| p.current_hint.as_deref())
     }
+
+    /// Attach inbound context to this input.
+    pub fn with_inbound(mut self, inbound: &'a InboundContext) -> Self {
+        self.inbound = Some(inbound);
+        self
+    }
+
+    /// Attach workspace files to this input.
+    pub fn with_workspace(mut self, workspace: &'a WorkspaceFiles) -> Self {
+        self.workspace = Some(workspace);
+        self
+    }
+
+    /// Attach optional inbound context to this input.
+    pub fn with_inbound_opt(mut self, inbound: Option<&'a InboundContext>) -> Self {
+        self.inbound = inbound;
+        self
+    }
+
+    /// Attach optional workspace files to this input.
+    pub fn with_workspace_opt(mut self, workspace: Option<&'a WorkspaceFiles>) -> Self {
+        self.workspace = workspace;
+        self
+    }
+
+    /// Get the content of a workspace file by name.
+    pub fn workspace_file(&self, name: &str) -> Option<&str> {
+        self.workspace.and_then(|ws| ws.get(name))
+    }
 }
 
 /// A composable unit of prompt assembly.
@@ -119,4 +154,79 @@ pub trait PromptLayer: Send + Sync {
 
     /// Append this layer's content to `output`.
     fn inject(&self, output: &mut String, input: &LayerInput);
+}
+
+#[cfg(test)]
+mod workspace_inbound_tests {
+    use super::*;
+    use crate::thinker::prompt_builder::PromptConfig;
+    use crate::thinker::workspace_files::{WorkspaceFiles, WorkspaceFile};
+    use crate::thinker::inbound_context::{InboundContext, SenderInfo};
+
+    fn make_config() -> PromptConfig {
+        PromptConfig::default()
+    }
+
+    #[test]
+    fn layer_input_workspace_file_access() {
+        let config = make_config();
+        let ws = WorkspaceFiles {
+            workspace_dir: std::path::PathBuf::from("/tmp"),
+            files: vec![
+                WorkspaceFile {
+                    name: "SOUL.md",
+                    content: Some("You are Aleph.".to_string()),
+                    truncated: false,
+                    original_size: 14,
+                },
+            ],
+        };
+
+        let input = LayerInput::basic(&config, &[]).with_workspace(&ws);
+        assert_eq!(input.workspace_file("SOUL.md"), Some("You are Aleph."));
+        assert_eq!(input.workspace_file("MISSING.md"), None);
+    }
+
+    #[test]
+    fn layer_input_inbound_access() {
+        let config = make_config();
+        let inbound = InboundContext {
+            sender: SenderInfo {
+                id: "u42".to_string(),
+                display_name: Some("Alice".to_string()),
+                is_owner: true,
+            },
+            ..Default::default()
+        };
+
+        let input = LayerInput::basic(&config, &[]).with_inbound(&inbound);
+        assert!(input.inbound.is_some());
+        let ctx = input.inbound.unwrap();
+        assert_eq!(ctx.sender.id, "u42");
+        assert!(ctx.sender.is_owner);
+    }
+
+    #[test]
+    fn with_opt_methods_work() {
+        let config = make_config();
+        let ws = WorkspaceFiles {
+            workspace_dir: std::path::PathBuf::from("/tmp"),
+            files: vec![],
+        };
+        let inbound = InboundContext::default();
+
+        // None variant
+        let input = LayerInput::basic(&config, &[])
+            .with_workspace_opt(None)
+            .with_inbound_opt(None);
+        assert!(input.workspace.is_none());
+        assert!(input.inbound.is_none());
+
+        // Some variant
+        let input = LayerInput::basic(&config, &[])
+            .with_workspace_opt(Some(&ws))
+            .with_inbound_opt(Some(&inbound));
+        assert!(input.workspace.is_some());
+        assert!(input.inbound.is_some());
+    }
 }

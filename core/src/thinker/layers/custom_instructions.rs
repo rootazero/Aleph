@@ -22,6 +22,12 @@ impl PromptLayer for CustomInstructionsLayer {
         ]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
+        // If workspace IDENTITY.md exists, skip — handled by WorkspaceFilesLayer
+        if input.workspace_file("IDENTITY.md").is_some() {
+            return;
+        }
+
+        // Legacy fallback
         if let Some(instructions) = &input.config.custom_instructions {
             let instructions = sanitize_for_prompt(instructions, SanitizeLevel::Moderate);
             let instructions = sanitize_for_prompt(&instructions, SanitizeLevel::Light);
@@ -51,6 +57,33 @@ mod tests {
 
         assert!(out.contains("## Additional Instructions"));
         assert!(out.contains("Always be concise."));
+    }
+
+    #[test]
+    fn skips_when_workspace_identity_exists() {
+        use crate::thinker::workspace_files::{WorkspaceFile, WorkspaceFiles};
+        use std::path::PathBuf;
+
+        let layer = CustomInstructionsLayer;
+        let config = PromptConfig {
+            custom_instructions: Some("Always be concise.".to_string()),
+            ..Default::default()
+        };
+        let ws = WorkspaceFiles {
+            workspace_dir: PathBuf::from("/tmp"),
+            files: vec![WorkspaceFile {
+                name: "IDENTITY.md",
+                content: Some("You are Aleph.".to_string()),
+                truncated: false,
+                original_size: 14,
+            }],
+        };
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools).with_workspace(&ws);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(out.is_empty(), "Should skip when IDENTITY.md exists");
     }
 
     #[test]

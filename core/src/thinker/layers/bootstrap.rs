@@ -1,6 +1,6 @@
 //! Bootstrap file injection layer.
 //!
-//! Loads workspace-level context files (CONTEXT.md, INSTRUCTIONS.md, USER.md, etc.)
+//! Loads workspace-level context files (SOUL.md, IDENTITY.md, AGENTS.md, etc.)
 //! and injects them into the system prompt with truncation management.
 
 use std::path::PathBuf;
@@ -10,12 +10,13 @@ use crate::thinker::prompt_budget::truncate_with_head_tail;
 
 /// Ordered list of bootstrap files by priority (highest first).
 const BOOTSTRAP_FILES: &[&str] = &[
-    "CONTEXT.md",
-    "INSTRUCTIONS.md",
+    "SOUL.md",
+    "IDENTITY.md",
+    "AGENTS.md",
     "TOOLS.md",
     "MEMORY.md",
-    "USER.md",
-    "AGENTS.md",
+    "HEARTBEAT.md",
+    "BOOTSTRAP.md",
 ];
 
 /// Layer that injects workspace bootstrap files into the system prompt.
@@ -133,29 +134,29 @@ mod tests {
     #[test]
     fn loads_existing_files() {
         let dir = tempdir().unwrap();
-        create_bootstrap_file(dir.path(), "CONTEXT.md", "# Project\nRust AI assistant");
-        create_bootstrap_file(dir.path(), "INSTRUCTIONS.md", "Always use Chinese");
+        create_bootstrap_file(dir.path(), "SOUL.md", "# Project\nRust AI assistant");
+        create_bootstrap_file(dir.path(), "IDENTITY.md", "Always use Chinese");
 
         let layer = BootstrapLayer::new(dir.path().to_path_buf());
         let content = layer.load_files().unwrap();
 
         assert!(content.contains("## Workspace Context"));
-        assert!(content.contains("### CONTEXT.md"));
+        assert!(content.contains("### SOUL.md"));
         assert!(content.contains("Rust AI assistant"));
-        assert!(content.contains("### INSTRUCTIONS.md"));
+        assert!(content.contains("### IDENTITY.md"));
         assert!(content.contains("Always use Chinese"));
     }
 
     #[test]
     fn skips_missing_files() {
         let dir = tempdir().unwrap();
-        create_bootstrap_file(dir.path(), "CONTEXT.md", "Only context file");
+        create_bootstrap_file(dir.path(), "SOUL.md", "Only soul file");
 
         let layer = BootstrapLayer::new(dir.path().to_path_buf());
         let content = layer.load_files().unwrap();
 
-        assert!(content.contains("CONTEXT.md"));
-        assert!(!content.contains("INSTRUCTIONS.md"));
+        assert!(content.contains("SOUL.md"));
+        assert!(!content.contains("IDENTITY.md"));
         assert!(!content.contains("TOOLS.md"));
     }
 
@@ -170,7 +171,7 @@ mod tests {
     fn truncates_large_files() {
         let dir = tempdir().unwrap();
         let large_content = "X".repeat(30_000);
-        create_bootstrap_file(dir.path(), "CONTEXT.md", &large_content);
+        create_bootstrap_file(dir.path(), "SOUL.md", &large_content);
 
         let layer = BootstrapLayer::new(dir.path().to_path_buf())
             .with_limits(20_000, 100_000);
@@ -183,8 +184,8 @@ mod tests {
     #[test]
     fn respects_total_budget() {
         let dir = tempdir().unwrap();
-        create_bootstrap_file(dir.path(), "CONTEXT.md", &"A".repeat(80_000));
-        create_bootstrap_file(dir.path(), "INSTRUCTIONS.md", &"B".repeat(80_000));
+        create_bootstrap_file(dir.path(), "SOUL.md", &"A".repeat(80_000));
+        create_bootstrap_file(dir.path(), "IDENTITY.md", &"B".repeat(80_000));
 
         let layer = BootstrapLayer::new(dir.path().to_path_buf())
             .with_limits(80_000, 100_000);
@@ -195,16 +196,16 @@ mod tests {
     }
 
     #[test]
-    fn loads_user_and_agents_files() {
+    fn loads_heartbeat_and_agents_files() {
         let dir = tempdir().unwrap();
-        create_bootstrap_file(dir.path(), "USER.md", "# User Profile\nRust developer, prefers Chinese");
+        create_bootstrap_file(dir.path(), "HEARTBEAT.md", "# Heartbeat\nSystem status: healthy");
         create_bootstrap_file(dir.path(), "AGENTS.md", "# Operating Manual\nAlways run tests before committing");
 
         let layer = BootstrapLayer::new(dir.path().to_path_buf());
         let content = layer.load_files().unwrap();
 
-        assert!(content.contains("### USER.md"));
-        assert!(content.contains("Rust developer"));
+        assert!(content.contains("### HEARTBEAT.md"));
+        assert!(content.contains("System status"));
         assert!(content.contains("### AGENTS.md"));
         assert!(content.contains("Always run tests"));
     }
@@ -212,9 +213,9 @@ mod tests {
     #[test]
     fn prefers_aleph_dir() {
         let dir = tempdir().unwrap();
-        create_bootstrap_file(dir.path(), "CONTEXT.md", "root version");
+        create_bootstrap_file(dir.path(), "SOUL.md", "root version");
         fs::create_dir_all(dir.path().join(".aleph")).unwrap();
-        create_bootstrap_file(&dir.path().join(".aleph"), "CONTEXT.md", "aleph version");
+        create_bootstrap_file(&dir.path().join(".aleph"), "SOUL.md", "aleph version");
 
         let layer = BootstrapLayer::new(dir.path().to_path_buf());
         let content = layer.load_files().unwrap();
