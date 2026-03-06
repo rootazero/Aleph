@@ -436,6 +436,48 @@ impl InboundMessageRouter {
             }
         };
 
+        // /switch command interception: change active agent for this channel+peer
+        if let Some(new_agent) = msg.text.strip_prefix("/switch ").map(|s| s.trim().to_string()) {
+            if !new_agent.is_empty() {
+                if let Some(ref manager) = self.workspace_manager {
+                    // Verify agent exists
+                    let agent_exists = if let Some(ref registry) = self.agent_registry {
+                        registry.get(&new_agent).await.is_some()
+                    } else {
+                        false
+                    };
+
+                    let reply_text = if agent_exists {
+                        match manager.set_active_agent(channel_id, sender_id, &new_agent) {
+                            Ok(()) => {
+                                info!("[Router] Switched agent for {}:{} -> {}", channel_id, sender_id, new_agent);
+                                format!("✅ Switched to agent: {}", new_agent)
+                            }
+                            Err(e) => {
+                                error!("[Router] Failed to switch agent: {}", e);
+                                format!("❌ Failed to switch agent: {}", e)
+                            }
+                        }
+                    } else {
+                        // List available agents
+                        let available = if let Some(ref registry) = self.agent_registry {
+                            registry.list().await.join(", ")
+                        } else {
+                            "unknown".to_string()
+                        };
+                        format!("❌ Agent '{}' not found. Available: {}", new_agent, available)
+                    };
+
+                    // Send reply
+                    let reply = OutboundMessage::text(msg.conversation_id.as_str(), reply_text);
+                    if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
+                        error!("[Router] Failed to send /switch reply: {}", e);
+                    }
+                    return Ok(());
+                }
+            }
+        }
+
         // Group chat interception: check for /groupchat commands or active sessions
         if self.group_chat_orch.is_some() {
             if let Some(handled) = self.try_handle_group_chat(&msg).await {
