@@ -7,10 +7,12 @@ pub mod arena;
 pub mod events;
 pub mod handle;
 pub mod manager;
+pub mod storage;
 pub mod types;
 
 pub use arena::*;
 pub use events::*;
 pub use handle::*;
 pub use manager::*;
+pub use storage::*;
 pub use types::*;
