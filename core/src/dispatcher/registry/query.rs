@@ -151,7 +151,7 @@ impl ToolQuery {
             return None;
         }
 
-        let (cmd_name, arguments) = match without_slash.split_once(char::is_whitespace) {
+        let (raw_cmd_name, arguments) = match without_slash.split_once(char::is_whitespace) {
             Some((name, rest)) => {
                 let args = rest.trim();
                 (
@@ -160,6 +160,12 @@ impl ToolQuery {
                 )
             }
             None => (without_slash.to_lowercase(), None),
+        };
+
+        // Strip @botname suffix for Telegram group commands (e.g. "gen@mybot" → "gen")
+        let cmd_name = match raw_cmd_name.split_once('@') {
+            Some((name, _)) => name.to_string(),
+            None => raw_cmd_name,
         };
 
         let tools = self.tools.read().await;

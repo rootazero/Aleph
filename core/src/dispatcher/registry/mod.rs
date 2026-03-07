@@ -1049,6 +1049,35 @@ mod tests {
         assert!(resolved.unwrap().arguments.is_none());
     }
 
+    #[tokio::test]
+    async fn test_resolve_command_strips_bot_mention() {
+        let registry = ToolRegistry::new();
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/search".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Search".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
+
+        // Telegram group format: /command@botname args
+        let resolved = registry.resolve_command("/search@alephbot weather").await;
+        assert!(resolved.is_some());
+        let resolved = resolved.unwrap();
+        assert_eq!(resolved.tool.name, "search");
+        assert_eq!(resolved.arguments, Some("weather".to_string()));
+
+        // No args variant
+        let resolved = registry.resolve_command("/search@alephbot").await;
+        assert!(resolved.is_some());
+        assert_eq!(resolved.unwrap().tool.name, "search");
+
+        // Without @botname should still work
+        let resolved = registry.resolve_command("/search query").await;
+        assert!(resolved.is_some());
+        assert_eq!(resolved.unwrap().tool.name, "search");
+    }
+
     // =========================================================================
     // Prefix Filtering Tests (Task 4)
     // =========================================================================

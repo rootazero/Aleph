@@ -156,6 +156,31 @@ impl InboundDedupTracker {
 /// Metadata key for slash command execution mode in RunRequest
 pub const SLASH_COMMAND_MODE_KEY: &str = "slash_command_mode";
 
+/// Strip @botname suffix from Telegram-style slash commands.
+///
+/// In Telegram groups, commands are sent as `/command@botname args`.
+/// This function normalizes to `/command args` so downstream parsers
+/// can resolve the command name correctly.
+fn strip_bot_mention(input: &str) -> String {
+    if !input.starts_with('/') {
+        return input.to_string();
+    }
+    // Split into command part and arguments
+    let (cmd_part, rest) = match input.split_once(char::is_whitespace) {
+        Some((cmd, args)) => (cmd, Some(args)),
+        None => (input, None),
+    };
+    // Strip @botname from the command part
+    let clean_cmd = match cmd_part.split_once('@') {
+        Some((cmd, _)) => cmd,
+        None => cmd_part,
+    };
+    match rest {
+        Some(args) => format!("{} {}", clean_cmd, args),
+        None => clean_cmd.to_string(),
+    }
+}
+
 /// Serialize ExecutionMode to a JSON string for RunRequest metadata.
 /// Returns None if the mode is Execute or Converse (not a direct command).
 fn serialize_execution_mode(mode: &ExecutionMode) -> Option<String> {
@@ -537,9 +562,14 @@ impl InboundMessageRouter {
         // Unified slash command interception
         // Resolves /switch, /groupchat, builtin, skill, MCP, and custom commands
         if ctx.message.text.trim().starts_with('/') {
+            // Strip @botname suffix from Telegram group commands
+            // e.g. "/gen@mybot some args" → "/gen some args"
+            let slash_text = strip_bot_mention(ctx.message.text.trim());
+            let slash_text = slash_text.as_str();
+
             // Try unified command resolution first (async, all sources)
             if let Some(ref parser) = self.command_parser {
-                if let Some(parsed) = parser.parse_async(ctx.message.text.trim()).await {
+                if let Some(parsed) = parser.parse_async(slash_text).await {
                     // Handle /switch internally
                     if parsed.command_name == "switch" {
                         if let Some(args) = &parsed.arguments {
@@ -564,21 +594,21 @@ impl InboundMessageRouter {
             }
 
             // Fallback: /switch without unified registry
-            if let Some(new_agent) = msg.text.strip_prefix("/switch ").map(|s| s.trim().to_string()) {
+            if let Some(new_agent) = slash_text.strip_prefix("/switch ").map(|s| s.trim().to_string()) {
                 if !new_agent.is_empty() {
                     return self.handle_switch_command(&new_agent, &msg, &ctx).await;
                 }
             }
 
             // Fallback: /groupchat without unified registry
-            if msg.text.trim().starts_with("/groupchat") {
+            if slash_text.starts_with("/groupchat") {
                 if self.group_chat_orch.is_some() {
                     return self.handle_groupchat_command(&msg).await;
                 }
             }
 
             // Fallback: ExecutionIntentDecider (builtin-only, 6 hardcoded commands)
-            let decision = self.intent_decider.decide(ctx.message.text.trim(), None);
+            let decision = self.intent_decider.decide(slash_text, None);
             if let Some(mode_json) = serialize_execution_mode(&decision.mode) {
                 info!(
                     "[Router] Slash command detected (fallback): layer={:?}, confidence={:.2}",
