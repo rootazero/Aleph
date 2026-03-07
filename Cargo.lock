@@ -135,46 +135,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aleph-control-plane"
-version = "0.2.0"
-dependencies = [
- "chrono",
- "console_error_panic_hook",
- "futures",
- "gloo-timers",
- "js-sys",
- "leptos 0.8.15",
- "leptos_meta",
- "leptos_router",
- "serde",
- "serde_json",
- "shared-ui-logic",
- "tailwind_fuse",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
-name = "aleph-dashboard"
-version = "0.2.0"
-dependencies = [
- "chrono",
- "console_error_panic_hook",
- "futures",
- "gloo-timers",
- "js-sys",
- "leptos 0.8.15",
- "leptos_meta",
- "leptos_router",
- "serde",
- "serde_json",
- "shared-ui-logic",
- "tailwind_fuse",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
 name = "aleph-desktop"
 version = "0.1.0"
 dependencies = [
@@ -203,6 +163,26 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "aleph-panel"
+version = "0.2.0"
+dependencies = [
+ "chrono",
+ "console_error_panic_hook",
+ "futures",
+ "gloo-timers",
+ "js-sys",
+ "leptos 0.8.15",
+ "leptos_meta",
+ "leptos_router",
+ "serde",
+ "serde_json",
+ "shared-ui-logic",
+ "tailwind_fuse",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
