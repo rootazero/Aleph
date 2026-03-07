@@ -147,10 +147,10 @@ impl AlephTool for AgentCreateTool {
         }
 
         // 3. Determine workspace path
-        let agents_dir = dirs::home_dir()
+        let workspaces_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".aleph/agents");
-        let workspace_path = agents_dir.join(&args.id).join("workspace");
+            .join(".aleph/workspaces");
+        let workspace_path = workspaces_dir.join(&args.id);
 
         // 4. Initialize workspace directory
         let display_name = args.name.as_deref().unwrap_or(&args.id);

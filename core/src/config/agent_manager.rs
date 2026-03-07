@@ -6,7 +6,7 @@
 //! Uses `toml_edit` for format-preserving edits and atomic file saves.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use toml_edit::{Array, DocumentMut, Item, Table};
@@ -15,19 +15,24 @@ use tracing::{debug, info, warn};
 use crate::config::types::agents_def::{
     AgentDefinition, AgentIdentity, AgentModelConfig, AgentParams, AgentsConfig, SubagentPolicy,
 };
+use crate::config::agent_resolver::initialize_workspace;
 use crate::error::{AlephError, Result};
 
 // =============================================================================
 // Constants
 // =============================================================================
 
-/// Bootstrap files created automatically in each agent workspace
+/// Bootstrap files recognized in agent workspaces.
+/// Auto-created: SOUL.md, AGENTS.md, MEMORY.md
+/// Optional (user-created): IDENTITY.md, TOOLS.md, HEARTBEAT.md, BOOTSTRAP.md
 const BOOTSTRAP_FILES: &[&str] = &[
     "SOUL.md",
-    "AGENTS.md",
-    "MEMORY.md",
-    "TOOLS.md",
     "IDENTITY.md",
+    "AGENTS.md",
+    "TOOLS.md",
+    "MEMORY.md",
+    "HEARTBEAT.md",
+    "BOOTSTRAP.md",
 ];
 
 /// Maximum length for agent IDs
@@ -74,16 +79,51 @@ pub struct AgentManager {
 
 impl AgentManager {
     /// Create a new AgentManager
+    ///
+    /// On construction, ensures at least one default agent exists in the config
+    /// file. If `[[agents.list]]` is empty or missing, writes a default "main"
+    /// agent to the TOML config and creates its workspace directory.
     pub fn new(
         config_path: PathBuf,
         workspace_root: PathBuf,
         trash_root: PathBuf,
     ) -> Self {
-        Self {
+        let mgr = Self {
             config_path,
             workspace_root,
             trash_root,
+        };
+
+        // Ensure at least one agent exists in config file
+        if let Ok(config) = mgr.load_config() {
+            if config.list.is_empty() {
+                // Remove `list = []` (plain array) if present — it conflicts
+                // with the `[[agents.list]]` (array of tables) format that
+                // append_agent_to_document expects.
+                if let Ok(mut doc) = mgr.load_document() {
+                    if let Some(agents) = doc.get_mut("agents").and_then(|v| v.as_table_mut()) {
+                        if agents.get("list").and_then(|v| v.as_array()).is_some() {
+                            agents.remove("list");
+                            let _ = mgr.save_document(&doc);
+                        }
+                    }
+                }
+
+                let def = AgentDefinition {
+                    id: "main".to_string(),
+                    default: true,
+                    name: Some("Main Agent".to_string()),
+                    ..Default::default()
+                };
+                if let Err(e) = mgr.create(def) {
+                    warn!("Failed to create default agent in config: {}", e);
+                } else {
+                    info!("Created default 'main' agent in config");
+                }
+            }
         }
+
+        mgr
     }
 
     // =========================================================================
@@ -127,30 +167,15 @@ impl AgentManager {
         self.append_agent_to_document(&mut doc, &def)?;
         self.save_document(&doc)?;
 
-        // Create workspace directory and bootstrap files
+        // Initialize workspace directory with standard structure
         let ws_dir = self.workspace_root.join(&def.id);
-        fs::create_dir_all(&ws_dir).map_err(|e| {
+        let agent_name = def.name.as_deref().unwrap_or(&def.id);
+        initialize_workspace(&ws_dir, agent_name).map_err(|e| {
             AlephError::IoError(format!(
-                "Failed to create workspace dir '{}': {}",
-                ws_dir.display(),
-                e
+                "Failed to initialize workspace for '{}': {}",
+                def.id, e
             ))
         })?;
-
-        let soul_path = ws_dir.join("SOUL.md");
-        if !soul_path.exists() {
-            let content = format!(
-                "# {}\n\nYou are {}.\n",
-                def.name.as_deref().unwrap_or(&def.id),
-                def.name.as_deref().unwrap_or(&def.id),
-            );
-            fs::write(&soul_path, content).map_err(|e| {
-                AlephError::IoError(format!(
-                    "Failed to write SOUL.md: {}",
-                    e
-                ))
-            })?;
-        }
 
         info!("Created agent '{}' with workspace at {}", def.id, ws_dir.display());
         Ok(())

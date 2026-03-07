@@ -21,8 +21,8 @@ default:
 
 # ─── Daily Development ───
 
-# Run server (debug)
-dev:
+# Run server (debug, rebuilds WASM first)
+dev: wasm
     cargo run -p alephcore --bin {{server_bin}}
 
 # ─── Full Builds ───
