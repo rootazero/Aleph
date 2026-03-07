@@ -17,6 +17,52 @@ use crate::tools::AlephTool;
 // Validation
 // =============================================================================
 
+/// Generate a valid ASCII agent ID from a display name.
+///
+/// For ASCII names: slugify ("Trading Assistant" → "trading-assistant")
+/// For non-ASCII names: use a deterministic hash ("交易助手" → "agent-a1b2c3d4")
+fn generate_agent_id_from_name(name: &str) -> String {
+    // Try to build an ASCII slug from the name
+    let slug: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else if c == ' ' || c == '-' || c == '_' {
+                '-'
+            } else {
+                '\0' // skip non-ASCII
+            }
+        })
+        .filter(|&c| c != '\0')
+        .collect();
+
+    // Clean up consecutive hyphens
+    let slug: String = slug
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+
+    // Use slug if it's a valid id
+    if slug.len() >= 2
+        && slug.len() <= 64
+        && slug
+            .chars()
+            .next()
+            .map_or(false, |c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
+        return slug;
+    }
+
+    // Fallback: deterministic hash-based id
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    name.hash(&mut hasher);
+    format!("agent-{:08x}", hasher.finish() as u32)
+}
+
 /// Validate an agent ID: `[a-z0-9][a-z0-9_-]*`, 1-64 characters.
 fn validate_agent_id(id: &str) -> std::result::Result<(), String> {
     if id.is_empty() {
@@ -54,7 +100,9 @@ fn validate_agent_id(id: &str) -> std::result::Result<(), String> {
 /// Arguments for creating a new agent.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AgentCreateArgs {
-    /// Unique agent identifier (a-z, 0-9, _, -, max 64 chars)
+    /// Unique agent identifier (a-z, 0-9, _, -, max 64 chars).
+    /// If empty or missing, auto-generated from the name.
+    #[serde(default)]
     pub id: String,
     /// Human-readable name (defaults to id)
     #[serde(default)]
@@ -68,6 +116,10 @@ pub struct AgentCreateArgs {
     /// Custom system prompt for this agent
     #[serde(default)]
     pub system_prompt: Option<String>,
+    /// Raw input from slash command fast path (internal, hidden from LLM schema)
+    #[serde(default)]
+    #[schemars(skip)]
+    pub input: Option<String>,
     /// Injected by registry — session channel (internal, hidden from LLM schema)
     #[serde(default)]
     #[schemars(skip)]
@@ -132,7 +184,29 @@ impl AlephTool for AgentCreateTool {
         ])
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+    async fn call(&self, mut args: Self::Args) -> Result<Self::Output> {
+        // Auto-resolve name and id from raw slash command input
+        // e.g., /agent_create 交易助手 → name="交易助手", id="agent-{hash}"
+        if args.id.is_empty() {
+            let raw_name = args.name.clone()
+                .or_else(|| args.input.as_ref().map(|s| s.trim().to_string()))
+                .unwrap_or_default();
+
+            if raw_name.is_empty() {
+                return Err(crate::error::AlephError::other(
+                    "Agent name or id is required. Usage: /agent_create <name>"
+                ));
+            }
+
+            // Set display name
+            if args.name.is_none() {
+                args.name = Some(raw_name.clone());
+            }
+
+            // Generate valid ASCII id from name
+            args.id = generate_agent_id_from_name(&raw_name);
+        }
+
         info!(agent_id = %args.id, "Agent creation requested");
 
         // 1. Validate ID
@@ -330,6 +404,39 @@ mod tests {
     fn test_validate_agent_id_max_length() {
         let exact = "a".repeat(64);
         assert!(validate_agent_id(&exact).is_ok());
+    }
+
+    #[test]
+    fn test_generate_id_ascii_name() {
+        assert_eq!(generate_agent_id_from_name("Trading Assistant"), "trading-assistant");
+        assert_eq!(generate_agent_id_from_name("code-reviewer"), "code-reviewer");
+        assert_eq!(generate_agent_id_from_name("my_agent"), "my-agent");
+    }
+
+    #[test]
+    fn test_generate_id_non_ascii_name() {
+        // Chinese names should produce a deterministic hash-based id
+        let id = generate_agent_id_from_name("交易助手");
+        assert!(id.starts_with("agent-"), "Got: {}", id);
+        assert!(validate_agent_id(&id).is_ok(), "Generated id should be valid: {}", id);
+
+        // Same name should produce same id (deterministic)
+        assert_eq!(id, generate_agent_id_from_name("交易助手"));
+    }
+
+    #[test]
+    fn test_generate_id_mixed_name() {
+        // Mixed ASCII + non-ASCII
+        let id = generate_agent_id_from_name("AI助手");
+        // "AI" → "ai", Chinese chars filtered → slug is "ai" (len 2, valid)
+        assert_eq!(id, "ai");
+    }
+
+    #[test]
+    fn test_generate_id_single_char() {
+        // Too short slug → hash fallback
+        let id = generate_agent_id_from_name("A");
+        assert!(id.starts_with("agent-"), "Single char should fallback: {}", id);
     }
 
     #[test]
