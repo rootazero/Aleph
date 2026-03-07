@@ -125,6 +125,7 @@ pub use crate::config::{
     backup::ConfigBackup,
     patcher::ConfigPatcher,
     agent_resolver::{AgentDefinitionResolver, ResolvedAgent},
+    policies::CompressionPolicy,
 };
 
 // Initialization

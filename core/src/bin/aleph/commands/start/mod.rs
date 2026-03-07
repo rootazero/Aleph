@@ -285,6 +285,8 @@ struct AgentHandlersResult {
     agent_registry: Option<Arc<AgentRegistry>>,
     default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
     dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
+    _embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
+    compression_service: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -308,6 +310,8 @@ async fn register_agent_handlers(
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
     let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;
     let mut dispatch_reg: Option<Arc<alephcore::dispatcher::ToolRegistry>> = None;
+    let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
+    let mut compression_out: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>> = None;
 
     // Try to create provider: env vars first, then app config
     let provider_registry = if can_create_provider_from_env() {
@@ -348,6 +352,9 @@ async fn register_agent_handlers(
 
         // Create agent registry before tool config so agent management tools can use it
         let agent_registry = Arc::new(AgentRegistry::new());
+
+        // Capture embedder before it's moved into tool_config
+        embedder_out = embedder.clone();
 
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
@@ -515,6 +522,27 @@ async fn register_agent_handlers(
         if let Some(ref wm) = workspace_manager {
             engine = engine.with_workspace_manager(wm.clone());
         }
+
+        // Create compression service for Layer 1 -> Layer 2 fact extraction
+        let compression_svc: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>> =
+            if let Some(ref emb) = embedder_out {
+                if let Some(ref prov) = default_prov {
+                    Some(builder::init_compression_service(
+                        memory_db, prov.clone(), emb.clone(),
+                        &app_config.policies.memory.compression, daemon,
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+        if let Some(ref cs) = compression_svc {
+            engine = engine.with_compression_service(cs.clone());
+        }
+        compression_out = compression_svc;
+
         let engine = Arc::new(engine);
 
         if !app_config.agents.list.is_empty() {
@@ -688,6 +716,8 @@ async fn register_agent_handlers(
         agent_registry: agent_reg,
         default_provider: default_prov,
         dispatch_registry: dispatch_reg,
+        _embedder: embedder_out,
+        compression_service: compression_out,
     }
 }
 
@@ -1378,7 +1408,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     register_config_handlers(&mut server, app_config, config_patcher, event_bus.clone(), auth_bundle.device_store.clone());
 
     register_session_handlers(&mut server, &session_manager, args.daemon);
-    register_memory_handlers(&mut server, &memory_db, args.daemon);
+    register_memory_handlers(&mut server, &memory_db, &agent_result.compression_service, args.daemon);
     register_models_handlers(&mut server, &app_config_for_models, args.daemon);
     register_daemon_handlers(&mut server, start_time, args.daemon);
 

@@ -334,6 +334,7 @@ pub(in crate::commands::start) async fn start_webchat_server(args: &Args, final_
 pub(in crate::commands::start) fn register_memory_handlers(
     server: &mut GatewayServer,
     memory_db: &MemoryBackend,
+    compression_service: &Option<std::sync::Arc<alephcore::memory::compression::CompressionService>>,
     daemon: bool,
 ) {
     register_handler!(server, "memory.search", memory_handlers::handle_search, memory_db);
@@ -342,7 +343,17 @@ pub(in crate::commands::start) fn register_memory_handlers(
     register_handler!(server, "memory.clear", memory_handlers::handle_clear, memory_db);
     register_handler!(server, "memory.clearFacts", memory_handlers::handle_clear_facts, memory_db);
     register_handler!(server, "memory.appList", memory_handlers::handle_app_list, memory_db);
-    register_handler!(server, "memory.compress", memory_handlers::handle_compress);
+    if let Some(cs) = compression_service {
+        register_handler!(server, "memory.compress", memory_handlers::handle_compress, cs);
+    } else {
+        server.handlers_mut().register("memory.compress", |req| async move {
+            alephcore::gateway::protocol::JsonRpcResponse::error(
+                req.id,
+                alephcore::gateway::protocol::INTERNAL_ERROR,
+                "Compression not available: missing AI or embedding provider".to_string(),
+            )
+        });
+    }
 
     if !daemon {
         println!("Memory methods:");
@@ -353,6 +364,36 @@ pub(in crate::commands::start) fn register_memory_handlers(
         println!("  - memory.compress   : Trigger compression");
         println!();
     }
+}
+
+// ─── init_compression_service ────────────────────────────────────────────────
+
+pub(in crate::commands::start) fn init_compression_service(
+    memory_db: &MemoryBackend,
+    provider: std::sync::Arc<dyn alephcore::providers::AiProvider>,
+    embedder: std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>,
+    policy: &alephcore::CompressionPolicy,
+    daemon: bool,
+) -> std::sync::Arc<alephcore::memory::compression::CompressionService> {
+    use alephcore::memory::compression::{CompressionConfig, CompressionService};
+
+    let config = CompressionConfig::from_policy(policy);
+    let service = std::sync::Arc::new(CompressionService::new(
+        memory_db.clone(),
+        provider,
+        embedder,
+        config,
+    ));
+
+    // Start background compression loop (hourly check)
+    let _handle = service.clone().start_background_task();
+
+    if !daemon {
+        println!("Compression service started (interval: {}s, turn threshold: {})",
+            policy.background_interval_seconds, policy.turn_threshold);
+    }
+
+    service
 }
 
 // ─── register_models_handlers ────────────────────────────────────────────────
