@@ -5,6 +5,7 @@
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 use super::bottom_bar::PanelMode;
+use super::agents_sidebar::AgentsSidebar;
 use super::chat_sidebar::ChatSidebar;
 use super::dashboard_sidebar::DashboardSidebar;
 use crate::components::settings_sidebar::SETTINGS_GROUPS;
@@ -19,6 +20,7 @@ pub fn ModeSidebar() -> impl IntoView {
             {move || match mode.get() {
                 PanelMode::Chat => view! { <ChatSidebar /> }.into_any(),
                 PanelMode::Dashboard => view! { <DashboardSidebar /> }.into_any(),
+                PanelMode::Agents => view! { <AgentsSidebar /> }.into_any(),
                 PanelMode::Settings => view! { <SettingsSidebar /> }.into_any(),
             }}
         </aside>

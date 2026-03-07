@@ -162,6 +162,9 @@ fn MainContent() -> impl IntoView {
         <div style:display=move || if mode.get() == PanelMode::Dashboard { "contents" } else { "none" }>
             <DashboardRouter />
         </div>
+        <div style:display=move || if mode.get() == PanelMode::Agents { "contents" } else { "none" }>
+            <AgentsRouter />
+        </div>
         <div style:display=move || if mode.get() == PanelMode::Settings { "contents" } else { "none" }>
             <SettingsRouter />
         </div>
@@ -209,7 +212,6 @@ fn SettingsRouter() -> impl IntoView {
             "/settings/memory" => view! { <MemoryView /> }.into_any(),
 
             // Extensions
-            "/settings/agent" => view! { <AgentView /> }.into_any(),
             "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),
             "/settings/mcp" => view! { <McpView /> }.into_any(),
             "/settings/plugins" => view! { <PluginsView /> }.into_any(),
@@ -238,6 +240,21 @@ fn SettingsRouter() -> impl IntoView {
 
             // Not in settings mode or unknown path — render nothing (div is hidden)
             _ => ().into_any(),
+        }
+    }
+}
+
+/// Agents sub-routing
+#[component]
+fn AgentsRouter() -> impl IntoView {
+    let location = use_location();
+
+    move || {
+        let path = location.pathname.get();
+        if path.starts_with("/agents") {
+            view! { <crate::views::agents::AgentsView /> }.into_any()
+        } else {
+            ().into_any()
         }
     }
 }

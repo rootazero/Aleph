@@ -1,5 +1,6 @@
 //! Component modules
 
+pub mod agents_sidebar;
 pub mod bottom_bar;
 pub mod chat_sidebar;
 pub mod connection_status;

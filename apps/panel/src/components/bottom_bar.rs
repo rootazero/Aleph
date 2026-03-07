@@ -11,13 +11,16 @@ use leptos_router::hooks::{use_location, use_navigate};
 pub enum PanelMode {
     Chat,
     Dashboard,
+    Agents,
     Settings,
 }
 
 impl PanelMode {
     /// Determine panel mode from a URL path.
     pub fn from_path(path: &str) -> Self {
-        if path.starts_with("/dashboard") {
+        if path.starts_with("/agents") {
+            Self::Agents
+        } else if path.starts_with("/dashboard") {
             Self::Dashboard
         } else if path.starts_with("/settings") {
             Self::Settings
@@ -67,6 +70,17 @@ pub fn BottomBar() -> impl IntoView {
                 <rect x="14" y="3" width="7" height="7"/>
                 <rect x="14" y="14" width="7" height="7"/>
                 <rect x="3" y="14" width="7" height="7"/>
+            </BottomBarItem>
+
+            <BottomBarItem
+                label="Agents"
+                mode=PanelMode::Agents
+                active_mode=Signal::derive(active_mode)
+                on_click=go("/agents")
+            >
+                <circle cx="12" cy="8" r="4"/>
+                <path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/>
+                <line x1="12" y1="2" x2="12" y2="4"/>
             </BottomBarItem>
 
             <BottomBarItem
