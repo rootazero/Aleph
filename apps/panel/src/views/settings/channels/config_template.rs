@@ -1,13 +1,13 @@
-//! Generic channel configuration page renderer.
+//! Generic channel configuration renderer for a single instance.
 //!
-//! `ChannelConfigTemplate` receives a `&'static ChannelDefinition` and renders
-//! a complete settings form: header, connection status, all config fields,
-//! save/connect/disconnect actions. The `render_field()` dispatcher maps each
+//! `ChannelConfigTemplate` receives a `&'static ChannelDefinition` plus an
+//! `instance_id` string identifying the concrete channel instance. It renders
+//! a configuration form: connection status, all config fields, save/connect/
+//! disconnect/delete actions. The `render_field()` dispatcher maps each
 //! `FieldKind` to the appropriate form component.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use leptos_router::components::A;
 use serde_json::{json, Value};
 
 use crate::components::forms::{
@@ -25,13 +25,17 @@ use super::definitions::{ChannelDefinition, FieldDef, FieldKind};
 // ChannelConfigTemplate
 // ---------------------------------------------------------------------------
 
-/// Generic channel configuration page driven by a `ChannelDefinition`.
+/// Generic channel configuration panel driven by a `ChannelDefinition`.
 ///
 /// Loads the current config from Gateway via `config.get`, renders all fields
 /// through the `render_field` dispatcher, and provides Save / Connect /
-/// Disconnect actions.
+/// Disconnect / Delete actions.
 #[component]
-pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl IntoView {
+pub fn ChannelConfigTemplate(
+    definition: &'static ChannelDefinition,
+    instance_id: String,
+    #[prop(optional)] on_deleted: Option<Callback<()>>,
+) -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
     // ---- state signals ----
@@ -42,21 +46,23 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
     let success = RwSignal::new(Option::<String>::None);
     let channel_status = RwSignal::new(ChannelStatus::Disconnected);
     let connecting = RwSignal::new(false);
+    let deleting = RwSignal::new(false);
 
-    // Copies for closures
-    let channel_id: &'static str = definition.id;
-    let config_section: &'static str = definition.config_section;
+    // Dynamic identifiers based on instance_id
+    let channel_id: String = instance_id.clone();
+    let config_section: String = format!("channels.{}", instance_id);
+
+    // Extract top-level section and sub-key for config.get
+    let (top_section, channel_sub_key): (String, String) = config_section
+        .split_once('.')
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .unwrap_or((config_section.clone(), String::new()));
 
     // ---- Effect: load config on mount ----
-    // config_section is e.g. "channels.telegram"; extract the top-level
-    // section ("channels") and the channel sub-key ("telegram").
-    let (top_section, channel_sub_key): (&'static str, &'static str) = config_section
-        .split_once('.')
-        .unwrap_or((config_section, ""));
-
     {
-        let section = top_section.to_string();
-        let sub_key = channel_sub_key.to_string();
+        let section = top_section.clone();
+        let sub_key = channel_sub_key.clone();
+        let channel_id_for_load = channel_id.clone();
         spawn_local(async move {
             match state
                 .rpc_call("config.get", json!({ "section": section }))
@@ -75,7 +81,8 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
                 }
                 Err(e) => {
                     web_sys::console::warn_1(
-                        &format!("Failed to load config for {}: {}", channel_id, e).into(),
+                        &format!("Failed to load config for {}: {}", channel_id_for_load, e)
+                            .into(),
                     );
                     loading.set(false);
                 }
@@ -85,18 +92,19 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
 
     // Fetch channel status on mount
     {
-        let id = channel_id.to_string();
+        let channel_id_for_status = channel_id.clone();
         spawn_local(async move {
             match state
-                .rpc_call("channels.status", json!({ "channel_id": id }))
+                .rpc_call(
+                    "channels.status",
+                    json!({ "channel_id": channel_id_for_status }),
+                )
                 .await
             {
                 Ok(val) => {
                     if let Some(s) = val.as_str() {
                         channel_status.set(ChannelStatus::from_str(s));
-                    } else if let Some(s) =
-                        val.get("status").and_then(|v| v.as_str())
-                    {
+                    } else if let Some(s) = val.get("status").and_then(|v| v.as_str()) {
                         channel_status.set(ChannelStatus::from_str(s));
                     }
                 }
@@ -108,6 +116,7 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
     }
 
     // ---- Save handler ----
+    let config_section_for_save = config_section.clone();
     let on_save = move || {
         if !state.is_connected.get() {
             return;
@@ -117,12 +126,9 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
         success.set(None);
 
         let values = field_values.get();
-        let section = config_section.to_string();
+        let section = config_section_for_save.clone();
 
         spawn_local(async move {
-            // Build PatchRequest: { path, patch }
-            // All fields (including secrets like bot_token) go into patch directly.
-            // secret_fields is only used when a vault is configured (e.g. provider api_keys).
             let mut patch_obj = serde_json::Map::new();
             for (key, value) in values.iter() {
                 patch_obj.insert(key.clone(), value.clone());
@@ -133,10 +139,7 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
                 "patch": Value::Object(patch_obj),
             });
 
-            match state
-                .rpc_call("config.patch", params)
-                .await
-            {
+            match state.rpc_call("config.patch", params).await {
                 Ok(_) => {
                     success.set(Some("Configuration saved successfully.".to_string()));
                 }
@@ -148,6 +151,9 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
         });
     };
 
+    // Store channel_id in a signal so handlers can access it without move issues
+    let channel_id_sig = StoredValue::new(channel_id.clone());
+
     // ---- Connect handler ----
     let on_connect = move || {
         if !state.is_connected.get() {
@@ -158,7 +164,7 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
         success.set(None);
         channel_status.set(ChannelStatus::Connecting);
 
-        let id = channel_id.to_string();
+        let id = channel_id_sig.get_value();
         spawn_local(async move {
             match state
                 .rpc_call("channel.start", json!({ "channel_id": id }))
@@ -185,7 +191,7 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
         error.set(None);
         success.set(None);
 
-        let id = channel_id.to_string();
+        let id = channel_id_sig.get_value();
         spawn_local(async move {
             match state
                 .rpc_call("channel.stop", json!({ "channel_id": id }))
@@ -202,43 +208,59 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
         });
     };
 
+    // ---- Delete handler ----
+    let on_delete = move || {
+        if !state.is_connected.get() {
+            return;
+        }
+        deleting.set(true);
+        error.set(None);
+        success.set(None);
+
+        let id = channel_id_sig.get_value();
+        spawn_local(async move {
+            match state
+                .rpc_call("channel.delete", json!({ "channel_id": id }))
+                .await
+            {
+                Ok(_) => {
+                    if let Some(cb) = on_deleted {
+                        cb.run(());
+                    }
+                }
+                Err(e) => {
+                    error.set(Some(format!("Failed to delete instance: {}", e)));
+                    deleting.set(false);
+                }
+            }
+        });
+    };
+
     // ---- Pre-compute static view data ----
     let icon_svg = definition.icon_svg;
     let brand_color = definition.brand_color;
-    let name = definition.name;
-    let description = definition.description;
     let docs_url = definition.docs_url;
     let fields = definition.fields;
-    let icon_bg = format!("background-color: {}15", brand_color);
 
     // ---- Build the success signal for display ----
     let success_signal: Signal<Option<String>> = success.into();
 
+    // Channel ID label
+    let channel_id_label = channel_id.clone();
+
     view! {
-        <div class="flex-1 p-6 overflow-y-auto bg-surface">
-            <div class="max-w-3xl space-y-6">
+        <div class="space-y-6">
+            // ---- Instance identifier ----
+            <div class="text-xs text-text-tertiary font-mono">{channel_id_label}</div>
 
-                // ---- Back link ----
-                <A
-                    href="/settings/channels"
-                    attr:class="inline-flex items-center gap-1 text-sm text-text-tertiary hover:text-text-primary transition-colors"
-                >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="15 18 9 12 15 6"/>
-                    </svg>
-                    "Back to Channels"
-                </A>
-
-                // ---- Header: icon + name + description ----
-                <div>
-                    <div class="flex items-center gap-3 mb-1">
-                        <div
-                            class="w-10 h-10 rounded-lg flex items-center justify-center"
-                            style=icon_bg
-                        >
+            // ---- Connection status card ----
+            <div class="p-4 bg-surface-raised border border-border rounded-xl">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-full bg-surface-sunken flex items-center justify-center">
                             <svg
-                                width="22"
-                                height="22"
+                                width="20"
+                                height="20"
                                 viewBox="0 0 24 24"
                                 fill="none"
                                 stroke=brand_color
@@ -249,121 +271,104 @@ pub fn ChannelConfigTemplate(definition: &'static ChannelDefinition) -> impl Int
                             />
                         </div>
                         <div>
-                            <h1 class="text-2xl font-semibold text-text-primary">{name}</h1>
+                            <div class="text-sm font-medium text-text-primary">"Connection Status"</div>
+                            <ChannelStatusBadge status=channel_status.into() />
                         </div>
                     </div>
-                    <p class="text-sm text-text-secondary mt-1">{description}</p>
-                </div>
-
-                // ---- Connection status card ----
-                <div class="p-4 bg-surface-raised border border-border rounded-xl">
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center gap-3">
-                            <div class="w-10 h-10 rounded-full bg-surface-sunken flex items-center justify-center">
-                                <svg
-                                    width="20"
-                                    height="20"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke=brand_color
-                                    stroke-width="2"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    inner_html=icon_svg
-                                />
-                            </div>
-                            <div>
-                                <div class="text-sm font-medium text-text-primary">"Connection Status"</div>
-                                <ChannelStatusBadge status=channel_status.into() />
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-2">
-                            {move || {
-                                let st = channel_status.get();
-                                match st {
-                                    ChannelStatus::Connected | ChannelStatus::Connecting => {
-                                        view! {
-                                            <button
-                                                on:click=move |_| on_disconnect()
-                                                class="px-3 py-1.5 text-sm border border-danger/30 text-danger rounded-lg hover:bg-danger-subtle transition-colors"
-                                            >
-                                                "Disconnect"
-                                            </button>
-                                        }.into_any()
-                                    }
-                                    _ => {
-                                        view! {
-                                            <button
-                                                on:click=move |_| on_connect()
-                                                disabled=move || connecting.get()
-                                                class="px-3 py-1.5 text-sm bg-primary text-text-inverse rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors"
-                                            >
-                                                {move || if connecting.get() { "Connecting..." } else { "Connect" }}
-                                            </button>
-                                        }.into_any()
-                                    }
+                    <div class="flex items-center gap-2">
+                        {move || {
+                            let st = channel_status.get();
+                            match st {
+                                ChannelStatus::Connected | ChannelStatus::Connecting => {
+                                    view! {
+                                        <button
+                                            on:click=move |_| on_disconnect()
+                                            class="px-3 py-1.5 text-sm border border-danger/30 text-danger rounded-lg hover:bg-danger-subtle transition-colors"
+                                        >
+                                            "Disconnect"
+                                        </button>
+                                    }.into_any()
                                 }
-                            }}
-                        </div>
+                                _ => {
+                                    view! {
+                                        <button
+                                            on:click=move |_| on_connect()
+                                            disabled=move || connecting.get()
+                                            class="px-3 py-1.5 text-sm bg-primary text-text-inverse rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors"
+                                        >
+                                            {move || if connecting.get() { "Connecting..." } else { "Connect" }}
+                                        </button>
+                                    }.into_any()
+                                }
+                            }
+                        }}
                     </div>
                 </div>
+            </div>
 
-                // ---- Error / Success messages ----
-                <ErrorMessageDynamic error=error.into() />
-                {move || success_signal.get().map(|msg| view! {
-                    <div class="p-4 bg-success-subtle border border-success/30 rounded-lg text-success text-sm">
-                        {msg}
-                    </div>
-                })}
+            // ---- Error / Success messages ----
+            <ErrorMessageDynamic error=error.into() />
+            {move || success_signal.get().map(|msg| view! {
+                <div class="p-4 bg-success-subtle border border-success/30 rounded-lg text-success text-sm">
+                    {msg}
+                </div>
+            })}
 
-                // ---- Loading state OR field section ----
-                {move || {
-                    if loading.get() {
-                        view! {
-                            <div class="flex items-center justify-center py-12">
-                                <div class="text-text-tertiary">"Loading configuration..."</div>
-                            </div>
-                        }.into_any()
-                    } else if fields.is_empty() {
-                        view! {
-                            <div class="p-4 bg-primary-subtle border border-primary/20 rounded-xl text-sm text-info">
-                                "This channel uses a custom configuration page."
-                            </div>
-                        }.into_any()
-                    } else {
-                        view! {
-                            <SettingsSection title="Configuration">
-                                {fields
-                                    .iter()
-                                    .map(|field| render_field(field, field_values))
-                                    .collect_view()}
-                            </SettingsSection>
-                        }.into_any()
-                    }
-                }}
+            // ---- Loading state OR field section ----
+            {move || {
+                if loading.get() {
+                    view! {
+                        <div class="flex items-center justify-center py-12">
+                            <div class="text-text-tertiary">"Loading configuration..."</div>
+                        </div>
+                    }.into_any()
+                } else if fields.is_empty() {
+                    view! {
+                        <div class="p-4 bg-primary-subtle border border-primary/20 rounded-xl text-sm text-info">
+                            "This channel uses a custom configuration page."
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {
+                        <SettingsSection title="Configuration">
+                            {fields
+                                .iter()
+                                .map(|field| render_field(field, field_values))
+                                .collect_view()}
+                        </SettingsSection>
+                    }.into_any()
+                }
+            }}
 
-                // ---- Action bar: Save + docs link ----
-                <div class="flex items-center justify-between">
+            // ---- Action bar: Save + Delete + docs link ----
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
                     <SaveButton
                         on_click=move || on_save()
                         loading=saving.into()
                         text="Save Configuration"
                     />
-                    <a
-                        href=docs_url
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        class="text-sm text-text-tertiary hover:text-primary transition-colors inline-flex items-center gap-1"
+                    <button
+                        on:click=move |_| on_delete()
+                        disabled=move || deleting.get()
+                        class="px-4 py-2 text-sm border border-danger/30 text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors"
                     >
-                        "Documentation"
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                            <polyline points="15 3 21 3 21 9"/>
-                            <line x1="10" y1="14" x2="21" y2="3"/>
-                        </svg>
-                    </a>
+                        {move || if deleting.get() { "Deleting..." } else { "Delete Instance" }}
+                    </button>
                 </div>
-
+                <a
+                    href=docs_url
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="text-sm text-text-tertiary hover:text-primary transition-colors inline-flex items-center gap-1"
+                >
+                    "Documentation"
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                        <polyline points="15 3 21 3 21 9"/>
+                        <line x1="10" y1="14" x2="21" y2="3"/>
+                    </svg>
+                </a>
             </div>
         </div>
     }
