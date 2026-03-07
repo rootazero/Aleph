@@ -310,7 +310,7 @@ async fn register_agent_handlers(
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
     let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;
-    let mut dispatch_reg: Option<Arc<alephcore::dispatcher::ToolRegistry>> = None;
+    let dispatch_reg: Option<Arc<alephcore::dispatcher::ToolRegistry>>;
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
     let mut compression_out: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>> = None;
 
@@ -384,76 +384,7 @@ async fn register_agent_handlers(
             ))
             .collect();
 
-        // Create unified dispatch registry (command discovery + resolution)
-        use alephcore::dispatcher::ToolRegistry as DispatchRegistry;
-        let dispatch_registry = Arc::new(DispatchRegistry::new());
-
-        // Register builtin tools (generate_image, generate_speech, read_skill, list_skills, snapshot)
-        dispatch_registry.register_builtin_tools().await;
-
-        // Also register executor builtin tools as commands (search, screenshot, ocr, etc.)
-        for def in BUILTIN_TOOL_DEFINITIONS {
-            use alephcore::dispatcher::{UnifiedTool as DUnifiedTool, ToolSource as DToolSource};
-            let tool = DUnifiedTool::new(
-                format!("builtin:{}", def.name),
-                def.name,
-                def.description,
-                DToolSource::Builtin,
-            );
-            dispatch_registry.register_with_conflict_resolution(tool).await;
-        }
-
-        // Register custom commands from config routing rules
-        if !app_config.rules.is_empty() {
-            dispatch_registry.register_custom_commands(&app_config.rules).await;
-        }
-
-        // Register skills from ExtensionManager (if initialized)
-        {
-            use alephcore::gateway::handlers::plugins::get_extension_manager;
-            use alephcore::domain::Entity;
-            if let Ok(ext_manager) = get_extension_manager() {
-                if let Some(skill_sys) = ext_manager.skill_system() {
-                    let skill_manifests = skill_sys.list_skills().await;
-                    let skill_infos: Vec<alephcore::skills::SkillInfo> = skill_manifests
-                        .iter()
-                        .filter(|s| s.is_user_invocable())
-                        .map(|s| alephcore::skills::SkillInfo {
-                            id: s.id().as_str().to_string(),
-                            name: s.name().to_string(),
-                            description: s.description().to_string(),
-                            triggers: Vec::new(),
-                            allowed_tools: Vec::new(),
-                            ecosystem: "aleph".to_string(),
-                        })
-                        .collect();
-                    dispatch_registry.register_skills(&skill_infos).await;
-                    if !daemon {
-                        println!("  Dispatch registry: {} skills registered", skill_infos.len());
-                    }
-                }
-            }
-        }
-
-        if !daemon {
-            println!("  Dispatch registry initialized");
-        }
-
-        // Wire commands.list to use unified dispatch registry instead of hardcoded builtins
-        {
-            let reg = dispatch_registry.clone();
-            server.handlers_mut().register("commands.list", move |req| {
-                let registry = reg.clone();
-                async move {
-                    alephcore::gateway::handlers::commands::handle_list_from_registry(req, &registry).await
-                }
-            });
-            if !daemon {
-                println!("  commands.list: wired to unified dispatch registry");
-            }
-        }
-
-        dispatch_reg = Some(dispatch_registry);
+        // dispatch_registry is created after the provider block (see below)
 
         // Build task router from config
         let task_router: Option<Arc<dyn alephcore::routing::TaskRouter>> = if app_config.task_routing.enabled {
@@ -670,6 +601,82 @@ async fn register_agent_handlers(
             let manager = rm_chat.clone();
             async move { chat_handlers::handle_send(req, manager).await }
         });
+    }
+
+    // Create unified dispatch registry (command discovery + resolution)
+    // This is independent of the AI provider — it only maps command names to metadata.
+    {
+        use alephcore::dispatcher::ToolRegistry as DispatchRegistry;
+        use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
+
+        let dispatch_registry = Arc::new(DispatchRegistry::new());
+
+        // Register builtin tools (generate_image, generate_speech, read_skill, list_skills, snapshot)
+        dispatch_registry.register_builtin_tools().await;
+
+        // Also register executor builtin tools as commands (search, screenshot, ocr, etc.)
+        for def in BUILTIN_TOOL_DEFINITIONS {
+            use alephcore::dispatcher::{UnifiedTool as DUnifiedTool, ToolSource as DToolSource};
+            let tool = DUnifiedTool::new(
+                format!("builtin:{}", def.name),
+                def.name,
+                def.description,
+                DToolSource::Builtin,
+            );
+            dispatch_registry.register_with_conflict_resolution(tool).await;
+        }
+
+        // Register custom commands from config routing rules
+        if !app_config.rules.is_empty() {
+            dispatch_registry.register_custom_commands(&app_config.rules).await;
+        }
+
+        // Register skills from ExtensionManager (if initialized)
+        {
+            use alephcore::gateway::handlers::plugins::get_extension_manager;
+            use alephcore::domain::Entity;
+            if let Ok(ext_manager) = get_extension_manager() {
+                if let Some(skill_sys) = ext_manager.skill_system() {
+                    let skill_manifests = skill_sys.list_skills().await;
+                    let skill_infos: Vec<alephcore::skills::SkillInfo> = skill_manifests
+                        .iter()
+                        .filter(|s| s.is_user_invocable())
+                        .map(|s| alephcore::skills::SkillInfo {
+                            id: s.id().as_str().to_string(),
+                            name: s.name().to_string(),
+                            description: s.description().to_string(),
+                            triggers: Vec::new(),
+                            allowed_tools: Vec::new(),
+                            ecosystem: "aleph".to_string(),
+                        })
+                        .collect();
+                    dispatch_registry.register_skills(&skill_infos).await;
+                    if !daemon {
+                        println!("  Dispatch registry: {} skills registered", skill_infos.len());
+                    }
+                }
+            }
+        }
+
+        if !daemon {
+            println!("  Dispatch registry initialized");
+        }
+
+        // Wire commands.list to use unified dispatch registry instead of hardcoded builtins
+        {
+            let reg = dispatch_registry.clone();
+            server.handlers_mut().register("commands.list", move |req| {
+                let registry = reg.clone();
+                async move {
+                    alephcore::gateway::handlers::commands::handle_list_from_registry(req, &registry).await
+                }
+            });
+            if !daemon {
+                println!("  commands.list: wired to unified dispatch registry");
+            }
+        }
+
+        dispatch_reg = Some(dispatch_registry);
     }
 
     // Register status/cancel (work for both real and simulated modes)
@@ -1105,10 +1112,9 @@ async fn initialize_channels(
         });
     }
 
-    // Build slash commands once for all telegram instances
+    // Build slash commands once for all telegram instances (builtin tools only — Telegram has command count limits)
     let slash_commands = if let Some(reg) = dispatch_registry {
-        use alephcore::dispatcher::ChannelType;
-        let tools = reg.list_for_channel(ChannelType::Telegram).await;
+        let tools = reg.list_builtin_tools().await;
         tools.iter()
             .map(|t| (t.name.clone(), t.description.clone()))
             .collect::<Vec<_>>()
