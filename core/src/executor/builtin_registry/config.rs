@@ -41,4 +41,6 @@ pub struct BuiltinToolConfig {
     pub tool_policy: Option<crate::builtin_tools::agent_manage::ToolPolicyHandle>,
     /// Sub-agent registry for subagent_steer and subagent_kill tools
     pub sub_agent_registry: Option<Arc<SubAgentRegistry>>,
+    /// Event bus for lifecycle event emission (agent switch/delete)
+    pub event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 }

@@ -7,6 +7,8 @@ use tracing::info;
 
 use crate::error::Result;
 use crate::gateway::agent_instance::AgentRegistry;
+use crate::gateway::agent_lifecycle::AgentLifecycleEvent;
+use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::workspace::WorkspaceManager;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -50,16 +52,19 @@ pub struct AgentSwitchOutput {
 pub struct AgentSwitchTool {
     registry: Arc<AgentRegistry>,
     workspace_mgr: Arc<WorkspaceManager>,
+    event_bus: Option<Arc<GatewayEventBus>>,
 }
 
 impl AgentSwitchTool {
     pub fn new(
         registry: Arc<AgentRegistry>,
         workspace_mgr: Arc<WorkspaceManager>,
+        event_bus: Option<Arc<GatewayEventBus>>,
     ) -> Self {
         Self {
             registry,
             workspace_mgr,
+            event_bus,
         }
     }
 }
@@ -125,6 +130,16 @@ impl AlephTool for AgentSwitchTool {
             ),
         };
 
+        // Emit lifecycle event
+        if let Some(ref bus) = self.event_bus {
+            let _ = bus.publish_json(&AgentLifecycleEvent::Switched {
+                agent_id: args.agent_id.clone(),
+                channel: channel.clone(),
+                peer_id: peer_id.clone(),
+                previous_agent_id: previous.clone().unwrap_or_default(),
+            });
+        }
+
         info!(
             agent_id = %args.agent_id,
             previous = ?previous,
@@ -164,7 +179,7 @@ mod tests {
     fn test_switch_tool_definition() {
         let registry = Arc::new(AgentRegistry::new());
         let workspace_mgr = test_workspace_mgr();
-        let tool = AgentSwitchTool::new(registry, workspace_mgr);
+        let tool = AgentSwitchTool::new(registry, workspace_mgr, None);
         let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "agent_switch");

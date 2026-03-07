@@ -7,6 +7,8 @@ use tracing::{info, warn};
 
 use crate::error::Result;
 use crate::gateway::agent_instance::AgentRegistry;
+use crate::gateway::agent_lifecycle::AgentLifecycleEvent;
+use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::workspace::WorkspaceManager;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -51,16 +53,19 @@ pub struct AgentDeleteOutput {
 pub struct AgentDeleteTool {
     registry: Arc<AgentRegistry>,
     workspace_mgr: Arc<WorkspaceManager>,
+    event_bus: Option<Arc<GatewayEventBus>>,
 }
 
 impl AgentDeleteTool {
     pub fn new(
         registry: Arc<AgentRegistry>,
         workspace_mgr: Arc<WorkspaceManager>,
+        event_bus: Option<Arc<GatewayEventBus>>,
     ) -> Self {
         Self {
             registry,
             workspace_mgr,
+            event_bus,
         }
     }
 }
@@ -152,6 +157,17 @@ impl AlephTool for AgentDeleteTool {
         }
 
         let deleted = removed.is_some();
+
+        // Emit lifecycle event
+        if deleted {
+            if let Some(ref bus) = self.event_bus {
+                let _ = bus.publish_json(&AgentLifecycleEvent::Deleted {
+                    agent_id: args.agent_id.clone(),
+                    workspace_archived: true,
+                });
+            }
+        }
+
         let message = if deleted {
             format!("Agent '{}' deleted and workspace archived.", args.agent_id)
         } else {
@@ -189,7 +205,7 @@ mod tests {
     fn test_delete_tool_definition() {
         let registry = Arc::new(AgentRegistry::new());
         let workspace_mgr = test_workspace_mgr();
-        let tool = AgentDeleteTool::new(registry, workspace_mgr);
+        let tool = AgentDeleteTool::new(registry, workspace_mgr, None);
         let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "agent_delete");

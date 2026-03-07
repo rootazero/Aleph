@@ -90,6 +90,9 @@ pub struct BuiltinToolRegistry {
     session_context_handle: Option<crate::builtin_tools::agent_manage::SessionContextHandle>,
     /// Tool policy handle for per-agent tool access control
     tool_policy_handle: Option<crate::builtin_tools::agent_manage::ToolPolicyHandle>,
+    /// Event bus for lifecycle event emission (held for future use; tools get their own clones)
+    #[allow(dead_code)]
+    event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Tool metadata for lookup
     tools: HashMap<String, UnifiedTool>,
 }
@@ -555,13 +558,13 @@ impl BuiltinToolRegistry {
                     Arc::clone(ar), Arc::clone(wm),
                 );
                 let switch = agent_manage::AgentSwitchTool::new(
-                    Arc::clone(ar), Arc::clone(wm),
+                    Arc::clone(ar), Arc::clone(wm), config.event_bus.clone(),
                 );
                 let list = agent_manage::AgentListTool::new(
                     Arc::clone(ar), Arc::clone(wm),
                 );
                 let delete = agent_manage::AgentDeleteTool::new(
-                    Arc::clone(ar), Arc::clone(wm),
+                    Arc::clone(ar), Arc::clone(wm), config.event_bus.clone(),
                 );
 
                 for (name, desc) in [
@@ -620,6 +623,7 @@ impl BuiltinToolRegistry {
             agent_delete_tool,
             session_context_handle,
             tool_policy_handle,
+            event_bus: config.event_bus.clone(),
             tools,
         }
     }
