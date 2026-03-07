@@ -7,12 +7,30 @@ use serde_json::{json, Value};
 use crate::sync_primitives::Arc;
 use tracing::debug;
 
+use std::sync::OnceLock;
 use tokio::sync::RwLock;
 
 use crate::Config;
 use crate::gateway::channel::{ChannelId, ChannelInfo, ChannelStatus, OutboundMessage};
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+
+/// Cached Telegram slash commands for channel recreation.
+///
+/// When `channel.start` RPC recreates a Telegram channel from config,
+/// it needs to re-attach slash commands. This static stores the commands
+/// set during initial startup via `set_telegram_slash_commands()`.
+static TELEGRAM_SLASH_COMMANDS: OnceLock<Vec<(String, String)>> = OnceLock::new();
+
+/// Store Telegram slash commands for use when recreating the channel.
+pub fn set_telegram_slash_commands(commands: Vec<(String, String)>) {
+    let _ = TELEGRAM_SLASH_COMMANDS.set(commands);
+}
+
+/// Get cached Telegram slash commands.
+fn get_telegram_slash_commands() -> Vec<(String, String)> {
+    TELEGRAM_SLASH_COMMANDS.get().cloned().unwrap_or_default()
+}
 
 /// Channel info for JSON response
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -182,7 +200,18 @@ pub async fn handle_start(
             map.remove("type");
         }
 
-        if let Some(new_channel) = create_channel_from_config(channel_id.as_str(), &channel_type, clean_config) {
+        if let Some(mut new_channel) = create_channel_from_config(channel_id.as_str(), &channel_type, clean_config.clone()) {
+            // Re-attach slash commands for telegram channels
+            if channel_type == "telegram" {
+                use crate::gateway::interfaces::telegram::{TelegramChannel, TelegramConfig};
+                if let Ok(tg_config) = serde_json::from_value::<TelegramConfig>(clean_config) {
+                    let slash_cmds = get_telegram_slash_commands();
+                    new_channel = Box::new(
+                        TelegramChannel::new(channel_id.as_str(), tg_config)
+                            .with_slash_commands(slash_cmds),
+                    );
+                }
+            }
             // Replace old channel with freshly configured one
             registry.register(new_channel).await;
             debug!("Replaced channel {} with fresh config from app config", channel_id);
