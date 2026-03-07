@@ -8,6 +8,7 @@ use serde_json::json;
 use super::parse_params;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::memory::store::{MemoryBackend, SessionStore};
+use crate::sync_primitives::Arc;
 
 /// Memory entry for JSON serialization
 #[derive(Debug, Clone, Serialize)]
@@ -268,18 +269,26 @@ pub async fn handle_stats(
 // ============================================================================
 
 /// Trigger memory compression
-pub async fn handle_compress(request: JsonRpcRequest) -> JsonRpcResponse {
-    // V2 compression is not yet fully implemented
-    // Return a default result indicating no compression occurred
-    JsonRpcResponse::success(
-        request.id,
-        json!(CompressionResult {
-            memories_processed: 0,
-            facts_extracted: 0,
-            facts_invalidated: 0,
-            duration_ms: 0,
-        }),
-    )
+pub async fn handle_compress(
+    request: JsonRpcRequest,
+    service: Arc<crate::memory::compression::CompressionService>,
+) -> JsonRpcResponse {
+    match service.compress().await {
+        Ok(result) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "memoriesProcessed": result.memories_processed,
+                "factsExtracted": result.facts_extracted,
+                "factsInvalidated": result.facts_invalidated,
+                "durationMs": result.duration_ms,
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Compression failed: {}", e),
+        ),
+    }
 }
 
 // ============================================================================
