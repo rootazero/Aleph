@@ -82,6 +82,10 @@ pub struct BuiltinToolRegistry {
     pub(crate) agent_switch_tool: Option<crate::builtin_tools::agent_manage::AgentSwitchTool>,
     pub(crate) agent_list_tool: Option<crate::builtin_tools::agent_manage::AgentListTool>,
     pub(crate) agent_delete_tool: Option<crate::builtin_tools::agent_manage::AgentDeleteTool>,
+    /// Subagent management tools (optional - requires SubAgentDispatcher + SubAgentRegistry)
+    pub(crate) subagent_spawn_tool: Option<crate::builtin_tools::subagent_manage::SubagentSpawnTool>,
+    pub(crate) subagent_steer_tool: Option<crate::builtin_tools::subagent_manage::SubagentSteerTool>,
+    pub(crate) subagent_kill_tool: Option<crate::builtin_tools::subagent_manage::SubagentKillTool>,
     /// Session context handle for agent management tools
     session_context_handle: Option<crate::builtin_tools::agent_manage::SessionContextHandle>,
     /// Tool policy handle for per-agent tool access control
@@ -488,6 +492,60 @@ impl BuiltinToolRegistry {
             info!("Registered sessions tools (sessions_list, sessions_send) in BuiltinToolRegistry");
         }
 
+        // Add subagent management tools (if SubAgentDispatcher is available)
+        let (subagent_spawn_tool, subagent_steer_tool, subagent_kill_tool) =
+            if let Some(ref dispatcher) = config.sub_agent_dispatcher {
+                use crate::builtin_tools::subagent_manage;
+                let spawn = subagent_manage::SubagentSpawnTool::new(Arc::clone(dispatcher));
+                let steer = config.sub_agent_registry.as_ref().map(|reg| {
+                    subagent_manage::SubagentSteerTool::new(Arc::clone(dispatcher), Arc::clone(reg))
+                });
+                let kill = config.sub_agent_registry.as_ref().map(|reg| {
+                    subagent_manage::SubagentKillTool::new(Arc::clone(dispatcher), Arc::clone(reg))
+                });
+
+                // Register tool metadata
+                tools.insert(
+                    "subagent_spawn".to_string(),
+                    UnifiedTool::new(
+                        "builtin:subagent_spawn",
+                        "subagent_spawn",
+                        subagent_manage::SubagentSpawnTool::DESCRIPTION,
+                        ToolSource::Builtin,
+                    ),
+                );
+                if steer.is_some() {
+                    tools.insert(
+                        "subagent_steer".to_string(),
+                        UnifiedTool::new(
+                            "builtin:subagent_steer",
+                            "subagent_steer",
+                            subagent_manage::SubagentSteerTool::DESCRIPTION,
+                            ToolSource::Builtin,
+                        ),
+                    );
+                }
+                if kill.is_some() {
+                    tools.insert(
+                        "subagent_kill".to_string(),
+                        UnifiedTool::new(
+                            "builtin:subagent_kill",
+                            "subagent_kill",
+                            subagent_manage::SubagentKillTool::DESCRIPTION,
+                            ToolSource::Builtin,
+                        ),
+                    );
+                }
+
+                info!("Registered subagent management tools (subagent_spawn{}{})",
+                    if steer.is_some() { ", subagent_steer" } else { "" },
+                    if kill.is_some() { ", subagent_kill" } else { "" },
+                );
+                (Some(spawn), steer, kill)
+            } else {
+                (None, None, None)
+            };
+
         // Add agent management tools (if AgentRegistry + WorkspaceManager are available)
         let (agent_create_tool, agent_switch_tool, agent_list_tool, agent_delete_tool, session_context_handle) =
             if let (Some(ref ar), Some(ref wm)) = (&config.agent_registry, &config.workspace_manager) {
@@ -553,6 +611,9 @@ impl BuiltinToolRegistry {
             dispatcher_registry,
             sub_agent_dispatcher,
             gateway_context,
+            subagent_spawn_tool,
+            subagent_steer_tool,
+            subagent_kill_tool,
             agent_create_tool,
             agent_switch_tool,
             agent_list_tool,
@@ -731,6 +792,26 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // Note: GatewayContext doesn't implement Clone, so we dereference and clone
                 // the inner context for SessionsSendTool which expects GatewayContext by value
                 let tool = SessionsSendTool::with_context((**context).clone(), "main");
+                tool.call_json(arguments).await
+            }),
+
+            // Subagent management tools
+            "subagent_spawn" => Box::pin(async move {
+                let tool = self.subagent_spawn_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("subagent_spawn not available: no SubAgentDispatcher configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "subagent_steer" => Box::pin(async move {
+                let tool = self.subagent_steer_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("subagent_steer not available: no SubAgentDispatcher/SubAgentRegistry configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "subagent_kill" => Box::pin(async move {
+                let tool = self.subagent_kill_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("subagent_kill not available: no SubAgentDispatcher/SubAgentRegistry configured")
+                })?;
                 tool.call_json(arguments).await
             }),
 
