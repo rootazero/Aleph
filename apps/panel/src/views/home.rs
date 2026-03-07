@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 use crate::context::DashboardState;
-use crate::api::{MemoryApi, SystemApi, SystemInfo};
+use crate::api::{MemoryApi, MemoryStats, SystemApi, SystemInfo};
 
 #[component]
 pub fn Home() -> impl IntoView {
@@ -8,7 +8,7 @@ pub fn Home() -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
     // State for stats
-    let memory_stats = RwSignal::new(None::<Option<(u64, u64)>>); // Some(Some((count, size))) = loaded, Some(None) = failed, None = not fetched
+    let memory_stats = RwSignal::new(None::<Option<MemoryStats>>); // Some(Some(stats)) = loaded, Some(None) = failed, None = not fetched
     let system_info = RwSignal::new(None::<SystemInfo>);
     let active_tasks = RwSignal::new(None::<u64>);
     let gateway_latency_ms = RwSignal::new(None::<u64>);
@@ -20,7 +20,7 @@ pub fn Home() -> impl IntoView {
             leptos::task::spawn_local(async move {
                 // Fetch memory stats
                 match MemoryApi::stats(&state_clone).await {
-                    Ok(stats) => memory_stats.set(Some(Some((stats.total_facts, stats.total_memories)))),
+                    Ok(stats) => memory_stats.set(Some(Some(stats))),
                     Err(_) => memory_stats.set(Some(None)),
                 }
 
@@ -88,7 +88,7 @@ pub fn Home() -> impl IntoView {
             }}
 
             // Stats Grid
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 pt-8">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 pt-8">
                 <StatCard label="Active Tasks" value=Signal::derive(move || {
                     active_tasks.get()
                         .map(|n| n.to_string())
@@ -106,15 +106,25 @@ pub fn Home() -> impl IntoView {
                     <line x1="9" y1="1" x2="9" y2="4" />
                     <line x1="15" y1="1" x2="15" y2="4" />
                 </StatCard>
-                <StatCard label="Knowledge Base" value=Signal::derive(move || {
+                <StatCard label="Raw Memories" value=Signal::derive(move || {
                     match memory_stats.get() {
-                        Some(Some((count, _))) => format!("{} facts", count),
+                        Some(Some(ref stats)) => format!("{}", stats.total_memories),
                         Some(None) => "—".to_string(),
                         None => "—".to_string(),
                     }
                 }) icon_color="text-info" icon_bg="bg-info-subtle">
                     <ellipse cx="12" cy="5" rx="9" ry="3" />
                     <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+                    <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+                </StatCard>
+                <StatCard label="Knowledge Base" value=Signal::derive(move || {
+                    match memory_stats.get() {
+                        Some(Some(ref stats)) => format!("{} facts", stats.total_facts),
+                        Some(None) => "—".to_string(),
+                        None => "—".to_string(),
+                    }
+                }) icon_color="text-accent" icon_bg="bg-accent-subtle">
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                 </StatCard>
                 <StatCard label="Gateway Latency" value=Signal::derive(move || {
                     gateway_latency_ms.get()
