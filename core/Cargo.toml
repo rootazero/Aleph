@@ -47,6 +47,7 @@ rand = "0.8"
 reqwest = { version = "0.12", features = ["json", "native-tls", "stream", "multipart"] }
 serde_json = "1.0"
 toml = "0.8"
+toml_edit = "0.22"
 dirs = "5.0"
 log = "0.4"
 # For structured logging
