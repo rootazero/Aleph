@@ -507,9 +507,14 @@ impl ExecutionIntentDecider {
 
         // Fallback: Parse command and args manually
         let without_slash = &trimmed[1..];
-        let (cmd_name, args) = match without_slash.split_once(char::is_whitespace) {
+        let (raw_cmd_name, args) = match without_slash.split_once(char::is_whitespace) {
             Some((name, rest)) => (name.to_lowercase(), rest.trim().to_string()),
             None => (without_slash.to_lowercase(), String::new()),
+        };
+        // Strip @botname suffix for Telegram group commands (e.g. "gen@mybot" → "gen")
+        let cmd_name = match raw_cmd_name.split_once('@') {
+            Some((name, _)) => name.to_string(),
+            None => raw_cmd_name,
         };
 
         // Check custom commands from config
