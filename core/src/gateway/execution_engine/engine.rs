@@ -747,7 +747,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // Pre-fetch LanceDB memory context for prompt augmentation
         let memory_context = if let Some(ref provider) = self.memory_context_provider {
-            let ctx = provider.fetch(&request.input).await;
+            let ctx = provider.fetch(&request.input, &agent_id).await;
             if ctx.is_empty() { None } else { Some(ctx) }
         } else {
             None
