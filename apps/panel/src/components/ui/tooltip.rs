@@ -1,4 +1,4 @@
-// core/ui/control_plane/src/components/ui/tooltip.rs
+// apps/panel/src/components/ui/tooltip.rs
 use leptos::prelude::*;
 use crate::components::sidebar::SystemAlert;
 

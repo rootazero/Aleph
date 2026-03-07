@@ -1,4 +1,4 @@
-// core/ui/control_plane/src/components/chat_sidebar.rs
+// apps/panel/src/components/chat_sidebar.rs
 //
 // Chat mode sidebar — session list fetched from sessions.list RPC,
 // auto-refreshed via stream.session_updated Gateway events.

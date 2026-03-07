@@ -1,4 +1,4 @@
-// core/ui/control_plane/src/components/bottom_bar.rs
+// apps/panel/src/components/bottom_bar.rs
 //
 // Bottom navigation bar with Chat, Dashboard, and Settings tabs.
 // Uses use_navigate() for explicit client-side routing.
