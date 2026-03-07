@@ -746,12 +746,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         }
 
         // Pre-fetch LanceDB memory context for prompt augmentation
-        let memory_context = if let Some(ref provider) = self.memory_context_provider {
+        let mut memory_context = if let Some(ref provider) = self.memory_context_provider {
             let ctx = provider.fetch(&request.input, &agent_id).await;
             if ctx.is_empty() { None } else { Some(ctx) }
         } else {
             None
         };
+
+        // Load recent daily memory notes from workspace/memory/*.md
+        {
+            let daily_notes = {
+                let mut loader = self.workspace_loader.lock().unwrap_or_else(|e| e.into_inner());
+                loader.load_recent_memory(&agent_workspace_dir, 7)
+            };
+            if !daily_notes.is_empty() {
+                let ctx = memory_context.get_or_insert_with(Default::default);
+                ctx.daily_notes = daily_notes;
+            }
+        }
 
         let thinker_config = ThinkerConfig {
             prompt: PromptConfig {
