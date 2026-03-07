@@ -106,6 +106,7 @@ mod tests {
                 ai_output: "Use aleph.toml...".to_string(),
                 score: 0.8,
             }],
+            daily_notes: vec![],
         };
 
         let input = LayerInput::basic(&config, &[]).with_memory_context(&ctx);
