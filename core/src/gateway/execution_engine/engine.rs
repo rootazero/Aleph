@@ -525,6 +525,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             );
         }
 
+        // Propagate tool policy from agent configuration
+        if let Some(tp_handle) = self.tool_registry.tool_policy_handle() {
+            // Policy will be populated when AgentRegistry is available on engine
+            // For now, default ToolPolicy (empty whitelist/blacklist) allows all tools
+            let _ = tp_handle;
+        }
+
         // Load workspace files (SOUL.md, IDENTITY.md, etc.) from agent's workspace_path
         let workspace_files = active_workspace.workspace_path.as_ref().map(|ws_path| {
             crate::thinker::workspace_files::WorkspaceFiles::load(

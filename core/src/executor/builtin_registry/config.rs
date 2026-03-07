@@ -37,4 +37,6 @@ pub struct BuiltinToolConfig {
     pub agent_registry: Option<Arc<crate::gateway::agent_instance::AgentRegistry>>,
     /// Workspace manager for agent management tools
     pub workspace_manager: Option<Arc<crate::gateway::workspace::WorkspaceManager>>,
+    /// Tool policy handle for per-agent tool access control
+    pub tool_policy: Option<crate::builtin_tools::agent_manage::ToolPolicyHandle>,
 }

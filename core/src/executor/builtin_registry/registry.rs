@@ -84,6 +84,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) agent_delete_tool: Option<crate::builtin_tools::agent_manage::AgentDeleteTool>,
     /// Session context handle for agent management tools
     session_context_handle: Option<crate::builtin_tools::agent_manage::SessionContextHandle>,
+    /// Tool policy handle for per-agent tool access control
+    tool_policy_handle: Option<crate::builtin_tools::agent_manage::ToolPolicyHandle>,
     /// Tool metadata for lookup
     tools: HashMap<String, UnifiedTool>,
 }
@@ -522,6 +524,10 @@ impl BuiltinToolRegistry {
                 (None, None, None, None, None)
             };
 
+        // Initialize tool policy handle (use provided or create a default one)
+        let tool_policy_handle = config.tool_policy.clone()
+            .or_else(|| Some(crate::builtin_tools::agent_manage::new_tool_policy_handle()));
+
         Self {
             search_tool,
             web_fetch_tool,
@@ -552,6 +558,7 @@ impl BuiltinToolRegistry {
             agent_list_tool,
             agent_delete_tool,
             session_context_handle,
+            tool_policy_handle,
             tools,
         }
     }
@@ -597,12 +604,32 @@ impl ToolRegistry for BuiltinToolRegistry {
         self.session_context_handle.clone()
     }
 
+    fn tool_policy_handle(&self) -> Option<Arc<RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>> {
+        self.tool_policy_handle.clone()
+    }
+
     fn execute_tool(
         &self,
         tool_name: &str,
         arguments: Value,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
         debug!(tool = tool_name, "Executing builtin tool");
+
+        // Enforce per-agent tool policy.
+        // Uses try_read() (non-blocking) since this is a synchronous function.
+        // Contention is extremely unlikely — policy is only written during agent_switch.
+        if let Some(ref policy_handle) = self.tool_policy_handle {
+            if let Ok(policy) = policy_handle.try_read() {
+                if !policy.is_allowed(tool_name) {
+                    let msg = format!(
+                        "Tool '{}' is not allowed for the current agent. \
+                         Use agent_list to check available tools, or switch to an agent that has access.",
+                        tool_name
+                    );
+                    return Box::pin(async move { Err(AlephError::tool(msg)) });
+                }
+            }
+        }
 
         // Check capability before execution
         if let Err(e) = self.check_capability(tool_name, &arguments) {
