@@ -39,6 +39,9 @@ mod operational_guidelines;
 // --- Workspace files layer ---
 mod workspace_files;
 
+// --- Memory augmentation layer ---
+mod memory_augmentation;
+
 // --- Bootstrap layer ---
 pub mod bootstrap;
 
@@ -72,4 +75,5 @@ pub use protocol_tokens::ProtocolTokensLayer;
 pub use heartbeat::HeartbeatLayer;
 pub use operational_guidelines::OperationalGuidelinesLayer;
 pub use workspace_files::WorkspaceFilesLayer;
+pub use memory_augmentation::MemoryAugmentationLayer;
 pub use bootstrap::BootstrapLayer;

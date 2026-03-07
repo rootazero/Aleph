@@ -130,6 +130,7 @@ impl PromptPipeline {
     /// 1400  SkillModeLayer
     /// 1500  CustomInstructionsLayer
     /// 1550  WorkspaceFilesLayer
+    /// 1575  MemoryAugmentationLayer
     /// 1600  LanguageLayer
     pub fn default_layers() -> Self {
         Self::new(vec![
@@ -157,6 +158,7 @@ impl PromptPipeline {
             Box::new(SkillModeLayer),
             Box::new(CustomInstructionsLayer),
             Box::new(WorkspaceFilesLayer),
+            Box::new(MemoryAugmentationLayer),
             Box::new(LanguageLayer),
         ])
     }
@@ -263,7 +265,7 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        assert_eq!(pipeline.layer_count(), 25);
+        assert_eq!(pipeline.layer_count(), 26);
     }
 
     #[test]
