@@ -1,6 +1,0 @@
-# Build outputs
-dist/
-target/
-
-# Trunk
-.trunk/
