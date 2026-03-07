@@ -65,6 +65,7 @@ pub mod scratchpad;
 pub mod soul_update;
 pub mod vision;
 pub mod escalate_task;
+pub mod subagent_manage;
 
 pub use agent_manage::{
     AgentCreateArgs, AgentCreateOutput, AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput,
@@ -109,6 +110,10 @@ pub use scratchpad::{ScratchpadAction, ScratchpadArgs, ScratchpadOutput, Scratch
 pub use soul_update::{SoulField, SoulOperation, SoulUpdateArgs, SoulUpdateOutput, SoulUpdateTool};
 pub use vision::{VisionAction, VisionArgs, VisionOutput, VisionTool};
 pub use escalate_task::{EscalateTaskArgs, EscalateTaskOutput, EscalateTaskTool};
+pub use subagent_manage::{
+    SubagentKillArgs, SubagentKillOutput, SubagentKillTool, SubagentSpawnArgs, SubagentSpawnOutput,
+    SubagentSpawnTool, SubagentSteerArgs, SubagentSteerOutput, SubagentSteerTool,
+};
 
 
 // Message tool re-exports
