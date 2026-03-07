@@ -392,6 +392,157 @@ pub async fn handle_send(
     }
 }
 
+/// Handle channel.create RPC request
+///
+/// Creates a new channel instance, saves to config, registers, and auto-starts.
+pub async fn handle_create(
+    request: JsonRpcRequest,
+    registry: Arc<ChannelRegistry>,
+    app_config: Arc<RwLock<Config>>,
+) -> JsonRpcResponse {
+    let params = match &request.params {
+        Some(Value::Object(map)) => map,
+        _ => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
+        }
+    };
+
+    let id = match params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing 'id' field");
+        }
+    };
+
+    let channel_type = match params.get("type").and_then(|v| v.as_str()) {
+        Some(t) => t.to_string(),
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing 'type' field");
+        }
+    };
+
+    let config = params
+        .get("config")
+        .cloned()
+        .unwrap_or(Value::Object(serde_json::Map::new()));
+
+    debug!("Handling channel.create: id={}, type={}", id, channel_type);
+
+    // Check if channel already exists
+    let channel_id = ChannelId::new(&id);
+    if registry.get(&channel_id).await.is_some() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Channel '{}' already exists", id),
+        );
+    }
+
+    // Create channel instance
+    let channel = match create_channel_from_config(&id, &channel_type, config.clone()) {
+        Some(ch) => ch,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Failed to create channel: unsupported type '{}' or invalid config", channel_type),
+            );
+        }
+    };
+
+    // Register the channel
+    registry.register(channel).await;
+
+    // Save to app config
+    {
+        let mut app_cfg = app_config.write().await;
+        let mut config_to_save = if let Value::Object(map) = config {
+            map
+        } else {
+            serde_json::Map::new()
+        };
+        config_to_save.insert("type".to_string(), Value::String(channel_type.clone()));
+        app_cfg.channels.insert(id.clone(), Value::Object(config_to_save));
+    }
+
+    // Auto-start the channel
+    let start_result = registry.start_channel(&channel_id).await;
+
+    match start_result {
+        Ok(()) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "id": id,
+                "type": channel_type,
+                "status": "started",
+            }),
+        ),
+        Err(e) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "id": id,
+                "type": channel_type,
+                "status": "created_but_start_failed",
+                "error": e.to_string(),
+            }),
+        ),
+    }
+}
+
+/// Handle channel.delete RPC request
+///
+/// Stops a channel, removes from registry, and removes from config.
+pub async fn handle_delete(
+    request: JsonRpcRequest,
+    registry: Arc<ChannelRegistry>,
+    app_config: Arc<RwLock<Config>>,
+) -> JsonRpcResponse {
+    let channel_id = match &request.params {
+        Some(Value::Object(map)) => map.get("id").and_then(|v| v.as_str()),
+        _ => None,
+    };
+
+    let id = match channel_id {
+        Some(id) => id.to_string(),
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing 'id' field");
+        }
+    };
+
+    let channel_id = ChannelId::new(&id);
+
+    debug!("Handling channel.delete: id={}", id);
+
+    // Check if channel exists
+    if registry.get(&channel_id).await.is_none() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Channel '{}' not found", id),
+        );
+    }
+
+    // Stop the channel first
+    let _ = registry.stop_channel(&channel_id).await;
+
+    // Remove from registry
+    registry.unregister(&channel_id).await;
+
+    // Remove from app config
+    {
+        let mut app_cfg = app_config.write().await;
+        app_cfg.channels.remove(&id);
+    }
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "id": id,
+            "status": "deleted",
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
