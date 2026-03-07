@@ -48,6 +48,7 @@ pub mod echo;
 pub mod version;
 pub mod agent;
 pub mod agent_config;
+pub mod agents;
 pub mod general_config;
 pub mod shortcuts_config;
 pub mod behavior_config;
@@ -500,6 +501,48 @@ impl HandlerRegistry {
                 INTERNAL_ERROR,
                 "arena.settle requires ArenaManager - wire SharedArenaManager first".to_string(),
             )
+        });
+
+        // Agent management handlers (placeholders — actual handlers wired with AgentManager)
+        registry.register("agents.list", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "agents.list requires AgentManager — wire in Gateway startup".to_string())
+        });
+        registry.register("agents.get", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "agents.get requires AgentManager — wire in Gateway startup".to_string())
+        });
+        registry.register("agents.create", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "agents.create requires AgentManager — wire in Gateway startup".to_string())
+        });
+        registry.register("agents.update", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "agents.update requires AgentManager — wire in Gateway startup".to_string())
+        });
+        registry.register("agents.delete", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "agents.delete requires AgentManager — wire in Gateway startup".to_string())
+        });
+        registry.register("agents.set_default", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "agents.set_default requires AgentManager — wire in Gateway startup".to_string())
+        });
+        registry.register("agents.files.list", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "agents.files.list requires AgentManager — wire in Gateway startup".to_string())
+        });
+        registry.register("agents.files.get", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "agents.files.get requires AgentManager — wire in Gateway startup".to_string())
+        });
+        registry.register("agents.files.set", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "agents.files.set requires AgentManager — wire in Gateway startup".to_string())
+        });
+        registry.register("agents.files.delete", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "agents.files.delete requires AgentManager — wire in Gateway startup".to_string())
         });
 
         // Vault configuration handlers (stateless — keychain + file I/O)
