@@ -136,6 +136,26 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Request escalation to a more capable execution strategy",
         requires_config: false,
     },
+    BuiltinToolDefinition {
+        name: "agent_create",
+        description: "Create a new agent with an isolated workspace and register it for use",
+        requires_config: true, // Requires agent_registry + workspace_manager
+    },
+    BuiltinToolDefinition {
+        name: "agent_switch",
+        description: "Switch the active agent for the current conversation",
+        requires_config: true, // Requires agent_registry + workspace_manager
+    },
+    BuiltinToolDefinition {
+        name: "agent_list",
+        description: "List all registered agents and show which is active for the current session",
+        requires_config: true, // Requires agent_registry
+    },
+    BuiltinToolDefinition {
+        name: "agent_delete",
+        description: "Delete an agent and archive its workspace (cannot delete 'main')",
+        requires_config: true, // Requires agent_registry + workspace_manager
+    },
 ];
 
 /// Create a boxed tool instance by name
@@ -201,6 +221,9 @@ pub fn create_tool_boxed(
         // so they cannot be created via create_tool_boxed. They are created
         // dynamically in BuiltinToolRegistry::execute_tool().
         "sessions_list" | "sessions_send" => None,
+        // Agent management tools require agent_registry + workspace_manager + session_context,
+        // created dynamically in BuiltinToolRegistry::with_config().
+        "agent_create" | "agent_switch" | "agent_list" | "agent_delete" => None,
         "escalate_task" => Some(Box::new(EscalateTaskTool)),
         _ => None,
     }
