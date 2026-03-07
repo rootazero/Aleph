@@ -30,7 +30,7 @@ pub mod agent_manager;
 pub mod agent_resolver;
 
 // Re-export main types
-pub use structs::{Config, FullConfig};
+pub use structs::{Config, FullConfig, ChannelInstanceConfig};
 
 // Re-export patcher types
 pub use patcher::ConfigPatcher;
