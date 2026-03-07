@@ -121,7 +121,7 @@ impl AlephTool for AgentSwitchTool {
             None
         };
 
-        // 3. Set or clear active agent override
+        // 3. Set or clear active agent override (per-channel only)
         if !channel.is_empty() && !peer_id.is_empty() {
             if args.agent_id == "main" {
                 // Clear the override so routing falls through to config bindings / default
