@@ -14,3 +14,4 @@ mod tools;
 mod save_incremental;
 mod schema_integration;
 mod agents_integration;
+mod channels;

@@ -146,6 +146,68 @@ pub struct Config {
 }
 
 // =============================================================================
+// ChannelInstanceConfig
+// =============================================================================
+
+/// Known platform names for type auto-inference from channel config keys.
+const KNOWN_CHANNEL_TYPES: &[&str] = &[
+    "telegram", "discord", "whatsapp", "slack", "imessage",
+    "email", "matrix", "signal", "mattermost", "irc",
+    "webhook", "xmpp", "nostr",
+];
+
+/// A resolved channel instance from the channels config HashMap.
+#[derive(Debug, Clone)]
+pub struct ChannelInstanceConfig {
+    /// Instance identifier (the HashMap key)
+    pub id: String,
+    /// Channel platform type (e.g. "telegram", "discord")
+    pub channel_type: String,
+    /// Remaining config with `type` field stripped
+    pub config: serde_json::Value,
+}
+
+impl Config {
+    /// Parse the `channels` HashMap into resolved channel instances.
+    ///
+    /// Type resolution rules:
+    /// 1. If value has a `type` string field -> use it as channel_type
+    /// 2. If no `type` field and key is a known platform name -> infer type = key
+    /// 3. Otherwise -> warn and skip
+    pub fn resolved_channels(&self) -> Vec<ChannelInstanceConfig> {
+        let mut instances = Vec::new();
+        for (key, value) in &self.channels {
+            let channel_type = if let Some(t) = value.get("type").and_then(|v| v.as_str()) {
+                t.to_string()
+            } else if KNOWN_CHANNEL_TYPES.contains(&key.as_str()) {
+                key.clone()
+            } else {
+                tracing::warn!(
+                    "Channel '{}' has no 'type' field and is not a known platform name, skipping",
+                    key
+                );
+                continue;
+            };
+
+            let config = if let serde_json::Value::Object(mut map) = value.clone() {
+                map.remove("type");
+                serde_json::Value::Object(map)
+            } else {
+                value.clone()
+            };
+
+            instances.push(ChannelInstanceConfig {
+                id: key.clone(),
+                channel_type,
+                config,
+            });
+        }
+        instances.sort_by(|a, b| a.id.cmp(&b.id));
+        instances
+    }
+}
+
+// =============================================================================
 // FullConfig (UniFFI)
 // =============================================================================
 
