@@ -280,6 +280,7 @@ async fn register_agent_handlers(
     app_config: &alephcore::Config,
     app_config_arc: Arc<tokio::sync::RwLock<alephcore::Config>>,
     memory_db: &alephcore::memory::store::MemoryBackend,
+    workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
     daemon: bool,
 ) -> AgentHandlersResult {
     let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
@@ -323,11 +324,16 @@ async fn register_agent_handlers(
             .and_then(|s| s.backends.get(&s.default_provider))
             .and_then(|b| b.api_key.clone());
 
-        // Build tool config with memory backend, embedder, and search API key
+        // Create agent registry before tool config so agent management tools can use it
+        let agent_registry = Arc::new(AgentRegistry::new());
+
+        // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
             memory_db: Some(memory_db.clone()),
             embedder,
             tavily_api_key,
+            agent_registry: Some(agent_registry.clone()),
+            workspace_manager: workspace_manager.clone(),
             ..Default::default()
         };
         let tool_registry = Arc::new(BuiltinToolRegistry::with_config(tool_config));
@@ -409,7 +415,6 @@ async fn register_agent_handlers(
         }
         let engine = Arc::new(engine);
 
-        let agent_registry = Arc::new(AgentRegistry::new());
         if !app_config.agents.list.is_empty() {
             // New path: use ResolvedAgents from AgentDefinitionResolver
             let mut resolver = alephcore::AgentDefinitionResolver::new();
@@ -1170,9 +1175,30 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Wrap app config in Arc<RwLock> early so agent handlers can read output_mode dynamically
     let app_config = Arc::new(tokio::sync::RwLock::new(loaded_app_config));
 
+    // Initialize WorkspaceManager early so agent management tools can use it
+    let workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>> = {
+        use alephcore::gateway::WorkspaceManager;
+        match WorkspaceManager::with_defaults() {
+            Ok(wm) => {
+                let wm = Arc::new(wm);
+                if !args.daemon {
+                    println!("Workspace manager initialized (SQLite persistence)");
+                }
+                Some(wm)
+            }
+            Err(e) => {
+                if !args.daemon {
+                    eprintln!("Warning: Failed to initialize workspace manager: {}. workspace.switch/getActive disabled.", e);
+                }
+                None
+            }
+        }
+    };
+
     let agent_result = register_agent_handlers(
         &mut server, session_manager.clone(), event_bus.clone(),
-        router.clone(), &full_config, &*app_config.read().await, app_config.clone(), &memory_db, args.daemon,
+        router.clone(), &full_config, &*app_config.read().await, app_config.clone(), &memory_db,
+        workspace_manager.clone(), args.daemon,
     ).await;
 
     register_poe_handlers(&mut server, event_bus.clone(), args.daemon).await;
@@ -1220,25 +1246,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     };
     register_oauth_handlers(&mut server, &oauth_state, &app_config_for_oauth, args.daemon);
 
-    // Initialize WorkspaceManager (SQLite-based workspace state)
-    let workspace_manager = {
-        use alephcore::gateway::WorkspaceManager;
-        match WorkspaceManager::with_defaults() {
-            Ok(wm) => {
-                let wm = Arc::new(wm);
-                if !args.daemon {
-                    println!("Workspace manager initialized (SQLite persistence)");
-                }
-                Some(wm)
-            }
-            Err(e) => {
-                if !args.daemon {
-                    eprintln!("Warning: Failed to initialize workspace manager: {}. workspace.switch/getActive disabled.", e);
-                }
-                None
-            }
-        }
-    };
     if let Some(ref wm) = workspace_manager {
         register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
     }

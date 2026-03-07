@@ -12,7 +12,6 @@ use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRe
 use crate::gateway::workspace::WorkspaceManager;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
-use tokio::sync::RwLock;
 
 use super::SessionContextHandle;
 

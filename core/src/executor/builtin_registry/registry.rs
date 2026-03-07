@@ -77,6 +77,13 @@ pub struct BuiltinToolRegistry {
     pub(crate) sub_agent_dispatcher: Option<Arc<RwLock<SubAgentDispatcher>>>,
     /// Gateway context for sessions tools (sessions_list, sessions_send)
     pub(crate) gateway_context: Option<Arc<GatewayContext>>,
+    /// Agent management tools (optional - requires AgentRegistry + WorkspaceManager)
+    pub(crate) agent_create_tool: Option<crate::builtin_tools::agent_manage::AgentCreateTool>,
+    pub(crate) agent_switch_tool: Option<crate::builtin_tools::agent_manage::AgentSwitchTool>,
+    pub(crate) agent_list_tool: Option<crate::builtin_tools::agent_manage::AgentListTool>,
+    pub(crate) agent_delete_tool: Option<crate::builtin_tools::agent_manage::AgentDeleteTool>,
+    /// Session context handle for agent management tools
+    session_context_handle: Option<crate::builtin_tools::agent_manage::SessionContextHandle>,
     /// Tool metadata for lookup
     tools: HashMap<String, UnifiedTool>,
 }
@@ -479,6 +486,42 @@ impl BuiltinToolRegistry {
             info!("Registered sessions tools (sessions_list, sessions_send) in BuiltinToolRegistry");
         }
 
+        // Add agent management tools (if AgentRegistry + WorkspaceManager are available)
+        let (agent_create_tool, agent_switch_tool, agent_list_tool, agent_delete_tool, session_context_handle) =
+            if let (Some(ref ar), Some(ref wm)) = (&config.agent_registry, &config.workspace_manager) {
+                use crate::builtin_tools::agent_manage;
+                let ctx = agent_manage::new_session_context_handle();
+                let create = agent_manage::AgentCreateTool::new(
+                    Arc::clone(ar), Arc::clone(wm), Arc::clone(&ctx),
+                );
+                let switch = agent_manage::AgentSwitchTool::new(
+                    Arc::clone(ar), Arc::clone(wm), Arc::clone(&ctx),
+                );
+                let list = agent_manage::AgentListTool::new(
+                    Arc::clone(ar), Arc::clone(wm), Arc::clone(&ctx),
+                );
+                let delete = agent_manage::AgentDeleteTool::new(
+                    Arc::clone(ar), Arc::clone(wm), Arc::clone(&ctx),
+                );
+
+                for (name, desc) in [
+                    ("agent_create", agent_manage::AgentCreateTool::DESCRIPTION),
+                    ("agent_switch", agent_manage::AgentSwitchTool::DESCRIPTION),
+                    ("agent_list", agent_manage::AgentListTool::DESCRIPTION),
+                    ("agent_delete", agent_manage::AgentDeleteTool::DESCRIPTION),
+                ] {
+                    tools.insert(
+                        name.to_string(),
+                        UnifiedTool::new(&format!("builtin:{}", name), name, desc, ToolSource::Builtin),
+                    );
+                }
+
+                info!("Registered agent management tools (agent_create, agent_switch, agent_list, agent_delete)");
+                (Some(create), Some(switch), Some(list), Some(delete), Some(ctx))
+            } else {
+                (None, None, None, None, None)
+            };
+
         Self {
             search_tool,
             web_fetch_tool,
@@ -504,6 +547,11 @@ impl BuiltinToolRegistry {
             dispatcher_registry,
             sub_agent_dispatcher,
             gateway_context,
+            agent_create_tool,
+            agent_switch_tool,
+            agent_list_tool,
+            agent_delete_tool,
+            session_context_handle,
             tools,
         }
     }
@@ -541,6 +589,12 @@ impl ToolRegistry for BuiltinToolRegistry {
         &self,
     ) -> Option<Arc<RwLock<Option<crate::config::types::profile::SmartRecallConfig>>>> {
         self.memory_search_tool.as_ref().map(|t| t.smart_recall_config_handle())
+    }
+
+    fn session_context_handle(
+        &self,
+    ) -> Option<Arc<RwLock<crate::builtin_tools::agent_manage::SessionContext>>> {
+        self.session_context_handle.clone()
     }
 
     fn execute_tool(
@@ -650,6 +704,32 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // Note: GatewayContext doesn't implement Clone, so we dereference and clone
                 // the inner context for SessionsSendTool which expects GatewayContext by value
                 let tool = SessionsSendTool::with_context((**context).clone(), "main");
+                tool.call_json(arguments).await
+            }),
+
+            // Agent management tools
+            "agent_create" => Box::pin(async move {
+                let tool = self.agent_create_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("agent_create not available: no AgentRegistry/WorkspaceManager configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "agent_switch" => Box::pin(async move {
+                let tool = self.agent_switch_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("agent_switch not available: no AgentRegistry/WorkspaceManager configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "agent_list" => Box::pin(async move {
+                let tool = self.agent_list_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("agent_list not available: no AgentRegistry/WorkspaceManager configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "agent_delete" => Box::pin(async move {
+                let tool = self.agent_delete_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("agent_delete not available: no AgentRegistry/WorkspaceManager configured")
+                })?;
                 tool.call_json(arguments).await
             }),
 
