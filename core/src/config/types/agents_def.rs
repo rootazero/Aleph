@@ -90,6 +90,10 @@ pub struct AgentDefaults {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<PathBuf>,
 
+    /// Default agent state root directory (default: ~/.aleph/agents)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents_root: Option<PathBuf>,
+
     /// Default skills available to all agents
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<String>>,
@@ -339,6 +343,7 @@ mod tests {
         // Defaults should all be None/empty
         assert!(config.defaults.model.is_none());
         assert!(config.defaults.workspace_root.is_none());
+        assert!(config.defaults.agents_root.is_none());
         assert!(config.defaults.skills.is_none());
         assert!(config.defaults.dm_scope.is_none());
         assert!(config.defaults.bootstrap_max_chars.is_none());
@@ -458,6 +463,20 @@ mod tests {
         let agent = &config.list[0];
         assert_eq!(agent.model, Some("claude-sonnet-4".to_string()));
         assert!(agent.model_config.is_none());
+    }
+
+    #[test]
+    fn test_agents_root_deserialize() {
+        let toml_str = r#"
+            [defaults]
+            agents_root = "/home/user/agents"
+            workspace_root = "/home/user/workspaces"
+        "#;
+        let config: AgentsConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.defaults.agents_root,
+            Some(PathBuf::from("/home/user/agents"))
+        );
     }
 
     #[test]

@@ -34,7 +34,7 @@ pub use message_ops::IrcMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId,
     OutboundMessage, SendResult,
 };
 use async_trait::async_trait;

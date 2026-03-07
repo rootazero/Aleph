@@ -52,6 +52,9 @@ pub struct ResolvedAgent {
     /// Resolved workspace directory path
     pub workspace_path: PathBuf,
 
+    /// Resolved agent state directory path
+    pub agent_dir: PathBuf,
+
     /// Resolved profile configuration
     pub profile: ProfileConfig,
 
@@ -173,6 +176,20 @@ impl AgentDefinitionResolver {
         root.join(&agent.id)
     }
 
+    /// Resolve the agent state directory path.
+    pub fn resolve_agent_dir(
+        &self,
+        agent: &AgentDefinition,
+        defaults: &AgentDefaults,
+    ) -> PathBuf {
+        let root = defaults
+            .agents_root
+            .as_ref()
+            .map(|p| resolve_user_path(p))
+            .unwrap_or_else(default_agents_root);
+        root.join(&agent.id)
+    }
+
     /// Resolve a single agent definition into a `ResolvedAgent`.
     fn resolve_one(
         &mut self,
@@ -180,8 +197,9 @@ impl AgentDefinitionResolver {
         defaults: &AgentDefaults,
         profiles: &HashMap<String, ProfileConfig>,
     ) -> ResolvedAgent {
-        // 1. Resolve workspace path
+        // 1. Resolve workspace path and agent state directory
         let workspace_path = self.resolve_workspace_path(agent, defaults);
+        let agent_dir = self.resolve_agent_dir(agent, defaults);
 
         // 2. Initialize workspace directory (create dirs + default files)
         let agent_name = agent
@@ -195,6 +213,43 @@ impl AgentDefinitionResolver {
                 error = %e,
                 "Failed to initialize workspace directory"
             );
+        }
+
+        // 2b. Initialize agent state directory
+        if let Err(e) = initialize_agent_dir(&agent_dir) {
+            tracing::warn!(
+                agent_id = %agent.id,
+                path = %agent_dir.display(),
+                error = %e,
+                "Failed to initialize agent state directory"
+            );
+        }
+
+        // 2c. Lazy migration: move sessions/ from workspace to agent_dir if needed
+        let old_sessions = workspace_path.join("sessions");
+        if old_sessions.is_dir() && !agent_dir.join("sessions").join(".migrated").exists() {
+            // Check if there are actual session files to migrate
+            let has_files = fs::read_dir(&old_sessions)
+                .map(|mut entries| entries.next().is_some())
+                .unwrap_or(false);
+            if has_files {
+                let new_sessions = agent_dir.join("sessions");
+                tracing::info!(
+                    agent_id = %agent.id,
+                    "Migrating sessions/ from workspace to agent state directory"
+                );
+                // Copy files from old to new (rename may fail across filesystems)
+                if let Ok(entries) = fs::read_dir(&old_sessions) {
+                    for entry in entries.flatten() {
+                        let dest = new_sessions.join(entry.file_name());
+                        if !dest.exists() {
+                            let _ = fs::copy(entry.path(), &dest);
+                        }
+                    }
+                }
+                // Remove old sessions dir after successful migration
+                let _ = fs::remove_dir_all(&old_sessions);
+            }
         }
 
         // 3. Load ProfileConfig from profiles HashMap
@@ -243,6 +298,7 @@ impl AgentDefinitionResolver {
             name,
             is_default: agent.default,
             workspace_path,
+            agent_dir,
             profile,
             soul,
             agents_md,
@@ -258,6 +314,12 @@ impl AgentDefinitionResolver {
 // Public Helper Functions
 // =============================================================================
 
+/// Initialize agent state directory structure.
+pub fn initialize_agent_dir(path: &Path) -> Result<(), io::Error> {
+    fs::create_dir_all(path.join("sessions"))?;
+    Ok(())
+}
+
 /// Standard workspace directory structure:
 ///
 /// ```text
@@ -265,8 +327,7 @@ impl AgentDefinitionResolver {
 /// ├── SOUL.md           # Agent soul — core persona and behavior
 /// ├── AGENTS.md         # Workspace-specific instructions
 /// ├── MEMORY.md         # Persistent memory notes
-/// ├── memory/           # Memory data directory (LanceDB, etc.)
-/// └── sessions/         # Session persistence
+/// └── memory/           # Memory data directory (LanceDB, etc.)
 /// ```
 ///
 /// Optional files (not auto-created, recognized by bootstrap layer):
@@ -277,7 +338,6 @@ impl AgentDefinitionResolver {
 pub fn initialize_workspace(path: &Path, agent_name: &str) -> Result<(), io::Error> {
     // Create standard directories
     fs::create_dir_all(path.join("memory"))?;
-    fs::create_dir_all(path.join("sessions"))?;
 
     // SOUL.md — core persona (highest priority bootstrap file)
     let soul_path = path.join("SOUL.md");
@@ -337,6 +397,14 @@ fn default_workspace_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join(".aleph")
         .join("workspaces")
+}
+
+/// Default agent state root directory: `~/.aleph/agents`.
+fn default_agents_root() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".aleph")
+        .join("agents")
 }
 
 // =============================================================================
@@ -486,5 +554,120 @@ mod tests {
         initialize_workspace(&workspace, "Test Agent").unwrap();
         let agents_md_after = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
         assert_eq!(agents_md_after, "Custom content");
+    }
+
+    #[test]
+    fn test_resolve_creates_dual_directories() {
+        let tmp = TempDir::new().unwrap();
+        let workspace_root = tmp.path().join("workspaces");
+        let agents_root = tmp.path().join("agents");
+
+        let config = AgentsConfig {
+            defaults: AgentDefaults {
+                workspace_root: Some(workspace_root.clone()),
+                agents_root: Some(agents_root.clone()),
+                ..Default::default()
+            },
+            list: vec![AgentDefinition {
+                id: "coder".to_string(),
+                name: Some("Coder".to_string()),
+                ..Default::default()
+            }],
+        };
+
+        let profiles = HashMap::new();
+        let mut resolver = AgentDefinitionResolver::new();
+        let resolved = resolver.resolve_all(&config, &profiles);
+
+        assert_eq!(resolved.len(), 1);
+        let agent = &resolved[0];
+
+        // Workspace content dir
+        assert_eq!(agent.workspace_path, workspace_root.join("coder"));
+        assert!(agent.workspace_path.join("memory").is_dir());
+        assert!(agent.workspace_path.join("SOUL.md").exists());
+
+        // Agent state dir
+        assert_eq!(agent.agent_dir, agents_root.join("coder"));
+        assert!(agent.agent_dir.join("sessions").is_dir());
+
+        // sessions/ should NOT be in workspace
+        assert!(!agent.workspace_path.join("sessions").exists());
+    }
+
+    #[test]
+    fn test_lazy_migration_moves_sessions() {
+        let tmp = TempDir::new().unwrap();
+        let workspace_root = tmp.path().join("workspaces");
+        let agents_root = tmp.path().join("agents");
+
+        // Pre-create old unified layout: sessions/ inside workspace
+        let ws = workspace_root.join("migrator");
+        let old_sessions = ws.join("sessions");
+        fs::create_dir_all(&old_sessions).unwrap();
+        fs::write(old_sessions.join("test-session.json"), "{}").unwrap();
+        // Pre-create content files so initialize_workspace doesn't overwrite
+        fs::create_dir_all(ws.join("memory")).unwrap();
+        fs::write(ws.join("SOUL.md"), "# Migrator").unwrap();
+        fs::write(ws.join("AGENTS.md"), "# WS").unwrap();
+        fs::write(ws.join("MEMORY.md"), "# Mem").unwrap();
+
+        let config = AgentsConfig {
+            defaults: AgentDefaults {
+                workspace_root: Some(workspace_root.clone()),
+                agents_root: Some(agents_root.clone()),
+                ..Default::default()
+            },
+            list: vec![AgentDefinition {
+                id: "migrator".to_string(),
+                ..Default::default()
+            }],
+        };
+
+        let profiles = HashMap::new();
+        let mut resolver = AgentDefinitionResolver::new();
+        let resolved = resolver.resolve_all(&config, &profiles);
+        let agent = &resolved[0];
+
+        // sessions/ should have been copied to agent_dir
+        assert!(agent.agent_dir.join("sessions").join("test-session.json").exists());
+        // old sessions/ should be removed
+        assert!(!agent.workspace_path.join("sessions").exists());
+    }
+
+    #[test]
+    fn test_no_migration_when_no_session_files() {
+        let tmp = TempDir::new().unwrap();
+        let workspace_root = tmp.path().join("workspaces");
+        let agents_root = tmp.path().join("agents");
+
+        // Pre-create empty sessions/ in workspace
+        let ws = workspace_root.join("empty");
+        let old_sessions = ws.join("sessions");
+        fs::create_dir_all(&old_sessions).unwrap();
+        fs::create_dir_all(ws.join("memory")).unwrap();
+        fs::write(ws.join("SOUL.md"), "# Empty").unwrap();
+        fs::write(ws.join("AGENTS.md"), "# WS").unwrap();
+        fs::write(ws.join("MEMORY.md"), "# Mem").unwrap();
+
+        let config = AgentsConfig {
+            defaults: AgentDefaults {
+                workspace_root: Some(workspace_root.clone()),
+                agents_root: Some(agents_root.clone()),
+                ..Default::default()
+            },
+            list: vec![AgentDefinition {
+                id: "empty".to_string(),
+                ..Default::default()
+            }],
+        };
+
+        let profiles = HashMap::new();
+        let mut resolver = AgentDefinitionResolver::new();
+        resolver.resolve_all(&config, &profiles);
+
+        // No migration should happen for empty sessions dir
+        // agent_dir/sessions/ should exist (from initialize_agent_dir)
+        assert!(agents_root.join("empty").join("sessions").is_dir());
     }
 }
