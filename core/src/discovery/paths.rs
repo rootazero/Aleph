@@ -18,7 +18,7 @@ pub const CLAUDE_HOME_DIR: &str = ".claude";
 /// Standard subdirectories
 pub const SKILLS_DIR: &str = "skills";
 pub const COMMANDS_DIR: &str = "commands";
-pub const AGENTS_DIR: &str = "agents";
+pub const AGENTS_DIR: &str = "workspaces";
 pub const PLUGINS_DIR: &str = "plugins";
 
 /// Configuration files
@@ -70,7 +70,7 @@ pub fn aleph_commands_dir() -> DiscoveryResult<PathBuf> {
     Ok(aleph_home_dir()?.join(COMMANDS_DIR))
 }
 
-/// Get the Aleph agents directory (~/.aleph/agents/)
+/// Get the Aleph agents directory (~/.aleph/workspaces/)
 pub fn aleph_agents_dir() -> DiscoveryResult<PathBuf> {
     Ok(aleph_home_dir()?.join(AGENTS_DIR))
 }

@@ -114,7 +114,7 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            workspace: "~/.aleph/agents/main/workspace".to_string(),
+            workspace: "~/.aleph/workspaces/main".to_string(),
             model: "claude-sonnet-4-5".to_string(),
             fallback_models: vec![],
             max_loops: 20,

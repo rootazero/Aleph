@@ -258,16 +258,38 @@ impl AgentDefinitionResolver {
 // Public Helper Functions
 // =============================================================================
 
-/// Initialize an agent workspace directory.
+/// Standard workspace directory structure:
 ///
-/// Creates the workspace directory structure and default files:
-/// - `{path}/memory/` directory
-/// - `{path}/AGENTS.md` with a template (only if it doesn't already exist)
+/// ```text
+/// ~/.aleph/workspaces/{agent_id}/
+/// ├── SOUL.md           # Agent soul — core persona and behavior
+/// ├── AGENTS.md         # Workspace-specific instructions
+/// ├── MEMORY.md         # Persistent memory notes
+/// ├── memory/           # Memory data directory (LanceDB, etc.)
+/// └── sessions/         # Session persistence
+/// ```
+///
+/// Optional files (not auto-created, recognized by bootstrap layer):
+/// - `IDENTITY.md` — Extended identity definition
+/// - `TOOLS.md` — Tool usage guidelines
+/// - `HEARTBEAT.md` — Periodic status / heartbeat notes
+/// - `BOOTSTRAP.md` — Additional bootstrap instructions
 pub fn initialize_workspace(path: &Path, agent_name: &str) -> Result<(), io::Error> {
-    // Create memory directory
+    // Create standard directories
     fs::create_dir_all(path.join("memory"))?;
+    fs::create_dir_all(path.join("sessions"))?;
 
-    // Create AGENTS.md with template if it doesn't exist
+    // SOUL.md — core persona (highest priority bootstrap file)
+    let soul_path = path.join("SOUL.md");
+    if !soul_path.exists() {
+        let content = format!(
+            "# {}\n\nYou are {}.\n",
+            agent_name, agent_name,
+        );
+        fs::write(&soul_path, content)?;
+    }
+
+    // AGENTS.md — workspace instructions
     let agents_md_path = path.join("AGENTS.md");
     if !agents_md_path.exists() {
         let template = format!(
@@ -277,6 +299,12 @@ pub fn initialize_workspace(path: &Path, agent_name: &str) -> Result<(), io::Err
             agent_name
         );
         fs::write(&agents_md_path, template)?;
+    }
+
+    // MEMORY.md — persistent memory
+    let memory_md_path = path.join("MEMORY.md");
+    if !memory_md_path.exists() {
+        fs::write(&memory_md_path, "# Memory\n\nPersistent notes and context.\n")?;
     }
 
     Ok(())
