@@ -48,27 +48,29 @@ pub struct LayerInput<'a> {
     pub inbound: Option<&'a InboundContext>,
     /// Loaded workspace files (SOUL.md, IDENTITY.md, etc.)
     pub workspace: Option<&'a WorkspaceFiles>,
+    /// Pre-fetched memory context from LanceDB (facts + memory summaries).
+    pub memory_context: Option<&'a super::memory_context::MemoryContext>,
 }
 
 impl<'a> LayerInput<'a> {
     /// Input for the `Basic` path — config + tool list.
     pub fn basic(config: &'a PromptConfig, tools: &'a [ToolInfo]) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None }
+        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
     }
 
     /// Input for the `Hydration` path — config + hydration result.
     pub fn hydration(config: &'a PromptConfig, hydration: &'a HydrationResult) -> Self {
-        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None }
+        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
     }
 
     /// Input for the `Soul` path — config + tools + soul manifest.
     pub fn soul(config: &'a PromptConfig, tools: &'a [ToolInfo], soul: &'a SoulManifest) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None }
+        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
     }
 
     /// Input for the `Context` path — config + resolved context.
     pub fn context(config: &'a PromptConfig, ctx: &'a ResolvedContext) -> Self {
-        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None }
+        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
     }
 
     /// Attach POE context to this input.
@@ -120,6 +122,18 @@ impl<'a> LayerInput<'a> {
     /// Attach optional workspace files to this input.
     pub fn with_workspace_opt(mut self, workspace: Option<&'a WorkspaceFiles>) -> Self {
         self.workspace = workspace;
+        self
+    }
+
+    /// Attach pre-fetched memory context.
+    pub fn with_memory_context(mut self, ctx: &'a super::memory_context::MemoryContext) -> Self {
+        self.memory_context = Some(ctx);
+        self
+    }
+
+    /// Attach optional pre-fetched memory context.
+    pub fn with_memory_context_opt(mut self, ctx: Option<&'a super::memory_context::MemoryContext>) -> Self {
+        self.memory_context = ctx;
         self
     }
 
