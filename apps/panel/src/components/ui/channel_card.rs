@@ -15,6 +15,9 @@ pub fn ChannelCard(
     icon_svg: &'static str,
     brand_color: &'static str,
     status: Signal<ChannelStatus>,
+    /// Number of bot instances for this platform
+    #[prop(optional)]
+    count: Option<Signal<usize>>,
 ) -> impl IntoView {
     let href = format!("/settings/channels/{}", id);
 
@@ -49,10 +52,26 @@ pub fn ChannelCard(
                 <ChannelStatusPill status=status />
             </div>
 
-            // Channel name
-            <h3 class="text-sm font-semibold text-text-primary group-hover:text-primary transition-colors mb-1">
-                {name}
-            </h3>
+            // Channel name + count badge
+            <div class="flex items-center gap-2 mb-1">
+                <h3 class="text-sm font-semibold text-text-primary group-hover:text-primary transition-colors">
+                    {name}
+                </h3>
+                {move || {
+                    count.and_then(|c| {
+                        let n = c.get();
+                        if n > 0 {
+                            Some(view! {
+                                <span class="px-1.5 py-0.5 text-xs font-medium bg-surface-sunken text-text-tertiary rounded-full">
+                                    {n}
+                                </span>
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                }}
+            </div>
 
             // Description (2-line clamp)
             <p class="text-xs text-text-tertiary line-clamp-2 mb-3">
