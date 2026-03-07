@@ -554,9 +554,16 @@ impl BuiltinToolRegistry {
             if let (Some(ref ar), Some(ref wm)) = (&config.agent_registry, &config.workspace_manager) {
                 use crate::builtin_tools::agent_manage;
                 let ctx = agent_manage::new_session_context_handle();
-                let create = agent_manage::AgentCreateTool::new(
-                    Arc::clone(ar), Arc::clone(wm),
-                );
+                let create = {
+                    let tool = agent_manage::AgentCreateTool::new(
+                        Arc::clone(ar), Arc::clone(wm),
+                    );
+                    if let Some(ref am) = config.agent_manager {
+                        tool.with_agent_manager(Arc::clone(am))
+                    } else {
+                        tool
+                    }
+                };
                 let switch = agent_manage::AgentSwitchTool::new(
                     Arc::clone(ar), Arc::clone(wm), config.event_bus.clone(),
                 );

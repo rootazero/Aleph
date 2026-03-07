@@ -4,9 +4,11 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tracing::info;
+use tracing::{info, warn};
 
+use crate::config::agent_manager::AgentManager;
 use crate::config::agent_resolver::initialize_workspace;
+use crate::config::types::agents_def::AgentDefinition;
 use crate::error::Result;
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
 use crate::gateway::workspace::WorkspaceManager;
@@ -152,6 +154,7 @@ pub struct AgentCreateOutput {
 pub struct AgentCreateTool {
     registry: Arc<AgentRegistry>,
     workspace_mgr: Arc<WorkspaceManager>,
+    agent_manager: Option<Arc<AgentManager>>,
 }
 
 impl AgentCreateTool {
@@ -162,7 +165,13 @@ impl AgentCreateTool {
         Self {
             registry,
             workspace_mgr,
+            agent_manager: None,
         }
+    }
+
+    pub fn with_agent_manager(mut self, manager: Arc<AgentManager>) -> Self {
+        self.agent_manager = Some(manager);
+        self
     }
 }
 
@@ -319,8 +328,26 @@ impl AlephTool for AgentCreateTool {
                 args.id, e
             )))?;
 
-        // 8. Register in AgentRegistry
+        // 8. Register in AgentRegistry (runtime)
         self.registry.register(instance).await;
+
+        // 8b. Persist to AgentManager (TOML config) so agents.list RPC returns it
+        if let Some(ref manager) = self.agent_manager {
+            let def = AgentDefinition {
+                id: args.id.clone(),
+                name: args.name.clone(),
+                model: Some(model.to_string()),
+                ..Default::default()
+            };
+            if let Err(e) = manager.create(def) {
+                // Non-fatal: agent works in runtime, just won't appear in Panel agents list
+                warn!(
+                    agent_id = %args.id,
+                    error = %e,
+                    "Failed to persist agent to TOML config (runtime registration succeeded)"
+                );
+            }
+        }
 
         // 9. Auto-switch via WorkspaceManager (channel/peer_id injected by registry snapshot)
         let channel = args.__channel.clone();

@@ -303,6 +303,7 @@ async fn register_agent_handlers(
     app_config_arc: Arc<tokio::sync::RwLock<alephcore::Config>>,
     memory_db: &alephcore::memory::store::MemoryBackend,
     workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
+    agent_manager: Arc<alephcore::AgentManager>,
     daemon: bool,
 ) -> AgentHandlersResult {
     let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
@@ -365,6 +366,7 @@ async fn register_agent_handlers(
             workspace_manager: workspace_manager.clone(),
             event_bus: Some(event_bus.clone()),
             tool_policy: Some(alephcore::builtin_tools::agent_manage::new_tool_policy_handle()),
+            agent_manager: Some(agent_manager.clone()),
             ..Default::default()
         };
         let tool_registry = BuiltinToolRegistry::with_config(tool_config);
@@ -1378,10 +1380,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
+    // Create agent manager (shared between tool config and RPC handlers)
+    let agent_manager = Arc::new(alephcore::AgentManager::new(
+        alephcore::Config::default_path(),
+        dirs::home_dir().unwrap_or_default().join(".aleph/workspaces"),
+        dirs::home_dir().unwrap_or_default().join(".aleph/agents"),
+        dirs::home_dir().unwrap_or_default().join(".aleph/trash"),
+    ));
+
     let agent_result = register_agent_handlers(
         &mut server, session_manager.clone(), event_bus.clone(),
         router.clone(), &full_config, &*app_config.read().await, app_config.clone(), &memory_db,
-        workspace_manager.clone(), args.daemon,
+        workspace_manager.clone(), agent_manager.clone(), args.daemon,
     ).await;
 
     register_poe_handlers(&mut server, event_bus.clone(), args.daemon).await;
@@ -1433,13 +1443,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
     }
 
-    // Agent management
-    let agent_manager = Arc::new(alephcore::AgentManager::new(
-        alephcore::Config::default_path(),
-        dirs::home_dir().unwrap_or_default().join(".aleph/workspaces"),
-        dirs::home_dir().unwrap_or_default().join(".aleph/agents"),
-        dirs::home_dir().unwrap_or_default().join(".aleph/trash"),
-    ));
+    // Agent management (agent_manager created earlier for tool config sharing)
     register_agents_handlers(&mut server, &agent_manager, &event_bus);
 
     // Identity resolver (shared for session-level overrides)

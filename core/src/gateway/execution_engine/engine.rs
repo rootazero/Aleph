@@ -241,6 +241,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         }
 
         // ================================================================
+        // Propagate session context BEFORE fast path so agent management
+        // tools (agent_create, agent_switch) can auto-switch correctly.
+        // ================================================================
+        if let Some(sc_handle) = self.tool_registry.session_context_handle() {
+            let mut sc = sc_handle.write().await;
+            sc.channel = request.metadata.get("channel_id").cloned().unwrap_or_default();
+            sc.peer_id = request.metadata.get("sender_id").cloned().unwrap_or_default();
+        }
+
+        // ================================================================
         // Slash command fast path (L0): bypass full agent loop
         // ================================================================
         if let Some(mode_json) = request.metadata.get(SLASH_COMMAND_MODE_KEY) {
@@ -1089,6 +1099,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let cmd_name = match cmd_name.split_once('@') {
             Some((name, _)) => name.to_string(),
             None => cmd_name,
+        };
+
+        // Map common shorthand commands to their actual tool names
+        let cmd_name = match cmd_name.as_str() {
+            "switch" => "agent_switch".to_string(),
+            other => other.to_string(),
         };
 
         // Check if this matches a registered tool

@@ -43,4 +43,6 @@ pub struct BuiltinToolConfig {
     pub sub_agent_registry: Option<Arc<SubAgentRegistry>>,
     /// Event bus for lifecycle event emission (agent switch/delete)
     pub event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
+    /// Agent manager for persistent agent definition storage (TOML config)
+    pub agent_manager: Option<Arc<crate::config::agent_manager::AgentManager>>,
 }
