@@ -301,19 +301,75 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     return Ok(());
                 }
                 Err(ref e) => {
-                    // Reset run state so the normal agent loop can proceed
-                    {
+                    let error_msg = e.to_string();
+                    let is_skill_fallthrough = error_msg.contains("SKILL_FALLTHROUGH:");
+
+                    if is_skill_fallthrough {
+                        // Skills need LLM processing — fall through to agent loop
                         let mut runs = self.active_runs.write().await;
                         if let Some(run) = runs.get_mut(&run_id) {
                             run.state = RunState::Running;
                         }
+                        warn!(
+                            run_id = %run_id,
+                            "Skill command falling through to agent loop"
+                        );
+                        // Fall through to normal agent loop
+                    } else {
+                        // Direct tool errors: return error response, do NOT fall through
+                        // to prevent agent loop from processing slash commands as plain text.
+                        let (started_at, final_seq) = {
+                            let mut runs = self.active_runs.write().await;
+                            if let Some(run) = runs.get_mut(&run_id) {
+                                run.state = RunState::Completed;
+                                run.cancel_tx = None;
+                                (run.started_at, run.next_seq())
+                            } else {
+                                (chrono::Utc::now(), 0)
+                            }
+                        };
+
+                        agent.set_state(AgentState::Idle).await;
+                        let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
+                        let error_response = format!("❌ {}", error_msg);
+
+                        agent
+                            .add_message(&request.session_key, MessageRole::Assistant, &error_response)
+                            .await;
+                        let _ = emitter
+                            .emit(StreamEvent::ResponseChunk {
+                                run_id: run_id.clone(),
+                                seq: 1,
+                                content: error_response.clone(),
+                                chunk_index: 0,
+                                is_final: true,
+                            })
+                            .await;
+                        let _ = emitter
+                            .emit(StreamEvent::RunComplete {
+                                run_id: run_id.clone(),
+                                seq: final_seq,
+                                summary: RunSummary {
+                                    total_tokens: 0,
+                                    tool_calls: 1,
+                                    loops: 0,
+                                    final_response: Some(error_response),
+                                },
+                                total_duration_ms: duration_ms,
+                            })
+                            .await;
+                        let _ = emitter
+                            .emit(StreamEvent::SessionUpdated {
+                                session_key: request.session_key.to_key_string(),
+                            })
+                            .await;
+                        warn!(
+                            run_id = %run_id,
+                            error = %error_msg,
+                            "Slash command fast path failed, returning error to user"
+                        );
+                        return Ok(());
                     }
-                    warn!(
-                        run_id = %run_id,
-                        error = %e,
-                        "Slash command fast path failed, falling through to agent loop"
-                    );
-                    // Fall through to normal agent loop (agent state stays Running)
                 }
             }
         }
