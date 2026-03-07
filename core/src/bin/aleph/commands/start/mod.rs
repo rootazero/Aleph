@@ -34,8 +34,8 @@ use alephcore::gateway::device_store::DeviceStore;
 #[cfg(target_os = "macos")]
 use alephcore::gateway::interfaces::{IMessageChannel, IMessageConfig};
 use alephcore::gateway::interfaces::{TelegramChannel, TelegramConfig};
-use alephcore::gateway::interfaces::{DiscordChannel, DiscordConfig};
-use alephcore::gateway::interfaces::{WhatsAppChannel, WhatsAppConfig};
+use alephcore::gateway::interfaces::DiscordConfig;
+use alephcore::gateway::interfaces::WhatsAppConfig;
 use alephcore::executor::BuiltinToolRegistry;
 use alephcore::cron::CronService;
 use alephcore::group_chat::{GroupChatExecutor, GroupChatOrchestrator};
@@ -1047,79 +1047,110 @@ async fn initialize_channels(
     dispatch_registry: Option<&alephcore::dispatcher::ToolRegistry>,
     daemon: bool,
 ) -> Arc<ChannelRegistry> {
+    use alephcore::gateway::handlers::channel::create_channel_from_config;
+
     let channel_registry = Arc::new(ChannelRegistry::new());
 
-    #[cfg(target_os = "macos")]
-    {
-        let imessage_config = if let Some(app_im) = app_config.channels.get("imessage") {
-            serde_json::from_value::<IMessageConfig>(app_im.clone()).unwrap_or_else(|e| {
-                tracing::warn!("Failed to parse imessage config from app config: {}, falling back", e);
-                IMessageConfig::default()
-            })
-        } else {
-            IMessageConfig::default()
-        };
-        let imessage_channel = IMessageChannel::new(imessage_config);
-        let channel_id = channel_registry.register(Box::new(imessage_channel)).await;
-        if !daemon {
-            println!("Registered channel: {} (iMessage)", channel_id);
-        }
+    // Resolve all channel instances from app config
+    let mut instances = app_config.resolved_channels();
+
+    // Helper: check if any instance of this type already exists
+    fn has_type(instances: &[alephcore::ChannelInstanceConfig], t: &str) -> bool {
+        instances.iter().any(|i| i.channel_type == t)
     }
 
-    {
-        // Priority: app config (config.toml, set by Panel UI) > gateway config (aleph.toml) > env var
-        let telegram_config = if let Some(app_tg) = app_config.channels.get("telegram") {
-            serde_json::from_value::<TelegramConfig>(app_tg.clone()).unwrap_or_else(|e| {
-                tracing::warn!("Failed to parse telegram config from app config: {}, falling back", e);
-                TelegramConfig::from_env().unwrap_or_default()
-            })
-        } else if let Some(ref gw_tg) = gateway_config.channels.telegram {
+    // Add fallback instances for well-known platforms if not already in resolved list
+
+    // Telegram fallback: gateway config (aleph.toml) > env var
+    if !has_type(&instances, "telegram") {
+        let fallback_config = if let Some(ref gw_tg) = gateway_config.channels.telegram {
             let mut cfg = TelegramConfig::default();
             cfg.bot_token = gw_tg.token.clone();
-            cfg
+            serde_json::to_value(cfg).unwrap_or_default()
         } else {
-            TelegramConfig::from_env().unwrap_or_default()
+            serde_json::to_value(TelegramConfig::from_env().unwrap_or_default()).unwrap_or_default()
         };
-        // Build slash commands list from dispatch registry for Telegram menu
-        let slash_commands = if let Some(reg) = dispatch_registry {
-            use alephcore::dispatcher::ChannelType;
-            let tools = reg.list_for_channel(ChannelType::Telegram).await;
-            tools.iter()
-                .map(|t| (t.name.clone(), t.description.clone()))
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-        let telegram_channel = TelegramChannel::new("telegram", telegram_config)
-            .with_slash_commands(slash_commands);
-        let channel_id = channel_registry.register(Box::new(telegram_channel)).await;
-        if !daemon {
-            println!("Registered channel: {} (Telegram)", channel_id);
-        }
+        instances.push(alephcore::ChannelInstanceConfig {
+            id: "telegram".to_string(),
+            channel_type: "telegram".to_string(),
+            config: fallback_config,
+        });
     }
 
-    {
-        let discord_config = DiscordConfig::default();
-        let discord_channel = DiscordChannel::new("discord", discord_config);
-        let channel_id = channel_registry.register(Box::new(discord_channel)).await;
-        if !daemon {
-            println!("Registered channel: {} (Discord)", channel_id);
-        }
+    // Discord fallback
+    if !has_type(&instances, "discord") {
+        instances.push(alephcore::ChannelInstanceConfig {
+            id: "discord".to_string(),
+            channel_type: "discord".to_string(),
+            config: serde_json::to_value(DiscordConfig::default()).unwrap_or_default(),
+        });
     }
 
-    {
-        let whatsapp_config = if let Some(app_wa) = app_config.channels.get("whatsapp") {
-            serde_json::from_value::<WhatsAppConfig>(app_wa.clone()).unwrap_or_else(|e| {
-                tracing::warn!("Failed to parse whatsapp config from app config: {}, falling back", e);
-                WhatsAppConfig::default()
-            })
+    // WhatsApp fallback
+    if !has_type(&instances, "whatsapp") {
+        instances.push(alephcore::ChannelInstanceConfig {
+            id: "whatsapp".to_string(),
+            channel_type: "whatsapp".to_string(),
+            config: serde_json::to_value(WhatsAppConfig::default()).unwrap_or_default(),
+        });
+    }
+
+    // iMessage fallback (macOS only)
+    #[cfg(target_os = "macos")]
+    if !has_type(&instances, "imessage") {
+        instances.push(alephcore::ChannelInstanceConfig {
+            id: "imessage".to_string(),
+            channel_type: "imessage".to_string(),
+            config: serde_json::to_value(IMessageConfig::default()).unwrap_or_default(),
+        });
+    }
+
+    // Build slash commands once for all telegram instances
+    let slash_commands = if let Some(reg) = dispatch_registry {
+        use alephcore::dispatcher::ChannelType;
+        let tools = reg.list_for_channel(ChannelType::Telegram).await;
+        tools.iter()
+            .map(|t| (t.name.clone(), t.description.clone()))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    // Create and register all channel instances
+    for inst in &instances {
+        // iMessage uses its own constructor (no id parameter)
+        #[cfg(target_os = "macos")]
+        if inst.channel_type == "imessage" {
+            let imessage_config = serde_json::from_value::<IMessageConfig>(inst.config.clone())
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to parse imessage config '{}': {}, using default", inst.id, e);
+                    IMessageConfig::default()
+                });
+            let imessage_channel = IMessageChannel::new(imessage_config);
+            let channel_id = channel_registry.register(Box::new(imessage_channel)).await;
+            if !daemon {
+                println!("Registered channel: {} (iMessage)", channel_id);
+            }
+            continue;
+        }
+
+        if let Some(mut channel) = create_channel_from_config(&inst.id, &inst.channel_type, inst.config.clone()) {
+            // Attach slash commands to telegram instances
+            if inst.channel_type == "telegram" {
+                // Downcast to TelegramChannel to attach slash commands
+                // We need to re-create with slash commands since we can't downcast Box<dyn Channel>
+                if let Ok(tg_config) = serde_json::from_value::<TelegramConfig>(inst.config.clone()) {
+                    let tg_channel = TelegramChannel::new(&inst.id, tg_config)
+                        .with_slash_commands(slash_commands.clone());
+                    channel = Box::new(tg_channel);
+                }
+            }
+            let channel_id = channel_registry.register(channel).await;
+            if !daemon {
+                println!("Registered channel: {} ({})", channel_id, inst.channel_type);
+            }
         } else {
-            WhatsAppConfig::default()
-        };
-        let whatsapp_channel = WhatsAppChannel::new("whatsapp", whatsapp_config);
-        let channel_id = channel_registry.register(Box::new(whatsapp_channel)).await;
-        if !daemon {
-            println!("Registered channel: {} (WhatsApp)", channel_id);
+            tracing::warn!("Failed to create channel '{}' of type '{}'", inst.id, inst.channel_type);
         }
     }
 
@@ -1145,6 +1176,8 @@ async fn initialize_channels(
         println!("  - channel.start   : Start a channel");
         println!("  - channel.stop    : Stop a channel");
         println!("  - channel.send    : Send message via channel");
+        println!("  - channel.create  : Create a new channel");
+        println!("  - channel.delete  : Delete a channel");
         println!();
     }
 
