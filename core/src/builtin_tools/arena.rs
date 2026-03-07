@@ -6,15 +6,11 @@
 //! - `arena_settle` — Settle an arena (archive and persist facts)
 
 use async_trait::async_trait;
-use chrono::Utc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::arena::{
-    ArenaId, ArenaManager, ArenaManifest, ArenaPermissions, CoordinationStrategy, Participant,
-    ParticipantRole, StageSpec,
-};
+use crate::arena::{ArenaId, ArenaManager, ArenaManifest};
 use crate::error::Result;
 use crate::sync_primitives::{Arc, RwLock};
 use crate::tools::AlephTool;
@@ -85,83 +81,21 @@ impl AlephTool for ArenaCreateTool {
             "Arena creation requested"
         );
 
-        if args.participants.is_empty() {
-            return Err(crate::error::AlephError::other(
-                "At least one participant is required",
-            ));
-        }
+        let participants_count = args.participants.len();
 
-        let created_by = args
-            .coordinator
-            .clone()
-            .unwrap_or_else(|| args.participants[0].clone());
-
-        // Parse strategy
-        let strategy = match args.strategy.as_str() {
-            "peer" => {
-                let coordinator = args
-                    .coordinator
-                    .unwrap_or_else(|| args.participants[0].clone());
-                CoordinationStrategy::Peer { coordinator }
-            }
-            "pipeline" => {
-                let stages = args
-                    .participants
-                    .iter()
-                    .enumerate()
-                    .map(|(i, agent_id)| StageSpec {
-                        agent_id: agent_id.clone(),
-                        description: format!("Stage {}", i + 1),
-                        depends_on: if i > 0 {
-                            vec![args.participants[i - 1].clone()]
-                        } else {
-                            vec![]
-                        },
-                    })
-                    .collect();
-                CoordinationStrategy::Pipeline { stages }
-            }
-            other => {
-                return Err(crate::error::AlephError::other(format!(
-                    "Unknown strategy '{}': expected 'peer' or 'pipeline'",
-                    other
-                )));
-            }
-        };
-
-        // Build participants list
-        let participants: Vec<Participant> = args
-            .participants
-            .iter()
-            .enumerate()
-            .map(|(i, id)| {
-                let role = if i == 0 {
-                    ParticipantRole::Coordinator
-                } else {
-                    ParticipantRole::Worker
-                };
-                Participant {
-                    agent_id: id.clone(),
-                    role,
-                    permissions: ArenaPermissions::from_role(role),
-                }
-            })
-            .collect();
-
-        let participants_count = participants.len();
-
-        let manifest = ArenaManifest {
-            goal: args.goal,
-            strategy,
-            participants,
-            created_by,
-            created_at: Utc::now(),
-        };
+        let manifest = ArenaManifest::build(
+            args.goal,
+            &args.strategy,
+            &args.participants,
+            args.coordinator,
+            None,
+        )
+        .map_err(crate::error::AlephError::other)?;
 
         let mut manager = self.manager.write().unwrap_or_else(|e| e.into_inner());
         let (arena_id, _handles) = manager
             .create_arena(manifest)
-            .map_err(|e| crate::error::AlephError::other(e))?;
+            .map_err(crate::error::AlephError::other)?;
 
         Ok(ArenaCreateOutput {
             arena_id: arena_id.to_string(),
@@ -252,18 +186,15 @@ impl AlephTool for ArenaQueryTool {
         let arena_id = ArenaId::from_string(&args.arena_id);
         let manager = self.manager.read().unwrap_or_else(|e| e.into_inner());
 
-        // If agent_id was provided, use it directly
         if let Some(ref agent_id_str) = args.agent_id {
+            // Use handle-based query with permission checks
             let handle = manager
                 .get_handle(&arena_id, agent_id_str)
-                .map_err(|e| crate::error::AlephError::other(e))?;
+                .map_err(crate::error::AlephError::other)?;
 
-            // Use snapshot_for_context to read arena state through the handle
             let (_, goal, active_agents, completed_steps, total_steps, _) =
                 handle.snapshot_for_context();
-            let progress = handle.get_progress();
 
-            // Build slot summaries from each known agent
             let mut slot_summaries: Vec<SlotSummary> = Vec::new();
             for agent in &active_agents {
                 let artifacts = handle.list_artifacts(agent).unwrap_or_default();
@@ -278,7 +209,6 @@ impl AlephTool for ArenaQueryTool {
                 });
             }
 
-            // Determine arena status from progress
             let status = if completed_steps > 0 && completed_steps >= total_steps && total_steps > 0
             {
                 "Settling".to_string()
@@ -290,16 +220,45 @@ impl AlephTool for ArenaQueryTool {
                 arena_id: args.arena_id,
                 goal,
                 status,
-                completed_steps: progress.completed_steps,
-                total_steps: progress.total_steps,
+                completed_steps,
+                total_steps,
                 slots: slot_summaries,
             });
         }
 
-        // No agent_id provided — the caller must provide their own agent_id
-        Err(crate::error::AlephError::other(
-            "agent_id is required to query arena state (provide your own agent ID)",
-        ))
+        // No agent_id — use manager's global query
+        let snapshot = manager
+            .query_arena(&arena_id)
+            .ok_or_else(|| {
+                crate::error::AlephError::other(format!("Arena not found: {}", arena_id))
+            })?;
+
+        let goal = snapshot["goal"].as_str().unwrap_or("").to_string();
+        let status = snapshot["status"].as_str().unwrap_or("Active").to_string();
+        let completed_steps = snapshot["progress"]["completed_steps"].as_u64().unwrap_or(0) as usize;
+        let total_steps = snapshot["progress"]["total_steps"].as_u64().unwrap_or(0) as usize;
+
+        let slots = snapshot["slots"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|s| SlotSummary {
+                        agent_id: s["agent_id"].as_str().unwrap_or("").to_string(),
+                        status: s["status"].as_str().unwrap_or("Idle").to_string(),
+                        artifact_count: s["artifact_count"].as_u64().unwrap_or(0) as usize,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(ArenaQueryOutput {
+            arena_id: args.arena_id,
+            goal,
+            status,
+            completed_steps,
+            total_steps,
+            slots,
+        })
     }
 }
 
@@ -370,7 +329,7 @@ impl AlephTool for ArenaSettleTool {
 
         let (report, _facts) = manager
             .settle_with_facts(&arena_id)
-            .map_err(|e| crate::error::AlephError::other(e))?;
+            .map_err(crate::error::AlephError::other)?;
 
         // Note: The caller (agent loop / dispatcher) is responsible for
         // persisting the returned facts to MemoryStore. The tool reports
