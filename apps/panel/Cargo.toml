@@ -1,16 +1,16 @@
 [package]
-name = "aleph-control-plane"
+name = "aleph-panel"
 version = "0.2.0"
 edition = "2021"
 rust-version = "1.92"
 
 [lib]
-name = "aleph_dashboard"
+name = "aleph_panel"
 crate-type = ["cdylib", "rlib"]
 
 # Binary target not needed for WASM build
 # [[bin]]
-# name = "aleph-control-plane"
+# name = "aleph-panel"
 # path = "src/main.rs"
 
 [dependencies]
@@ -37,4 +37,4 @@ chrono = "0.4"
 futures = "0.3"
 
 # Internal logic
-shared-ui-logic = { path = "../../../shared/ui_logic", features = ["leptos", "wasm"] }
+shared-ui-logic = { path = "../../shared/ui_logic", features = ["leptos", "wasm"] }

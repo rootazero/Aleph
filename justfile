@@ -6,8 +6,8 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # ─── Variables ───
 release_dir     := "target/release"
 debug_dir       := "target/debug"
-wasm_dir        := "core/ui/control_plane"
-wasm_dist       := "core/ui/control_plane/dist"
+panel_dir       := "apps/panel"
+panel_dist      := "apps/panel/dist"
 macos_dir       := "apps/macos-native"
 macos_resources := "apps/macos-native/Aleph/Resources"
 macos_app       := "apps/macos-native/build/Build/Products/Release/Aleph.app"
@@ -59,35 +59,43 @@ macos: _ensure-server
 wasm:
     #!/usr/bin/env bash
     set -euo pipefail
-    mkdir -p {{wasm_dist}}
+    mkdir -p {{panel_dist}}
     # 1. Tailwind CSS
-    (cd {{wasm_dir}} && npm run build:css)
+    (cd {{panel_dir}} && npm run build:css)
     # 2. Compile Rust → WASM
-    cargo build -p aleph-control-plane --target wasm32-unknown-unknown --release
+    cargo build -p aleph-panel --target wasm32-unknown-unknown --release
     # 3. Generate JS bindings
     wasm-bindgen --target web --no-typescript \
-        --out-dir {{wasm_dist}} --out-name aleph_dashboard \
-        target/wasm32-unknown-unknown/release/aleph_dashboard.wasm
+        --out-dir {{panel_dist}} --out-name aleph_panel \
+        target/wasm32-unknown-unknown/release/aleph_panel.wasm
     # 4. Runtime index.html
-    cat > {{wasm_dist}}/index.html << 'HTMLEOF'
+    cat > {{panel_dist}}/index.html << 'HTMLEOF'
     <!DOCTYPE html>
     <html lang="en">
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Aleph Dashboard</title>
+        <title>Aleph Panel</title>
         <link rel="stylesheet" href="/tailwind.css" />
       </head>
       <body class="bg-surface text-text-primary">
         <noscript>This application requires JavaScript to run.</noscript>
         <script type="module">
-          import init from '/aleph_dashboard.js';
-          await init('/aleph_dashboard_bg.wasm');
+          import init from '/aleph_panel.js';
+          await init('/aleph_panel_bg.wasm');
         </script>
       </body>
     </html>
     HTMLEOF
-    echo "✓ WASM: {{wasm_dist}}/"
+    echo "✓ WASM: {{panel_dist}}/"
+
+# Build WebChat UI (React)
+webchat-build:
+    cd apps/webchat && pnpm build
+
+# Dev server for WebChat
+webchat-dev:
+    cd apps/webchat && pnpm dev
 
 # Run Xcode build only (assumes server binary exists in Resources)
 xcode:
@@ -156,7 +164,7 @@ clippy-all: clippy clippy-desktop
 # Clean all build artifacts
 clean:
     cargo clean
-    rm -rf {{wasm_dist}}
+    rm -rf {{panel_dist}}
     rm -rf {{macos_dir}}/build
     rm -rf {{macos_resources}}/{{server_bin}}
     @echo "✓ Cleaned"
