@@ -156,6 +156,21 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Delete an agent and archive its workspace (cannot delete 'main')",
         requires_config: true, // Requires agent_registry + workspace_manager
     },
+    BuiltinToolDefinition {
+        name: "subagent_spawn",
+        description: "Spawn a sub-agent to handle a task autonomously and return the result",
+        requires_config: true, // Requires sub_agent_dispatcher
+    },
+    BuiltinToolDefinition {
+        name: "subagent_steer",
+        description: "Send additional instructions to a running sub-agent",
+        requires_config: true, // Requires sub_agent_dispatcher + sub_agent_registry
+    },
+    BuiltinToolDefinition {
+        name: "subagent_kill",
+        description: "Terminate a running sub-agent",
+        requires_config: true, // Requires sub_agent_dispatcher + sub_agent_registry
+    },
 ];
 
 /// Create a boxed tool instance by name
@@ -224,6 +239,9 @@ pub fn create_tool_boxed(
         // Agent management tools require agent_registry + workspace_manager + session_context,
         // created dynamically in BuiltinToolRegistry::with_config().
         "agent_create" | "agent_switch" | "agent_list" | "agent_delete" => None,
+        // Subagent management tools require sub_agent_dispatcher (+ registry for steer/kill),
+        // created dynamically in BuiltinToolRegistry::with_config().
+        "subagent_spawn" | "subagent_steer" | "subagent_kill" => None,
         "escalate_task" => Some(Box::new(EscalateTaskTool)),
         _ => None,
     }

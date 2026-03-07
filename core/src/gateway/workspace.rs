@@ -332,6 +332,9 @@ pub struct ActiveWorkspace {
 
     /// Memory filter scoped to this workspace
     pub memory_filter: WorkspaceFilter,
+
+    /// Filesystem path to the workspace directory (for loading workspace files like SOUL.md)
+    pub workspace_path: Option<PathBuf>,
 }
 
 impl ActiveWorkspace {
@@ -368,10 +371,13 @@ impl ActiveWorkspace {
         let memory_filter =
             WorkspaceFilter::Single(workspace.id.clone());
 
+        let workspace_path = Self::resolve_workspace_path(&workspace.id);
+
         Self {
             workspace_id: workspace.id,
             profile,
             memory_filter,
+            workspace_path,
         }
     }
 
@@ -401,10 +407,13 @@ impl ActiveWorkspace {
         let memory_filter =
             WorkspaceFilter::Single(workspace.id.clone());
 
+        let workspace_path = Self::resolve_workspace_path(&workspace.id);
+
         Self {
             workspace_id: workspace.id,
             profile,
             memory_filter,
+            workspace_path,
         }
     }
 
@@ -419,7 +428,15 @@ impl ActiveWorkspace {
             memory_filter: WorkspaceFilter::Single(
                 "global".to_string(),
             ),
+            workspace_path: dirs::home_dir().map(|h| h.join(".aleph")),
         }
+    }
+
+    /// Resolve the workspace directory path from the workspace ID.
+    ///
+    /// Convention: `~/.aleph/workspaces/{workspace_id}`
+    fn resolve_workspace_path(workspace_id: &str) -> Option<PathBuf> {
+        dirs::home_dir().map(|h| h.join(".aleph/workspaces").join(workspace_id))
     }
 }
 
@@ -896,6 +913,19 @@ impl WorkspaceManager {
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(channel, peer_id) DO UPDATE SET agent_id = ?3, updated_at = ?4",
             params![channel, peer_id, agent_id, now],
+        ).map_err(|e| WorkspaceError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Clear the active agent override for a channel+peer combination.
+    ///
+    /// This restores default routing (config bindings / default_agent) for
+    /// the given channel+peer. Called when user switches back to "main".
+    pub fn clear_active_agent(&self, channel: &str, peer_id: &str) -> Result<(), WorkspaceError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "DELETE FROM channel_active_agent WHERE channel = ?1 AND peer_id = ?2",
+            params![channel, peer_id],
         ).map_err(|e| WorkspaceError::Database(e.to_string()))?;
         Ok(())
     }

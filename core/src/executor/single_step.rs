@@ -120,6 +120,16 @@ pub trait ToolRegistry: Send + Sync {
     ) -> Option<std::sync::Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::SessionContext>>> {
         None
     }
+
+    /// Get the shared tool policy handle for per-agent tool access control.
+    ///
+    /// When set, execute_tool() checks this policy before dispatching.
+    /// Default ToolPolicy (empty whitelist/blacklist) allows all tools.
+    fn tool_policy_handle(
+        &self,
+    ) -> Option<std::sync::Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>> {
+        None
+    }
 }
 
 /// Single-step executor for Agent Loop

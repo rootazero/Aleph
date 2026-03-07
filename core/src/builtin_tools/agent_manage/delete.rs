@@ -7,11 +7,11 @@ use tracing::{info, warn};
 
 use crate::error::Result;
 use crate::gateway::agent_instance::AgentRegistry;
+use crate::gateway::agent_lifecycle::AgentLifecycleEvent;
+use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::workspace::WorkspaceManager;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
-
-use super::SessionContextHandle;
 
 // =============================================================================
 // Args / Output
@@ -22,6 +22,14 @@ use super::SessionContextHandle;
 pub struct AgentDeleteArgs {
     /// ID of the agent to delete
     pub agent_id: String,
+    /// Injected by registry — session channel (internal, hidden from LLM schema)
+    #[serde(default)]
+    #[schemars(skip)]
+    pub __channel: String,
+    /// Injected by registry — session peer_id (internal, hidden from LLM schema)
+    #[serde(default)]
+    #[schemars(skip)]
+    pub __peer_id: String,
 }
 
 /// Output from agent deletion.
@@ -45,19 +53,19 @@ pub struct AgentDeleteOutput {
 pub struct AgentDeleteTool {
     registry: Arc<AgentRegistry>,
     workspace_mgr: Arc<WorkspaceManager>,
-    session_ctx: SessionContextHandle,
+    event_bus: Option<Arc<GatewayEventBus>>,
 }
 
 impl AgentDeleteTool {
     pub fn new(
         registry: Arc<AgentRegistry>,
         workspace_mgr: Arc<WorkspaceManager>,
-        session_ctx: SessionContextHandle,
+        event_bus: Option<Arc<GatewayEventBus>>,
     ) -> Self {
         Self {
             registry,
             workspace_mgr,
-            session_ctx,
+            event_bus,
         }
     }
 }
@@ -100,12 +108,13 @@ impl AlephTool for AgentDeleteTool {
             )));
         }
 
-        // 3. If active, switch to main first
-        let session = self.session_ctx.read().await;
-        if !session.channel.is_empty() && !session.peer_id.is_empty() {
+        // 3. If active, switch to main first (channel/peer_id injected by registry snapshot)
+        let channel = args.__channel.clone();
+        let peer_id = args.__peer_id.clone();
+        if !channel.is_empty() && !peer_id.is_empty() {
             let current_active = self
                 .workspace_mgr
-                .get_active_agent(&session.channel, &session.peer_id)
+                .get_active_agent(&channel, &peer_id)
                 .ok()
                 .flatten();
 
@@ -116,7 +125,7 @@ impl AlephTool for AgentDeleteTool {
                 );
                 if let Err(e) = self
                     .workspace_mgr
-                    .set_active_agent(&session.channel, &session.peer_id, "main")
+                    .set_active_agent(&channel, &peer_id, "main")
                 {
                     warn!("Failed to switch to main after deletion: {}", e);
                 }
@@ -148,6 +157,17 @@ impl AlephTool for AgentDeleteTool {
         }
 
         let deleted = removed.is_some();
+
+        // Emit lifecycle event
+        if deleted {
+            if let Some(ref bus) = self.event_bus {
+                let _ = bus.publish_json(&AgentLifecycleEvent::Deleted {
+                    agent_id: args.agent_id.clone(),
+                    workspace_archived: true,
+                });
+            }
+        }
+
         let message = if deleted {
             format!("Agent '{}' deleted and workspace archived.", args.agent_id)
         } else {
@@ -185,8 +205,7 @@ mod tests {
     fn test_delete_tool_definition() {
         let registry = Arc::new(AgentRegistry::new());
         let workspace_mgr = test_workspace_mgr();
-        let session_ctx = super::super::new_session_context_handle();
-        let tool = AgentDeleteTool::new(registry, workspace_mgr, session_ctx);
+        let tool = AgentDeleteTool::new(registry, workspace_mgr, None);
         let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "agent_delete");

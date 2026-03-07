@@ -1315,29 +1315,33 @@ impl InboundMessageRouter {
 
     /// Resolve agent ID from channel using AgentRouter bindings and workspace manager (async)
     ///
-    /// Resolution priority:
-    /// 1. Route bindings (AgentRouter) — explicit channel-to-agent mappings
-    /// 2. channel_active_agent (WorkspaceManager) — user's manual agent switch
-    /// 3. default_agent (RoutingConfig) — lowest priority fallback
+    /// Resolution priority (highest to lowest):
+    /// 1. User's explicit agent switch (WorkspaceManager) — user said "switch to X",
+    ///    this MUST take precedence so agent_switch tool works as expected.
+    ///    When user switches back to "main", the override is cleared (not set to "main"),
+    ///    allowing lower-priority routes to take effect.
+    /// 2. Config-layer route bindings (AgentRouter) — channel-to-agent mappings
+    ///    from aleph.toml. Only used when no user override is active.
+    /// 3. default_agent (RoutingConfig) — lowest priority fallback.
     async fn resolve_agent_id_async(&self, channel: &str, sender_id: &str) -> String {
-        // 1. Check route bindings first (highest priority)
+        // 1. User's explicit agent switch (highest priority)
+        if let Some(ref manager) = self.workspace_manager {
+            if let Ok(Some(agent_id)) = manager.get_active_agent(channel, sender_id) {
+                debug!(
+                    "Using user-override agent '{}' for {}:{}",
+                    agent_id, channel, sender_id
+                );
+                return agent_id;
+            }
+        }
+
+        // 2. Config-layer route bindings
         if let Some(router) = &self.agent_router {
             let resolved = router.route(None, Some(channel), None).await;
             let resolved_id = resolved.agent_id();
             // Only use if it differs from the default (meaning a binding matched)
             if resolved_id != router.default_agent() {
                 return resolved_id.to_string();
-            }
-        }
-
-        // 2. Check channel_active_agent from workspace manager (user's manual switch)
-        if let Some(ref manager) = self.workspace_manager {
-            if let Ok(Some(agent_id)) = manager.get_active_agent(channel, sender_id) {
-                debug!(
-                    "Using channel_active_agent '{}' for {}:{}",
-                    agent_id, channel, sender_id
-                );
-                return agent_id;
             }
         }
 
