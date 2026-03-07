@@ -73,3 +73,75 @@ impl MemoryContext {
         output
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::workspace_loader::DailyMemory;
+    use crate::memory::context::{FactType, MemoryFact};
+
+    #[test]
+    fn test_empty_context() {
+        let ctx = MemoryContext::default();
+        assert!(ctx.is_empty());
+        assert_eq!(ctx.format_for_prompt(), "");
+    }
+
+    #[test]
+    fn test_daily_notes_not_empty() {
+        let ctx = MemoryContext {
+            daily_notes: vec![DailyMemory {
+                date: "2026-03-07".to_string(),
+                content: "Test note".to_string(),
+            }],
+            ..Default::default()
+        };
+        assert!(!ctx.is_empty());
+    }
+
+    #[test]
+    fn test_daily_notes_format() {
+        let ctx = MemoryContext {
+            daily_notes: vec![
+                DailyMemory {
+                    date: "2026-03-07".to_string(),
+                    content: "Morning standup notes".to_string(),
+                },
+                DailyMemory {
+                    date: "2026-03-06".to_string(),
+                    content: "Debug session log".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+        let prompt = ctx.format_for_prompt();
+        assert!(prompt.contains("Recent Notes"));
+        assert!(prompt.contains("2026-03-07"));
+        assert!(prompt.contains("Morning standup notes"));
+        assert!(prompt.contains("2026-03-06"));
+        assert!(prompt.contains("Debug session log"));
+    }
+
+    #[test]
+    fn test_mixed_context_format() {
+        let fact = ScoredFact {
+            fact: MemoryFact::new(
+                "Rust is great".to_string(),
+                FactType::Preference,
+                vec![],
+            ),
+            score: 0.9,
+        };
+        let ctx = MemoryContext {
+            facts: vec![fact],
+            memory_summaries: vec![],
+            daily_notes: vec![DailyMemory {
+                date: "2026-03-07".to_string(),
+                content: "Daily note".to_string(),
+            }],
+        };
+        let prompt = ctx.format_for_prompt();
+        assert!(prompt.contains("Facts"));
+        assert!(prompt.contains("Recent Notes"));
+    }
+}
