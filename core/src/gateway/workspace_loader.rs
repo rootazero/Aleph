@@ -10,19 +10,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::thinker::memory_context::DailyMemory;
 use crate::thinker::soul::SoulManifest;
 
 /// Cached file entry with content and modification time.
 pub(crate) struct CachedFile {
     content: String,
     mtime: SystemTime,
-}
-
-/// Daily memory entry read from `memory/YYYY-MM-DD.md`.
-#[derive(Debug, Clone)]
-pub struct DailyMemory {
-    pub date: String,
-    pub content: String,
 }
 
 /// Workspace file loader with mtime-based caching.
@@ -113,7 +107,8 @@ impl WorkspaceFileLoader {
             Err(_) => return Vec::new(),
         };
 
-        let mut memories: Vec<DailyMemory> = entries
+        // Collect valid date-named files
+        let mut dated_files: Vec<String> = entries
             .filter_map(|entry| {
                 let entry = entry.ok()?;
                 let name = entry.file_name().to_string_lossy().to_string();
@@ -122,20 +117,23 @@ impl WorkspaceFileLoader {
                 if date.len() != 10 || date.chars().nth(4) != Some('-') {
                     return None;
                 }
-                let content = fs::read_to_string(entry.path()).ok()?;
-                Some(DailyMemory {
-                    date: date.to_string(),
-                    content,
-                })
+                Some(date.to_string())
             })
             .collect();
 
-        // Sort descending by date
-        memories.sort_by(|a, b| b.date.cmp(&a.date));
+        // Sort descending by date and limit
+        dated_files.sort_unstable_by(|a, b| b.cmp(a));
+        dated_files.truncate(days as usize);
 
-        // Limit to N most recent
-        memories.truncate(days as usize);
-        memories
+        // Load via mtime cache
+        dated_files
+            .into_iter()
+            .filter_map(|date| {
+                let filename = format!("memory/{}.md", date);
+                let content = self.load(workspace, &filename)?;
+                Some(DailyMemory { date, content })
+            })
+            .collect()
     }
 
     /// Append content to `memory/YYYY-MM-DD.md`, creating the directory

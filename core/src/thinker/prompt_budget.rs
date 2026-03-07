@@ -87,13 +87,7 @@ pub fn truncate_with_head_tail(
 
     // If max_chars is too small for head+tail+marker, just take head
     if max_chars <= marker_overhead {
-        let end = content
-            .char_indices()
-            .take_while(|(i, _)| *i < max_chars)
-            .last()
-            .map(|(i, c)| i + c.len_utf8())
-            .unwrap_or(0);
-        return content[..end].to_string();
+        return content[..content.floor_char_boundary(max_chars)].to_string();
     }
 
     let usable = max_chars - marker_overhead;
@@ -107,32 +101,15 @@ pub fn truncate_with_head_tail(
     let marker = format!("\n\n[... {} chars truncated ...]\n\n", truncated_count);
 
     // UTF-8 safe boundary finding
-    let head_end = content
-        .char_indices()
-        .take_while(|(i, _)| *i < head_chars)
-        .last()
-        .map(|(i, c)| i + c.len_utf8())
-        .unwrap_or(0);
+    let head_end = content.floor_char_boundary(head_chars);
 
-    let tail_start = content
-        .char_indices()
-        .rev()
-        .take_while(|(i, _)| content.len() - *i <= tail_chars)
-        .last()
-        .map(|(i, _)| i)
-        .unwrap_or(content.len());
+    let tail_start = content.ceil_char_boundary(content.len().saturating_sub(tail_chars));
 
     let result = format!("{}{}{}", &content[..head_end], marker, &content[tail_start..]);
 
     // Final safety check — if still over budget, hard truncate
     if result.len() > max_chars {
-        let end = result
-            .char_indices()
-            .take_while(|(i, _)| *i < max_chars)
-            .last()
-            .map(|(i, c)| i + c.len_utf8())
-            .unwrap_or(0);
-        return result[..end].to_string();
+        return result[..result.floor_char_boundary(max_chars)].to_string();
     }
 
     result
