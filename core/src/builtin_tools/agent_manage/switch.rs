@@ -109,14 +109,24 @@ impl AlephTool for AgentSwitchTool {
             None
         };
 
-        // 3. Set new active agent
+        // 3. Set or clear active agent override
         if !channel.is_empty() && !peer_id.is_empty() {
-            self.workspace_mgr
-                .set_active_agent(&channel, &peer_id, &args.agent_id)
-                .map_err(|e| crate::error::AlephError::other(format!(
-                    "Failed to switch agent: {}",
-                    e
-                )))?;
+            if args.agent_id == "main" {
+                // Clear the override so routing falls through to config bindings / default
+                self.workspace_mgr
+                    .clear_active_agent(&channel, &peer_id)
+                    .map_err(|e| crate::error::AlephError::other(format!(
+                        "Failed to clear agent override: {}",
+                        e
+                    )))?;
+            } else {
+                self.workspace_mgr
+                    .set_active_agent(&channel, &peer_id, &args.agent_id)
+                    .map_err(|e| crate::error::AlephError::other(format!(
+                        "Failed to switch agent: {}",
+                        e
+                    )))?;
+            }
         }
 
         let msg = match &previous {

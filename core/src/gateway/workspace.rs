@@ -917,6 +917,19 @@ impl WorkspaceManager {
         Ok(())
     }
 
+    /// Clear the active agent override for a channel+peer combination.
+    ///
+    /// This restores default routing (config bindings / default_agent) for
+    /// the given channel+peer. Called when user switches back to "main".
+    pub fn clear_active_agent(&self, channel: &str, peer_id: &str) -> Result<(), WorkspaceError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "DELETE FROM channel_active_agent WHERE channel = ?1 AND peer_id = ?2",
+            params![channel, peer_id],
+        ).map_err(|e| WorkspaceError::Database(e.to_string()))?;
+        Ok(())
+    }
+
     /// Get the active agent for a channel+peer combination
     pub fn get_active_agent(&self, channel: &str, peer_id: &str) -> Result<Option<String>, WorkspaceError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
