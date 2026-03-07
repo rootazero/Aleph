@@ -494,16 +494,16 @@ impl BuiltinToolRegistry {
                 use crate::builtin_tools::agent_manage;
                 let ctx = agent_manage::new_session_context_handle();
                 let create = agent_manage::AgentCreateTool::new(
-                    Arc::clone(ar), Arc::clone(wm), Arc::clone(&ctx),
+                    Arc::clone(ar), Arc::clone(wm),
                 );
                 let switch = agent_manage::AgentSwitchTool::new(
-                    Arc::clone(ar), Arc::clone(wm), Arc::clone(&ctx),
+                    Arc::clone(ar), Arc::clone(wm),
                 );
                 let list = agent_manage::AgentListTool::new(
-                    Arc::clone(ar), Arc::clone(wm), Arc::clone(&ctx),
+                    Arc::clone(ar), Arc::clone(wm),
                 );
                 let delete = agent_manage::AgentDeleteTool::new(
-                    Arc::clone(ar), Arc::clone(wm), Arc::clone(&ctx),
+                    Arc::clone(ar), Arc::clone(wm),
                 );
 
                 for (name, desc) in [
@@ -734,31 +734,51 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
-            // Agent management tools
-            "agent_create" => Box::pin(async move {
-                let tool = self.agent_create_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("agent_create not available: no AgentRegistry/WorkspaceManager configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
-            "agent_switch" => Box::pin(async move {
-                let tool = self.agent_switch_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("agent_switch not available: no AgentRegistry/WorkspaceManager configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
-            "agent_list" => Box::pin(async move {
-                let tool = self.agent_list_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("agent_list not available: no AgentRegistry/WorkspaceManager configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
-            "agent_delete" => Box::pin(async move {
-                let tool = self.agent_delete_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("agent_delete not available: no AgentRegistry/WorkspaceManager configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
+            // Agent management tools — snapshot session context into arguments
+            // to avoid race conditions from concurrent reads of the shared handle.
+            "agent_create" | "agent_switch" | "agent_list" | "agent_delete" => {
+                // Snapshot session context into tool arguments before async execution
+                let arguments = {
+                    let mut args = arguments;
+                    if let Some(ref h) = self.session_context_handle {
+                        if let Ok(ctx) = h.try_read() {
+                            if let Some(obj) = args.as_object_mut() {
+                                obj.insert("__channel".into(), serde_json::Value::String(ctx.channel.clone()));
+                                obj.insert("__peer_id".into(), serde_json::Value::String(ctx.peer_id.clone()));
+                            }
+                        }
+                    }
+                    args
+                };
+
+                match tool_name {
+                    "agent_create" => Box::pin(async move {
+                        let tool = self.agent_create_tool.as_ref().ok_or_else(|| {
+                            AlephError::tool("agent_create not available: no AgentRegistry/WorkspaceManager configured")
+                        })?;
+                        tool.call_json(arguments).await
+                    }),
+                    "agent_switch" => Box::pin(async move {
+                        let tool = self.agent_switch_tool.as_ref().ok_or_else(|| {
+                            AlephError::tool("agent_switch not available: no AgentRegistry/WorkspaceManager configured")
+                        })?;
+                        tool.call_json(arguments).await
+                    }),
+                    "agent_list" => Box::pin(async move {
+                        let tool = self.agent_list_tool.as_ref().ok_or_else(|| {
+                            AlephError::tool("agent_list not available: no AgentRegistry/WorkspaceManager configured")
+                        })?;
+                        tool.call_json(arguments).await
+                    }),
+                    "agent_delete" => Box::pin(async move {
+                        let tool = self.agent_delete_tool.as_ref().ok_or_else(|| {
+                            AlephError::tool("agent_delete not available: no AgentRegistry/WorkspaceManager configured")
+                        })?;
+                        tool.call_json(arguments).await
+                    }),
+                    _ => unreachable!(),
+                }
+            }
 
             _ => {
                 let tool = tool_name.to_string();
