@@ -168,7 +168,10 @@ impl MemoryContextProvider {
     }
 
     fn truncate_to_budget(&self, ctx: &mut MemoryContext) {
-        // Remove memories first (facts are higher value), then facts
+        // Remove daily notes first (lowest priority), then memories, then facts
+        while ctx.format_for_prompt().len() > self.config.max_output_chars && !ctx.daily_notes.is_empty() {
+            ctx.daily_notes.pop();
+        }
         while ctx.format_for_prompt().len() > self.config.max_output_chars && !ctx.memory_summaries.is_empty() {
             ctx.memory_summaries.pop();
         }
