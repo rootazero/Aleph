@@ -543,6 +543,12 @@ async fn register_agent_handlers(
         }
         compression_out = compression_svc;
 
+        // Wire memory context provider for LanceDB-backed prompt augmentation
+        if let Some(ref emb) = embedder_out {
+            let mcp = builder::init_memory_context_provider(memory_db, emb.clone());
+            engine = engine.with_memory_context_provider(mcp);
+        }
+
         let engine = Arc::new(engine);
 
         if !app_config.agents.list.is_empty() {

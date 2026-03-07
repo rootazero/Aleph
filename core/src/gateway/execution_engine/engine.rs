@@ -52,6 +52,8 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     task_router: Option<Arc<dyn crate::routing::TaskRouter>>,
     /// Compression service for turn-based fact extraction
     compression_service: Option<Arc<crate::memory::compression::CompressionService>>,
+    /// Memory context provider for LanceDB-backed prompt augmentation
+    memory_context_provider: Option<Arc<crate::thinker::MemoryContextProvider>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -78,6 +80,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             ),
             task_router: None,
             compression_service: None,
+            memory_context_provider: None,
         }
     }
 
@@ -93,6 +96,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         service: Arc<crate::memory::compression::CompressionService>,
     ) -> Self {
         self.compression_service = Some(service);
+        self
+    }
+
+    /// Set a memory context provider for LanceDB-backed prompt augmentation.
+    pub fn with_memory_context_provider(
+        mut self,
+        provider: Arc<crate::thinker::MemoryContextProvider>,
+    ) -> Self {
+        self.memory_context_provider = Some(provider);
         self
     }
 
@@ -733,6 +745,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             soul = Some(workspace_soul);
         }
 
+        // Pre-fetch LanceDB memory context for prompt augmentation
+        let memory_context = if let Some(ref provider) = self.memory_context_provider {
+            let ctx = provider.fetch(&request.input).await;
+            if ctx.is_empty() { None } else { Some(ctx) }
+        } else {
+            None
+        };
+
         let thinker_config = ThinkerConfig {
             prompt: PromptConfig {
                 skill_instructions,
@@ -743,6 +763,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             soul,
             active_profile: Some(active_workspace.profile.clone()),
             workspace_files,
+            memory_context,
             ..ThinkerConfig::default()
         };
         let thinker = Arc::new(Thinker::new(thinker_registry, thinker_config));

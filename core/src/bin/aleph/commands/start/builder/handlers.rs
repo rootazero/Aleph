@@ -396,6 +396,18 @@ pub(in crate::commands::start) fn init_compression_service(
     service
 }
 
+// ─── init_memory_context_provider ────────────────────────────────────────────
+
+pub(in crate::commands::start) fn init_memory_context_provider(
+    memory_db: &MemoryBackend,
+    embedder: std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>,
+) -> std::sync::Arc<alephcore::thinker::MemoryContextProvider> {
+    std::sync::Arc::new(alephcore::thinker::MemoryContextProvider::new(
+        memory_db.clone(),
+        embedder,
+    ))
+}
+
 // ─── register_models_handlers ────────────────────────────────────────────────
 
 pub(in crate::commands::start) fn register_models_handlers(
