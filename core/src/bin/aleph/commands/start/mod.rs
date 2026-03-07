@@ -266,6 +266,7 @@ struct AgentHandlersResult {
     execution_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>>,
     agent_registry: Option<Arc<AgentRegistry>>,
     default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
+    dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -288,6 +289,7 @@ async fn register_agent_handlers(
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
     let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;
+    let mut dispatch_reg: Option<Arc<alephcore::dispatcher::ToolRegistry>> = None;
 
     // Try to create provider: env vars first, then app config
     let provider_registry = if can_create_provider_from_env() {
@@ -352,6 +354,77 @@ async fn register_agent_handlers(
                 ToolSource::Builtin,
             ))
             .collect();
+
+        // Create unified dispatch registry (command discovery + resolution)
+        use alephcore::dispatcher::ToolRegistry as DispatchRegistry;
+        let dispatch_registry = Arc::new(DispatchRegistry::new());
+
+        // Register builtin tools (generate_image, generate_speech, read_skill, list_skills, snapshot)
+        dispatch_registry.register_builtin_tools().await;
+
+        // Also register executor builtin tools as commands (search, screenshot, ocr, etc.)
+        for def in BUILTIN_TOOL_DEFINITIONS {
+            use alephcore::dispatcher::{UnifiedTool as DUnifiedTool, ToolSource as DToolSource};
+            let tool = DUnifiedTool::new(
+                format!("builtin:{}", def.name),
+                def.name,
+                def.description,
+                DToolSource::Builtin,
+            );
+            dispatch_registry.register_with_conflict_resolution(tool).await;
+        }
+
+        // Register custom commands from config routing rules
+        if !app_config.rules.is_empty() {
+            dispatch_registry.register_custom_commands(&app_config.rules).await;
+        }
+
+        // Register skills from ExtensionManager (if initialized)
+        {
+            use alephcore::gateway::handlers::plugins::get_extension_manager;
+            use alephcore::domain::Entity;
+            if let Ok(ext_manager) = get_extension_manager() {
+                if let Some(skill_sys) = ext_manager.skill_system() {
+                    let skill_manifests = skill_sys.list_skills().await;
+                    let skill_infos: Vec<alephcore::skills::SkillInfo> = skill_manifests
+                        .iter()
+                        .filter(|s| s.is_user_invocable())
+                        .map(|s| alephcore::skills::SkillInfo {
+                            id: s.id().as_str().to_string(),
+                            name: s.name().to_string(),
+                            description: s.description().to_string(),
+                            triggers: Vec::new(),
+                            allowed_tools: Vec::new(),
+                            ecosystem: "aleph".to_string(),
+                        })
+                        .collect();
+                    dispatch_registry.register_skills(&skill_infos).await;
+                    if !daemon {
+                        println!("  Dispatch registry: {} skills registered", skill_infos.len());
+                    }
+                }
+            }
+        }
+
+        if !daemon {
+            println!("  Dispatch registry initialized");
+        }
+
+        // Wire commands.list to use unified dispatch registry instead of hardcoded builtins
+        {
+            let reg = dispatch_registry.clone();
+            server.handlers_mut().register("commands.list", move |req| {
+                let registry = reg.clone();
+                async move {
+                    alephcore::gateway::handlers::commands::handle_list_from_registry(req, &registry).await
+                }
+            });
+            if !daemon {
+                println!("  commands.list: wired to unified dispatch registry");
+            }
+        }
+
+        dispatch_reg = Some(dispatch_registry);
 
         // Build task router from config
         let task_router: Option<Arc<dyn alephcore::routing::TaskRouter>> = if app_config.task_routing.enabled {
@@ -591,6 +664,7 @@ async fn register_agent_handlers(
         execution_adapter: exec_adapter,
         agent_registry: agent_reg,
         default_provider: default_prov,
+        dispatch_registry: dispatch_reg,
     }
 }
 
@@ -905,6 +979,7 @@ async fn initialize_channels(
     gateway_config: &FullGatewayConfig,
     app_config: &alephcore::Config,
     app_config_arc: &Arc<tokio::sync::RwLock<alephcore::Config>>,
+    dispatch_registry: Option<&alephcore::dispatcher::ToolRegistry>,
     daemon: bool,
 ) -> Arc<ChannelRegistry> {
     let channel_registry = Arc::new(ChannelRegistry::new());
@@ -940,7 +1015,18 @@ async fn initialize_channels(
         } else {
             TelegramConfig::from_env().unwrap_or_default()
         };
-        let telegram_channel = TelegramChannel::new("telegram", telegram_config);
+        // Build slash commands list from dispatch registry for Telegram menu
+        let slash_commands = if let Some(reg) = dispatch_registry {
+            use alephcore::dispatcher::ChannelType;
+            let tools = reg.list_for_channel(ChannelType::Telegram).await;
+            tools.iter()
+                .map(|t| (t.name.clone(), t.description.clone()))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let telegram_channel = TelegramChannel::new("telegram", telegram_config)
+            .with_slash_commands(slash_commands);
         let channel_id = channel_registry.register(Box::new(telegram_channel)).await;
         if !daemon {
             println!("Registered channel: {} (Telegram)", channel_id);
@@ -1030,6 +1116,7 @@ async fn initialize_inbound_router(
     group_chat_executor: Option<Arc<GroupChatExecutor>>,
     workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
     default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
+    dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
     daemon: bool,
 ) {
     let routing_config = RoutingConfig::default();
@@ -1091,6 +1178,15 @@ async fn initialize_inbound_router(
 
     // Default DM policy is Pairing — owner must approve each sender.
     // Channel-specific overrides can be registered here if needed.
+
+    // Wire command parser for unified slash command resolution
+    if let Some(reg) = dispatch_registry {
+        let command_parser = Arc::new(alephcore::command::CommandParser::new(reg));
+        inbound_router = inbound_router.with_command_parser(command_parser);
+        if !daemon {
+            println!("  Inbound router: slash command resolution enabled (unified registry)");
+        }
+    }
 
     let inbound_router = Arc::new(inbound_router);
 
@@ -1410,7 +1506,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     let app_config_snapshot = app_config_for_channels.read().await.clone();
-    let channel_registry = initialize_channels(&mut server, &full_config, &app_config_snapshot, &app_config_for_channels, args.daemon).await;
+    let channel_registry = initialize_channels(&mut server, &full_config, &app_config_snapshot, &app_config_for_channels, agent_result.dispatch_registry.as_deref(), args.daemon).await;
     initialize_inbound_router(
         channel_registry, router,
         agent_result.execution_adapter, agent_result.agent_registry,
@@ -1418,6 +1514,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         shared_orch, gc_executor,
         workspace_manager,
         agent_result.default_provider,
+        agent_result.dispatch_registry,
         args.daemon,
     ).await;
 

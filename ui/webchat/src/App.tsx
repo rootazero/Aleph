@@ -14,6 +14,7 @@ function App() {
     sendMessage,
     clearMessages,
     switchSession,
+    fetchCommands,
   } = useGateway()
 
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -154,7 +155,8 @@ function App() {
         <ChatInput
           onSend={sendMessage}
           disabled={status !== 'connected'}
-          placeholder={status === 'connected' ? 'Type a message...' : 'Connecting...'}
+          placeholder={status === 'connected' ? 'Type a message or / for commands...' : 'Connecting...'}
+          fetchCommands={fetchCommands}
         />
       </main>
     </div>
