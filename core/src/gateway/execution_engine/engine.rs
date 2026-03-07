@@ -525,6 +525,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             );
         }
 
+        // Load workspace files (SOUL.md, IDENTITY.md, etc.) from agent's workspace_path
+        let workspace_files = active_workspace.workspace_path.as_ref().map(|ws_path| {
+            crate::thinker::workspace_files::WorkspaceFiles::load(
+                ws_path,
+                &crate::thinker::workspace_files::WorkspaceFilesConfig::default(),
+            )
+        });
+
         // --- Identity / Bootstrap / User Profile ---
         // Resolve AI identity from ~/.aleph/soul.md (layered: session > global > default)
         let identity_resolver = crate::thinker::identity::IdentityResolver::with_defaults();
@@ -642,6 +650,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             },
             soul,
             active_profile: Some(active_workspace.profile.clone()),
+            workspace_files,
             ..ThinkerConfig::default()
         };
         let thinker = Arc::new(Thinker::new(thinker_registry, thinker_config));
