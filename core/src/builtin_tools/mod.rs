@@ -33,6 +33,7 @@ use once_cell::sync::Lazy;
 use crate::sync_primitives::{Arc, Mutex};
 use tracing::debug;
 
+pub mod agent_manage;
 pub mod arena;
 pub mod atomic_ops;
 pub mod bash_exec;
@@ -65,6 +66,11 @@ pub mod soul_update;
 pub mod vision;
 pub mod escalate_task;
 
+pub use agent_manage::{
+    AgentCreateArgs, AgentCreateOutput, AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput,
+    AgentDeleteTool, AgentListArgs, AgentListInfo, AgentListOutput, AgentListTool,
+    AgentSwitchArgs, AgentSwitchOutput, AgentSwitchTool, SessionContext, SessionContextHandle,
+};
 pub use arena::{
     ArenaCreateArgs, ArenaCreateOutput, ArenaCreateTool, ArenaQueryArgs, ArenaQueryOutput,
     ArenaQueryTool, ArenaSettleArgs, ArenaSettleOutput, ArenaSettleTool, SlotSummary,
