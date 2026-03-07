@@ -1,4 +1,4 @@
-use aleph_dashboard::app::*;
+use aleph_panel::app::*;
 use leptos::prelude::*;
 
 fn main() {
