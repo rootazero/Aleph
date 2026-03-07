@@ -56,6 +56,7 @@ pub mod tool_filter;
 pub mod user_profile;
 pub mod virtual_tools;
 pub mod memory_context;
+pub mod memory_context_provider;
 pub mod workspace_files;
 
 use crate::sync_primitives::Arc;
@@ -87,9 +88,10 @@ pub use context::{
 };
 pub use soul::{FormattingStyle, RelationshipMode, SoulLoadError, SoulManifest, SoulVoice, Verbosity};
 pub use protocol_tokens::ProtocolToken;
+pub use memory_context::{MemoryContext, MemorySummary};
+pub use memory_context_provider::{MemoryContextProvider, MemoryContextConfig};
 pub use runtime_context::RuntimeContext;
 pub use identity::{IdentityResolver, IdentitySource, IdentitySourceType};
-pub use memory_context::{MemoryContext, MemorySummary};
 
 use crate::agent_loop::{
     CompressionConfig, LoopState, ModelRoutingConfig, Observation, ThinkerTrait, Thinking, ToolInfo,
