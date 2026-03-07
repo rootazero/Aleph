@@ -82,8 +82,17 @@ pub struct BuiltinToolRegistry {
     pub(crate) agent_switch_tool: Option<crate::builtin_tools::agent_manage::AgentSwitchTool>,
     pub(crate) agent_list_tool: Option<crate::builtin_tools::agent_manage::AgentListTool>,
     pub(crate) agent_delete_tool: Option<crate::builtin_tools::agent_manage::AgentDeleteTool>,
+    /// Subagent management tools (optional - requires SubAgentDispatcher + SubAgentRegistry)
+    pub(crate) subagent_spawn_tool: Option<crate::builtin_tools::subagent_manage::SubagentSpawnTool>,
+    pub(crate) subagent_steer_tool: Option<crate::builtin_tools::subagent_manage::SubagentSteerTool>,
+    pub(crate) subagent_kill_tool: Option<crate::builtin_tools::subagent_manage::SubagentKillTool>,
     /// Session context handle for agent management tools
     session_context_handle: Option<crate::builtin_tools::agent_manage::SessionContextHandle>,
+    /// Tool policy handle for per-agent tool access control
+    tool_policy_handle: Option<crate::builtin_tools::agent_manage::ToolPolicyHandle>,
+    /// Event bus for lifecycle event emission (held for future use; tools get their own clones)
+    #[allow(dead_code)]
+    event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Tool metadata for lookup
     tools: HashMap<String, UnifiedTool>,
 }
@@ -486,22 +495,76 @@ impl BuiltinToolRegistry {
             info!("Registered sessions tools (sessions_list, sessions_send) in BuiltinToolRegistry");
         }
 
+        // Add subagent management tools (if SubAgentDispatcher is available)
+        let (subagent_spawn_tool, subagent_steer_tool, subagent_kill_tool) =
+            if let Some(ref dispatcher) = config.sub_agent_dispatcher {
+                use crate::builtin_tools::subagent_manage;
+                let spawn = subagent_manage::SubagentSpawnTool::new(Arc::clone(dispatcher));
+                let steer = config.sub_agent_registry.as_ref().map(|reg| {
+                    subagent_manage::SubagentSteerTool::new(Arc::clone(dispatcher), Arc::clone(reg))
+                });
+                let kill = config.sub_agent_registry.as_ref().map(|reg| {
+                    subagent_manage::SubagentKillTool::new(Arc::clone(dispatcher), Arc::clone(reg))
+                });
+
+                // Register tool metadata
+                tools.insert(
+                    "subagent_spawn".to_string(),
+                    UnifiedTool::new(
+                        "builtin:subagent_spawn",
+                        "subagent_spawn",
+                        subagent_manage::SubagentSpawnTool::DESCRIPTION,
+                        ToolSource::Builtin,
+                    ),
+                );
+                if steer.is_some() {
+                    tools.insert(
+                        "subagent_steer".to_string(),
+                        UnifiedTool::new(
+                            "builtin:subagent_steer",
+                            "subagent_steer",
+                            subagent_manage::SubagentSteerTool::DESCRIPTION,
+                            ToolSource::Builtin,
+                        ),
+                    );
+                }
+                if kill.is_some() {
+                    tools.insert(
+                        "subagent_kill".to_string(),
+                        UnifiedTool::new(
+                            "builtin:subagent_kill",
+                            "subagent_kill",
+                            subagent_manage::SubagentKillTool::DESCRIPTION,
+                            ToolSource::Builtin,
+                        ),
+                    );
+                }
+
+                info!("Registered subagent management tools (subagent_spawn{}{})",
+                    if steer.is_some() { ", subagent_steer" } else { "" },
+                    if kill.is_some() { ", subagent_kill" } else { "" },
+                );
+                (Some(spawn), steer, kill)
+            } else {
+                (None, None, None)
+            };
+
         // Add agent management tools (if AgentRegistry + WorkspaceManager are available)
         let (agent_create_tool, agent_switch_tool, agent_list_tool, agent_delete_tool, session_context_handle) =
             if let (Some(ref ar), Some(ref wm)) = (&config.agent_registry, &config.workspace_manager) {
                 use crate::builtin_tools::agent_manage;
                 let ctx = agent_manage::new_session_context_handle();
                 let create = agent_manage::AgentCreateTool::new(
-                    Arc::clone(ar), Arc::clone(wm), Arc::clone(&ctx),
+                    Arc::clone(ar), Arc::clone(wm),
                 );
                 let switch = agent_manage::AgentSwitchTool::new(
-                    Arc::clone(ar), Arc::clone(wm), Arc::clone(&ctx),
+                    Arc::clone(ar), Arc::clone(wm), config.event_bus.clone(),
                 );
                 let list = agent_manage::AgentListTool::new(
-                    Arc::clone(ar), Arc::clone(wm), Arc::clone(&ctx),
+                    Arc::clone(ar), Arc::clone(wm),
                 );
                 let delete = agent_manage::AgentDeleteTool::new(
-                    Arc::clone(ar), Arc::clone(wm), Arc::clone(&ctx),
+                    Arc::clone(ar), Arc::clone(wm), config.event_bus.clone(),
                 );
 
                 for (name, desc) in [
@@ -521,6 +584,10 @@ impl BuiltinToolRegistry {
             } else {
                 (None, None, None, None, None)
             };
+
+        // Initialize tool policy handle (use provided or create a default one)
+        let tool_policy_handle = config.tool_policy.clone()
+            .or_else(|| Some(crate::builtin_tools::agent_manage::new_tool_policy_handle()));
 
         Self {
             search_tool,
@@ -547,11 +614,16 @@ impl BuiltinToolRegistry {
             dispatcher_registry,
             sub_agent_dispatcher,
             gateway_context,
+            subagent_spawn_tool,
+            subagent_steer_tool,
+            subagent_kill_tool,
             agent_create_tool,
             agent_switch_tool,
             agent_list_tool,
             agent_delete_tool,
             session_context_handle,
+            tool_policy_handle,
+            event_bus: config.event_bus.clone(),
             tools,
         }
     }
@@ -597,12 +669,32 @@ impl ToolRegistry for BuiltinToolRegistry {
         self.session_context_handle.clone()
     }
 
+    fn tool_policy_handle(&self) -> Option<Arc<RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>> {
+        self.tool_policy_handle.clone()
+    }
+
     fn execute_tool(
         &self,
         tool_name: &str,
         arguments: Value,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
         debug!(tool = tool_name, "Executing builtin tool");
+
+        // Enforce per-agent tool policy.
+        // Uses try_read() (non-blocking) since this is a synchronous function.
+        // Contention is extremely unlikely — policy is only written during agent_switch.
+        if let Some(ref policy_handle) = self.tool_policy_handle {
+            if let Ok(policy) = policy_handle.try_read() {
+                if !policy.is_allowed(tool_name) {
+                    let msg = format!(
+                        "Tool '{}' is not allowed for the current agent. \
+                         Use agent_list to check available tools, or switch to an agent that has access.",
+                        tool_name
+                    );
+                    return Box::pin(async move { Err(AlephError::tool(msg)) });
+                }
+            }
+        }
 
         // Check capability before execution
         if let Err(e) = self.check_capability(tool_name, &arguments) {
@@ -707,31 +799,71 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
-            // Agent management tools
-            "agent_create" => Box::pin(async move {
-                let tool = self.agent_create_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("agent_create not available: no AgentRegistry/WorkspaceManager configured")
+            // Subagent management tools
+            "subagent_spawn" => Box::pin(async move {
+                let tool = self.subagent_spawn_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("subagent_spawn not available: no SubAgentDispatcher configured")
                 })?;
                 tool.call_json(arguments).await
             }),
-            "agent_switch" => Box::pin(async move {
-                let tool = self.agent_switch_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("agent_switch not available: no AgentRegistry/WorkspaceManager configured")
+            "subagent_steer" => Box::pin(async move {
+                let tool = self.subagent_steer_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("subagent_steer not available: no SubAgentDispatcher/SubAgentRegistry configured")
                 })?;
                 tool.call_json(arguments).await
             }),
-            "agent_list" => Box::pin(async move {
-                let tool = self.agent_list_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("agent_list not available: no AgentRegistry/WorkspaceManager configured")
+            "subagent_kill" => Box::pin(async move {
+                let tool = self.subagent_kill_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("subagent_kill not available: no SubAgentDispatcher/SubAgentRegistry configured")
                 })?;
                 tool.call_json(arguments).await
             }),
-            "agent_delete" => Box::pin(async move {
-                let tool = self.agent_delete_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("agent_delete not available: no AgentRegistry/WorkspaceManager configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
+
+            // Agent management tools — snapshot session context into arguments
+            // to avoid race conditions from concurrent reads of the shared handle.
+            "agent_create" | "agent_switch" | "agent_list" | "agent_delete" => {
+                // Snapshot session context into tool arguments before async execution
+                let arguments = {
+                    let mut args = arguments;
+                    if let Some(ref h) = self.session_context_handle {
+                        if let Ok(ctx) = h.try_read() {
+                            if let Some(obj) = args.as_object_mut() {
+                                obj.insert("__channel".into(), serde_json::Value::String(ctx.channel.clone()));
+                                obj.insert("__peer_id".into(), serde_json::Value::String(ctx.peer_id.clone()));
+                            }
+                        }
+                    }
+                    args
+                };
+
+                match tool_name {
+                    "agent_create" => Box::pin(async move {
+                        let tool = self.agent_create_tool.as_ref().ok_or_else(|| {
+                            AlephError::tool("agent_create not available: no AgentRegistry/WorkspaceManager configured")
+                        })?;
+                        tool.call_json(arguments).await
+                    }),
+                    "agent_switch" => Box::pin(async move {
+                        let tool = self.agent_switch_tool.as_ref().ok_or_else(|| {
+                            AlephError::tool("agent_switch not available: no AgentRegistry/WorkspaceManager configured")
+                        })?;
+                        tool.call_json(arguments).await
+                    }),
+                    "agent_list" => Box::pin(async move {
+                        let tool = self.agent_list_tool.as_ref().ok_or_else(|| {
+                            AlephError::tool("agent_list not available: no AgentRegistry/WorkspaceManager configured")
+                        })?;
+                        tool.call_json(arguments).await
+                    }),
+                    "agent_delete" => Box::pin(async move {
+                        let tool = self.agent_delete_tool.as_ref().ok_or_else(|| {
+                            AlephError::tool("agent_delete not available: no AgentRegistry/WorkspaceManager configured")
+                        })?;
+                        tool.call_json(arguments).await
+                    }),
+                    _ => unreachable!(),
+                }
+            }
 
             _ => {
                 let tool = tool_name.to_string();

@@ -13,8 +13,6 @@ use crate::gateway::workspace::WorkspaceManager;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-use super::SessionContextHandle;
-
 // =============================================================================
 // Validation
 // =============================================================================
@@ -70,6 +68,14 @@ pub struct AgentCreateArgs {
     /// Custom system prompt for this agent
     #[serde(default)]
     pub system_prompt: Option<String>,
+    /// Injected by registry — session channel (internal, hidden from LLM schema)
+    #[serde(default)]
+    #[schemars(skip)]
+    pub __channel: String,
+    /// Injected by registry — session peer_id (internal, hidden from LLM schema)
+    #[serde(default)]
+    #[schemars(skip)]
+    pub __peer_id: String,
 }
 
 /// Output from agent creation.
@@ -94,19 +100,16 @@ pub struct AgentCreateOutput {
 pub struct AgentCreateTool {
     registry: Arc<AgentRegistry>,
     workspace_mgr: Arc<WorkspaceManager>,
-    session_ctx: SessionContextHandle,
 }
 
 impl AgentCreateTool {
     pub fn new(
         registry: Arc<AgentRegistry>,
         workspace_mgr: Arc<WorkspaceManager>,
-        session_ctx: SessionContextHandle,
     ) -> Self {
         Self {
             registry,
             workspace_mgr,
-            session_ctx,
         }
     }
 }
@@ -175,7 +178,47 @@ impl AlephTool for AgentCreateTool {
             })?;
         }
 
-        // 6. Create AgentInstance
+        // 6. Generate template files (non-fatal if write fails)
+        let soul_path = workspace_path.join("SOUL.md");
+        if !soul_path.exists() {
+            let soul_content = if let Some(ref prompt) = args.system_prompt {
+                prompt.clone()
+            } else {
+                let soul_name = args.name.as_deref().unwrap_or(&args.id);
+                let specialized = match args.description.as_deref() {
+                    Some(desc) => format!(" specialized in {}", desc),
+                    None => String::new(),
+                };
+                format!(
+                    "You are {}{}.\n\n\
+                     ## Tone\n\
+                     - Professional, friendly, concise\n\n\
+                     ## Boundaries\n\
+                     - Focus on your area of expertise\n\
+                     - Suggest switching to another agent for out-of-scope requests\n",
+                    soul_name, specialized
+                )
+            };
+            let _ = std::fs::write(&soul_path, soul_content);
+        }
+
+        let identity_path = workspace_path.join("IDENTITY.md");
+        if !identity_path.exists() {
+            let identity_name = args.name.as_deref().unwrap_or(&args.id);
+            let identity_content = format!(
+                "- Name: {}\n- Emoji: 🤖\n- Theme: professional\n",
+                identity_name
+            );
+            let _ = std::fs::write(&identity_path, identity_content);
+        }
+
+        let tools_path = workspace_path.join("TOOLS.md");
+        if !tools_path.exists() {
+            let tools_content = "# Tool Notes\n\nRecord your tool usage preferences and notes here.\n";
+            let _ = std::fs::write(&tools_path, tools_content);
+        }
+
+        // 7. Create AgentInstance
         let model = args.model.as_deref().unwrap_or("claude-sonnet-4-5");
         let config = AgentInstanceConfig {
             agent_id: args.id.clone(),
@@ -191,14 +234,15 @@ impl AlephTool for AgentCreateTool {
                 args.id, e
             )))?;
 
-        // 7. Register in AgentRegistry
+        // 8. Register in AgentRegistry
         self.registry.register(instance).await;
 
-        // 8. Auto-switch via WorkspaceManager
-        let session = self.session_ctx.read().await;
-        let switched = if !session.channel.is_empty() && !session.peer_id.is_empty() {
+        // 9. Auto-switch via WorkspaceManager (channel/peer_id injected by registry snapshot)
+        let channel = args.__channel.clone();
+        let peer_id = args.__peer_id.clone();
+        let switched = if !channel.is_empty() && !peer_id.is_empty() {
             self.workspace_mgr
-                .set_active_agent(&session.channel, &session.peer_id, &args.id)
+                .set_active_agent(&channel, &peer_id, &args.id)
                 .map(|_| true)
                 .unwrap_or(false)
         } else {
@@ -281,8 +325,7 @@ mod tests {
     fn test_create_tool_definition() {
         let registry = Arc::new(AgentRegistry::new());
         let workspace_mgr = test_workspace_mgr();
-        let session_ctx = super::super::new_session_context_handle();
-        let tool = AgentCreateTool::new(registry, workspace_mgr, session_ctx);
+        let tool = AgentCreateTool::new(registry, workspace_mgr);
         let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "agent_create");
