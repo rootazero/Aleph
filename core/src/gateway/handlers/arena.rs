@@ -1,13 +1,9 @@
 //! Arena RPC handlers — create, query, and settle SharedArena instances.
 
-use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::arena::{
-    ArenaId, ArenaManifest, ArenaManager, ArenaPermissions, CoordinationStrategy,
-    Participant, ParticipantRole, StageSpec,
-};
+use crate::arena::{ArenaId, ArenaManifest, ArenaManager, StageSpec};
 use crate::sync_primitives::{Arc, RwLock};
 
 use super::parse_params;
@@ -63,73 +59,26 @@ pub async fn handle_create(
         Err(resp) => return resp,
     };
 
-    // Build coordination strategy
-    let strategy = match params.strategy.as_str() {
-        "peer" => {
-            let coordinator = params
-                .coordinator
-                .clone()
-                .or_else(|| params.participants.first().cloned())
-                .unwrap_or_default();
-            CoordinationStrategy::Peer { coordinator }
-        }
-        "pipeline" => {
-            let stages = params
-                .stages
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .map(|s| StageSpec {
-                    agent_id: s.agent_id.clone(),
-                    description: s.description.clone(),
-                    depends_on: s.depends_on.clone(),
-                })
-                .collect();
-            CoordinationStrategy::Pipeline { stages }
-        }
-        other => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Unknown strategy: '{}'. Use 'peer' or 'pipeline'.", other),
-            );
-        }
-    };
+    // Convert explicit stages from RPC params
+    let stages: Option<Vec<StageSpec>> = params.stages.map(|s| {
+        s.into_iter()
+            .map(|st| StageSpec {
+                agent_id: st.agent_id,
+                description: st.description,
+                depends_on: st.depends_on,
+            })
+            .collect()
+    });
 
-    // Build participants list
-    let coordinator_id = match &strategy {
-        CoordinationStrategy::Peer { coordinator } => Some(coordinator.clone()),
-        CoordinationStrategy::Pipeline { .. } => None,
-    };
-
-    let participants: Vec<Participant> = params
-        .participants
-        .iter()
-        .map(|id| {
-            let role = if coordinator_id.as_deref() == Some(id.as_str()) {
-                ParticipantRole::Coordinator
-            } else {
-                ParticipantRole::Worker
-            };
-            Participant {
-                agent_id: id.clone(),
-                role,
-                permissions: ArenaPermissions::from_role(role),
-            }
-        })
-        .collect();
-
-    let created_by = coordinator_id
-        .clone()
-        .or_else(|| params.participants.first().cloned())
-        .unwrap_or_default();
-
-    let manifest = ArenaManifest {
-        goal: params.goal,
-        strategy,
-        participants: participants.clone(),
-        created_by,
-        created_at: Utc::now(),
+    let manifest = match ArenaManifest::build(
+        params.goal,
+        &params.strategy,
+        &params.participants,
+        params.coordinator,
+        stages,
+    ) {
+        Ok(m) => m,
+        Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
     };
 
     let mut mgr = manager.write().unwrap_or_else(|e| e.into_inner());

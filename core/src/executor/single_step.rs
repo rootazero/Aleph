@@ -110,6 +110,16 @@ pub trait ToolRegistry: Send + Sync {
     ) -> Option<std::sync::Arc<tokio::sync::RwLock<Option<crate::config::types::profile::SmartRecallConfig>>>> {
         None
     }
+
+    /// Get the shared session context handle for agent management tools.
+    ///
+    /// The execution engine writes the current channel/peer_id here so agent
+    /// tools can bind agent switches to the correct conversation.
+    fn session_context_handle(
+        &self,
+    ) -> Option<std::sync::Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::SessionContext>>> {
+        None
+    }
 }
 
 /// Single-step executor for Agent Loop

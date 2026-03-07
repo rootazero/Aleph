@@ -512,6 +512,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             );
         }
 
+        // Propagate session context (channel + peer_id) for agent management tools
+        if let Some(sc_handle) = self.tool_registry.session_context_handle() {
+            let mut sc = sc_handle.write().await;
+            sc.channel = request.metadata.get("channel_id").cloned().unwrap_or_default();
+            sc.peer_id = request.metadata.get("sender_id").cloned().unwrap_or_default();
+            debug!(
+                run_id = run_id,
+                channel = %sc.channel,
+                peer_id = %sc.peer_id,
+                "Updated tool session context"
+            );
+        }
+
         // --- Identity / Bootstrap / User Profile ---
         // Resolve AI identity from ~/.aleph/soul.md (layered: session > global > default)
         let identity_resolver = crate::thinker::identity::IdentityResolver::with_defaults();

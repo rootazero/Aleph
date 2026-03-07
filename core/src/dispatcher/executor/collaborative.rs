@@ -4,10 +4,7 @@ use async_trait::async_trait;
 use tracing::debug;
 
 use super::{ExecutionContext, TaskExecutor};
-use crate::arena::{
-    ArenaManifest, ArenaPermissions, CoordinationStrategy, Participant, ParticipantRole, StageSpec,
-};
-use crate::arena::ArenaManager;
+use crate::arena::{ArenaManifest, ArenaManager, StageSpec};
 use crate::dispatcher::agent_types::{CollaborativeTask, Task, TaskResult, TaskType};
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::{Arc, RwLock};
@@ -31,63 +28,24 @@ impl CollaborativeExecutor {
 
     /// Build an ArenaManifest from a CollaborativeTask definition.
     fn build_manifest(collab: &CollaborativeTask) -> Result<ArenaManifest> {
-        let strategy = match collab.strategy.as_str() {
-            "peer" => {
-                let coord = collab
-                    .coordinator
-                    .clone()
-                    .unwrap_or_else(|| collab.agents.first().cloned().unwrap_or_default());
-                CoordinationStrategy::Peer { coordinator: coord }
-            }
-            "pipeline" => {
-                let stages = collab
-                    .stages
-                    .as_ref()
-                    .map(|s| {
-                        s.iter()
-                            .map(|st| StageSpec {
-                                agent_id: st.agent_id.clone(),
-                                description: st.description.clone(),
-                                depends_on: st.depends_on.clone(),
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                CoordinationStrategy::Pipeline { stages }
-            }
-            other => {
-                return Err(AlephError::other(format!(
-                    "Unknown collaboration strategy: {}",
-                    other
-                )));
-            }
-        };
+        let stages: Option<Vec<StageSpec>> = collab.stages.as_ref().map(|s| {
+            s.iter()
+                .map(|st| StageSpec {
+                    agent_id: st.agent_id.clone(),
+                    description: st.description.clone(),
+                    depends_on: st.depends_on.clone(),
+                })
+                .collect()
+        });
 
-        let participants: Vec<Participant> = collab
-            .agents
-            .iter()
-            .enumerate()
-            .map(|(i, id)| {
-                let role = if i == 0 {
-                    ParticipantRole::Coordinator
-                } else {
-                    ParticipantRole::Worker
-                };
-                Participant {
-                    agent_id: id.clone(),
-                    role,
-                    permissions: ArenaPermissions::from_role(role),
-                }
-            })
-            .collect();
-
-        Ok(ArenaManifest {
-            goal: collab.description.clone(),
-            strategy,
-            participants,
-            created_by: collab.agents.first().cloned().unwrap_or_default(),
-            created_at: chrono::Utc::now(),
-        })
+        ArenaManifest::build(
+            collab.description.clone(),
+            &collab.strategy,
+            &collab.agents,
+            collab.coordinator.clone(),
+            stages,
+        )
+        .map_err(AlephError::other)
     }
 }
 
@@ -120,7 +78,7 @@ impl TaskExecutor for CollaborativeExecutor {
         let mut mgr = self.arena_manager.write().unwrap_or_else(|e| e.into_inner());
         let (arena_id, _handles) = mgr
             .create_arena(manifest)
-            .map_err(|e| AlephError::other(e))?;
+            .map_err(AlephError::other)?;
 
         debug!(
             "Arena '{}' created for collaborative task '{}'",
@@ -271,7 +229,7 @@ mod tests {
 
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("Unknown collaboration strategy"));
+        assert!(err_msg.contains("Unknown strategy"));
     }
 
     #[test]
