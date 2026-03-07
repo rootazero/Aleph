@@ -4,7 +4,7 @@ use crate::sync_primitives::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::agents::sub_agents::SubAgentDispatcher;
+use crate::agents::sub_agents::{SubAgentDispatcher, SubAgentRegistry};
 use crate::config::{Config, ConfigPatcher};
 use crate::dispatcher::ToolRegistry as DispatcherToolRegistry;
 use crate::generation::GenerationProviderRegistry;
@@ -39,4 +39,6 @@ pub struct BuiltinToolConfig {
     pub workspace_manager: Option<Arc<crate::gateway::workspace::WorkspaceManager>>,
     /// Tool policy handle for per-agent tool access control
     pub tool_policy: Option<crate::builtin_tools::agent_manage::ToolPolicyHandle>,
+    /// Sub-agent registry for subagent_steer and subagent_kill tools
+    pub sub_agent_registry: Option<Arc<SubAgentRegistry>>,
 }
