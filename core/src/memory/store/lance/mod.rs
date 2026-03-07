@@ -4,7 +4,7 @@
 //! using LanceDB as the underlying vector database engine.
 
 use std::path::Path;
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AtomicI64};
 
 use lancedb::connection::Connection;
 use lancedb::Table;
@@ -35,6 +35,9 @@ pub struct LanceMemoryBackend {
     pub(crate) nodes_table: Table,
     pub(crate) edges_table: Table,
     pub(crate) memories_table: Table,
+    /// In-memory compression timestamp tracker.
+    /// Resets to 0 on restart (safe: just re-processes all memories once).
+    pub(crate) last_compression_ts: AtomicI64,
 }
 
 impl LanceMemoryBackend {
@@ -75,6 +78,7 @@ impl LanceMemoryBackend {
             nodes_table,
             edges_table,
             memories_table,
+            last_compression_ts: AtomicI64::new(0),
         })
     }
 
