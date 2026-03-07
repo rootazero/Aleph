@@ -63,6 +63,8 @@ pub struct TelegramChannel {
     shutdown_tx: Option<oneshot::Sender<()>>,
     /// Teloxide bot instance
     bot: Option<Bot>,
+    /// Slash commands to register with Telegram Bot API (command, description)
+    slash_commands: Vec<(String, String)>,
 }
 
 impl TelegramChannel {
@@ -86,7 +88,17 @@ impl TelegramChannel {
             callback_rx: Some(callback_rx),
             shutdown_tx: None,
             bot: None,
+            slash_commands: Vec::new(),
         }
+    }
+
+    /// Set slash commands to register with Telegram Bot API on startup.
+    ///
+    /// Each entry is (command_name, description). These are registered via
+    /// `set_my_commands` so users see a command menu when typing `/`.
+    pub fn with_slash_commands(mut self, commands: Vec<(String, String)>) -> Self {
+        self.slash_commands = commands;
+        self
     }
 
     /// Get Telegram-specific capabilities
@@ -320,6 +332,56 @@ impl Channel for TelegramChannel {
                     "Failed to verify bot token: {}",
                     e
                 )));
+            }
+        }
+
+        // Register slash commands with Telegram Bot API
+        // This makes commands appear in the menu when users type "/"
+        if !self.slash_commands.is_empty() {
+            use teloxide::types::BotCommand;
+
+            // Telegram limits: max 100 commands, command name max 32 chars,
+            // lowercase a-z, 0-9, underscore only
+            let bot_commands: Vec<BotCommand> = self.slash_commands.iter()
+                .take(100) // Telegram hard limit
+                .filter_map(|(name, desc)| {
+                    // Normalize: lowercase, replace hyphens with underscores, strip invalid chars
+                    let normalized: String = name.to_lowercase().chars()
+                        .map(|c| if c == '-' { '_' } else { c })
+                        .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_')
+                        .take(32) // Max command name length
+                        .collect();
+                    if normalized.is_empty() {
+                        return None;
+                    }
+                    // Telegram description max 256 chars
+                    let desc_truncated = if desc.len() > 256 {
+                        format!("{}...", &desc[..253])
+                    } else {
+                        desc.clone()
+                    };
+                    Some(BotCommand::new(normalized, desc_truncated))
+                })
+                .collect();
+
+            if !bot_commands.is_empty() {
+                // Clear old commands first, then set new ones (OpenClaw pattern)
+                let _ = bot.delete_my_commands().await;
+                match bot.set_my_commands(bot_commands.clone()).await {
+                    Ok(_) => {
+                        tracing::info!(
+                            "Registered {} slash commands with Telegram Bot API",
+                            bot_commands.len()
+                        );
+                    }
+                    Err(e) => {
+                        // Non-fatal: bot still works, just no command menu
+                        tracing::warn!(
+                            "Failed to register Telegram slash commands: {} (bot will still work)",
+                            e
+                        );
+                    }
+                }
             }
         }
 

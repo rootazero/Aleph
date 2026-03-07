@@ -15,6 +15,7 @@ use super::{ActiveRun, ExecutionEngineConfig, ExecutionError, RunRequest, RunSta
 use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
 use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, RunSummary, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
+use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::gateway::loop_callback_adapter::EventEmittingCallback;
 use crate::gateway::workspace::{ActiveWorkspace, WorkspaceManager};
 
@@ -199,6 +200,74 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         agent
             .add_message(&request.session_key, MessageRole::User, &request.input)
             .await;
+
+        // ================================================================
+        // Slash command fast path (L0): bypass full agent loop
+        // ================================================================
+        if let Some(mode_json) = request.metadata.get(SLASH_COMMAND_MODE_KEY) {
+            let fast_result = self
+                .execute_slash_command_fast_path(
+                    &run_id, mode_json, &request, agent.clone(), emitter.clone(),
+                )
+                .await;
+
+            match fast_result {
+                Ok(response) => {
+                    // Mark run as completed and finalize
+                    let (started_at, steps_completed, final_seq) = {
+                        let mut runs = self.active_runs.write().await;
+                        if let Some(run) = runs.get_mut(&run_id) {
+                            run.state = RunState::Completed;
+                            run.cancel_tx = None;
+                            (run.started_at, run.steps_completed, run.next_seq())
+                        } else {
+                            (chrono::Utc::now(), 0, 0)
+                        }
+                    };
+
+                    agent.set_state(AgentState::Idle).await;
+                    let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
+
+                    agent
+                        .add_message(&request.session_key, MessageRole::Assistant, &response)
+                        .await;
+                    let _ = emitter
+                        .emit(StreamEvent::RunComplete {
+                            run_id: run_id.clone(),
+                            seq: final_seq,
+                            summary: RunSummary {
+                                total_tokens: 0,
+                                tool_calls: 1,
+                                loops: steps_completed,
+                                final_response: Some(response),
+                            },
+                            total_duration_ms: duration_ms,
+                        })
+                        .await;
+                    let _ = emitter
+                        .emit(StreamEvent::SessionUpdated {
+                            session_key: request.session_key.to_key_string(),
+                        })
+                        .await;
+                    return Ok(());
+                }
+                Err(ref e) => {
+                    // Reset run state so the normal agent loop can proceed
+                    {
+                        let mut runs = self.active_runs.write().await;
+                        if let Some(run) = runs.get_mut(&run_id) {
+                            run.state = RunState::Running;
+                        }
+                    }
+                    warn!(
+                        run_id = %run_id,
+                        error = %e,
+                        "Slash command fast path failed, falling through to agent loop"
+                    );
+                    // Fall through to normal agent loop (agent state stays Running)
+                }
+            }
+        }
 
         // Execute the run
         let active_runs = self.active_runs.clone();
@@ -915,6 +984,166 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         ).await
                     }
                 }
+            }
+        }
+    }
+
+    /// Execute a slash command directly, bypassing the full agent loop.
+    ///
+    /// This is the L0 fast path: parse the serialized execution mode from metadata,
+    /// call the tool via the tool registry, and stream the result back.
+    /// Falls back to an error if the tool is not found or execution fails.
+    async fn execute_slash_command_fast_path<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        mode_json: &str,
+        request: &RunRequest,
+        _agent: Arc<AgentInstance>,
+        emitter: Arc<E>,
+    ) -> Result<String, ExecutionError> {
+        let mode: serde_json::Value = serde_json::from_str(mode_json)
+            .map_err(|e| ExecutionError::Failed(format!("Invalid slash command metadata: {}", e)))?;
+
+        let mode_type = mode["type"].as_str().unwrap_or("");
+
+        info!(
+            run_id = %run_id,
+            mode_type = %mode_type,
+            "Slash command fast path executing"
+        );
+
+        match mode_type {
+            "direct_tool" => {
+                let tool_id = mode["tool_id"]
+                    .as_str()
+                    .ok_or_else(|| ExecutionError::Failed("Missing tool_id".to_string()))?;
+                let args_str = mode["args"].as_str().unwrap_or("");
+
+                // Build tool arguments
+                let arguments = serde_json::json!({
+                    "input": args_str,
+                    "query": args_str,
+                    "args": args_str,
+                    "input_text": request.input,
+                });
+
+                // Emit reasoning event
+                let _ = emitter
+                    .emit(StreamEvent::Reasoning {
+                        run_id: run_id.to_string(),
+                        seq: 0,
+                        content: format!("Executing /{} ...", tool_id),
+                        is_complete: true,
+                    })
+                    .await;
+
+                // Execute the tool directly
+                match self.tool_registry.execute_tool(tool_id, arguments).await {
+                    Ok(result) => {
+                        let response = if let Some(s) = result.as_str() {
+                            s.to_string()
+                        } else {
+                            serde_json::to_string_pretty(&result).unwrap_or_default()
+                        };
+
+                        // Stream response
+                        let _ = emitter
+                            .emit(StreamEvent::ResponseChunk {
+                                run_id: run_id.to_string(),
+                                seq: 1,
+                                content: response.clone(),
+                                chunk_index: 0,
+                                is_final: true,
+                            })
+                            .await;
+
+                        Ok(response)
+                    }
+                    Err(e) => {
+                        Err(ExecutionError::Failed(format!(
+                            "Tool '{}' execution failed: {}",
+                            tool_id, e
+                        )))
+                    }
+                }
+            }
+
+            "skill" => {
+                // For skills, construct a focused prompt and route through a single-step agent loop
+                let skill_name = mode["display_name"].as_str().unwrap_or("skill");
+                let instructions = mode["instructions"].as_str().unwrap_or("");
+                let args = mode["args"].as_str().unwrap_or("");
+
+                // For skills we fall through to the agent loop with modified input
+                // since skills need LLM processing with injected instructions
+                Err(ExecutionError::Failed(format!(
+                    "SKILL_FALLTHROUGH:{}:{}:{}",
+                    skill_name, instructions, args
+                )))
+            }
+
+            "mcp" => {
+                let server_name = mode["server_name"].as_str().unwrap_or("");
+                let tool_name = mode["tool_name"].as_str();
+                let mcp_tool_id = if let Some(tn) = tool_name {
+                    format!("mcp__{}_{}", server_name, tn)
+                } else {
+                    format!("mcp__{}", server_name)
+                };
+                let args_str = mode["args"].as_str().unwrap_or("");
+
+                let arguments = serde_json::json!({
+                    "input": args_str,
+                    "args": args_str,
+                    "input_text": request.input,
+                });
+
+                let _ = emitter
+                    .emit(StreamEvent::Reasoning {
+                        run_id: run_id.to_string(),
+                        seq: 0,
+                        content: format!("Executing MCP tool /{} ...", server_name),
+                        is_complete: true,
+                    })
+                    .await;
+
+                match self.tool_registry.execute_tool(&mcp_tool_id, arguments).await {
+                    Ok(result) => {
+                        let response = if let Some(s) = result.as_str() {
+                            s.to_string()
+                        } else {
+                            serde_json::to_string_pretty(&result).unwrap_or_default()
+                        };
+
+                        let _ = emitter
+                            .emit(StreamEvent::ResponseChunk {
+                                run_id: run_id.to_string(),
+                                seq: 1,
+                                content: response.clone(),
+                                chunk_index: 0,
+                                is_final: true,
+                            })
+                            .await;
+
+                        Ok(response)
+                    }
+                    Err(e) => Err(ExecutionError::Failed(format!(
+                        "MCP tool '{}' execution failed: {}",
+                        mcp_tool_id, e
+                    ))),
+                }
+            }
+
+            "custom" => {
+                // Custom commands need LLM with a custom system prompt — fall through
+                Err(ExecutionError::Failed("CUSTOM_FALLTHROUGH".to_string()))
+            }
+
+            _ => {
+                Err(ExecutionError::Failed(format!(
+                    "Unknown slash command type: {}",
+                    mode_type
+                )))
             }
         }
     }

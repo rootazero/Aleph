@@ -322,6 +322,24 @@ export function useGateway(options: UseGatewayOptions = {}) {
     }
   }, [status, loadSessions])
 
+  // Fetch available commands from unified registry
+  const fetchCommands = useCallback(async () => {
+    try {
+      const result = await call<{ commands: Array<{
+        key: string
+        description: string
+        icon: string
+        hint?: string
+        command_type: string
+        source_type: string
+      }> }>('commands.list')
+      return result.commands || []
+    } catch (e) {
+      console.error('Failed to fetch commands:', e)
+      return []
+    }
+  }, [call])
+
   return {
     status,
     messages,
@@ -334,5 +352,6 @@ export function useGateway(options: UseGatewayOptions = {}) {
     clearMessages,
     switchSession,
     call,
+    fetchCommands,
   }
 }

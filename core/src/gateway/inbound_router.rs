@@ -23,10 +23,12 @@ use super::reply_emitter::ReplyEmitter;
 use super::router::{AgentRouter, SessionKey};
 use super::routing_config::{DmScope, RoutingConfig};
 use super::workspace::WorkspaceManager;
+use crate::command::CommandParser;
 use crate::group_chat::{
     DefaultGroupChatCommandParser, GroupChatCommandParser, GroupChatExecutor,
     GroupChatRequest, GroupChatStatus,
 };
+use crate::intent::{ExecutionIntentDecider, ExecutionMode};
 
 #[cfg(target_os = "macos")]
 use super::interfaces::imessage::normalize_phone;
@@ -151,6 +153,56 @@ impl InboundDedupTracker {
     }
 }
 
+/// Metadata key for slash command execution mode in RunRequest
+pub const SLASH_COMMAND_MODE_KEY: &str = "slash_command_mode";
+
+/// Serialize ExecutionMode to a JSON string for RunRequest metadata.
+/// Returns None if the mode is Execute or Converse (not a direct command).
+fn serialize_execution_mode(mode: &ExecutionMode) -> Option<String> {
+    match mode {
+        ExecutionMode::DirectTool(inv) => {
+            serde_json::to_string(&serde_json::json!({
+                "type": "direct_tool",
+                "tool_id": inv.tool_id,
+                "args": inv.args,
+            }))
+            .ok()
+        }
+        ExecutionMode::Skill(inv) => {
+            serde_json::to_string(&serde_json::json!({
+                "type": "skill",
+                "skill_id": inv.skill_id,
+                "display_name": inv.display_name,
+                "instructions": inv.instructions,
+                "args": inv.args,
+                "allowed_tools": inv.allowed_tools,
+            }))
+            .ok()
+        }
+        ExecutionMode::Mcp(inv) => {
+            serde_json::to_string(&serde_json::json!({
+                "type": "mcp",
+                "server_name": inv.server_name,
+                "tool_name": inv.tool_name,
+                "args": inv.args,
+            }))
+            .ok()
+        }
+        ExecutionMode::Custom(inv) => {
+            serde_json::to_string(&serde_json::json!({
+                "type": "custom",
+                "command_name": inv.command_name,
+                "system_prompt": inv.system_prompt,
+                "provider": inv.provider,
+                "args": inv.args,
+            }))
+            .ok()
+        }
+        // Execute and Converse modes are not slash commands
+        ExecutionMode::Execute(_) | ExecutionMode::Converse => None,
+    }
+}
+
 /// Inbound message router
 pub struct InboundMessageRouter {
     channel_registry: Arc<ChannelRegistry>,
@@ -178,6 +230,11 @@ pub struct InboundMessageRouter {
     intent_detector: Option<IntentDetector>,
     /// LLM provider for intent classification and soul generation
     llm_provider: Option<Arc<dyn crate::providers::AiProvider>>,
+    /// Slash command intent decider (L0 fast path, fallback)
+    intent_decider: ExecutionIntentDecider,
+    /// Command parser for unified slash command resolution (optional)
+    /// When set, resolves all command sources (builtin, skill, MCP, custom)
+    command_parser: Option<Arc<CommandParser>>,
 }
 
 /// Unified channel config for permission checking
@@ -274,6 +331,8 @@ impl InboundMessageRouter {
             active_group_sessions: Mutex::new(HashMap::new()),
             intent_detector: None,
             llm_provider: None,
+            intent_decider: ExecutionIntentDecider::default(),
+            command_parser: None,
         }
     }
 
@@ -303,6 +362,8 @@ impl InboundMessageRouter {
             active_group_sessions: Mutex::new(HashMap::new()),
             intent_detector: None,
             llm_provider: None,
+            intent_decider: ExecutionIntentDecider::default(),
+            command_parser: None,
         }
     }
 
@@ -334,6 +395,8 @@ impl InboundMessageRouter {
             active_group_sessions: Mutex::new(HashMap::new()),
             intent_detector: None,
             llm_provider: None,
+            intent_decider: ExecutionIntentDecider::default(),
+            command_parser: None,
         }
     }
 
@@ -379,6 +442,18 @@ impl InboundMessageRouter {
     /// Set the LLM provider for intent classification and soul generation
     pub fn with_llm_provider(mut self, provider: Arc<dyn crate::providers::AiProvider>) -> Self {
         self.llm_provider = Some(provider);
+        self
+    }
+
+    /// Set the command parser for dynamic slash command resolution
+    ///
+    /// Enables support for skills, MCP tools, and custom commands in addition
+    /// to built-in slash commands. Without this, only built-in commands
+    /// (/screenshot, /ocr, /search, /youtube, /webfetch, /gen) are recognized.
+    pub fn with_command_parser(mut self, parser: Arc<CommandParser>) -> Self {
+        self.command_parser = Some(parser.clone());
+        // Also wire into intent_decider for backward compatibility (L0 fallback)
+        self.intent_decider.set_command_parser(parser);
         self
     }
 
@@ -459,45 +534,58 @@ impl InboundMessageRouter {
             }
         };
 
-        // /switch command interception: change active agent for this channel+peer
-        if let Some(new_agent) = msg.text.strip_prefix("/switch ").map(|s| s.trim().to_string()) {
-            if !new_agent.is_empty() {
-                if let Some(ref manager) = self.workspace_manager {
-                    // Verify agent exists
-                    let agent_exists = if let Some(ref registry) = self.agent_registry {
-                        registry.get(&new_agent).await.is_some()
-                    } else {
-                        false
-                    };
-
-                    let reply_text = if agent_exists {
-                        match manager.set_active_agent(channel_id, sender_id, &new_agent) {
-                            Ok(()) => {
-                                info!("[Router] Switched agent for {}:{} -> {}", channel_id, sender_id, new_agent);
-                                format!("✅ Switched to agent: {}", new_agent)
-                            }
-                            Err(e) => {
-                                error!("[Router] Failed to switch agent: {}", e);
-                                format!("❌ Failed to switch agent: {}", e)
-                            }
+        // Unified slash command interception
+        // Resolves /switch, /groupchat, builtin, skill, MCP, and custom commands
+        if ctx.message.text.trim().starts_with('/') {
+            // Try unified command resolution first (async, all sources)
+            if let Some(ref parser) = self.command_parser {
+                if let Some(parsed) = parser.parse_async(ctx.message.text.trim()).await {
+                    // Handle /switch internally
+                    if parsed.command_name == "switch" {
+                        if let Some(args) = &parsed.arguments {
+                            return self.handle_switch_command(args.trim(), &msg, &ctx).await;
                         }
-                    } else {
-                        // List available agents
-                        let available = if let Some(ref registry) = self.agent_registry {
-                            registry.list().await.join(", ")
-                        } else {
-                            "unknown".to_string()
-                        };
-                        format!("❌ Agent '{}' not found. Available: {}", new_agent, available)
-                    };
-
-                    // Send reply
-                    let reply = OutboundMessage::text(msg.conversation_id.as_str(), reply_text);
-                    if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
-                        error!("[Router] Failed to send /switch reply: {}", e);
                     }
-                    return Ok(());
+                    // Handle /groupchat internally
+                    if parsed.command_name == "groupchat" {
+                        return self.handle_groupchat_command(&msg).await;
+                    }
+                    // All other commands → execution engine via metadata
+                    let mode = self.parsed_command_to_mode(parsed);
+                    if let Some(mode_json) = serialize_execution_mode(&mode) {
+                        info!(
+                            "[Router] Slash command resolved: source=unified, name={}",
+                            ctx.message.text.trim().split_whitespace().next().unwrap_or("")
+                        );
+                        self.execute_for_context_with_metadata(&ctx, mode_json).await?;
+                        return Ok(());
+                    }
                 }
+            }
+
+            // Fallback: /switch without unified registry
+            if let Some(new_agent) = msg.text.strip_prefix("/switch ").map(|s| s.trim().to_string()) {
+                if !new_agent.is_empty() {
+                    return self.handle_switch_command(&new_agent, &msg, &ctx).await;
+                }
+            }
+
+            // Fallback: /groupchat without unified registry
+            if msg.text.trim().starts_with("/groupchat") {
+                if self.group_chat_orch.is_some() {
+                    return self.handle_groupchat_command(&msg).await;
+                }
+            }
+
+            // Fallback: ExecutionIntentDecider (builtin-only, 6 hardcoded commands)
+            let decision = self.intent_decider.decide(ctx.message.text.trim(), None);
+            if let Some(mode_json) = serialize_execution_mode(&decision.mode) {
+                info!(
+                    "[Router] Slash command detected (fallback): layer={:?}, confidence={:.2}",
+                    decision.metadata.layer, decision.metadata.confidence
+                );
+                self.execute_for_context_with_metadata(&ctx, mode_json).await?;
+                return Ok(());
             }
         }
 
@@ -506,13 +594,12 @@ impl InboundMessageRouter {
             return result;
         }
 
-        // Group chat interception: check for /groupchat commands or active sessions
+        // Group chat: check for active sessions (non-slash messages in active group chats)
         if self.group_chat_orch.is_some() {
             if let Some(handled) = self.try_handle_group_chat(&msg).await {
                 match handled {
                     Ok(()) => return Ok(()),
                     Err(e) => {
-                        // Send error back to the user
                         let error_msg = OutboundMessage::text(
                             msg.conversation_id.as_str(),
                             format!("Group chat error: {}", e),
@@ -528,6 +615,127 @@ impl InboundMessageRouter {
         self.execute_for_context(&ctx).await?;
 
         Ok(())
+    }
+
+    /// Handle /switch command: change active agent for this channel+peer
+    async fn handle_switch_command(
+        &self,
+        agent_name: &str,
+        msg: &InboundMessage,
+        ctx: &InboundContext,
+    ) -> Result<(), RoutingError> {
+        let channel_id = ctx.message.channel_id.as_str();
+        let sender_id = msg.sender_id.as_str();
+
+        if let Some(ref manager) = self.workspace_manager {
+            let agent_exists = if let Some(ref registry) = self.agent_registry {
+                registry.get(agent_name).await.is_some()
+            } else {
+                false
+            };
+
+            let reply_text = if agent_exists {
+                match manager.set_active_agent(channel_id, sender_id, agent_name) {
+                    Ok(()) => {
+                        info!("[Router] Switched agent for {}:{} -> {}", channel_id, sender_id, agent_name);
+                        format!("✅ Switched to agent: {}", agent_name)
+                    }
+                    Err(e) => {
+                        error!("[Router] Failed to switch agent: {}", e);
+                        format!("❌ Failed to switch agent: {}", e)
+                    }
+                }
+            } else {
+                let available = if let Some(ref registry) = self.agent_registry {
+                    registry.list().await.join(", ")
+                } else {
+                    "unknown".to_string()
+                };
+                format!("❌ Agent '{}' not found. Available: {}", agent_name, available)
+            };
+
+            let reply = OutboundMessage::text(msg.conversation_id.as_str(), reply_text);
+            if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
+                error!("[Router] Failed to send /switch reply: {}", e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Handle /groupchat command: dispatch to group chat orchestrator
+    async fn handle_groupchat_command(
+        &self,
+        msg: &InboundMessage,
+    ) -> Result<(), RoutingError> {
+        if self.group_chat_orch.is_some() {
+            if let Some(handled) = self.try_handle_group_chat(msg).await {
+                match handled {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        let error_msg = OutboundMessage::text(
+                            msg.conversation_id.as_str(),
+                            format!("Group chat error: {}", e),
+                        );
+                        let _ = self.channel_registry.send(&msg.channel_id, error_msg).await;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Convert a ParsedCommand to ExecutionMode
+    fn parsed_command_to_mode(&self, cmd: crate::command::ParsedCommand) -> ExecutionMode {
+        use crate::command::CommandContext;
+        use crate::intent::{
+            CustomInvocation, McpInvocation, SkillInvocation, ToolInvocation,
+        };
+
+        let args = cmd.arguments.clone().unwrap_or_default();
+
+        match cmd.context {
+            CommandContext::Builtin { tool_name } => {
+                ExecutionMode::DirectTool(ToolInvocation {
+                    tool_id: tool_name,
+                    args,
+                })
+            }
+            CommandContext::Skill {
+                skill_id,
+                instructions,
+                display_name,
+                allowed_tools,
+            } => ExecutionMode::Skill(SkillInvocation {
+                skill_id,
+                display_name,
+                instructions,
+                args,
+                allowed_tools,
+            }),
+            CommandContext::Mcp {
+                server_name,
+                tool_name,
+            } => ExecutionMode::Mcp(McpInvocation {
+                server_name,
+                tool_name,
+                args,
+            }),
+            CommandContext::Custom {
+                system_prompt,
+                provider,
+                ..
+            } => ExecutionMode::Custom(CustomInvocation {
+                command_name: cmd.command_name,
+                system_prompt,
+                provider,
+                args,
+            }),
+            CommandContext::None => ExecutionMode::DirectTool(ToolInvocation {
+                tool_id: cmd.command_name,
+                args,
+            }),
+        }
     }
 
     /// Try to handle a switch intent from the message.
@@ -1004,6 +1212,75 @@ impl InboundMessageRouter {
         tokio::spawn(async move {
             if let Err(e) = execution_adapter.execute(request, agent, emitter).await {
                 error!("Agent execution failed (run_id: {}): {}", run_id, e);
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Execute the agent with additional metadata (e.g., slash command mode)
+    ///
+    /// Same as `execute_for_context` but injects extra metadata into the RunRequest.
+    async fn execute_for_context_with_metadata(
+        &self,
+        ctx: &InboundContext,
+        slash_command_mode: String,
+    ) -> Result<(), RoutingError> {
+        let (agent_registry, execution_adapter) = match (
+            self.agent_registry.as_ref(),
+            self.execution_adapter.as_ref(),
+        ) {
+            (Some(ar), Some(ea)) => (ar.clone(), ea.clone()),
+            _ => {
+                info!(
+                    "Would execute slash command for session {} (execution not configured)",
+                    ctx.session_key.to_key_string(),
+                );
+                return Ok(());
+            }
+        };
+
+        let agent_id = ctx.session_key.agent_id();
+        let agent = agent_registry.get(agent_id).await.ok_or_else(|| {
+            RoutingError::AgentNotFound(agent_id.to_string())
+        })?;
+
+        let run_id = Uuid::new_v4().to_string();
+        let emitter = Arc::new(ReplyEmitter::new(
+            self.channel_registry.clone(),
+            ctx.reply_route.clone(),
+            run_id.clone(),
+        ));
+
+        let mut metadata = HashMap::new();
+        metadata.insert("channel_id".to_string(), ctx.message.channel_id.as_str().to_string());
+        metadata.insert("sender_id".to_string(), ctx.sender_normalized.clone());
+        metadata.insert(SLASH_COMMAND_MODE_KEY.to_string(), slash_command_mode);
+        if ctx.message.is_group {
+            metadata.insert("is_group".to_string(), "true".to_string());
+        }
+        if ctx.is_mentioned {
+            metadata.insert("is_mentioned".to_string(), "true".to_string());
+        }
+
+        let request = RunRequest {
+            run_id: run_id.clone(),
+            input: ctx.message.text.clone(),
+            session_key: ctx.session_key.clone(),
+            timeout_secs: None,
+            metadata,
+        };
+
+        info!(
+            "Executing slash command for agent '{}' session {} (run_id: {})",
+            agent_id,
+            ctx.session_key.to_key_string(),
+            run_id
+        );
+
+        tokio::spawn(async move {
+            if let Err(e) = execution_adapter.execute(request, agent, emitter).await {
+                error!("Slash command execution failed (run_id: {}): {}", run_id, e);
             }
         });
 

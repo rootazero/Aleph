@@ -129,7 +129,35 @@ impl ToolRegistrar {
             .register_with_conflict_resolution(snapshot_capture)
             .await;
 
-        info!("Registered 5 builtin tools (2 generation + 2 skill reading + snapshot)");
+        // Agent switching command
+        let switch_cmd = UnifiedTool::new(
+            "builtin:switch",
+            "switch",
+            "Switch to a different AI agent",
+            ToolSource::Builtin,
+        )
+        .with_usage("/switch <agent_id>")
+        .with_sort_order(80);
+
+        conflict_resolver
+            .register_with_conflict_resolution(switch_cmd)
+            .await;
+
+        // Group chat command
+        let groupchat_cmd = UnifiedTool::new(
+            "builtin:groupchat",
+            "groupchat",
+            "Start, end, or manage a multi-persona group chat",
+            ToolSource::Builtin,
+        )
+        .with_usage("/groupchat start <personas> [topic]")
+        .with_sort_order(81);
+
+        conflict_resolver
+            .register_with_conflict_resolution(groupchat_cmd)
+            .await;
+
+        info!("Registered 7 builtin tools (2 generation + 2 skill reading + snapshot + switch + groupchat)");
     }
 
     /// Register MCP tools from tool info list (Flat Namespace Mode)
