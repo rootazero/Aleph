@@ -37,7 +37,7 @@ pub use message_ops::EmailMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, OutboundMessage,
+    ChannelResult, ChannelState, ChannelStatus, InboundMessage, OutboundMessage,
     SendResult,
 };
 use async_trait::async_trait;

@@ -219,6 +219,85 @@ pub struct ArenaManifest {
     pub created_at: DateTime<Utc>,
 }
 
+impl ArenaManifest {
+    /// Build a manifest from raw parameters.
+    ///
+    /// Centralizes the strategy parsing + participant building logic used by
+    /// AlephTool, RPC handler, and CollaborativeExecutor.
+    ///
+    /// - `strategy_str`: "peer" or "pipeline"
+    /// - `agent_ids`: participant agent IDs (first is coordinator for peer strategy)
+    /// - `coordinator`: explicit coordinator override (defaults to first agent)
+    /// - `stages`: explicit pipeline stages (if None for pipeline, auto-generated from agent_ids)
+    pub fn build(
+        goal: String,
+        strategy_str: &str,
+        agent_ids: &[String],
+        coordinator: Option<String>,
+        stages: Option<Vec<StageSpec>>,
+    ) -> Result<Self, String> {
+        if agent_ids.is_empty() {
+            return Err("At least one participant is required".to_string());
+        }
+
+        let coord = coordinator.unwrap_or_else(|| agent_ids[0].clone());
+
+        let strategy = match strategy_str {
+            "peer" => CoordinationStrategy::Peer {
+                coordinator: coord.clone(),
+            },
+            "pipeline" => {
+                let stages = stages.unwrap_or_else(|| {
+                    agent_ids
+                        .iter()
+                        .enumerate()
+                        .map(|(i, agent_id)| StageSpec {
+                            agent_id: agent_id.clone(),
+                            description: format!("Stage {}", i + 1),
+                            depends_on: if i > 0 {
+                                vec![agent_ids[i - 1].clone()]
+                            } else {
+                                vec![]
+                            },
+                        })
+                        .collect()
+                });
+                CoordinationStrategy::Pipeline { stages }
+            }
+            other => {
+                return Err(format!(
+                    "Unknown strategy '{}': expected 'peer' or 'pipeline'",
+                    other
+                ));
+            }
+        };
+
+        let participants: Vec<Participant> = agent_ids
+            .iter()
+            .map(|id| {
+                let role = if *id == coord {
+                    ParticipantRole::Coordinator
+                } else {
+                    ParticipantRole::Worker
+                };
+                Participant {
+                    agent_id: id.clone(),
+                    role,
+                    permissions: ArenaPermissions::from_role(role),
+                }
+            })
+            .collect();
+
+        Ok(Self {
+            goal,
+            strategy,
+            participants,
+            created_by: coord,
+            created_at: Utc::now(),
+        })
+    }
+}
+
 // =============================================================================
 // Artifacts
 // =============================================================================
