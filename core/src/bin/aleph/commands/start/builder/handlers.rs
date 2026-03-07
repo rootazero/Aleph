@@ -139,6 +139,8 @@ pub(in crate::commands::start) fn register_channel_handlers(
     register_handler!(server, "channel.stop", channel_handlers::handle_stop, channel_registry);
     register_handler!(server, "channel.pairing_data", channel_handlers::handle_pairing_data, channel_registry);
     register_handler!(server, "channel.send", channel_handlers::handle_send, channel_registry);
+    register_handler!(server, "channel.create", channel_handlers::handle_create, channel_registry, app_config);
+    register_handler!(server, "channel.delete", channel_handlers::handle_delete, channel_registry, app_config);
 
     // ---- Discord Control Plane panel handlers ----
     register_handler!(server, "discord.validate_token", discord_panel_handlers::handle_validate_token);
