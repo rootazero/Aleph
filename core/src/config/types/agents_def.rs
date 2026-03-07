@@ -108,6 +108,52 @@ pub struct AgentDefaults {
 }
 
 // =============================================================================
+// AgentIdentity
+// =============================================================================
+
+/// Agent identity for display purposes
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct AgentIdentity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+}
+
+// =============================================================================
+// AgentModelConfig
+// =============================================================================
+
+/// Model configuration with fallback chain
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AgentModelConfig {
+    pub primary: String,
+    #[serde(default)]
+    pub fallbacks: Vec<String>,
+}
+
+// =============================================================================
+// AgentParams
+// =============================================================================
+
+/// Per-agent inference parameters
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct AgentParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+}
+
+// =============================================================================
 // AgentDefinition
 // =============================================================================
 
@@ -162,6 +208,18 @@ pub struct AgentDefinition {
     /// Skills available to this agent (overrides defaults)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<String>>,
+
+    /// Agent identity (emoji, description, avatar, theme)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<AgentIdentity>,
+
+    /// Model configuration with fallback chain (overrides `model` field)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_config: Option<AgentModelConfig>,
+
+    /// Per-agent inference parameters
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<AgentParams>,
 
     /// Sub-agent spawning policy
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -320,6 +378,86 @@ mod tests {
         // Should not add another agent
         assert_eq!(config.list.len(), 1);
         assert_eq!(config.list[0].id, "custom");
+    }
+
+    #[test]
+    fn test_agent_identity_deserialize() {
+        let toml_str = r#"
+            emoji = "🧑‍💻"
+            description = "Full-stack coding specialist"
+            avatar = "https://example.com/avatar.png"
+            theme = "Write clean code"
+        "#;
+        let identity: AgentIdentity = toml::from_str(toml_str).unwrap();
+        assert_eq!(identity.emoji, Some("🧑‍💻".to_string()));
+        assert_eq!(identity.description, Some("Full-stack coding specialist".to_string()));
+    }
+
+    #[test]
+    fn test_agent_model_config_deserialize() {
+        let toml_str = r#"
+            primary = "claude-opus-4"
+            fallbacks = ["claude-sonnet-4", "gpt-4o"]
+        "#;
+        let mc: AgentModelConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(mc.primary, "claude-opus-4");
+        assert_eq!(mc.fallbacks, vec!["claude-sonnet-4", "gpt-4o"]);
+    }
+
+    #[test]
+    fn test_agent_params_deserialize() {
+        let toml_str = r#"
+            temperature = 0.3
+            max_tokens = 8192
+        "#;
+        let params: AgentParams = toml::from_str(toml_str).unwrap();
+        assert_eq!(params.temperature, Some(0.3));
+        assert_eq!(params.max_tokens, Some(8192));
+        assert!(params.top_p.is_none());
+    }
+
+    #[test]
+    fn test_agent_definition_with_new_fields() {
+        let toml_str = r#"
+            [[list]]
+            id = "coder"
+            name = "Code Master"
+            default = true
+
+            [list.identity]
+            emoji = "🧑‍💻"
+            description = "Full-stack coding specialist"
+
+            [list.model_config]
+            primary = "claude-opus-4"
+            fallbacks = ["claude-sonnet-4"]
+
+            [list.params]
+            temperature = 0.3
+            max_tokens = 8192
+        "#;
+        let config: AgentsConfig = toml::from_str(toml_str).unwrap();
+        let agent = &config.list[0];
+        assert_eq!(agent.id, "coder");
+        assert!(agent.identity.is_some());
+        assert_eq!(agent.identity.as_ref().unwrap().emoji, Some("🧑‍💻".to_string()));
+        assert!(agent.model_config.is_some());
+        assert_eq!(agent.model_config.as_ref().unwrap().primary, "claude-opus-4");
+        assert!(agent.params.is_some());
+        assert_eq!(agent.params.as_ref().unwrap().temperature, Some(0.3));
+    }
+
+    #[test]
+    fn test_backward_compat_model_field() {
+        let toml_str = r#"
+            [[list]]
+            id = "legacy"
+            model = "claude-sonnet-4"
+        "#;
+        let config: AgentsConfig = toml::from_str(toml_str).unwrap();
+        let agent = &config.list[0];
+        assert_eq!(agent.model, Some("claude-sonnet-4".to_string()));
+        assert!(agent.model_config.is_none());
     }
 
     #[test]
