@@ -226,11 +226,13 @@ impl PromptBuilder {
         profile: Option<&ProfileConfig>,
         workspace: Option<&WorkspaceFiles>,
         inbound: Option<&InboundContext>,
+        memory_context: Option<&super::memory_context::MemoryContext>,
     ) -> String {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_profile(profile)
             .with_workspace_opt(workspace)
-            .with_inbound_opt(inbound);
+            .with_inbound_opt(inbound)
+            .with_memory_context_opt(memory_context);
         self.pipeline.execute(AssemblyPath::Soul, &input)
     }
 
