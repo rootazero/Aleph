@@ -15,7 +15,7 @@ use tracing::{debug, info, warn};
 use crate::config::types::agents_def::{
     AgentDefinition, AgentIdentity, AgentModelConfig, AgentParams, AgentsConfig, SubagentPolicy,
 };
-use crate::config::agent_resolver::initialize_workspace;
+use crate::config::agent_resolver::{initialize_workspace, initialize_agent_dir};
 use crate::error::{AlephError, Result};
 
 // =============================================================================
@@ -73,7 +73,8 @@ pub struct WorkspaceFile {
 /// Manages agent definitions in the TOML config and their workspace directories
 pub struct AgentManager {
     config_path: PathBuf,
-    workspace_root: PathBuf,
+    pub workspace_root: PathBuf,
+    pub agents_root: PathBuf,
     trash_root: PathBuf,
 }
 
@@ -86,11 +87,13 @@ impl AgentManager {
     pub fn new(
         config_path: PathBuf,
         workspace_root: PathBuf,
+        agents_root: PathBuf,
         trash_root: PathBuf,
     ) -> Self {
         let mgr = Self {
             config_path,
             workspace_root,
+            agents_root,
             trash_root,
         };
 
@@ -173,6 +176,15 @@ impl AgentManager {
         initialize_workspace(&ws_dir, agent_name).map_err(|e| {
             AlephError::IoError(format!(
                 "Failed to initialize workspace for '{}': {}",
+                def.id, e
+            ))
+        })?;
+
+        // Initialize agent state directory
+        let agent_state_dir = self.agents_root.join(&def.id);
+        initialize_agent_dir(&agent_state_dir).map_err(|e| {
+            AlephError::IoError(format!(
+                "Failed to initialize agent state dir for '{}': {}",
                 def.id, e
             ))
         })?;
@@ -336,6 +348,24 @@ impl AgentManager {
                 ))
             })?;
             info!("Moved workspace to trash: {}", trash_dir.display());
+        }
+
+        // Move agent state directory to trash
+        let agent_state_dir = self.agents_root.join(id);
+        if agent_state_dir.exists() {
+            let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+            let trash_name = format!("{}_agent_{}", id, timestamp);
+            let trash_dir = self.trash_root.join(trash_name);
+            fs::create_dir_all(&self.trash_root).map_err(|e| {
+                AlephError::IoError(format!("Failed to create trash dir: {}", e))
+            })?;
+            fs::rename(&agent_state_dir, &trash_dir).map_err(|e| {
+                AlephError::IoError(format!(
+                    "Failed to move agent state dir to trash: {}",
+                    e
+                ))
+            })?;
+            info!("Moved agent state to trash: {}", trash_dir.display());
         }
 
         info!("Deleted agent '{}'", id);
@@ -733,13 +763,15 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("config.toml");
         let workspace_root = dir.path().join("workspaces");
+        let agents_root = dir.path().join("agents");
         let trash_root = dir.path().join("trash");
 
         fs::create_dir_all(&workspace_root).unwrap();
+        fs::create_dir_all(&agents_root).unwrap();
         fs::create_dir_all(&trash_root).unwrap();
         fs::write(&config_path, config_content).unwrap();
 
-        let manager = AgentManager::new(config_path, workspace_root, trash_root);
+        let manager = AgentManager::new(config_path, workspace_root, agents_root, trash_root);
         (dir, manager)
     }
 
@@ -926,6 +958,43 @@ name = "Coder"
             agent.subagents.as_ref().unwrap().allow,
             vec!["helper"]
         );
+    }
+
+    #[test]
+    fn test_create_creates_both_directories() {
+        let (_dir, mgr) = setup(base_config());
+        let def = AgentDefinition {
+            id: "dual".to_string(),
+            name: Some("Dual Agent".to_string()),
+            ..Default::default()
+        };
+
+        mgr.create(def).unwrap();
+
+        // Workspace content dir
+        assert!(mgr.workspace_root.join("dual").join("SOUL.md").exists());
+        assert!(mgr.workspace_root.join("dual").join("memory").is_dir());
+
+        // Agent state dir
+        assert!(mgr.agents_root.join("dual").join("sessions").is_dir());
+
+        // sessions/ should NOT be in workspace
+        assert!(!mgr.workspace_root.join("dual").join("sessions").exists());
+    }
+
+    #[test]
+    fn test_delete_trashes_both_directories() {
+        let (_dir, mgr) = setup(base_config());
+
+        // Pre-create both dirs for coder
+        fs::create_dir_all(mgr.workspace_root.join("coder")).unwrap();
+        fs::write(mgr.workspace_root.join("coder").join("SOUL.md"), "test").unwrap();
+        fs::create_dir_all(mgr.agents_root.join("coder").join("sessions")).unwrap();
+
+        mgr.delete("coder").unwrap();
+
+        assert!(!mgr.workspace_root.join("coder").exists());
+        assert!(!mgr.agents_root.join("coder").exists());
     }
 
     // =========================================================================

@@ -1437,6 +1437,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let agent_manager = Arc::new(alephcore::AgentManager::new(
         alephcore::Config::default_path(),
         dirs::home_dir().unwrap_or_default().join(".aleph/workspaces"),
+        dirs::home_dir().unwrap_or_default().join(".aleph/agents"),
         dirs::home_dir().unwrap_or_default().join(".aleph/trash"),
     ));
     register_agents_handlers(&mut server, &agent_manager, &event_bus);
