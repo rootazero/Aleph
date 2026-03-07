@@ -83,22 +83,22 @@ Control Plane UI 是嵌入在 Server 二进制中的 Web 管理界面，使用 L
 
 ```bash
 # 1. 构建 WASM 库
-cd core/ui/control_plane
+cd apps/panel
 cargo build --lib --target wasm32-unknown-unknown --release
 
 # 2. 生成 JS 绑定
 wasm-bindgen --target web \
   --out-dir dist \
-  --out-name aleph-dashboard \
-  /Volumes/TBU4/Workspace/Aleph/target/wasm32-unknown-unknown/release/aleph_dashboard.wasm
+  --out-name aleph-panel \
+  /Volumes/TBU4/Workspace/Aleph/target/wasm32-unknown-unknown/release/aleph_panel.wasm
 
 # 3. 编译 Tailwind CSS
 npm run build:css  # 编译 styles/tailwind.css -> dist/tailwind.css
 
 # 4. 更新 index.html（确保引用正确的文件名）
 # 编辑 dist/index.html，引用：
-# - /aleph-dashboard.js
-# - /aleph-dashboard_bg.wasm
+# - /aleph-panel.js
+# - /aleph-panel_bg.wasm
 # - /tailwind.css
 
 # 5. 构建 Server（会自动嵌入 dist/ 中的资源）
@@ -110,10 +110,10 @@ cargo build --bin aleph
 
 ```bash
 # 修改 Leptos 代码后：
-cd core/ui/control_plane && \
+cd apps/panel && \
 cargo build --lib --target wasm32-unknown-unknown --release && \
-wasm-bindgen --target web --out-dir dist --out-name aleph-dashboard \
-  /Volumes/TBU4/Workspace/Aleph/target/wasm32-unknown-unknown/release/aleph_dashboard.wasm && \
+wasm-bindgen --target web --out-dir dist --out-name aleph-panel \
+  /Volumes/TBU4/Workspace/Aleph/target/wasm32-unknown-unknown/release/aleph_panel.wasm && \
 npm run build:css && \
 cd ../../.. && \
 cargo build --bin aleph
@@ -125,7 +125,7 @@ Control Plane UI 使用 `rust-embed` 在**编译时**嵌入资源：
 
 ```rust
 #[derive(RustEmbed)]
-#[folder = "ui/control_plane/dist/"]
+#[folder = "apps/panel/dist/"]
 pub struct ControlPlaneAssets;
 ```
 
@@ -162,7 +162,7 @@ Control Plane UI 使用 Tailwind CSS v3 进行样式管理，CSS 在构建时编
 
 ```bash
 # 安装依赖（首次）
-cd core/ui/control_plane
+cd apps/panel
 npm install
 
 # 编译 CSS
@@ -214,8 +214,8 @@ cargo build --bin aleph --release
 cargo test --workspace
 
 # 确保 UI 已构建（如果需要）
-ls core/ui/control_plane/dist/
-# 应包含：index.html, aleph-dashboard.js, aleph-dashboard_bg.wasm, tailwind.css
+ls apps/panel/dist/
+# 应包含：index.html, aleph-panel.js, aleph-panel_bg.wasm, tailwind.css
 ```
 
 ### 2. 构建 Release 版本
