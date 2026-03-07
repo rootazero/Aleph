@@ -11,8 +11,6 @@ use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
 use crate::views::logs::Logs;
 use crate::views::settings::*;
-use crate::views::settings::channels::config_template::ChannelConfigTemplate;
-use crate::views::settings::channels::definitions;
 
 // Layout components
 use crate::components::top_bar::TopBar;
@@ -79,70 +77,6 @@ fn AppContent() -> impl IntoView {
             </Router>
         </div>
     }
-}
-
-// ---------------------------------------------------------------------------
-// Thin wrapper components: one per template-driven channel
-// ---------------------------------------------------------------------------
-
-#[component]
-fn TelegramConfigPage() -> impl IntoView {
-    view! { <ChannelConfigTemplate definition=definitions::TELEGRAM /> }
-}
-
-#[component]
-fn WhatsAppConfigPage() -> impl IntoView {
-    view! { <ChannelConfigTemplate definition=definitions::WHATSAPP /> }
-}
-
-#[component]
-fn IMessageConfigPage() -> impl IntoView {
-    view! { <ChannelConfigTemplate definition=definitions::IMESSAGE /> }
-}
-
-#[component]
-fn SlackConfigPage() -> impl IntoView {
-    view! { <ChannelConfigTemplate definition=definitions::SLACK /> }
-}
-
-#[component]
-fn EmailConfigPage() -> impl IntoView {
-    view! { <ChannelConfigTemplate definition=definitions::EMAIL /> }
-}
-
-#[component]
-fn MatrixConfigPage() -> impl IntoView {
-    view! { <ChannelConfigTemplate definition=definitions::MATRIX /> }
-}
-
-#[component]
-fn SignalConfigPage() -> impl IntoView {
-    view! { <ChannelConfigTemplate definition=definitions::SIGNAL /> }
-}
-
-#[component]
-fn MattermostConfigPage() -> impl IntoView {
-    view! { <ChannelConfigTemplate definition=definitions::MATTERMOST /> }
-}
-
-#[component]
-fn IrcConfigPage() -> impl IntoView {
-    view! { <ChannelConfigTemplate definition=definitions::IRC /> }
-}
-
-#[component]
-fn WebhookConfigPage() -> impl IntoView {
-    view! { <ChannelConfigTemplate definition=definitions::WEBHOOK /> }
-}
-
-#[component]
-fn XmppConfigPage() -> impl IntoView {
-    view! { <ChannelConfigTemplate definition=definitions::XMPP /> }
-}
-
-#[component]
-fn NostrConfigPage() -> impl IntoView {
-    view! { <ChannelConfigTemplate definition=definitions::NOSTR /> }
 }
 
 /// Main content routing — uses CSS display toggling for mode switching to keep
@@ -222,19 +156,12 @@ fn SettingsRouter() -> impl IntoView {
 
             // Channels
             "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),
-            "/settings/channels/discord" => view! { <DiscordChannelView /> }.into_any(),
-            "/settings/channels/telegram" => view! { <TelegramConfigPage /> }.into_any(),
-            "/settings/channels/whatsapp" => view! { <WhatsAppConfigPage /> }.into_any(),
-            "/settings/channels/imessage" => view! { <IMessageConfigPage /> }.into_any(),
-            "/settings/channels/slack" => view! { <SlackConfigPage /> }.into_any(),
-            "/settings/channels/email" => view! { <EmailConfigPage /> }.into_any(),
-            "/settings/channels/matrix" => view! { <MatrixConfigPage /> }.into_any(),
-            "/settings/channels/signal" => view! { <SignalConfigPage /> }.into_any(),
-            "/settings/channels/mattermost" => view! { <MattermostConfigPage /> }.into_any(),
-            "/settings/channels/irc" => view! { <IrcConfigPage /> }.into_any(),
-            "/settings/channels/webhook" => view! { <WebhookConfigPage /> }.into_any(),
-            "/settings/channels/xmpp" => view! { <XmppConfigPage /> }.into_any(),
-            "/settings/channels/nostr" => view! { <NostrConfigPage /> }.into_any(),
+            _ if path.starts_with("/settings/channels/") => {
+                let platform_type = path.strip_prefix("/settings/channels/")
+                    .unwrap_or("")
+                    .to_string();
+                view! { <ChannelPlatformPage platform_type=platform_type /> }.into_any()
+            },
 
             // Not in settings mode or unknown path — render nothing (div is hidden)
             _ => ().into_any(),
