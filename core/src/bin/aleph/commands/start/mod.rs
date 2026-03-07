@@ -1427,6 +1427,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
     }
 
+    // Agent management
+    let agent_manager = Arc::new(alephcore::AgentManager::new(
+        alephcore::Config::default_path(),
+        dirs::home_dir().unwrap_or_default().join(".aleph/agents"),
+        dirs::home_dir().unwrap_or_default().join(".aleph/trash"),
+    ));
+    register_agents_handlers(&mut server, &agent_manager, &event_bus);
+
     // Identity resolver (shared for session-level overrides)
     let identity_resolver: alephcore::gateway::handlers::identity::SharedIdentityResolver = Arc::new(
         tokio::sync::RwLock::new(
