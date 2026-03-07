@@ -3,8 +3,14 @@
 //! Memory retrieval is async (embedding + LanceDB), but PromptLayer::inject()
 //! is sync. This struct holds pre-fetched results to bridge that gap.
 
-use crate::gateway::workspace_loader::DailyMemory;
 use crate::memory::store::types::ScoredFact;
+
+/// Daily memory entry from workspace/memory/YYYY-MM-DD.md files.
+#[derive(Debug, Clone)]
+pub struct DailyMemory {
+    pub date: String,
+    pub content: String,
+}
 
 /// Pre-fetched memory context ready for prompt injection.
 #[derive(Debug, Clone, Default)]
@@ -77,7 +83,6 @@ impl MemoryContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::workspace_loader::DailyMemory;
     use crate::memory::context::{FactType, MemoryFact};
 
     #[test]
