@@ -1156,13 +1156,25 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .ok_or_else(|| ExecutionError::Failed("Missing tool_id".to_string()))?;
                 let args_str = mode["args"].as_str().unwrap_or("");
 
-                // Build tool arguments
-                let arguments = serde_json::json!({
-                    "input": args_str,
-                    "query": args_str,
-                    "args": args_str,
-                    "input_text": request.input,
-                });
+                // Build tool arguments — map slash command args to the
+                // correct field names for each tool's expected schema.
+                let arguments = match tool_id {
+                    "agent_switch" => serde_json::json!({
+                        "agent_id": args_str,
+                    }),
+                    "agent_create" => serde_json::json!({
+                        "input": args_str,
+                    }),
+                    "agent_delete" => serde_json::json!({
+                        "agent_id": args_str,
+                    }),
+                    _ => serde_json::json!({
+                        "input": args_str,
+                        "query": args_str,
+                        "args": args_str,
+                        "input_text": request.input,
+                    }),
+                };
 
                 // Emit reasoning event
                 let _ = emitter

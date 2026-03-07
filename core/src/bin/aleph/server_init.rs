@@ -57,6 +57,7 @@ pub async fn handle_run_with_engine<P, R>(
     router: Arc<AgentRouter>,
     agent_registry: Arc<AgentRegistry>,
     app_config: Arc<tokio::sync::RwLock<alephcore::Config>>,
+    workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
 ) -> alephcore::gateway::JsonRpcResponse
 where
     P: alephcore::thinker::ProviderRegistry + 'static,
@@ -139,15 +140,27 @@ where
     let session_key_str = session_key.to_key_string();
     let accepted_at = chrono::Utc::now().to_rfc3339();
 
-    // Get default agent
-    let agent = match agent_registry.get_default().await {
-        Some(a) => a,
-        None => {
-            return alephcore::gateway::JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                "No default agent available",
-            );
+    let channel_id = params.channel.as_deref().unwrap_or("panel");
+    let peer_id = params.peer_id.as_deref().unwrap_or("local");
+
+    // Resolve active agent: check WorkspaceManager override first, then default
+    let agent = {
+        let active_agent_id = workspace_manager.as_ref()
+            .and_then(|wm| wm.get_active_agent(channel_id, peer_id).ok().flatten());
+        let agent_opt = if let Some(ref aid) = active_agent_id {
+            agent_registry.get(aid).await
+        } else {
+            None
+        };
+        match agent_opt.or(agent_registry.get_default().await) {
+            Some(a) => a,
+            None => {
+                return alephcore::gateway::JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    "No default agent available",
+                );
+            }
         }
     };
 
@@ -162,8 +175,6 @@ where
 
     // Create run request with channel/peer metadata for agent management tools
     let mut metadata = std::collections::HashMap::new();
-    let channel_id = params.channel.as_deref().unwrap_or("panel");
-    let peer_id = params.peer_id.as_deref().unwrap_or("local");
     metadata.insert("channel_id".to_string(), channel_id.to_string());
     metadata.insert("sender_id".to_string(), peer_id.to_string());
 
@@ -214,6 +225,7 @@ pub async fn handle_chat_send_with_engine<P, R>(
     router: Arc<AgentRouter>,
     agent_registry: Arc<AgentRegistry>,
     app_config: Arc<tokio::sync::RwLock<alephcore::Config>>,
+    workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
 ) -> alephcore::gateway::JsonRpcResponse
 where
     P: alephcore::thinker::ProviderRegistry + 'static,
@@ -276,15 +288,27 @@ where
 
     let session_key_str = session_key.to_key_string();
 
-    // Get default agent
-    let agent = match agent_registry.get_default().await {
-        Some(a) => a,
-        None => {
-            return alephcore::gateway::JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                "No default agent available",
-            );
+    let channel_id = params.channel.as_deref().unwrap_or("panel");
+    let peer_id = "local"; // Panel doesn't have per-user peer IDs
+
+    // Resolve active agent: check WorkspaceManager override first, then default
+    let agent = {
+        let active_agent_id = workspace_manager.as_ref()
+            .and_then(|wm| wm.get_active_agent(channel_id, peer_id).ok().flatten());
+        let agent_opt = if let Some(ref aid) = active_agent_id {
+            agent_registry.get(aid).await
+        } else {
+            None
+        };
+        match agent_opt.or(agent_registry.get_default().await) {
+            Some(a) => a,
+            None => {
+                return alephcore::gateway::JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    "No default agent available",
+                );
+            }
         }
     };
 
@@ -299,9 +323,8 @@ where
 
     // Create run request with channel/peer metadata for agent management tools
     let mut metadata = std::collections::HashMap::new();
-    let channel_id = params.channel.as_deref().unwrap_or("panel");
     metadata.insert("channel_id".to_string(), channel_id.to_string());
-    metadata.insert("sender_id".to_string(), "local".to_string());
+    metadata.insert("sender_id".to_string(), peer_id.to_string());
 
     let run_request = RunRequest {
         run_id: run_id.clone(),
