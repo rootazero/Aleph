@@ -394,7 +394,8 @@ impl CompressionService {
 
     /// Start background compression task
     ///
-    /// Similar to CleanupService, runs periodically to check for compression triggers.
+    /// Runs periodically and compresses unconditionally (bypasses scheduler).
+    /// The scheduler-based triggers are handled separately via `record_turn_and_check()`.
     pub fn start_background_task(self: Arc<Self>) -> JoinHandle<()> {
         let interval_secs = self.config.background_interval_seconds;
 
@@ -409,16 +410,20 @@ impl CompressionService {
             loop {
                 interval.tick().await;
 
-                match self.check_and_compress().await {
-                    Ok(Some(result)) => {
-                        tracing::info!(
-                            facts = result.facts_extracted,
-                            duration_ms = result.duration_ms,
-                            "Background compression completed"
-                        );
-                    }
-                    Ok(None) => {
-                        tracing::trace!("Background compression check: no action needed");
+                // Background task compresses unconditionally — the scheduler
+                // is only for turn-based / signal-based immediate triggers.
+                match self.compress().await {
+                    Ok(result) => {
+                        if result.memories_processed > 0 {
+                            tracing::info!(
+                                memories = result.memories_processed,
+                                facts = result.facts_extracted,
+                                duration_ms = result.duration_ms,
+                                "Background compression completed"
+                            );
+                        } else {
+                            tracing::debug!("Background compression: no memories to process");
+                        }
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "Background compression failed");
@@ -433,39 +438,35 @@ impl CompressionService {
     /// This method is used during AlephCore initialization when we have a runtime
     /// but are not yet inside its context (so tokio::spawn won't work).
     ///
-    /// Triggers:
-    /// - Every hour: checks if compression is needed
-    /// - Turn threshold (20): triggers when conversation turns accumulate
+    /// Compresses unconditionally on each interval tick.
     pub fn start_background_task_with_runtime(
         self: &Arc<Self>,
         runtime: &tokio::runtime::Runtime,
     ) -> JoinHandle<()> {
         let service = Arc::clone(self);
         let interval_secs = self.config.background_interval_seconds;
-        let turn_threshold = self.config.scheduler.turn_threshold;
 
         runtime.spawn(async move {
             let mut hourly_interval = interval(Duration::from_secs(interval_secs as u64));
 
             tracing::info!(
                 interval_seconds = interval_secs,
-                turn_threshold = turn_threshold,
-                "Started background compression task (hourly + turn threshold)"
+                "Started background compression task"
             );
 
             loop {
                 hourly_interval.tick().await;
 
-                match service.check_and_compress().await {
-                    Ok(Some(result)) => {
-                        tracing::info!(
-                            facts = result.facts_extracted,
-                            duration_ms = result.duration_ms,
-                            "Compression completed"
-                        );
-                    }
-                    Ok(None) => {
-                        tracing::debug!("Compression check: no action needed");
+                match service.compress().await {
+                    Ok(result) => {
+                        if result.memories_processed > 0 {
+                            tracing::info!(
+                                memories = result.memories_processed,
+                                facts = result.facts_extracted,
+                                duration_ms = result.duration_ms,
+                                "Compression completed"
+                            );
+                        }
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "Compression failed");

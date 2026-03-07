@@ -5,7 +5,6 @@ use leptos_router::hooks::use_location;
 
 // Views
 use crate::views::home::Home;
-use crate::views::system_status::SystemStatus;
 use crate::views::agent_trace::AgentTrace;
 use crate::views::memory::Memory;
 use crate::views::chat::ChatView;
@@ -181,7 +180,6 @@ fn DashboardRouter() -> impl IntoView {
         match path.as_str() {
             "/dashboard" => view! { <Home /> }.into_any(),
             "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
-            "/dashboard/health" => view! { <SystemStatus /> }.into_any(),
             "/dashboard/memory" => view! { <Memory /> }.into_any(),
             "/dashboard/cron" => view! { <CronView /> }.into_any(),
             "/dashboard/logs" => view! { <Logs /> }.into_any(),

@@ -20,18 +20,6 @@ pub fn DashboardSidebar() -> impl IntoView {
                 <SidebarItem href="/dashboard/trace" label="Agent Trace" alert_key="agent.trace">
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                 </SidebarItem>
-                <SidebarItem href="/dashboard/health" label="System Health" alert_key="system.health">
-                    <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
-                    <rect x="9" y="9" width="6" height="6" />
-                    <line x1="9" y1="1" x2="9" y2="4" />
-                    <line x1="15" y1="1" x2="15" y2="4" />
-                    <line x1="9" y1="20" x2="9" y2="23" />
-                    <line x1="15" y1="20" x2="15" y2="23" />
-                    <line x1="20" y1="9" x2="23" y2="9" />
-                    <line x1="20" y1="15" x2="23" y2="15" />
-                    <line x1="1" y1="9" x2="4" y2="9" />
-                    <line x1="1" y1="15" x2="4" y2="15" />
-                </SidebarItem>
                 <SidebarItem href="/dashboard/memory" label="Memory Vault" alert_key="memory.status">
                     <ellipse cx="12" cy="5" rx="9" ry="3" />
                     <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />

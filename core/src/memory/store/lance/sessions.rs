@@ -334,24 +334,32 @@ impl DreamStore for LanceMemoryBackend {
 
 #[async_trait]
 impl CompressionStore for LanceMemoryBackend {
-    async fn set_last_compression_timestamp(&self, _timestamp: i64) -> Result<(), AlephError> {
-        // TODO: Persist compression timestamp to a metadata table or KV store.
-        // For now, this is a no-op.
+    async fn set_last_compression_timestamp(&self, timestamp: i64) -> Result<(), AlephError> {
+        self.last_compression_ts.store(timestamp, crate::sync_primitives::Ordering::Release);
+        tracing::debug!(timestamp, "Updated compression timestamp");
         Ok(())
     }
 
     async fn get_last_compression_timestamp(&self) -> Result<Option<i64>, AlephError> {
-        // TODO: Query compression timestamp from a metadata table or KV store.
-        // For now, return None (no previous compression).
-        Ok(None)
+        let ts = self.last_compression_ts.load(crate::sync_primitives::Ordering::Acquire);
+        if ts == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(ts))
+        }
     }
 
     async fn record_compression_session(
         &self,
-        _session: &CompressionSession,
+        session: &CompressionSession,
     ) -> Result<(), AlephError> {
-        // TODO: Store compression session records in a dedicated table.
-        // For now, this is a no-op.
+        tracing::info!(
+            memories = session.source_memory_ids.len(),
+            facts = session.extracted_fact_ids.len(),
+            provider = %session.provider_used,
+            duration_ms = session.duration_ms,
+            "Compression session recorded"
+        );
         Ok(())
     }
 }
