@@ -336,6 +336,8 @@ async fn register_agent_handlers(
             tavily_api_key,
             agent_registry: Some(agent_registry.clone()),
             workspace_manager: workspace_manager.clone(),
+            event_bus: Some(event_bus.clone()),
+            tool_policy: Some(alephcore::builtin_tools::agent_manage::new_tool_policy_handle()),
             ..Default::default()
         };
         let tool_registry = BuiltinToolRegistry::with_config(tool_config);
@@ -418,6 +420,9 @@ async fn register_agent_handlers(
         );
         if let Some(router) = task_router {
             engine = engine.with_task_router(router);
+        }
+        if let Some(ref wm) = workspace_manager {
+            engine = engine.with_workspace_manager(wm.clone());
         }
         let engine = Arc::new(engine);
 
