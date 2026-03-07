@@ -144,7 +144,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// * `emitter` - Event emitter for streaming events
     pub async fn execute<E: EventEmitter + Send + Sync + 'static>(
         &self,
-        request: RunRequest,
+        mut request: RunRequest,
         agent: Arc<AgentInstance>,
         emitter: Arc<E>,
     ) -> Result<(), ExecutionError> {
@@ -224,6 +224,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         agent
             .add_message(&request.session_key, MessageRole::User, &request.input)
             .await;
+
+        // ================================================================
+        // Inline slash command resolution for non-router paths (Panel, CLI)
+        // When input starts with / but no pre-resolved mode exists, try
+        // to match against registered tools and inject the fast-path metadata.
+        // ================================================================
+        if request.input.trim().starts_with('/')
+            && !request.metadata.contains_key(SLASH_COMMAND_MODE_KEY)
+        {
+            if let Some(mode_json) = self.try_resolve_slash_command(&request.input) {
+                request
+                    .metadata
+                    .insert(SLASH_COMMAND_MODE_KEY.to_string(), mode_json);
+            }
+        }
 
         // ================================================================
         // Slash command fast path (L0): bypass full agent loop
@@ -1050,6 +1065,47 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     }
                 }
             }
+        }
+    }
+
+    /// Try to resolve a `/command args` input to a slash command mode JSON.
+    ///
+    /// Used for non-router paths (Panel, CLI) where the inbound router's
+    /// command resolution doesn't run. Returns `Some(mode_json)` if the
+    /// command matches a registered tool, `None` otherwise.
+    fn try_resolve_slash_command(&self, input: &str) -> Option<String> {
+        let trimmed = input.trim();
+        let without_slash = trimmed.strip_prefix('/')?;
+        if without_slash.is_empty() {
+            return None;
+        }
+
+        let (cmd_name, args) = match without_slash.split_once(char::is_whitespace) {
+            Some((name, rest)) => (name.to_lowercase(), rest.trim().to_string()),
+            None => (without_slash.to_lowercase(), String::new()),
+        };
+
+        // Strip @botname suffix (e.g. "gen@mybot" → "gen")
+        let cmd_name = match cmd_name.split_once('@') {
+            Some((name, _)) => name.to_string(),
+            None => cmd_name,
+        };
+
+        // Check if this matches a registered tool
+        if self.tool_registry.get_tool(&cmd_name).is_some() {
+            let mode = serde_json::json!({
+                "type": "direct_tool",
+                "tool_id": cmd_name,
+                "args": args,
+            });
+            let mode_json = serde_json::to_string(&mode).ok()?;
+            info!(
+                "[Engine] Inline slash command resolved: /{}",
+                cmd_name
+            );
+            Some(mode_json)
+        } else {
+            None
         }
     }
 
