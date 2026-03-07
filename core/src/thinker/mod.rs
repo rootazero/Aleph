@@ -147,6 +147,8 @@ pub struct ThinkerConfig {
     pub workspace_files: Option<workspace_files::WorkspaceFiles>,
     /// Per-request inbound context (sender, channel, session metadata).
     pub inbound_context: Option<inbound_context::InboundContext>,
+    /// Pre-fetched memory context from LanceDB for prompt augmentation.
+    pub memory_context: Option<memory_context::MemoryContext>,
 }
 
 
@@ -281,6 +283,7 @@ impl<P: ProviderRegistry> Thinker<P> {
                 self.config.active_profile.as_ref(),
                 self.config.workspace_files.as_ref(),
                 self.config.inbound_context.as_ref(),
+                self.config.memory_context.as_ref(),
             )
         } else {
             self.prompt_builder.build_system_prompt(tools)
@@ -559,6 +562,7 @@ impl<P: ProviderRegistry> Thinker<P> {
                 self.config.active_profile.as_ref(),
                 self.config.workspace_files.as_ref(),
                 self.config.inbound_context.as_ref(),
+                self.config.memory_context.as_ref(),
             )
         } else {
             native_builder.build_system_prompt(tools)
