@@ -48,6 +48,18 @@ impl Default for CompressionConfig {
     }
 }
 
+impl CompressionConfig {
+    /// Create from config policy
+    pub fn from_policy(policy: &crate::config::CompressionPolicy) -> Self {
+        Self {
+            batch_size: 50,
+            scheduler: SchedulerConfig::from_policy(policy),
+            conflict: ConflictConfig::default(),
+            background_interval_seconds: policy.background_interval_seconds,
+        }
+    }
+}
+
 /// Main compression service
 pub struct CompressionService {
     database: MemoryBackend,
