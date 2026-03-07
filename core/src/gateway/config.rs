@@ -137,6 +137,9 @@ impl AgentConfig {
             system_prompt: self.system_prompt.clone(),
             tool_whitelist: self.tool_whitelist.clone(),
             tool_blacklist: self.tool_blacklist.clone(),
+            agent_dir: dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                .join(format!(".aleph/agents/{}", agent_id)),
         }
     }
 }

@@ -32,6 +32,8 @@ pub struct AgentInstanceConfig {
     pub tool_whitelist: Vec<String>,
     /// Tool blacklist
     pub tool_blacklist: Vec<String>,
+    /// Agent state directory (sessions, runtime state)
+    pub agent_dir: PathBuf,
 }
 
 impl Default for AgentInstanceConfig {
@@ -47,6 +49,9 @@ impl Default for AgentInstanceConfig {
             system_prompt: None,
             tool_whitelist: vec![],
             tool_blacklist: vec![],
+            agent_dir: dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join(".aleph/agents/main"),
         }
     }
 }
@@ -68,6 +73,7 @@ impl AgentInstanceConfig {
             system_prompt: agent.agents_md.clone(),
             tool_whitelist: agent.skills.clone(),
             tool_blacklist: vec![],
+            agent_dir: agent.agent_dir.clone(),
         }
     }
 }

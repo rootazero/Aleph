@@ -160,6 +160,17 @@ impl AlephTool for AgentCreateTool {
                 args.id, e
             )))?;
 
+        // Initialize agent state directory
+        let agents_state_root = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".aleph/agents");
+        let agent_state_dir = agents_state_root.join(&args.id);
+        crate::config::agent_resolver::initialize_agent_dir(&agent_state_dir)
+            .map_err(|e| crate::error::AlephError::other(format!(
+                "Failed to initialize agent state dir for '{}': {}",
+                args.id, e
+            )))?;
+
         // 5. Write custom system_prompt to AGENTS.md if provided
         if let Some(ref prompt) = args.system_prompt {
             let agents_md = workspace_path.join("AGENTS.md");
