@@ -755,6 +755,7 @@ mod tests {
             name: "Code Expert".to_string(),
             is_default: false,
             workspace_path: PathBuf::from("/tmp/test-workspace"),
+            agent_dir: PathBuf::from("/tmp/test-agents/coding"),
             profile: ProfileConfig::default(),
             soul: None,
             agents_md: Some("Be a great coder.".to_string()),
