@@ -92,3 +92,38 @@ fn test_resolved_channels_all_known_platforms() {
     let instances = config.resolved_channels();
     assert_eq!(instances.len(), platforms.len());
 }
+
+#[test]
+fn test_resolved_channels_from_toml_string() {
+    let toml_str = r#"
+[channels.telegram]
+bot_token = "old-single-bot"
+allowed_users = [111]
+
+[channels."telegram-work"]
+type = "telegram"
+bot_token = "new-work-bot"
+allowed_users = [222]
+
+[channels."discord-gaming"]
+type = "discord"
+bot_token = "discord-token"
+"#;
+
+    let config: Config = toml::from_str(toml_str).expect("should parse");
+    let instances = config.resolved_channels();
+
+    assert_eq!(instances.len(), 3);
+
+    // Sorted by id
+    assert_eq!(instances[0].id, "discord-gaming");
+    assert_eq!(instances[0].channel_type, "discord");
+
+    assert_eq!(instances[1].id, "telegram");
+    assert_eq!(instances[1].channel_type, "telegram");
+    assert_eq!(instances[1].config["bot_token"], "old-single-bot");
+
+    assert_eq!(instances[2].id, "telegram-work");
+    assert_eq!(instances[2].channel_type, "telegram");
+    assert_eq!(instances[2].config["bot_token"], "new-work-bot");
+}
