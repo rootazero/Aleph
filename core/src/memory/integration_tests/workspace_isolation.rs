@@ -235,6 +235,7 @@ mod tests {
             archive_after_days: 0,
         };
         let manager = WorkspaceManager::new(config).unwrap();
+        manager.load_profiles(std::collections::HashMap::new()); // registers "default" profile
 
         // Create a workspace
         let ws = manager.create("crypto", "default", Some("Crypto Research")).await.unwrap();

@@ -82,8 +82,24 @@ pub fn truncate_with_head_tail(
         return content.to_string();
     }
 
-    let head_chars = (max_chars as f64 * head_ratio) as usize;
-    let tail_chars = (max_chars as f64 * tail_ratio) as usize;
+    let marker_template = "\n\n[... truncated ...]\n\n";
+    let marker_overhead = marker_template.len() + 10; // extra for digit count
+
+    // If max_chars is too small for head+tail+marker, just take head
+    if max_chars <= marker_overhead {
+        let end = content
+            .char_indices()
+            .take_while(|(i, _)| *i < max_chars)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        return content[..end].to_string();
+    }
+
+    let usable = max_chars - marker_overhead;
+    let head_chars = (usable as f64 * head_ratio / (head_ratio + tail_ratio)) as usize;
+    let tail_chars = usable.saturating_sub(head_chars);
+
     let truncated_count = content
         .len()
         .saturating_sub(head_chars)
@@ -106,7 +122,20 @@ pub fn truncate_with_head_tail(
         .map(|(i, _)| i)
         .unwrap_or(content.len());
 
-    format!("{}{}{}", &content[..head_end], marker, &content[tail_start..])
+    let result = format!("{}{}{}", &content[..head_end], marker, &content[tail_start..]);
+
+    // Final safety check — if still over budget, hard truncate
+    if result.len() > max_chars {
+        let end = result
+            .char_indices()
+            .take_while(|(i, _)| *i < max_chars)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        return result[..end].to_string();
+    }
+
+    result
 }
 
 /// Enforce total budget by removing sections from lowest priority.

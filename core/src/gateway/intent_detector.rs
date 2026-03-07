@@ -41,7 +41,7 @@ pub type IntentClassifyFn =
 
 /// Chinese: "切换到X模式" / "换成X助手" / "切换为X" / "使用X"
 static RE_CN_SWITCH: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?:切换到|换成|切换为|使用)(.+?)(?:模式|助手|agent)?$").unwrap()
+    Regex::new(r"^(?:切换到|换成|切换为|使用)(.+?)(?:模式|agent)?$").unwrap()
 });
 
 /// Chinese: "我想和X聊" / "我想跟X说" / "我想找X咨询"
@@ -51,7 +51,7 @@ static RE_CN_WANT: Lazy<Regex> = Lazy::new(|| {
 
 /// English: "switch to X mode" / "change to X agent" / "use X assistant"
 static RE_EN_SWITCH: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^(?:switch to|change to|use) (.+?)(?:\s+(?:mode|agent|assistant))?$").unwrap()
+    Regex::new(r"(?i)^(?:switch to|change to|use) (.+?)(?:\s+(?:mode|agent))?$").unwrap()
 });
 
 // ---------------------------------------------------------------------------

@@ -111,8 +111,8 @@ impl SkillLoader {
             walker
                 .into_iter()
                 .filter_entry(|e| {
-                    // Skip hidden directories (e.g., .git, .git-cache)
-                    if e.file_type().is_dir() {
+                    // Skip hidden directories (e.g., .git, .git-cache), but not the root entry
+                    if e.depth() > 0 && e.file_type().is_dir() {
                         if let Some(name) = e.file_name().to_str() {
                             return !name.starts_with('.');
                         }

@@ -1234,9 +1234,9 @@ name = "Solo Agent"
         mgr.create(def).unwrap();
 
         let agents = mgr.list().unwrap();
-        assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0].id, "first");
-        assert!(agents[0].default);
+        assert_eq!(agents.len(), 2); // "main" auto-created + "first"
+        assert!(agents.iter().any(|a| a.id == "main"), "auto-created main agent");
+        assert!(agents.iter().any(|a| a.id == "first"), "explicitly created first agent");
     }
 
     // =========================================================================

@@ -177,7 +177,7 @@ mod tests {
         assert!(parser.parse_async("hello").await.is_none());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_parse_sync_compatibility() {
         let registry = create_test_registry();
         let rules = vec![RoutingRuleConfig {
