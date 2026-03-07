@@ -69,7 +69,7 @@ impl MemoryContextProvider {
     /// Fetch relevant memory context for a user query.
     ///
     /// Returns empty context on any failure (never blocks LLM calls).
-    pub async fn fetch(&self, query: &str) -> MemoryContext {
+    pub async fn fetch(&self, query: &str, agent_id: &str) -> MemoryContext {
         if query.trim().is_empty() {
             return MemoryContext::default();
         }
@@ -85,9 +85,9 @@ impl MemoryContextProvider {
 
         let dim = embedding.len() as u32;
 
-        // 2. Search facts and memories in parallel
-        let facts_future = self.search_facts(&embedding, dim);
-        let memories_future = self.search_memories(&embedding);
+        // 2. Search facts and memories in parallel (scoped to agent workspace)
+        let facts_future = self.search_facts(&embedding, dim, agent_id);
+        let memories_future = self.search_memories(&embedding, agent_id);
 
         let (facts, memories) = tokio::join!(facts_future, memories_future);
 
@@ -103,6 +103,7 @@ impl MemoryContextProvider {
         debug!(
             facts = ctx.facts.len(),
             memories = ctx.memory_summaries.len(),
+            agent_id = agent_id,
             "Memory context fetched for prompt augmentation"
         );
 
@@ -113,8 +114,11 @@ impl MemoryContextProvider {
         &self,
         embedding: &[f32],
         dim: u32,
+        agent_id: &str,
     ) -> Result<Vec<ScoredFact>, ()> {
-        let filter = SearchFilter::default();
+        use crate::gateway::workspace::WorkspaceFilter;
+        let filter = SearchFilter::new()
+            .with_workspace(WorkspaceFilter::Single(agent_id.to_string()));
         self.memory_db
             .vector_search(embedding, dim, &filter, self.config.max_facts)
             .await
@@ -130,8 +134,13 @@ impl MemoryContextProvider {
     async fn search_memories(
         &self,
         embedding: &[f32],
+        agent_id: &str,
     ) -> Result<Vec<MemorySummary>, ()> {
-        let filter = MemoryFilter::default();
+        use crate::gateway::workspace::WorkspaceFilter;
+        let filter = MemoryFilter {
+            workspace: Some(WorkspaceFilter::Single(agent_id.to_string())),
+            ..Default::default()
+        };
         self.memory_db
             .search_memories(embedding, &filter, self.config.max_memories)
             .await
