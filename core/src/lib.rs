@@ -120,7 +120,7 @@ pub use crate::error::{AlephError, AlephException, Result};
 
 // Configuration (main entry points and commonly used types)
 pub use crate::config::{
-    Config, FullConfig, ProviderConfig, RoutingRuleConfig,
+    Config, FullConfig, ChannelInstanceConfig, ProviderConfig, RoutingRuleConfig,
     MemoryConfig, BehaviorConfig, ShortcutsConfig, GeneralConfig, SmartFlowConfig,
     backup::ConfigBackup,
     patcher::ConfigPatcher,

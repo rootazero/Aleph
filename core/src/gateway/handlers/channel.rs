@@ -169,7 +169,20 @@ pub async fn handle_start(
     // Re-create channel with latest config from app config (Panel UI saves here)
     let config_snapshot = app_config.read().await;
     if let Some(channel_config) = config_snapshot.channels.get(channel_id.as_str()) {
-        if let Some(new_channel) = create_channel_from_config(channel_id.as_str(), channel_config.clone()) {
+        // Resolve channel type: explicit "type" field, or fall back to the channel id
+        let channel_type = channel_config
+            .get("type")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| channel_id.as_str().to_string());
+
+        // Strip the "type" field from config before passing to constructor
+        let mut clean_config = channel_config.clone();
+        if let serde_json::Value::Object(ref mut map) = clean_config {
+            map.remove("type");
+        }
+
+        if let Some(new_channel) = create_channel_from_config(channel_id.as_str(), &channel_type, clean_config) {
             // Replace old channel with freshly configured one
             registry.register(new_channel).await;
             debug!("Replaced channel {} with fresh config from app config", channel_id);
@@ -194,7 +207,11 @@ pub async fn handle_start(
 }
 
 /// Create a channel instance from config JSON, based on channel type.
-fn create_channel_from_config(channel_type: &str, config: Value) -> Option<Box<dyn crate::gateway::channel::Channel>> {
+///
+/// `id` is the instance identifier (e.g. "telegram", "tg-work", "discord-gaming").
+/// `channel_type` is the platform type (e.g. "telegram", "discord").
+/// `config` is the remaining config with the `type` field already stripped.
+pub fn create_channel_from_config(id: &str, channel_type: &str, config: Value) -> Option<Box<dyn crate::gateway::channel::Channel>> {
     use crate::gateway::interfaces::telegram::{TelegramChannel, TelegramConfig};
     use crate::gateway::interfaces::discord::{DiscordChannel, DiscordConfig};
     use crate::gateway::interfaces::whatsapp::{WhatsAppChannel, WhatsAppConfig};
@@ -210,29 +227,29 @@ fn create_channel_from_config(channel_type: &str, config: Value) -> Option<Box<d
 
     match channel_type {
         "telegram" => serde_json::from_value::<TelegramConfig>(config).ok()
-            .map(|cfg| Box::new(TelegramChannel::new("telegram", cfg)) as Box<dyn crate::gateway::channel::Channel>),
+            .map(|cfg| Box::new(TelegramChannel::new(id, cfg)) as Box<dyn crate::gateway::channel::Channel>),
         "discord" => serde_json::from_value::<DiscordConfig>(config).ok()
-            .map(|cfg| Box::new(DiscordChannel::new("discord", cfg)) as _),
+            .map(|cfg| Box::new(DiscordChannel::new(id, cfg)) as _),
         "whatsapp" => serde_json::from_value::<WhatsAppConfig>(config).ok()
-            .map(|cfg| Box::new(WhatsAppChannel::new("whatsapp", cfg)) as _),
+            .map(|cfg| Box::new(WhatsAppChannel::new(id, cfg)) as _),
         "slack" => serde_json::from_value::<SlackConfig>(config).ok()
-            .map(|cfg| Box::new(SlackChannel::new("slack", cfg)) as _),
+            .map(|cfg| Box::new(SlackChannel::new(id, cfg)) as _),
         "email" => serde_json::from_value::<EmailConfig>(config).ok()
-            .map(|cfg| Box::new(EmailChannel::new("email", cfg)) as _),
+            .map(|cfg| Box::new(EmailChannel::new(id, cfg)) as _),
         "matrix" => serde_json::from_value::<MatrixConfig>(config).ok()
-            .map(|cfg| Box::new(MatrixChannel::new("matrix", cfg)) as _),
+            .map(|cfg| Box::new(MatrixChannel::new(id, cfg)) as _),
         "signal" => serde_json::from_value::<SignalConfig>(config).ok()
-            .map(|cfg| Box::new(SignalChannel::new("signal", cfg)) as _),
+            .map(|cfg| Box::new(SignalChannel::new(id, cfg)) as _),
         "mattermost" => serde_json::from_value::<MattermostConfig>(config).ok()
-            .map(|cfg| Box::new(MattermostChannel::new("mattermost", cfg)) as _),
+            .map(|cfg| Box::new(MattermostChannel::new(id, cfg)) as _),
         "irc" => serde_json::from_value::<IrcConfig>(config).ok()
-            .map(|cfg| Box::new(IrcChannel::new("irc", cfg)) as _),
+            .map(|cfg| Box::new(IrcChannel::new(id, cfg)) as _),
         "webhook" => serde_json::from_value::<WebhookConfig>(config).ok()
-            .map(|cfg| Box::new(WebhookChannel::new("webhook", cfg)) as _),
+            .map(|cfg| Box::new(WebhookChannel::new(id, cfg)) as _),
         "xmpp" => serde_json::from_value::<XmppConfig>(config).ok()
-            .map(|cfg| Box::new(XmppChannel::new("xmpp", cfg)) as _),
+            .map(|cfg| Box::new(XmppChannel::new(id, cfg)) as _),
         "nostr" => serde_json::from_value::<NostrConfig>(config).ok()
-            .map(|cfg| Box::new(NostrChannel::new("nostr", cfg)) as _),
+            .map(|cfg| Box::new(NostrChannel::new(id, cfg)) as _),
         _ => None,
     }
 }
