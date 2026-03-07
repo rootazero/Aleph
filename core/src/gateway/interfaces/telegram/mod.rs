@@ -355,8 +355,9 @@ impl Channel for TelegramChannel {
                         return None;
                     }
                     // Telegram description max 256 chars
-                    let desc_truncated = if desc.len() > 256 {
-                        format!("{}...", &desc[..253])
+                    let desc_truncated = if desc.chars().count() > 256 {
+                        let truncated: String = desc.chars().take(253).collect();
+                        format!("{}...", truncated)
                     } else {
                         desc.clone()
                     };
