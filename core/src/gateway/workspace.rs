@@ -332,6 +332,9 @@ pub struct ActiveWorkspace {
 
     /// Memory filter scoped to this workspace
     pub memory_filter: WorkspaceFilter,
+
+    /// Filesystem path to the workspace directory (for loading workspace files like SOUL.md)
+    pub workspace_path: Option<PathBuf>,
 }
 
 impl ActiveWorkspace {
@@ -368,10 +371,13 @@ impl ActiveWorkspace {
         let memory_filter =
             WorkspaceFilter::Single(workspace.id.clone());
 
+        let workspace_path = Self::resolve_workspace_path(&workspace.id);
+
         Self {
             workspace_id: workspace.id,
             profile,
             memory_filter,
+            workspace_path,
         }
     }
 
@@ -401,10 +407,13 @@ impl ActiveWorkspace {
         let memory_filter =
             WorkspaceFilter::Single(workspace.id.clone());
 
+        let workspace_path = Self::resolve_workspace_path(&workspace.id);
+
         Self {
             workspace_id: workspace.id,
             profile,
             memory_filter,
+            workspace_path,
         }
     }
 
@@ -419,7 +428,15 @@ impl ActiveWorkspace {
             memory_filter: WorkspaceFilter::Single(
                 "global".to_string(),
             ),
+            workspace_path: dirs::home_dir().map(|h| h.join(".aleph")),
         }
+    }
+
+    /// Resolve the workspace directory path from the workspace ID.
+    ///
+    /// Convention: `~/.aleph/workspaces/{workspace_id}`
+    fn resolve_workspace_path(workspace_id: &str) -> Option<PathBuf> {
+        dirs::home_dir().map(|h| h.join(".aleph/workspaces").join(workspace_id))
     }
 }
 
