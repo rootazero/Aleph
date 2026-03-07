@@ -160,13 +160,19 @@ where
     };
     let emitter = Arc::new(GatewayEventEmitter::with_output_mode(event_bus.clone(), output_mode));
 
-    // Create run request
+    // Create run request with channel/peer metadata for agent management tools
+    let mut metadata = std::collections::HashMap::new();
+    let channel_id = params.channel.as_deref().unwrap_or("panel");
+    let peer_id = params.peer_id.as_deref().unwrap_or("local");
+    metadata.insert("channel_id".to_string(), channel_id.to_string());
+    metadata.insert("sender_id".to_string(), peer_id.to_string());
+
     let run_request = RunRequest {
         run_id: run_id.clone(),
         input: params.input.clone(),
         session_key: session_key.clone(),
         timeout_secs: None,
-        metadata: std::collections::HashMap::new(),
+        metadata,
     };
 
     // Spawn execution task
@@ -291,13 +297,18 @@ where
     };
     let emitter = Arc::new(GatewayEventEmitter::with_output_mode(event_bus.clone(), output_mode));
 
-    // Create run request
+    // Create run request with channel/peer metadata for agent management tools
+    let mut metadata = std::collections::HashMap::new();
+    let channel_id = params.channel.as_deref().unwrap_or("panel");
+    metadata.insert("channel_id".to_string(), channel_id.to_string());
+    metadata.insert("sender_id".to_string(), "local".to_string());
+
     let run_request = RunRequest {
         run_id: run_id.clone(),
         input: params.message.clone(),
         session_key: session_key.clone(),
         timeout_secs: None,
-        metadata: std::collections::HashMap::new(),
+        metadata,
     };
 
     // Spawn execution task
