@@ -30,12 +30,8 @@ pub use plugins::PluginsView;
 pub use skills::SkillsView;
 pub use policies::PoliciesView;
 pub use vault::VaultView;
-pub use channels::TelegramChannelView;
-pub use channels::DiscordChannelView;
-pub use channels::WhatsAppChannelView;
-pub use channels::IMessageChannelView;
 pub use channels::ChannelsOverview;
-pub use channels::ChannelConfigTemplate;
+pub use channels::ChannelPlatformPage;
 
 // Settings default view (sidebar is provided by SettingsLayout)
 use leptos::prelude::*;
