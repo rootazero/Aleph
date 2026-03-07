@@ -1,4 +1,4 @@
-// core/ui/control_plane/src/components/theme_toggle.rs
+// apps/panel/src/components/theme_toggle.rs
 //
 // Theme mode toggle: System / Light / Dark. Persists choice to localStorage.
 //

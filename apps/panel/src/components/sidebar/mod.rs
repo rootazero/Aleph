@@ -1,4 +1,4 @@
-// core/ui/control_plane/src/components/sidebar/mod.rs
+// apps/panel/src/components/sidebar/mod.rs
 pub mod types;
 pub mod sidebar_item;
 

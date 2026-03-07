@@ -1,4 +1,4 @@
-// core/ui/control_plane/src/components/dashboard_sidebar.rs
+// apps/panel/src/components/dashboard_sidebar.rs
 //
 // Dashboard mode sidebar — sub-navigation for dashboard views.
 //

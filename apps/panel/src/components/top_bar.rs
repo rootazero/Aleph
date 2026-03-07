@@ -1,4 +1,4 @@
-// core/ui/control_plane/src/components/top_bar.rs
+// apps/panel/src/components/top_bar.rs
 //
 // Top bar — logo, workspace selector, contextual actions (new chat button in Chat mode).
 //
