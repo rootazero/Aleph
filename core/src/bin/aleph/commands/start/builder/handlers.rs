@@ -705,3 +705,24 @@ pub(in crate::commands::start) fn register_group_chat_handlers(
         println!();
     }
 }
+
+// ─── register_agents_handlers ───────────────────────────────────────────────
+
+pub(in crate::commands::start) fn register_agents_handlers(
+    server: &mut GatewayServer,
+    manager: &Arc<alephcore::AgentManager>,
+    event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
+) {
+    use alephcore::gateway::handlers::agents;
+
+    register_handler!(server, "agents.list", agents::handle_list, manager);
+    register_handler!(server, "agents.get", agents::handle_get, manager);
+    register_handler!(server, "agents.create", agents::handle_create, manager, event_bus);
+    register_handler!(server, "agents.update", agents::handle_update, manager, event_bus);
+    register_handler!(server, "agents.delete", agents::handle_delete, manager, event_bus);
+    register_handler!(server, "agents.set_default", agents::handle_set_default, manager, event_bus);
+    register_handler!(server, "agents.files.list", agents::handle_files_list, manager);
+    register_handler!(server, "agents.files.get", agents::handle_files_get, manager);
+    register_handler!(server, "agents.files.set", agents::handle_files_set, manager);
+    register_handler!(server, "agents.files.delete", agents::handle_files_delete, manager);
+}
