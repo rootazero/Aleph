@@ -619,14 +619,16 @@ async fn register_agent_handlers(
         let router_clone = router.clone();
         let agent_registry_clone = agent_registry.clone();
         let app_config_run = app_config_arc.clone();
+        let wm_run = workspace_manager.clone();
         server.handlers_mut().register("agent.run", move |req| {
             let engine = engine_clone.clone();
             let event_bus = event_bus_clone.clone();
             let router = router_clone.clone();
             let agent_registry = agent_registry_clone.clone();
             let cfg = app_config_run.clone();
+            let wm = wm_run.clone();
             async move {
-                handle_run_with_engine(req, engine, event_bus, router, agent_registry, cfg).await
+                handle_run_with_engine(req, engine, event_bus, router, agent_registry, cfg, wm).await
             }
         });
 
@@ -636,14 +638,16 @@ async fn register_agent_handlers(
         let router_chat = router.clone();
         let agent_registry_chat = agent_registry.clone();
         let app_config_chat = app_config_arc.clone();
+        let wm_chat = workspace_manager.clone();
         server.handlers_mut().register("chat.send", move |req| {
             let engine = engine_chat.clone();
             let event_bus = event_bus_chat.clone();
             let router = router_chat.clone();
             let agent_registry = agent_registry_chat.clone();
             let cfg = app_config_chat.clone();
+            let wm = wm_chat.clone();
             async move {
-                handle_chat_send_with_engine(req, engine, event_bus, router, agent_registry, cfg).await
+                handle_chat_send_with_engine(req, engine, event_bus, router, agent_registry, cfg, wm).await
             }
         });
 

@@ -86,15 +86,27 @@ impl AlephTool for AgentSwitchTool {
         ])
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+    async fn call(&self, mut args: Self::Args) -> Result<Self::Output> {
         info!(agent_id = %args.agent_id, "Agent switch requested");
 
-        // 1. Verify target agent exists in registry
+        // 1. Verify target agent exists in registry (try exact ID, then name → ID)
         if self.registry.get(&args.agent_id).await.is_none() {
-            return Err(crate::error::AlephError::other(format!(
-                "Agent '{}' not found. Use agent_list to see available agents.",
-                args.agent_id
-            )));
+            // Try converting display name to agent ID (e.g. "交易助手" → "agent-73f36847")
+            let generated_id = super::create::generate_agent_id_from_name(&args.agent_id);
+            if self.registry.get(&generated_id).await.is_some() {
+                info!(
+                    original = %args.agent_id,
+                    resolved = %generated_id,
+                    "Resolved agent name to ID"
+                );
+                args.agent_id = generated_id;
+            } else {
+                let available = self.registry.list().await.join(", ");
+                return Err(crate::error::AlephError::other(format!(
+                    "Agent '{}' not found. Available: {}",
+                    args.agent_id, available
+                )));
+            }
         }
 
         // 2. Get current active agent (channel/peer_id injected by registry snapshot)
