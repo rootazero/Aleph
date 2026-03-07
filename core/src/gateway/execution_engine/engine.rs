@@ -49,6 +49,8 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     workspace_loader: std::sync::Mutex<crate::gateway::workspace_loader::WorkspaceFileLoader>,
     /// Optional task router for pre-classification and escalation handling
     task_router: Option<Arc<dyn crate::routing::TaskRouter>>,
+    /// Compression service for turn-based fact extraction
+    compression_service: Option<Arc<crate::memory::compression::CompressionService>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -74,12 +76,22 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 crate::gateway::workspace_loader::WorkspaceFileLoader::new(),
             ),
             task_router: None,
+            compression_service: None,
         }
     }
 
     /// Set a task router for pre-classification of incoming requests.
     pub fn with_task_router(mut self, router: Arc<dyn crate::routing::TaskRouter>) -> Self {
         self.task_router = Some(router);
+        self
+    }
+
+    /// Set a compression service for automatic turn-based compression.
+    pub fn with_compression_service(
+        mut self,
+        service: Arc<crate::memory::compression::CompressionService>,
+    ) -> Self {
+        self.compression_service = Some(service);
         self
     }
 
@@ -298,6 +310,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     let _ = tokio::spawn(async move {
                         write_conversation_memory(mb, sk, ui, ao).await;
                     });
+                }
+                // Record conversation turn for compression scheduling
+                if let Some(ref cs) = self.compression_service {
+                    cs.record_turn_and_check();
                 }
                 Ok(())
             }
