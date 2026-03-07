@@ -175,7 +175,47 @@ impl AlephTool for AgentCreateTool {
             })?;
         }
 
-        // 6. Create AgentInstance
+        // 6. Generate template files (non-fatal if write fails)
+        let soul_path = workspace_path.join("SOUL.md");
+        if !soul_path.exists() {
+            let soul_content = if let Some(ref prompt) = args.system_prompt {
+                prompt.clone()
+            } else {
+                let soul_name = args.name.as_deref().unwrap_or(&args.id);
+                let specialized = match args.description.as_deref() {
+                    Some(desc) => format!(" specialized in {}", desc),
+                    None => String::new(),
+                };
+                format!(
+                    "You are {}{}.\n\n\
+                     ## Tone\n\
+                     - Professional, friendly, concise\n\n\
+                     ## Boundaries\n\
+                     - Focus on your area of expertise\n\
+                     - Suggest switching to another agent for out-of-scope requests\n",
+                    soul_name, specialized
+                )
+            };
+            let _ = std::fs::write(&soul_path, soul_content);
+        }
+
+        let identity_path = workspace_path.join("IDENTITY.md");
+        if !identity_path.exists() {
+            let identity_name = args.name.as_deref().unwrap_or(&args.id);
+            let identity_content = format!(
+                "- Name: {}\n- Emoji: 🤖\n- Theme: professional\n",
+                identity_name
+            );
+            let _ = std::fs::write(&identity_path, identity_content);
+        }
+
+        let tools_path = workspace_path.join("TOOLS.md");
+        if !tools_path.exists() {
+            let tools_content = "# Tool Notes\n\nRecord your tool usage preferences and notes here.\n";
+            let _ = std::fs::write(&tools_path, tools_content);
+        }
+
+        // 7. Create AgentInstance
         let model = args.model.as_deref().unwrap_or("claude-sonnet-4-5");
         let config = AgentInstanceConfig {
             agent_id: args.id.clone(),
@@ -191,10 +231,10 @@ impl AlephTool for AgentCreateTool {
                 args.id, e
             )))?;
 
-        // 7. Register in AgentRegistry
+        // 8. Register in AgentRegistry
         self.registry.register(instance).await;
 
-        // 8. Auto-switch via WorkspaceManager
+        // 9. Auto-switch via WorkspaceManager
         let session = self.session_ctx.read().await;
         let switched = if !session.channel.is_empty() && !session.peer_id.is_empty() {
             self.workspace_mgr
