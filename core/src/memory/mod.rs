@@ -20,7 +20,6 @@ pub mod ai_retrieval;
 pub mod audit;
 pub mod events;
 pub mod backup;
-pub mod augmentation;
 pub mod cleanup;
 pub mod composer;
 pub mod compression;
@@ -80,7 +79,6 @@ pub use events::{
     traveler::MemoryTimeTraveler,
     EventActor, MemoryEvent, MemoryEventEnvelope, TierTransitionTrigger,
 };
-pub use augmentation::PromptAugmenter;
 pub use cleanup::CleanupService;
 pub use composer::{ComposedContext, CompositionRequest, ContextComposer};
 pub use compression::{
