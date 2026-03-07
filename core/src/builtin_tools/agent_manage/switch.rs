@@ -11,8 +11,6 @@ use crate::gateway::workspace::WorkspaceManager;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-use super::SessionContextHandle;
-
 // =============================================================================
 // Args / Output
 // =============================================================================
@@ -22,6 +20,14 @@ use super::SessionContextHandle;
 pub struct AgentSwitchArgs {
     /// ID of the agent to switch to
     pub agent_id: String,
+    /// Injected by registry — session channel (internal, hidden from LLM schema)
+    #[serde(default)]
+    #[schemars(skip)]
+    pub __channel: String,
+    /// Injected by registry — session peer_id (internal, hidden from LLM schema)
+    #[serde(default)]
+    #[schemars(skip)]
+    pub __peer_id: String,
 }
 
 /// Output from agent switching.
@@ -44,19 +50,16 @@ pub struct AgentSwitchOutput {
 pub struct AgentSwitchTool {
     registry: Arc<AgentRegistry>,
     workspace_mgr: Arc<WorkspaceManager>,
-    session_ctx: SessionContextHandle,
 }
 
 impl AgentSwitchTool {
     pub fn new(
         registry: Arc<AgentRegistry>,
         workspace_mgr: Arc<WorkspaceManager>,
-        session_ctx: SessionContextHandle,
     ) -> Self {
         Self {
             registry,
             workspace_mgr,
-            session_ctx,
         }
     }
 }
@@ -89,11 +92,12 @@ impl AlephTool for AgentSwitchTool {
             )));
         }
 
-        // 2. Get current active agent
-        let session = self.session_ctx.read().await;
-        let previous = if !session.channel.is_empty() && !session.peer_id.is_empty() {
+        // 2. Get current active agent (channel/peer_id injected by registry snapshot)
+        let channel = args.__channel.clone();
+        let peer_id = args.__peer_id.clone();
+        let previous = if !channel.is_empty() && !peer_id.is_empty() {
             self.workspace_mgr
-                .get_active_agent(&session.channel, &session.peer_id)
+                .get_active_agent(&channel, &peer_id)
                 .ok()
                 .flatten()
         } else {
@@ -101,9 +105,9 @@ impl AlephTool for AgentSwitchTool {
         };
 
         // 3. Set new active agent
-        if !session.channel.is_empty() && !session.peer_id.is_empty() {
+        if !channel.is_empty() && !peer_id.is_empty() {
             self.workspace_mgr
-                .set_active_agent(&session.channel, &session.peer_id, &args.agent_id)
+                .set_active_agent(&channel, &peer_id, &args.agent_id)
                 .map_err(|e| crate::error::AlephError::other(format!(
                     "Failed to switch agent: {}",
                     e
@@ -160,8 +164,7 @@ mod tests {
     fn test_switch_tool_definition() {
         let registry = Arc::new(AgentRegistry::new());
         let workspace_mgr = test_workspace_mgr();
-        let session_ctx = super::super::new_session_context_handle();
-        let tool = AgentSwitchTool::new(registry, workspace_mgr, session_ctx);
+        let tool = AgentSwitchTool::new(registry, workspace_mgr);
         let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "agent_switch");
