@@ -187,7 +187,14 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-/// Text input area with send button and file attachments.
+/// A single command entry from the Gateway.
+#[derive(Clone, Debug)]
+struct CommandInfo {
+    key: String,
+    description: String,
+}
+
+/// Text input area with send button, file attachments, and slash command palette.
 #[component]
 fn InputArea() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
@@ -195,6 +202,13 @@ fn InputArea() -> impl IntoView {
     let input_text = RwSignal::new(String::new());
     let is_sending = RwSignal::new(false);
     let attachments: RwSignal<Vec<FileAttachment>> = RwSignal::new(Vec::new());
+
+    // Slash command palette state
+    let all_commands: RwSignal<Vec<CommandInfo>> = RwSignal::new(Vec::new());
+    let show_palette = RwSignal::new(false);
+    let filtered_commands: RwSignal<Vec<CommandInfo>> = RwSignal::new(Vec::new());
+    let selected_index = RwSignal::new(0usize);
+    let commands_loaded = RwSignal::new(false);
 
     // NodeRef for the hidden file input
     let file_input_ref = NodeRef::<leptos::html::Input>::new();
@@ -238,7 +252,114 @@ fn InputArea() -> impl IntoView {
         });
     };
 
+    // Fetch commands from Gateway (once), then refresh the palette
+    let fetch_commands = move || {
+        if commands_loaded.get_untracked() { return; }
+        let dash = dashboard;
+        spawn_local(async move {
+            match dash.rpc_call("commands.list", serde_json::json!({})).await {
+                Ok(result) => {
+                    let mut cmds = Vec::new();
+                    if let Some(arr) = result.get("commands").and_then(|v| v.as_array()) {
+                        for item in arr {
+                            if let (Some(key), Some(desc)) = (
+                                item.get("key").and_then(|v| v.as_str()),
+                                item.get("description").and_then(|v| v.as_str()),
+                            ) {
+                                cmds.push(CommandInfo {
+                                    key: key.to_string(),
+                                    description: desc.to_string(),
+                                });
+                            }
+                        }
+                    }
+                    all_commands.set(cmds.clone());
+                    commands_loaded.set(true);
+                    // Refresh palette with newly loaded commands
+                    let text = input_text.get_untracked();
+                    if text.starts_with('/') {
+                        let query = &text[1..];
+                        let matches: Vec<CommandInfo> = if query.is_empty() {
+                            cmds
+                        } else {
+                            let q = query.to_lowercase();
+                            cmds.into_iter()
+                                .filter(|c| c.key.to_lowercase().contains(&q) || c.description.to_lowercase().contains(&q))
+                                .collect()
+                        };
+                        filtered_commands.set(matches);
+                        selected_index.set(0);
+                    }
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to fetch commands: {e}").into());
+                }
+            }
+        });
+    };
+
+    // Update filtered commands based on current input
+    let update_palette = move |text: &str| {
+        if text.starts_with('/') {
+            let query = &text[1..]; // safe: '/' is single-byte ASCII
+            let cmds = all_commands.get_untracked();
+            let matches: Vec<CommandInfo> = if query.is_empty() {
+                cmds
+            } else {
+                let q = query.to_lowercase();
+                cmds.into_iter()
+                    .filter(|c| c.key.to_lowercase().contains(&q) || c.description.to_lowercase().contains(&q))
+                    .collect()
+            };
+            filtered_commands.set(matches);
+            selected_index.set(0);
+            show_palette.set(true);
+            // Fetch commands on first '/' if not yet loaded
+            fetch_commands();
+        } else {
+            show_palette.set(false);
+        }
+    };
+
+    // Insert selected command into input
+    let insert_command = move |cmd: &CommandInfo| {
+        input_text.set(format!("/{} ", cmd.key));
+        show_palette.set(false);
+    };
+
     let on_keydown = move |ev: web_sys::KeyboardEvent| {
+        if show_palette.get_untracked() {
+            let cmds = filtered_commands.get_untracked();
+            let count = cmds.len();
+            match ev.key().as_str() {
+                "ArrowDown" => {
+                    ev.prevent_default();
+                    if count > 0 {
+                        selected_index.set((selected_index.get_untracked() + 1) % count);
+                    }
+                }
+                "ArrowUp" => {
+                    ev.prevent_default();
+                    if count > 0 {
+                        let cur = selected_index.get_untracked();
+                        selected_index.set(if cur == 0 { count - 1 } else { cur - 1 });
+                    }
+                }
+                "Tab" | "Enter" => {
+                    ev.prevent_default();
+                    let idx = selected_index.get_untracked();
+                    if idx < count {
+                        insert_command(&cmds[idx]);
+                    }
+                }
+                "Escape" => {
+                    ev.prevent_default();
+                    show_palette.set(false);
+                }
+                _ => {}
+            }
+            return;
+        }
         if ev.key() == "Enter" && !ev.shift_key() {
             ev.prevent_default();
             send_message();
@@ -376,6 +497,43 @@ fn InputArea() -> impl IntoView {
                 </div>
             </Show>
 
+            // Slash command palette (above the input)
+            <Show when=move || show_palette.get() && !filtered_commands.get().is_empty()>
+                <div class="mb-1 rounded-xl border border-border bg-surface-raised shadow-lg
+                            max-h-[200px] overflow-y-auto">
+                    <For
+                        each=move || {
+                            filtered_commands.get().into_iter().enumerate().collect::<Vec<_>>()
+                        }
+                        key=|(_, cmd)| cmd.key.clone()
+                        children=move |(idx, cmd)| {
+                            let key = cmd.key.clone();
+                            let desc = cmd.description.clone();
+                            let cmd_for_click = cmd.clone();
+                            view! {
+                                <button
+                                    class=move || {
+                                        let base = "w-full text-left px-3 py-2 flex items-baseline gap-2 text-sm transition-colors";
+                                        if selected_index.get() == idx {
+                                            format!("{base} bg-primary/10 text-primary")
+                                        } else {
+                                            format!("{base} hover:bg-surface-sunken text-text-primary")
+                                        }
+                                    }
+                                    on:mousedown=move |ev| {
+                                        ev.prevent_default(); // keep textarea focus
+                                        insert_command(&cmd_for_click);
+                                    }
+                                >
+                                    <span class="font-medium shrink-0">"/" {key}</span>
+                                    <span class="text-text-secondary text-xs truncate">{desc}</span>
+                                </button>
+                            }
+                        }
+                    />
+                </div>
+            </Show>
+
             <div class="flex items-end gap-2">
                 // Hidden file input
                 <input
@@ -409,7 +567,9 @@ fn InputArea() -> impl IntoView {
                     rows=1
                     prop:value=move || input_text.get()
                     on:input=move |ev| {
-                        input_text.set(event_target_value(&ev));
+                        let val = event_target_value(&ev);
+                        input_text.set(val.clone());
+                        update_palette(&val);
                     }
                     on:keydown=on_keydown
                 />
