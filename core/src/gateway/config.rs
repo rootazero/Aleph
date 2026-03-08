@@ -117,7 +117,7 @@ impl Default for AgentConfig {
             workspace: "~/.aleph/workspaces/main".to_string(),
             model: "claude-sonnet-4-5".to_string(),
             fallback_models: vec![],
-            max_loops: 20,
+            max_loops: 50,
             system_prompt: None,
             tool_whitelist: vec![],
             tool_blacklist: vec![],
