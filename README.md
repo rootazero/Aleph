@@ -8,6 +8,8 @@
 
 [中文文档](README_CN.md)
 
+![Aleph Panel Dashboard](docs/images/panel-dashboard.png)
+
 ## What is Aleph?
 
 Aleph is a self-hosted personal AI assistant built in Rust. It runs entirely on your own devices, connecting through a unified Gateway to 15+ messaging channels (Telegram, Discord, Slack, WhatsApp, IRC, Matrix, Signal, and more). The Rust core drives an agent loop with multi-provider LLM support, 30+ built-in tools, hybrid memory search, and a plugin system — accessible through native apps, CLI, a web panel, and social bots simultaneously.
