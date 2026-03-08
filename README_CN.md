@@ -8,6 +8,12 @@
 
 [English](README.md)
 
+## 写在前面
+
+这是一个纯粹的个人兴趣项目。我不是专业程序员，只是一个被 AI 可能性深深吸引的普通人。我一边学习 AI 辅助编程，一边构建了 Aleph。项目的设计大量参考了 [OpenClaw](https://github.com/AIChatClaw/OpenClaw) 和 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)。
+
+出于开源精神，我把它分享出来，希望对其他人有所帮助或启发。欢迎任何贡献、反馈和想法。
+
 ## Aleph 是什么？
 
 Aleph 是一款使用 Rust 构建的自托管个人 AI 助手。它完全运行在你自己的设备上，通过统一的 Gateway 连接 15+ 消息通道（Telegram、Discord、Slack、WhatsApp、IRC、Matrix、Signal 等）。Rust 核心驱动了一个 Agent 循环，支持多供应商 LLM、30+ 内置工具、混合记忆检索和插件系统 — 可同时通过原生应用、CLI、Web 面板和社交 Bot 访问。
