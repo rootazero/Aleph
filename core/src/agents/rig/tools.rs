@@ -15,7 +15,6 @@ use tracing::{info, warn};
 pub const BUILTIN_TOOLS: &[&str] = &[
     "search",
     "web_fetch",
-    "youtube",
     "file_ops",
     "bash",
     "code_exec",

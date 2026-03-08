@@ -61,17 +61,6 @@ impl AlephToolServer {
         self.tool(WebFetchTool::new())
     }
 
-    /// Register the YouTube tool
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let server = AlephToolServer::new()
-    ///     .with_youtube();
-    /// ```
-    pub fn with_youtube(self) -> Self {
-        self.tool(YouTubeTool::new())
-    }
-
     /// Register the code execution tool
     ///
     /// # Example

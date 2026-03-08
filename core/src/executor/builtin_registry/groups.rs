@@ -21,7 +21,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
     ToolGroup {
         id: "search_web",
         name: "搜索与网络",
-        tools: &["search", "web_fetch", "youtube"],
+        tools: &["search", "web_fetch"],
     },
     ToolGroup {
         id: "file_code",

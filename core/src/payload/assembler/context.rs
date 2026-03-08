@@ -50,12 +50,6 @@ fn format_markdown(context: &AgentContext) -> Option<String> {
         }
     }
 
-    // Video transcript section
-    if let Some(transcript) = &context.video_transcript {
-        let video_section = transcript.format_for_context();
-        sections.push(video_section);
-    }
-
     // MCP tool result section
     if let Some(result) = &context.mcp_tool_result {
         let mcp_section = format_mcp_tool_result_markdown(result);

@@ -474,7 +474,7 @@ impl InboundMessageRouter {
     ///
     /// Enables support for skills, MCP tools, and custom commands in addition
     /// to built-in slash commands. Without this, only built-in commands
-    /// (/screenshot, /ocr, /search, /youtube, /webfetch, /gen) are recognized.
+    /// (/screenshot, /ocr, /search, /webfetch, /gen) are recognized.
     pub fn with_command_parser(mut self, parser: Arc<CommandParser>) -> Self {
         self.command_parser = Some(parser.clone());
         // Also wire into intent_decider for backward compatibility (L0 fallback)

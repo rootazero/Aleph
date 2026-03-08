@@ -57,7 +57,6 @@ mod tests {
         // Verify all tools are registered
         assert!(registry.get_tool("search").is_some());
         assert!(registry.get_tool("web_fetch").is_some());
-        assert!(registry.get_tool("youtube").is_some());
         assert!(registry.get_tool("file_ops").is_some());
         assert!(registry.get_tool("code_exec").is_some());
         assert!(registry.get_tool("pdf_generate").is_some());

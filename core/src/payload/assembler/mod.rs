@@ -450,15 +450,14 @@ mod tests {
 
         let capabilities = vec![
             CapabilityDeclaration::search(),
-            CapabilityDeclaration::youtube(),
+            CapabilityDeclaration::mcp(),
         ];
 
         let prompt = assembler.build_capability_aware_prompt("Base prompt.", &capabilities, None);
 
         // Should contain both capabilities
         assert!(prompt.contains("Web Search"));
-        assert!(prompt.contains("YouTube"));
-        assert!(prompt.contains("youtube.com"));
+        assert!(prompt.contains("Tool Execution"));
     }
 
     #[test]
@@ -504,7 +503,6 @@ mod tests {
             search_results: None,
             mcp_resources: None,
             mcp_tool_result: None,
-            video_transcript: None,
             webfetch_content: None,
             workflow_state: None,
             attachments: None,

@@ -19,9 +19,9 @@ use super::unified::UnifiedTool;
 /// Uses a simple enum with a separate source_id field for easy JSON encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSourceType {
-    /// Built-in native capabilities (Search, YouTube)
+    /// Built-in native capabilities (Search, WebFetch)
     Native,
-    /// System builtin commands (/search, /youtube, /webfetch)
+    /// System builtin commands (/search, /webfetch)
     Builtin,
     /// MCP server tool
     Mcp,

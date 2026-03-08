@@ -176,9 +176,6 @@ impl SmartToolFilter {
             ContentCategory::WebFetch => {
                 name == "web_fetch" || desc_lower.contains("fetch") || desc_lower.contains("url")
             }
-            ContentCategory::YouTube => {
-                name == "youtube" || desc_lower.contains("youtube") || desc_lower.contains("video")
-            }
             ContentCategory::Bash => {
                 name == "bash" || desc_lower.contains("bash") || desc_lower.contains("shell") || desc_lower.contains("command")
             }
@@ -229,7 +226,7 @@ mod tests {
         let tools = vec![
             create_test_tool("search", "Web search"),
             create_test_tool("file_ops", "File operations"),
-            create_test_tool("youtube", "YouTube video info"),
+            create_test_tool("web_fetch", "Fetch web pages"),
             create_test_tool("generate_image", "Generate images"),
         ];
 
@@ -252,7 +249,7 @@ mod tests {
         let tools = vec![
             create_test_tool("search", "Web search"),
             create_test_tool("file_ops", "File operations"),
-            create_test_tool("youtube", "YouTube video info"),
+            create_test_tool("web_fetch", "Fetch web pages"),
             create_test_tool("generate_image", "Generate images"),
         ];
 
@@ -277,21 +274,21 @@ mod tests {
         let tools = vec![
             create_test_tool("search", "Web search"),
             create_test_tool("file_ops", "File operations"),
-            create_test_tool("youtube", "YouTube video info"),
+            create_test_tool("web_fetch", "Fetch and download web pages"),
         ];
 
-        // Skill instructions mention YouTube
+        // Skill instructions mention fetching URLs
         let result = filter.filter(
             &tools,
             TaskCategory::General,
             "process this content",
-            Some("Download YouTube video transcript and summarize"),
+            Some("Fetch the URL content and summarize"),
         );
 
-        // youtube should be included due to skill instructions
+        // web_fetch should be included due to skill instructions
         let full_schema_tools = result.full_schema_tools();
         let all_full_schema: Vec<_> = full_schema_tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(all_full_schema.contains(&"youtube"), "youtube should be in full schema tools");
+        assert!(all_full_schema.contains(&"web_fetch"), "web_fetch should be in full schema tools");
     }
 
     #[test]

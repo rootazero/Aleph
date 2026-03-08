@@ -32,8 +32,8 @@
 //! │  (see crate::builtin_tools)    │  (see this mcp module)             │
 //! │  ├── SearchTool            │  ├── McpTransport trait            │
 //! │  ├── WebFetchTool          │  │   ├── StdioTransport            │
-//! │  ├── YouTubeTool           │  │   ├── HttpTransport             │
-//! │  └── McpToolWrapper        │  │   └── SseTransport              │
+//! │  └── McpToolWrapper        │  │   ├── HttpTransport             │
+//! │                            │  │   └── SseTransport              │
 //! │                            │  ├── Resources (McpResourceManager)│
 //! │                            │  ├── Prompts (McpPromptManager)    │
 //! │                            │  └── Runtime Detection             │

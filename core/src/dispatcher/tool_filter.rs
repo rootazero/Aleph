@@ -287,7 +287,7 @@ impl ToolFilter {
 
             TaskCategory::WebSearch => vec!["search"],
             TaskCategory::WebFetch => vec!["web_fetch"],
-            TaskCategory::MediaDownload => vec!["youtube"],
+            TaskCategory::MediaDownload => vec![],
 
             TaskCategory::ImageGeneration => vec!["generate_image"],
             TaskCategory::VideoGeneration => vec!["generate_video"],
@@ -437,7 +437,7 @@ mod tests {
         let filter = ToolFilter::default_config();
         assert!(filter.is_core_tool("search"));
         assert!(filter.is_core_tool("file_ops"));
-        assert!(!filter.is_core_tool("youtube"));
+        assert!(!filter.is_core_tool("web_fetch"));
     }
 
     #[test]
@@ -447,7 +447,7 @@ mod tests {
         let tools = vec![
             create_test_tool("search", "Search the web"),
             create_test_tool("file_ops", "File operations"),
-            create_test_tool("youtube", "Download YouTube videos"),
+            create_test_tool("web_fetch", "Fetch web pages"),
             create_test_tool("generate_image", "Generate images"),
             create_test_tool("web_fetch", "Fetch web pages"),
         ];
@@ -471,15 +471,15 @@ mod tests {
 
         let tools = vec![
             create_test_tool("search", "Search the web"),
-            create_test_tool("youtube", "Download YouTube videos"),
+            create_test_tool("web_fetch", "Fetch web pages"),
             create_test_tool("file_ops", "File operations"),
-            create_test_tool("generate_image", "Generate images"),
+            create_test_tool("media_tool", "Download media files and audio"),
         ];
 
         let result = filter.filter_by_category(&tools, TaskCategory::MediaDownload);
 
-        // youtube should be filtered (relevant)
-        assert!(result.filtered_tools.iter().any(|t| t.name == "youtube"));
+        // media_tool should be filtered (relevant by keyword "media"/"audio"/"download")
+        assert!(result.filtered_tools.iter().any(|t| t.name == "media_tool"));
     }
 
     #[test]
@@ -508,18 +508,18 @@ mod tests {
         let tools = vec![
             create_test_tool("search", "Search the web"),
             create_test_tool("file_ops", "File operations"),
-            create_test_tool("youtube", "Download YouTube videos"),
+            create_test_tool("web_fetch", "Fetch web pages"),
             create_test_tool("generate_image", "Generate images"),
         ];
 
         let result = filter.filter_by_categories(
             &tools,
-            &[TaskCategory::WebSearch, TaskCategory::MediaDownload],
+            &[TaskCategory::WebSearch, TaskCategory::WebFetch],
         );
 
-        // Both web-related and media-related tools should be filtered
+        // Both web-related tools should be filtered
         let filtered_names: Vec<_> = result.filtered_tools.iter().map(|t| &t.name).collect();
-        assert!(filtered_names.contains(&&"youtube".to_string()));
+        assert!(filtered_names.contains(&&"web_fetch".to_string()));
     }
 
     #[test]
@@ -528,15 +528,15 @@ mod tests {
 
         let tools = vec![
             create_test_tool("search", "Search the web"),
-            create_test_tool("youtube", "Download videos"),
+            create_test_tool("web_fetch", "Fetch web pages"),
         ];
 
-        let result = filter.filter_by_category(&tools, TaskCategory::MediaDownload);
+        let result = filter.filter_by_category(&tools, TaskCategory::WebFetch);
         let full_schema = result.full_schema_tools();
 
-        // Should include core tool (search) and filtered tool (youtube)
+        // Should include core tool (search) and filtered tool (web_fetch)
         assert!(full_schema.iter().any(|t| t.name == "search"));
-        assert!(full_schema.iter().any(|t| t.name == "youtube"));
+        assert!(full_schema.iter().any(|t| t.name == "web_fetch"));
     }
 
     #[test]

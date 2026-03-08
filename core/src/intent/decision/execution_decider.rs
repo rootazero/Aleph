@@ -234,11 +234,6 @@ static SLASH_COMMANDS: LazyLock<HashMap<&'static str, SlashCommand>> = LazyLock:
             description: "Search the web",
         },
         SlashCommand {
-            name: "youtube",
-            tool_id: "youtube_transcript",
-            description: "Get YouTube video transcript",
-        },
-        SlashCommand {
             name: "webfetch",
             tool_id: "web_fetch",
             description: "Fetch web page content",
