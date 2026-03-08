@@ -277,6 +277,7 @@ dependencies = [
  "arrow-schema",
  "async-imap",
  "async-native-tls",
+ "async-stream",
  "async-trait",
  "axum",
  "base64 0.22.1",

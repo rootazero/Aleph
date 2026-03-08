@@ -80,6 +80,7 @@ async-trait = "0.1"
 anyhow = "1.0"
 # For async combinators (join_all, etc.)
 futures = "0.3"
+async-stream = "0.3"
 # LanceDB vector database (replacing sqlite-vec)
 lancedb = "0.26"
 lance-index = "2.0"
