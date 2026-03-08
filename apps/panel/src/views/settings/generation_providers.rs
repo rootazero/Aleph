@@ -4,6 +4,7 @@ use leptos::task::spawn_local;
 use std::rc::Rc;
 use crate::api::{GenerationProvidersApi, GenerationProviderConfig, GenerationProviderEntry};
 use crate::api::{GenerationConfig, GenerationConfigApi};
+use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
 use crate::preset_providers::{PresetProvider, PresetProviders};
@@ -866,12 +867,11 @@ fn AddCustomProviderPanel(
                 // API Key
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">"API Key"</label>
-                    <input
-                        type="password"
-                        value=move || api_key.get()
-                        on:input=move |ev| api_key.set(event_target_value(&ev))
+                    <SecretInput
+                        value=Signal::derive(move || api_key.get())
+                        on_change=move |v| api_key.set(v)
                         placeholder="sk-..."
-                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        monospace=true
                     />
                 </div>
 

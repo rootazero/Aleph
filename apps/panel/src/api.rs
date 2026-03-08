@@ -13,10 +13,13 @@ use crate::context::DashboardState;
 // Memory API
 // ============================================================================
 
-/// Memory entry returned by the backend search endpoint
+/// Raw memory entry (Layer 1 — user_input + ai_output conversation records)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryFact {
+pub struct RawMemory {
     pub id: String,
+    /// Agent that produced this memory
+    #[serde(default)]
+    pub agent_id: String,
     /// Combined display content (mapped from user_input + ai_output)
     pub content: String,
     #[serde(default)]
@@ -25,11 +28,35 @@ pub struct MemoryFact {
     pub created_at: Option<String>,
 }
 
+/// Compressed fact entry (Layer 2 — extracted from raw memories by compression)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressedFact {
+    pub id: String,
+    #[serde(default)]
+    pub agent_id: String,
+    pub content: String,
+    pub fact_type: String,
+    pub confidence: f32,
+    pub is_valid: bool,
+    pub created_at: i64,
+    pub category: String,
+    pub path: String,
+}
+
+/// Backend list_facts response wrapper
+#[derive(Debug, Clone, Deserialize)]
+struct BackendListFactsResponse {
+    #[serde(default)]
+    facts: Vec<CompressedFact>,
+}
+
 /// Backend memory search result entry (matches handler MemoryEntry)
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct BackendMemoryEntry {
     id: String,
+    #[serde(default)]
+    agent_id: String,
     #[serde(default)]
     app_bundle_id: String,
     #[serde(default)]
@@ -69,12 +96,12 @@ pub struct MemoryStats {
 pub struct MemoryApi;
 
 impl MemoryApi {
-    /// Search for memories
+    /// Search raw memories (Layer 1)
     pub async fn search(
         state: &DashboardState,
         query: String,
         limit: Option<u32>,
-    ) -> Result<Vec<MemoryFact>, String> {
+    ) -> Result<Vec<RawMemory>, String> {
         let params = serde_json::json!({
             "query": query,
             "limit": limit,
@@ -86,7 +113,7 @@ impl MemoryApi {
         let response: BackendSearchResponse = serde_json::from_value(result)
             .map_err(|e| format!("Failed to parse search results: {}", e))?;
 
-        // Map backend entries to UI MemoryFact
+        // Map backend entries to RawMemory
         let facts = response.memories.into_iter().map(|entry| {
             // Combine user_input and ai_output for display
             let content = if !entry.user_input.is_empty() && !entry.ai_output.is_empty() {
@@ -110,8 +137,9 @@ impl MemoryApi {
                 None
             };
 
-            MemoryFact {
+            RawMemory {
                 id: entry.id,
+                agent_id: entry.agent_id,
                 content,
                 source,
                 created_at,
@@ -132,6 +160,23 @@ impl MemoryApi {
 
         state.rpc_call("memory.delete", params).await?;
         Ok(())
+    }
+
+    /// List compressed facts (Layer 2)
+    pub async fn list_facts(
+        state: &DashboardState,
+        limit: Option<usize>,
+    ) -> Result<Vec<CompressedFact>, String> {
+        let params = serde_json::json!({
+            "limit": limit.unwrap_or(50),
+        });
+
+        let result = state.rpc_call("memory.listFacts", params).await?;
+
+        let response: BackendListFactsResponse = serde_json::from_value(result)
+            .map_err(|e| format!("Failed to parse facts: {}", e))?;
+
+        Ok(response.facts)
     }
 
     /// Get memory statistics
