@@ -8,6 +8,7 @@
 
 [中文文档](README_CN.md)
 
+![Aleph Panel Dashboard](docs/images/panel-dashboard.png)
 ![Aleph Panel Chat](docs/images/CleanShot3.png)
 ![Aleph Panel Settings](docs/images/CleanShot2.png)
 
