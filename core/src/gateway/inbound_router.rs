@@ -29,6 +29,7 @@ use crate::group_chat::{
     GroupChatRequest, GroupChatStatus,
 };
 use crate::intent::{ExecutionIntentDecider, ExecutionMode};
+use crate::intent::{DirectToolSource, IntentResult, UnifiedIntentClassifier};
 
 #[cfg(target_os = "macos")]
 use super::interfaces::imessage::normalize_phone;
@@ -228,6 +229,38 @@ fn serialize_execution_mode(mode: &ExecutionMode) -> Option<String> {
     }
 }
 
+/// Serialize an `IntentResult` to a JSON string for RunRequest metadata.
+///
+/// Returns `Some(json)` for `DirectTool` (which maps to a specific tool invocation),
+/// and `None` for `Execute`, `Converse`, and `Abort` (which are handled by the agent loop).
+fn serialize_intent_result(result: &IntentResult) -> Option<String> {
+    match result {
+        IntentResult::DirectTool {
+            tool_id,
+            args,
+            source,
+        } => {
+            let source_str = match source {
+                DirectToolSource::SlashCommand => "slash_command",
+                DirectToolSource::Skill => "skill",
+                DirectToolSource::Mcp => "mcp",
+                DirectToolSource::Custom => "custom",
+            };
+            serde_json::to_string(&serde_json::json!({
+                "type": "direct_tool",
+                "tool_id": tool_id,
+                "args": args,
+                "source": source_str,
+            }))
+            .ok()
+        }
+        // Execute, Converse, and Abort are not direct commands
+        IntentResult::Execute { .. }
+        | IntentResult::Converse { .. }
+        | IntentResult::Abort => None,
+    }
+}
+
 /// Inbound message router
 pub struct InboundMessageRouter {
     channel_registry: Arc<ChannelRegistry>,
@@ -260,6 +293,8 @@ pub struct InboundMessageRouter {
     /// Command parser for unified slash command resolution (optional)
     /// When set, resolves all command sources (builtin, skill, MCP, custom)
     command_parser: Option<Arc<CommandParser>>,
+    /// New unified intent classifier (v3 pipeline, additive migration)
+    unified_classifier: Option<UnifiedIntentClassifier>,
 }
 
 /// Unified channel config for permission checking
@@ -358,6 +393,7 @@ impl InboundMessageRouter {
             llm_provider: None,
             intent_decider: ExecutionIntentDecider::default(),
             command_parser: None,
+            unified_classifier: None,
         }
     }
 
@@ -389,6 +425,7 @@ impl InboundMessageRouter {
             llm_provider: None,
             intent_decider: ExecutionIntentDecider::default(),
             command_parser: None,
+            unified_classifier: None,
         }
     }
 
@@ -422,6 +459,7 @@ impl InboundMessageRouter {
             llm_provider: None,
             intent_decider: ExecutionIntentDecider::default(),
             command_parser: None,
+            unified_classifier: None,
         }
     }
 
@@ -441,6 +479,14 @@ impl InboundMessageRouter {
     pub fn with_workspace_manager(mut self, manager: Arc<WorkspaceManager>) -> Self {
         self.workspace_manager = Some(manager);
         self
+    }
+
+    /// Set the unified intent classifier (v3 pipeline).
+    ///
+    /// When set, `serialize_intent_result()` can be used alongside the existing
+    /// `serialize_execution_mode()` for new-pipeline metadata serialization.
+    pub fn set_unified_classifier(&mut self, classifier: UnifiedIntentClassifier) {
+        self.unified_classifier = Some(classifier);
     }
 
     /// Enable group chat support.

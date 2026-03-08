@@ -13,7 +13,7 @@
 //! │ L1: Regex Matching (<5ms)                                   │
 //! │     - Fast pattern matching for explicit commands           │
 //! │     - Confidence: 1.0                                       │
-//! │     - Example: "整理文件夹里的文件" → FileOrganize           │
+//! │     - Example: "organize files in folder" → FileOrganize     │
 //! └─────────────────────────────────────────────────────────────┘
 //!     ↓ (no match)
 //! ┌─────────────────────────────────────────────────────────────┐
@@ -52,7 +52,7 @@
 //!
 //! // Basic usage (L1 + L2 only)
 //! let classifier = IntentClassifier::new();
-//! let intent = classifier.classify("帮我整理文件").await;
+//! let intent = classifier.classify("help me organize files").await;
 //!
 //! // With keyword policy from config
 //! let policy = KeywordPolicy::with_builtin_rules();
@@ -65,10 +65,10 @@
 //! # Exclusion Patterns
 //!
 //! Inputs containing analysis/understanding verbs are excluded from Agent mode:
-//! - Chinese: 分析, 理解, 解释, 总结, 摘要...
+//! - Chinese: 分析 (analyze), 理解 (understand), 解释 (explain), 总结 (summarize), 摘要 (abstract)...
 //! - English: analyze, understand, explain, summarize...
 //!
-//! This ensures requests like "分析这个文件" (analyze this file) are
+//! This ensures requests like "analyze this file" are
 //! handled conversationally rather than triggering file operations.
 
 // Submodules
@@ -82,7 +82,11 @@ pub mod types;
 pub use detection::{
     AiIntentDetector, AiIntentResult, ExecutableTask, ExecutionIntent, IntentClassifier,
     KeywordIndex, KeywordMatch, KeywordMatchMode, KeywordRule,
+    UnifiedIntentClassifier, UnifiedIntentClassifierBuilder, IntentContext, StructuralContext,
 };
+
+// Re-export from types (new pipeline)
+pub use types::{DetectionLayer, DirectToolSource, ExecuteMetadata, IntentResult};
 
 // Re-export from decision
 pub use decision::{

@@ -21,6 +21,9 @@ use crate::event::{
 };
 use crate::intent::{ExecutionIntent, IntentClassifier};
 use crate::intent::{ContextSignals, ExecutionIntentDecider, ExecutionMode};
+use crate::intent::{
+    IntentContext, IntentResult, StructuralContext, UnifiedIntentClassifier,
+};
 
 use super::Complexity;
 
@@ -124,6 +127,8 @@ pub struct IntentAnalyzer {
     decider: ExecutionIntentDecider,
     /// Use the unified decider instead of legacy classifier
     use_unified_decider: bool,
+    /// New unified intent classifier (v3 pipeline, additive migration)
+    unified_classifier: Option<UnifiedIntentClassifier>,
 }
 
 impl Default for IntentAnalyzer {
@@ -139,6 +144,7 @@ impl IntentAnalyzer {
             classifier: IntentClassifier::new(),
             decider: ExecutionIntentDecider::new(),
             use_unified_decider: false,
+            unified_classifier: None,
         }
     }
 
@@ -148,6 +154,7 @@ impl IntentAnalyzer {
             classifier: IntentClassifier::new(),
             decider: ExecutionIntentDecider::new(),
             use_unified_decider: true,
+            unified_classifier: None,
         }
     }
 
@@ -157,6 +164,20 @@ impl IntentAnalyzer {
             classifier,
             decider: ExecutionIntentDecider::new(),
             use_unified_decider: false,
+            unified_classifier: None,
+        }
+    }
+
+    /// Create IntentAnalyzer with the new UnifiedIntentClassifier (v3 pipeline).
+    ///
+    /// This is the newest path that uses the fully unified classification pipeline,
+    /// replacing both `IntentClassifier` and `ExecutionIntentDecider`.
+    pub fn with_unified_classifier(classifier: UnifiedIntentClassifier) -> Self {
+        Self {
+            classifier: IntentClassifier::new(),
+            decider: ExecutionIntentDecider::new(),
+            use_unified_decider: false,
+            unified_classifier: Some(classifier),
         }
     }
 
@@ -589,6 +610,121 @@ impl IntentAnalyzer {
             return Complexity::NeedsPlan;
         }
         Complexity::Simple
+    }
+
+    // ========================================================================
+    // Unified Pipeline Path (v3)
+    // ========================================================================
+
+    /// Handle input using the new UnifiedIntentClassifier pipeline.
+    ///
+    /// This is the v3 unified pipeline path that replaces both the legacy
+    /// `IntentClassifier` and the v2 `ExecutionIntentDecider`. It produces
+    /// `IntentResult` variants and maps them to the existing event types.
+    ///
+    /// Returns `Ok(None)` if no unified classifier is configured.
+    pub async fn handle_with_unified(
+        &self,
+        input: &str,
+        event: &InputEvent,
+    ) -> Result<Option<Vec<AlephEvent>>, HandlerError> {
+        let classifier = match self.unified_classifier.as_ref() {
+            Some(c) => c,
+            None => return Ok(None),
+        };
+
+        // Build IntentContext from InputEvent
+        let intent_ctx = Self::build_intent_context(event);
+
+        // Classify
+        let result = classifier.classify(input, &intent_ctx).await;
+
+        tracing::debug!(
+            intent_result = ?result,
+            "UnifiedIntentClassifier decision"
+        );
+
+        let events = match result {
+            IntentResult::Abort => {
+                // Return an empty event list to signal abort (no action taken)
+                vec![]
+            }
+            IntentResult::DirectTool {
+                tool_id,
+                args,
+                source,
+            } => {
+                let tool_call = ToolCallRequest {
+                    tool: tool_id,
+                    parameters: serde_json::json!({
+                        "args": args,
+                        "input_text": input,
+                        "source": format!("{:?}", source),
+                    }),
+                    plan_step_id: None,
+                };
+                vec![AlephEvent::ToolCallRequested(tool_call)]
+            }
+            IntentResult::Execute {
+                confidence: _,
+                metadata,
+            } => {
+                // Determine if planning is needed based on complexity
+                if self.has_multi_step_keywords(input)
+                    || self.has_step_markers(input)
+                    || self.has_multiple_action_sentences(input)
+                {
+                    let detected_steps = self.extract_steps(input);
+                    let plan_request = PlanRequest {
+                        input: event.clone(),
+                        intent_type: metadata.keyword_tag.clone(),
+                        detected_steps,
+                    };
+                    vec![AlephEvent::PlanRequested(plan_request)]
+                } else {
+                    let tool_call = ToolCallRequest {
+                        tool: metadata
+                            .keyword_tag
+                            .clone()
+                            .unwrap_or_else(|| "general_task".to_string()),
+                        parameters: serde_json::json!({
+                            "action": input,
+                            "input_text": input,
+                            "layer": format!("{:?}", metadata.layer),
+                        }),
+                        plan_step_id: None,
+                    };
+                    vec![AlephEvent::ToolCallRequested(tool_call)]
+                }
+            }
+            IntentResult::Converse { .. } => {
+                let tool_call = ToolCallRequest {
+                    tool: "general_chat".to_string(),
+                    parameters: serde_json::json!({
+                        "input": input,
+                        "mode": "conversation",
+                    }),
+                    plan_step_id: None,
+                };
+                vec![AlephEvent::ToolCallRequested(tool_call)]
+            }
+        };
+
+        Ok(Some(events))
+    }
+
+    /// Build an `IntentContext` from an `InputEvent`.
+    fn build_intent_context(event: &InputEvent) -> IntentContext {
+        let structural = event
+            .context
+            .as_ref()
+            .map(|ctx| StructuralContext {
+                selected_file: ctx.selected_text.clone(),
+                clipboard_type: None,
+            })
+            .unwrap_or_default();
+
+        IntentContext { structural }
     }
 }
 
