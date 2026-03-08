@@ -161,7 +161,7 @@ impl MemoryCommands {
     /// List facts with optional filtering
     pub async fn list(&self, filter: ListFilter) -> Result<Vec<FactSummary>, AlephError> {
         // Get facts from database
-        let facts = self.db.get_all_facts(filter.include_decayed).await?;
+        let facts = self.db.get_all_facts(filter.include_decayed, None).await?;
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -238,7 +238,7 @@ impl MemoryCommands {
         }
 
         // Try prefix match
-        let facts = self.db.get_all_facts(true).await?;
+        let facts = self.db.get_all_facts(true, None).await?;
         let matches: Vec<_> = facts.iter().filter(|f| f.id.starts_with(id)).collect();
 
         match matches.len() {
@@ -409,7 +409,7 @@ impl MemoryCommands {
         }
 
         // Try prefix match
-        let facts = self.db.get_all_facts(true).await?;
+        let facts = self.db.get_all_facts(true, None).await?;
         let matches: Vec<_> = facts.iter().filter(|f| f.id.starts_with(id)).collect();
 
         match matches.len() {
@@ -445,7 +445,7 @@ impl MemoryCommands {
 
     /// Export all facts to JSON format
     pub async fn dump(&self, include_invalid: bool) -> Result<String, AlephError> {
-        let facts = self.db.get_all_facts(include_invalid).await?;
+        let facts = self.db.get_all_facts(include_invalid, None).await?;
 
         let export = FactExport {
             version: 1,

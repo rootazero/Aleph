@@ -251,9 +251,12 @@ pub trait MemoryStore: Send + Sync {
     ) -> Result<Vec<MemoryFact>, AlephError>;
 
     /// Retrieve all facts, optionally including invalidated ones.
+    ///
+    /// When `workspace` is `Some`, only facts in that workspace are returned.
     async fn get_all_facts(
         &self,
         include_invalid: bool,
+        workspace: Option<&str>,
     ) -> Result<Vec<MemoryFact>, AlephError>;
 
     // -- Mutation helpers ---------------------------------------------------

@@ -7,13 +7,15 @@ use serde_json::json;
 
 use super::parse_params;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
-use crate::memory::store::{MemoryBackend, SessionStore};
+use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
+use crate::gateway::workspace::WorkspaceFilter;
 use crate::sync_primitives::Arc;
 
 /// Memory entry for JSON serialization
 #[derive(Debug, Clone, Serialize)]
 pub struct MemoryEntry {
     pub id: String,
+    pub agent_id: String,
     pub app_bundle_id: String,
     pub window_title: String,
     pub user_input: String,
@@ -64,6 +66,9 @@ pub struct SearchParams {
     /// Search query text (optional - returns recent if empty)
     #[serde(default)]
     pub query: Option<String>,
+    /// Filter by agent ID (workspace isolation)
+    #[serde(default)]
+    pub agent_id: Option<String>,
     /// Filter by app bundle ID
     #[serde(default)]
     pub app_bundle_id: Option<String>,
@@ -83,6 +88,7 @@ impl Default for SearchParams {
     fn default() -> Self {
         Self {
             query: None,
+            agent_id: None,
             app_bundle_id: None,
             window_title: None,
             limit: default_limit(),
@@ -110,6 +116,7 @@ pub async fn handle_search(
     let filter = crate::memory::store::types::MemoryFilter {
         app_bundle_id: params.app_bundle_id.clone(),
         window_title: params.window_title.clone(),
+        workspace: params.agent_id.clone().map(WorkspaceFilter::Single),
         ..Default::default()
     };
 
@@ -123,6 +130,7 @@ pub async fn handle_search(
                 .into_iter()
                 .map(|m| MemoryEntry {
                     id: m.id,
+                    agent_id: m.workspace,
                     app_bundle_id: m.context.app_bundle_id,
                     window_title: m.context.window_title,
                     user_input: m.user_input,
@@ -210,6 +218,84 @@ pub async fn handle_clear(
             request.id,
             INTERNAL_ERROR,
             format!("Clear failed: {}", e),
+        ),
+    }
+}
+
+// ============================================================================
+// List Facts
+// ============================================================================
+
+/// Parameters for memory.list_facts
+#[derive(Debug, Default, Deserialize)]
+pub struct ListFactsParams {
+    /// Filter by agent ID (workspace isolation)
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// Maximum results (default: 50)
+    #[serde(default = "default_facts_limit")]
+    pub limit: usize,
+    /// Include invalidated facts (default: false)
+    #[serde(default)]
+    pub include_invalid: bool,
+}
+
+fn default_facts_limit() -> usize {
+    50
+}
+
+/// Fact entry for JSON serialization
+#[derive(Debug, Clone, Serialize)]
+pub struct FactEntry {
+    pub id: String,
+    pub agent_id: String,
+    pub content: String,
+    pub fact_type: String,
+    pub confidence: f32,
+    pub is_valid: bool,
+    pub created_at: i64,
+    pub category: String,
+    pub path: String,
+}
+
+/// List compressed facts (Layer 2 data)
+pub async fn handle_list_facts(
+    request: JsonRpcRequest,
+    db: MemoryBackend,
+) -> JsonRpcResponse {
+    let params: ListFactsParams = request
+        .params
+        .as_ref()
+        .and_then(|p| serde_json::from_value(p.clone()).ok())
+        .unwrap_or_default();
+
+    match db.get_all_facts(params.include_invalid, params.agent_id.as_deref()).await {
+        Ok(mut facts) => {
+            // Sort by created_at descending (most recent first)
+            facts.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            facts.truncate(params.limit);
+
+            let entries: Vec<FactEntry> = facts
+                .into_iter()
+                .map(|f| FactEntry {
+                    id: f.id,
+                    agent_id: f.workspace,
+                    content: f.content,
+                    fact_type: format!("{:?}", f.fact_type),
+                    confidence: f.confidence,
+                    is_valid: f.is_valid,
+                    created_at: f.created_at,
+                    category: format!("{:?}", f.category),
+                    path: f.path,
+                })
+                .collect();
+
+            JsonRpcResponse::success(request.id, json!({ "facts": entries }))
+        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("List facts failed: {}", e),
         ),
     }
 }
@@ -329,6 +415,7 @@ mod tests {
         let json = json!({});
         let params: SearchParams = serde_json::from_value(json).unwrap();
         assert!(params.query.is_none());
+        assert!(params.agent_id.is_none());
         assert!(params.app_bundle_id.is_none());
         assert_eq!(params.limit, 20);
     }
@@ -337,6 +424,7 @@ mod tests {
     fn test_memory_entry_serialize() {
         let entry = MemoryEntry {
             id: "test-id".to_string(),
+            agent_id: "main".to_string(),
             app_bundle_id: "com.example.app".to_string(),
             window_title: "Test Window".to_string(),
             user_input: "Hello".to_string(),
@@ -354,6 +442,7 @@ mod tests {
     fn test_memory_entry_no_score() {
         let entry = MemoryEntry {
             id: "test-id".to_string(),
+            agent_id: "main".to_string(),
             app_bundle_id: "".to_string(),
             window_title: "".to_string(),
             user_input: "".to_string(),

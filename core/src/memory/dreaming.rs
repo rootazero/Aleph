@@ -437,7 +437,7 @@ impl DreamDaemon {
 
         if let Some(handler) = &self.command_handler {
             // Pre-compute per-fact decay data so we can emit events.
-            let valid_facts = self.database.get_all_facts(false).await?;
+            let valid_facts = self.database.get_all_facts(false, None).await?;
             let decay_tuples: Vec<(String, f32, f32)> = valid_facts
                 .iter()
                 .filter_map(|fact| {

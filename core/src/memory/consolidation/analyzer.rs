@@ -65,7 +65,7 @@ impl ConsolidationAnalyzer {
     /// Analyze facts and generate a user profile
     pub async fn generate_profile(&self, config: ConsolidationConfig) -> Result<UserProfile> {
         // Get all valid facts (include_invalid = false)
-        let all_facts = self.database.get_all_facts(false).await?;
+        let all_facts = self.database.get_all_facts(false, None).await?;
 
         // Calculate frequency scores
         let frequent_facts = self.calculate_frequency_scores(all_facts, &config);

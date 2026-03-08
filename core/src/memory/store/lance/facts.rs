@@ -449,14 +449,25 @@ impl MemoryStore for LanceMemoryBackend {
     async fn get_all_facts(
         &self,
         include_invalid: bool,
+        workspace: Option<&str>,
     ) -> Result<Vec<MemoryFact>, AlephError> {
-        let filter = if include_invalid {
+        let mut clauses = Vec::new();
+        if !include_invalid {
+            clauses.push("is_valid = true".to_string());
+        }
+        if let Some(ws) = workspace {
+            clauses.push(format!(
+                "workspace = '{}'",
+                escape_sql_string(ws)
+            ));
+        }
+        let filter = if clauses.is_empty() {
             None
         } else {
-            Some("is_valid = true")
+            Some(clauses.join(" AND "))
         };
 
-        scan_facts(&self.facts_table, filter, None).await
+        scan_facts(&self.facts_table, filter.as_deref(), None).await
     }
 
     // -- Mutation helpers ---------------------------------------------------
@@ -872,12 +883,12 @@ mod tests {
         backend.insert_fact(&fact_invalid).await.unwrap();
 
         // Without invalid
-        let valid_only = backend.get_all_facts(false).await.unwrap();
+        let valid_only = backend.get_all_facts(false, None).await.unwrap();
         assert_eq!(valid_only.len(), 1);
         assert_eq!(valid_only[0].content, "Valid");
 
         // With invalid
-        let all = backend.get_all_facts(true).await.unwrap();
+        let all = backend.get_all_facts(true, None).await.unwrap();
         assert_eq!(all.len(), 2);
     }
 
@@ -916,13 +927,13 @@ mod tests {
             .unwrap();
 
         let learning = backend
-            .get_facts_by_type(FactType::Learning, &NamespaceScope::Owner, "default", 10)
+            .get_facts_by_type(FactType::Learning, &NamespaceScope::Owner, "main", 10)
             .await
             .unwrap();
         assert_eq!(learning.len(), 2);
 
         let prefs = backend
-            .get_facts_by_type(FactType::Preference, &NamespaceScope::Owner, "default", 10)
+            .get_facts_by_type(FactType::Preference, &NamespaceScope::Owner, "main", 10)
             .await
             .unwrap();
         assert_eq!(prefs.len(), 1);
@@ -1006,7 +1017,7 @@ mod tests {
             .unwrap();
 
         let entries = backend
-            .list_by_path("aleph://user/preferences/", &NamespaceScope::Owner, "default")
+            .list_by_path("aleph://user/preferences/", &NamespaceScope::Owner, "main")
             .await
             .unwrap();
 
@@ -1030,7 +1041,7 @@ mod tests {
             .get_by_path(
                 "aleph://user/preferences/coding/rust",
                 &NamespaceScope::Owner,
-                "default",
+                "main",
             )
             .await
             .unwrap();
@@ -1040,7 +1051,7 @@ mod tests {
 
         // Non-existent path
         let missing = backend
-            .get_by_path("aleph://nonexistent/path", &NamespaceScope::Owner, "default")
+            .get_by_path("aleph://nonexistent/path", &NamespaceScope::Owner, "main")
             .await
             .unwrap();
         assert!(missing.is_none());

@@ -218,7 +218,7 @@ mod tests {
             .to_search_filter()
             .to_lance_filter()
             .unwrap();
-        assert!(default_sql.contains("workspace = 'default'"));
+        assert!(default_sql.contains("workspace = 'main'"));
     }
 
     // -----------------------------------------------------------------------

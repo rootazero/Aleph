@@ -110,7 +110,7 @@ impl MemoryEntry {
             ai_output,
             embedding: None,
             namespace: "owner".to_string(),
-            workspace: "default".to_string(),
+            workspace: "main".to_string(),
             similarity_score: None,
         }
     }
@@ -130,7 +130,7 @@ impl MemoryEntry {
             ai_output,
             embedding: Some(embedding),
             namespace: "owner".to_string(),
-            workspace: "default".to_string(),
+            workspace: "main".to_string(),
             similarity_score: None,
         }
     }
