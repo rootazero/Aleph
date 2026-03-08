@@ -26,9 +26,9 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub bindings: HashMap<String, String>,
 
-    /// Channel connector configurations
+    /// Channel connector configurations (parsed by app config, ignored here)
     #[serde(default)]
-    pub channels: ChannelsConfig,
+    pub channels: serde_json::Value,
 
     /// Sandbox configuration
     #[serde(default)]
@@ -52,7 +52,7 @@ impl Default for GatewayConfig {
             gateway: GatewayServerConfig::default(),
             agents,
             bindings: HashMap::new(),
-            channels: ChannelsConfig::default(),
+            channels: serde_json::Value::Object(serde_json::Map::new()),
             sandbox: SandboxConfig::default(),
             tools: ToolsConfig::default(),
             privacy: PrivacyConfig::default(),
@@ -130,6 +130,7 @@ impl AgentConfig {
     pub fn to_instance_config(&self, agent_id: &str) -> AgentInstanceConfig {
         AgentInstanceConfig {
             agent_id: agent_id.to_string(),
+            display_name: None,
             workspace: expand_path(&self.workspace),
             model: self.model.clone(),
             fallback_models: self.fallback_models.clone(),
@@ -144,74 +145,11 @@ impl AgentConfig {
     }
 }
 
-/// Channel connectors configuration
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ChannelsConfig {
-    /// Telegram bot configuration
-    pub telegram: Option<TelegramConfig>,
-    /// Discord bot configuration
-    pub discord: Option<DiscordConfig>,
-    /// Slack app configuration
-    pub slack: Option<SlackConfig>,
-    /// WebChat configuration
-    pub webchat: Option<WebChatConfig>,
-}
+// Channel connector configurations have been unified into the app Config system
+// (Config.channels: HashMap<String, Value>). GatewayConfig.channels is kept as
+// a raw Value to avoid parse errors — the actual parsing happens in
+// Config::resolved_channels().
 
-/// Telegram bot configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TelegramConfig {
-    /// Enable the connector
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    /// Bot token (supports ${ENV_VAR} expansion)
-    pub token: String,
-    /// Route to specific agent (default: use bindings)
-    pub route_to_agent: Option<String>,
-    /// Allowed chat IDs (empty = all allowed)
-    #[serde(default)]
-    pub allowed_chats: Vec<i64>,
-}
-
-/// Discord bot configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscordConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    pub token: String,
-    pub route_to_agent: Option<String>,
-    #[serde(default)]
-    pub allowed_guilds: Vec<u64>,
-}
-
-/// Slack app configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SlackConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    pub bot_token: String,
-    pub app_token: String,
-    pub route_to_agent: Option<String>,
-}
-
-/// WebChat configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct WebChatConfig {
-    pub enabled: bool,
-    pub port: u16,
-    pub cors_origins: Vec<String>,
-}
-
-impl Default for WebChatConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            port: 18790,
-            cors_origins: vec!["http://localhost:*".to_string()],
-        }
-    }
-}
 
 /// Sandbox configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,11 +268,8 @@ impl GatewayConfig {
 
     /// Parse configuration from TOML string
     pub fn from_toml(content: &str) -> Result<Self, ConfigError> {
-        let mut config: GatewayConfig =
+        let config: GatewayConfig =
             toml::from_str(content).map_err(|e| ConfigError::ParseFailed(e.to_string()))?;
-
-        // Expand environment variables in sensitive fields
-        config.expand_env_vars();
 
         // Validate configuration
         config.validate()?;
@@ -353,21 +288,6 @@ impl GatewayConfig {
         } else {
             info!("No config file found, using defaults");
             Ok(Self::default())
-        }
-    }
-
-    /// Expand environment variables in configuration
-    fn expand_env_vars(&mut self) {
-        // Expand in channel configs
-        if let Some(ref mut telegram) = self.channels.telegram {
-            telegram.token = expand_env_var(&telegram.token);
-        }
-        if let Some(ref mut discord) = self.channels.discord {
-            discord.token = expand_env_var(&discord.token);
-        }
-        if let Some(ref mut slack) = self.channels.slack {
-            slack.bot_token = expand_env_var(&slack.bot_token);
-            slack.app_token = expand_env_var(&slack.app_token);
         }
     }
 
@@ -440,6 +360,7 @@ fn expand_path(path: &str) -> PathBuf {
 }
 
 /// Expand ${ENV_VAR} in strings
+#[cfg(test)]
 fn expand_env_var(s: &str) -> String {
     let mut result = s.to_string();
     let mut search_from = 0;
@@ -525,7 +446,7 @@ headless = true
         assert_eq!(config.agents.len(), 2);
         assert!(config.agents.contains_key("work"));
         assert_eq!(config.bindings["cli:*"], "work");
-        assert!(config.channels.telegram.is_some());
+        assert!(config.channels.get("telegram").is_some());
         assert!(config.sandbox.enabled);
     }
 

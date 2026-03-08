@@ -51,6 +51,7 @@ async fn test_simple_execution_engine_basic() {
     let config = AgentInstanceConfig {
         agent_id: "test".to_string(),
         workspace: temp.path().join("workspace"),
+        agent_dir: temp.path().join("agents/test"),
         ..Default::default()
     };
 
@@ -86,6 +87,7 @@ async fn test_simple_execution_engine_run() {
     let config = AgentInstanceConfig {
         agent_id: "test-simple".to_string(),
         workspace: temp.path().join("workspace"),
+        agent_dir: temp.path().join("agents/test-simple"),
         ..Default::default()
     };
 

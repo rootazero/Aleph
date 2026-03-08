@@ -183,24 +183,7 @@ pub async fn handle_get(
             json!(agents)
         }
         Some("bindings") => json!(config.bindings),
-        Some("channels") => json!({
-            "telegram": config.channels.telegram.as_ref().map(|t| json!({
-                "enabled": t.enabled,
-                "route_to_agent": t.route_to_agent,
-            })),
-            "discord": config.channels.discord.as_ref().map(|d| json!({
-                "enabled": d.enabled,
-                "route_to_agent": d.route_to_agent,
-            })),
-            "slack": config.channels.slack.as_ref().map(|s| json!({
-                "enabled": s.enabled,
-                "route_to_agent": s.route_to_agent,
-            })),
-            "webchat": config.channels.webchat.as_ref().map(|w| json!({
-                "enabled": w.enabled,
-                "port": w.port,
-            })),
-        }),
+        Some("channels") => config.channels.clone(),
         Some("sandbox") => json!({
             "enabled": config.sandbox.enabled,
             "docker_image": config.sandbox.docker_image,
@@ -240,12 +223,7 @@ pub async fn handle_get(
                 },
                 "agents": config.agents.keys().collect::<Vec<_>>(),
                 "bindings_count": config.bindings.len(),
-                "channels": {
-                    "telegram": config.channels.telegram.is_some(),
-                    "discord": config.channels.discord.is_some(),
-                    "slack": config.channels.slack.is_some(),
-                    "webchat": config.channels.webchat.is_some(),
-                },
+                "channels": config.channels.clone(),
                 "sandbox_enabled": config.sandbox.enabled,
             })
         }

@@ -1,5 +1,7 @@
 //! AgentListTool — list all registered agents and show which is active.
 
+use std::fmt;
+
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -33,6 +35,8 @@ pub struct AgentListArgs {
 pub struct AgentListInfo {
     /// Unique agent ID
     pub id: String,
+    /// Human-readable display name
+    pub name: String,
     /// Path to the agent's workspace
     pub workspace_path: String,
     /// LLM model used by this agent
@@ -44,12 +48,32 @@ pub struct AgentListInfo {
 /// Output from listing agents.
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentListOutput {
+    /// Human-readable text representation (used by slash command fast path)
+    #[serde(rename = "_display")]
+    pub display_text: String,
     /// All registered agents
     pub agents: Vec<AgentListInfo>,
     /// Currently active agent for the caller's session (if any)
     pub active_agent: Option<String>,
     /// Total number of agents
     pub total: usize,
+}
+
+impl fmt::Display for AgentListOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Agents ({} total):", self.total)?;
+        writeln!(f)?;
+        for agent in &self.agents {
+            let active_marker = if agent.is_active { " *" } else { "" };
+            writeln!(f, "  {} ({}){}", agent.name, agent.id, active_marker)?;
+            writeln!(f, "    model: {}", agent.model)?;
+        }
+        if let Some(ref active) = self.active_agent {
+            writeln!(f)?;
+            writeln!(f, "Active: {}", active)?;
+        }
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -114,6 +138,7 @@ impl AlephTool for AgentListTool {
             if let Some(instance) = self.registry.get(id).await {
                 agents.push(AgentListInfo {
                     id: id.clone(),
+                    name: instance.display_name().to_string(),
                     workspace_path: instance.workspace().to_string_lossy().to_string(),
                     model: instance.config().model.clone(),
                     is_active: active_agent.as_deref() == Some(id.as_str()),
@@ -128,11 +153,15 @@ impl AlephTool for AgentListTool {
 
         info!(total, active = ?active_agent, "Agent list complete");
 
-        Ok(AgentListOutput {
+        let mut output = AgentListOutput {
+            display_text: String::new(),
             agents,
             active_agent,
             total,
-        })
+        };
+        output.display_text = output.to_string();
+
+        Ok(output)
     }
 }
 
