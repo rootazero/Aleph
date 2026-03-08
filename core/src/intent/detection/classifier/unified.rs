@@ -2,7 +2,7 @@
 //!
 //! Combines all detection layers (abort, command, structural, keyword, AI)
 //! into a single async pipeline. This replaces the older multi-module
-//! `IntentClassifier` + `ExecutionIntentDecider` combination.
+//! `IntentClassifier` + intent decider combination.
 //!
 //! # Pipeline Order
 //!

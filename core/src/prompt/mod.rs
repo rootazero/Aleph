@@ -2,18 +2,18 @@
 //!
 //! This module provides a clean separation between execution and conversation modes.
 //! The key principle: prompts only describe "how to do", never "whether to do".
-//! The execution/conversation decision is made by `ExecutionIntentDecider` before
+//! The execution/conversation decision is made by `UnifiedIntentClassifier` before
 //! prompts are selected.
 //!
 //! # Architecture
 //!
 //! ```text
-//! ExecutionIntentDecider (decides mode)
+//! UnifiedIntentClassifier (decides mode)
 //!         │
-//!         ├─→ ExecutionMode::Execute(category)
+//!         ├─→ IntentResult::Execute { category, .. }
 //!         │      → PromptBuilder::executor_prompt(category, tools)
 //!         │
-//!         └─→ ExecutionMode::Converse
+//!         └─→ IntentResult::Converse { .. }
 //!                → PromptBuilder::conversational_prompt()
 //! ```
 //!

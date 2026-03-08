@@ -4,7 +4,7 @@
 //! Publishes: PlanRequested or ToolCallRequested
 //!
 //! Uses the UnifiedIntentClassifier (v3 pipeline) which replaces both the
-//! legacy IntentClassifier and the v2 ExecutionIntentDecider.
+//! legacy IntentClassifier and the v2 intent decider.
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;

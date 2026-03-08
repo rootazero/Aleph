@@ -1,6 +1,6 @@
 //! Executor mode prompt - for task execution.
 //!
-//! This prompt is used when `ExecutionIntentDecider` determines the user wants
+//! This prompt is used when the intent classifier determines the user wants
 //! to execute a task. The AI receives this prompt and relevant tools, then
 //! executes without second-guessing.
 

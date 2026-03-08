@@ -1,7 +1,7 @@
 //! Prompt builder - main API for prompt generation.
 //!
 //! The builder assembles prompts based on the execution mode determined by
-//! `ExecutionIntentDecider`. It handles tool injection and category-specific
+//! `UnifiedIntentClassifier`. It handles tool injection and category-specific
 //! guidelines.
 
 use super::conversational::ConversationalPrompt;

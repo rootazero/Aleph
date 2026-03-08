@@ -22,14 +22,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[derive(Default)]
 pub struct ExperimentalPolicy {
-    /// Use the new unified ExecutionIntentDecider instead of legacy IntentClassifier.
-    ///
-    /// The new decider provides:
-    /// - Single decision point for "execute vs converse"
-    /// - L0-L4 layered decision logic
-    /// - Default bias toward execution
-    ///
-    /// Default: false (use legacy IntentClassifier)
+    /// Legacy flag — no longer has any effect.
+    /// The unified intent classifier is now the only classifier.
+    /// Kept for backward compatibility with existing config files.
     #[serde(default)]
     pub use_unified_intent_decider: bool,
 
@@ -46,9 +41,8 @@ pub struct ExperimentalPolicy {
 
     /// Enable verbose decision logging for debugging.
     ///
-    /// When enabled, logs detailed information about:
-    /// - ExecutionIntentDecider decision layer and confidence
-    /// - Prompt selection and token counts
+    /// When enabled, logs detailed information about
+    /// intent classification decisions.
     ///
     /// Default: false
     #[serde(default)]
