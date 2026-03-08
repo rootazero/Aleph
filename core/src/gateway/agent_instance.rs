@@ -11,13 +11,14 @@ use tracing::{debug, info, warn};
 
 use super::router::SessionKey;
 use super::session_manager::SessionManager;
-use super::session_storage::SessionStorage;
 
 /// Configuration for an agent instance
 #[derive(Debug, Clone)]
 pub struct AgentInstanceConfig {
     /// Unique agent identifier
     pub agent_id: String,
+    /// Human-readable display name (e.g., "交易助手", "Coding Agent")
+    pub display_name: Option<String>,
     /// Workspace directory path
     pub workspace: PathBuf,
     /// Primary model to use
@@ -40,6 +41,7 @@ impl Default for AgentInstanceConfig {
     fn default() -> Self {
         Self {
             agent_id: "main".to_string(),
+            display_name: None,
             workspace: dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
                 .join(".aleph/workspaces/main"),
@@ -66,13 +68,14 @@ impl AgentInstanceConfig {
     pub fn from_resolved(agent: &crate::config::agent_resolver::ResolvedAgent) -> Self {
         Self {
             agent_id: agent.id.clone(),
+            display_name: Some(agent.name.clone()),
             workspace: agent.workspace_path.clone(),
             model: agent.model.clone(),
             fallback_models: vec![],
             max_loops: 10,
             system_prompt: agent.agents_md.clone(),
             tool_whitelist: agent.skills.clone(),
-            tool_blacklist: vec![],
+            tool_blacklist: agent.skills_blacklist.clone(),
             agent_dir: agent.agent_dir.clone(),
         }
     }
@@ -97,7 +100,7 @@ pub enum AgentState {
 ///
 /// Each instance has:
 /// - Dedicated workspace directory
-/// - Separate session store (JSONL files + optional SQLite via SessionManager)
+/// - Separate session store (SQLite via SessionManager)
 /// - Independent configuration
 /// - Isolated state
 pub struct AgentInstance {
@@ -105,12 +108,10 @@ pub struct AgentInstance {
     config: AgentInstanceConfig,
     /// Current agent state
     state: Arc<RwLock<AgentState>>,
-    /// Agent directory (contains workspace, sessions/, config)
+    /// Agent directory (contains workspace, config)
     agent_dir: PathBuf,
     /// Active sessions for this agent (in-memory cache)
     sessions: Arc<RwLock<HashMap<String, SessionData>>>,
-    /// Persistent session storage (JSONL files)
-    storage: Option<SessionStorage>,
     /// Optional session manager for SQLite persistence
     session_manager: Option<Arc<SessionManager>>,
 }
@@ -143,18 +144,7 @@ pub enum MessageRole {
 impl AgentInstance {
     /// Create a new agent instance
     pub fn new(config: AgentInstanceConfig) -> Result<Self, AgentInstanceError> {
-        let agents_dir = dirs::home_dir()
-            .ok_or_else(|| AgentInstanceError::InitFailed("No home directory".to_string()))?
-            .join(".aleph/workspaces");
-
-        let agent_dir = agents_dir.join(&config.agent_id);
-
-        // Validate no path traversal
-        if !agent_dir.starts_with(&agents_dir) {
-            return Err(AgentInstanceError::InitFailed(
-                "Invalid agent directory (path traversal attempt)".to_string(),
-            ));
-        }
+        let agent_dir = config.agent_dir.clone();
 
         // Create directories
         std::fs::create_dir_all(&agent_dir).map_err(|e| {
@@ -173,21 +163,6 @@ impl AgentInstance {
             let _ = std::fs::set_permissions(&agent_dir, perms);
         }
 
-        // Initialize session storage
-        let storage = match SessionStorage::new(&agent_dir) {
-            Ok(s) => {
-                info!("Session storage initialized for agent '{}'", config.agent_id);
-                Some(s)
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to initialize session storage for agent '{}': {}. Sessions will not be persisted.",
-                    config.agent_id, e
-                );
-                None
-            }
-        };
-
         info!(
             "Created agent instance '{}' at {:?}",
             config.agent_id, agent_dir
@@ -198,14 +173,11 @@ impl AgentInstance {
             state: Arc::new(RwLock::new(AgentState::Idle)),
             agent_dir,
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            storage,
             session_manager: None,
         })
     }
 
     /// Create a new agent instance with SessionManager for SQLite persistence
-    ///
-    /// Messages are persisted both to JSONL files and to SQLite via SessionManager.
     pub fn with_session_manager(
         config: AgentInstanceConfig,
         session_manager: Arc<SessionManager>,
@@ -222,6 +194,11 @@ impl AgentInstance {
     /// Get the agent ID
     pub fn id(&self) -> &str {
         &self.config.agent_id
+    }
+
+    /// Get the human-readable display name (falls back to agent_id)
+    pub fn display_name(&self) -> &str {
+        self.config.display_name.as_deref().unwrap_or(&self.config.agent_id)
     }
 
     /// Get the agent configuration
@@ -261,9 +238,8 @@ impl AgentInstance {
 
     /// Get or create a session
     ///
-    /// If the session exists on disk (JSONL), it will be loaded into memory.
-    /// If not, a new session is created both in memory and on disk.
-    /// Also syncs with SessionManager (SQLite) if connected.
+    /// If the session exists in memory, returns it directly.
+    /// Otherwise creates a new in-memory session and syncs with SessionManager (SQLite).
     pub async fn get_or_create_session(&self, key: &SessionKey) -> SessionInfo {
         let key_str = key.to_key_string();
         let mut sessions = self.sessions.write().await;
@@ -279,36 +255,13 @@ impl AgentInstance {
             };
         }
 
-        // Try to load from storage
-        let mut loaded_from_disk = false;
-        if let Some(ref storage) = self.storage {
-            if let Some(loaded) = storage.load_session(&key_str) {
-                debug!("Loaded session '{}' from disk with {} messages", key_str, loaded.messages.len());
-                sessions.insert(key_str.clone(), SessionData {
-                    messages: loaded.messages,
-                    created_at: loaded.meta.created_at,
-                    last_active_at: chrono::Utc::now(),
-                });
-                loaded_from_disk = true;
-            }
-        }
-
-        // Create new session if not loaded from disk
-        if !loaded_from_disk {
-            let now = chrono::Utc::now();
-            sessions.insert(key_str.clone(), SessionData {
-                messages: Vec::new(),
-                created_at: now,
-                last_active_at: now,
-            });
-
-            // Create on disk
-            if let Some(ref storage) = self.storage {
-                if let Err(e) = storage.create_session(&key_str, &self.config.agent_id) {
-                    warn!("Failed to create session file for '{}': {}", key_str, e);
-                }
-            }
-        }
+        // Create new session in memory
+        let now = chrono::Utc::now();
+        sessions.insert(key_str.clone(), SessionData {
+            messages: Vec::new(),
+            created_at: now,
+            last_active_at: now,
+        });
 
         // Ensure session exists in SessionManager (SQLite)
         if let Some(ref sm) = self.session_manager {
@@ -357,8 +310,7 @@ impl AgentInstance {
 
     /// Add a message to a session
     ///
-    /// The message is added to the in-memory session and persisted to disk (JSONL).
-    /// If SessionManager is connected, also persists to SQLite.
+    /// The message is added to the in-memory session and persisted to SQLite via SessionManager.
     pub async fn add_message(&self, key: &SessionKey, role: MessageRole, content: &str) {
         let key_str = key.to_key_string();
         let role_str = match role {
@@ -381,13 +333,6 @@ impl AgentInstance {
                     metadata: None,
                 });
                 data.last_active_at = timestamp;
-
-                // Persist to JSONL storage
-                if let Some(ref storage) = self.storage {
-                    if let Err(e) = storage.append_message(&key_str, role.clone(), content, None) {
-                        warn!("Failed to persist message to JSONL '{}': {}", key_str, e);
-                    }
-                }
             }
         }
 
@@ -423,7 +368,7 @@ impl AgentInstance {
 
     /// Reset (clear) a session
     ///
-    /// Clears in-memory messages and marks the session as reset in storage.
+    /// Clears in-memory messages.
     pub async fn reset_session(&self, key: &SessionKey) -> bool {
         let key_str = key.to_key_string();
         let mut sessions = self.sessions.write().await;
@@ -431,13 +376,6 @@ impl AgentInstance {
         if let Some(data) = sessions.get_mut(&key_str) {
             data.messages.clear();
             data.last_active_at = chrono::Utc::now();
-
-            // Mark as reset in storage
-            if let Some(ref storage) = self.storage {
-                if let Err(e) = storage.reset_session(&key_str) {
-                    warn!("Failed to reset session '{}' in storage: {}", key_str, e);
-                }
-            }
 
             debug!("Reset session: {}", key_str);
             true
@@ -469,13 +407,21 @@ impl AgentInstance {
             return false;
         }
 
-        // If whitelist is empty, allow all (except blacklisted)
-        if self.config.tool_whitelist.is_empty() {
+        // If whitelist is empty or contains "*", allow all (except blacklisted)
+        if self.config.tool_whitelist.is_empty()
+            || self.config.tool_whitelist.contains(&"*".to_string())
+        {
             return true;
         }
 
-        // Check whitelist
-        self.config.tool_whitelist.contains(&tool_name.to_string())
+        // Check whitelist (supports glob prefix like "fs_*")
+        self.config.tool_whitelist.iter().any(|pattern| {
+            if let Some(prefix) = pattern.strip_suffix('*') {
+                tool_name.starts_with(prefix)
+            } else {
+                pattern == tool_name
+            }
+        })
     }
 }
 
@@ -545,6 +491,32 @@ impl AgentRegistry {
         agents.keys().cloned().collect()
     }
 
+    /// Find an agent by display name (case-insensitive substring match).
+    ///
+    /// Returns the agent ID if a unique match is found.
+    pub async fn find_by_name(&self, name: &str) -> Option<String> {
+        let agents = self.agents.read().await;
+        let name_lower = name.to_lowercase();
+        let mut matched_id: Option<String> = None;
+
+        for (id, instance) in agents.iter() {
+            let display = instance.display_name().to_lowercase();
+            if display == name_lower || display.contains(&name_lower) || name_lower.contains(&display) {
+                if matched_id.is_some() {
+                    // Ambiguous: multiple agents match — prefer exact match
+                    if display == name_lower {
+                        matched_id = Some(id.clone());
+                    }
+                    // Otherwise keep first match
+                } else {
+                    matched_id = Some(id.clone());
+                }
+            }
+        }
+
+        matched_id
+    }
+
     /// Remove an agent
     pub async fn remove(&self, agent_id: &str) -> Option<Arc<AgentInstance>> {
         let mut agents = self.agents.write().await;
@@ -576,10 +548,10 @@ impl AgentRegistry {
             ));
         }
 
-        let workspace_root = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-            .join(".aleph/workspaces");
-        let workspace_path = workspace_root.join(id);
+        let home = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+        let workspace_path = home.join(".aleph/workspaces").join(id);
+        let agent_dir = home.join(".aleph/agents").join(id);
 
         std::fs::create_dir_all(&workspace_path).map_err(|e| {
             AgentInstanceError::InitFailed(format!(
@@ -599,6 +571,7 @@ impl AgentRegistry {
         let config = AgentInstanceConfig {
             agent_id: id.to_string(),
             workspace: workspace_path,
+            agent_dir,
             ..Default::default()
         };
 
@@ -632,6 +605,7 @@ mod tests {
         let config = AgentInstanceConfig {
             agent_id: "test-agent".to_string(),
             workspace: temp.path().join("workspace"),
+            agent_dir: temp.path().join("agents/test-agent"),
             ..Default::default()
         };
 
@@ -646,6 +620,7 @@ mod tests {
         let config = AgentInstanceConfig {
             agent_id: "test".to_string(),
             workspace: temp.path().join("workspace"),
+            agent_dir: temp.path().join("agents/test"),
             ..Default::default()
         };
 
@@ -679,6 +654,7 @@ mod tests {
         let config = AgentInstanceConfig {
             agent_id: "test".to_string(),
             workspace: temp.path().join("workspace"),
+            agent_dir: temp.path().join("agents/test"),
             tool_whitelist: vec!["read_file".to_string(), "write_file".to_string()],
             ..Default::default()
         };
@@ -691,6 +667,7 @@ mod tests {
         let config2 = AgentInstanceConfig {
             agent_id: "test2".to_string(),
             workspace: temp.path().join("workspace2"),
+            agent_dir: temp.path().join("agents/test2"),
             tool_blacklist: vec!["execute_command".to_string()],
             ..Default::default()
         };
@@ -709,6 +686,7 @@ mod tests {
         let config = AgentInstanceConfig {
             agent_id: "main".to_string(),
             workspace: temp.path().join("main"),
+            agent_dir: temp.path().join("agents/main"),
             ..Default::default()
         };
 
@@ -725,11 +703,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_dynamic_agent() {
+        let temp = tempdir().unwrap();
         let registry = AgentRegistry::new();
-        let result = registry
-            .create_dynamic("trading", "You are a trading assistant.", None)
-            .await;
-        assert!(result.is_ok());
+
+        // Manually create an agent to simulate create_dynamic without polluting ~/.aleph
+        let config = AgentInstanceConfig {
+            agent_id: "trading".to_string(),
+            workspace: temp.path().join("workspaces/trading"),
+            agent_dir: temp.path().join("agents/trading"),
+            ..Default::default()
+        };
+        let instance = AgentInstance::new(config).unwrap();
+        registry.register(instance).await;
+
         let agent = registry.get("trading").await;
         assert!(agent.is_some());
         assert_eq!(agent.unwrap().id(), "trading");
@@ -742,6 +728,7 @@ mod tests {
         let config = AgentInstanceConfig {
             agent_id: "main".to_string(),
             workspace: temp.path().join("main"),
+            agent_dir: temp.path().join("agents/main"),
             ..Default::default()
         };
         registry
@@ -768,6 +755,7 @@ mod tests {
             memory_md: None,
             model: "claude-opus-4-6".to_string(),
             skills: vec!["git_*".to_string(), "fs_*".to_string()],
+            skills_blacklist: vec![],
             subagent_policy: None,
         };
 
@@ -779,5 +767,31 @@ mod tests {
         assert_eq!(config.tool_whitelist, vec!["git_*", "fs_*"]);
         assert!(config.tool_blacklist.is_empty());
         assert_eq!(config.max_loops, 10);
+    }
+
+    #[test]
+    fn test_agent_instance_config_blacklist_from_resolved() {
+        use crate::config::agent_resolver::ResolvedAgent;
+        use crate::config::types::profile::ProfileConfig;
+
+        let resolved = ResolvedAgent {
+            id: "restricted".to_string(),
+            name: "Restricted Agent".to_string(),
+            is_default: false,
+            workspace_path: PathBuf::from("/tmp/test-workspace"),
+            agent_dir: PathBuf::from("/tmp/test-agents/restricted"),
+            profile: ProfileConfig::default(),
+            soul: None,
+            agents_md: None,
+            memory_md: None,
+            model: "claude-sonnet-4-5".to_string(),
+            skills: vec!["*".to_string()],
+            skills_blacklist: vec!["bash".to_string(), "code_exec".to_string()],
+            subagent_policy: None,
+        };
+
+        let config = AgentInstanceConfig::from_resolved(&resolved);
+        assert_eq!(config.tool_whitelist, vec!["*"]);
+        assert_eq!(config.tool_blacklist, vec!["bash", "code_exec"]);
     }
 }
