@@ -36,5 +36,11 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 chrono = "0.4"
 futures = "0.3"
 
+# Markdown rendering
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+
+# Syntax highlighting (WASM-compatible)
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+
 # Internal logic
 shared-ui-logic = { path = "../../shared/ui_logic", features = ["leptos", "wasm"] }
