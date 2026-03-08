@@ -183,7 +183,3 @@ Example: `gateway: add WebSocket server foundation`
 
 MIT. See [LICENSE](LICENSE).
 
-## Acknowledgments
-
-- [Ghost in the Shell](https://en.wikipedia.org/wiki/Ghost_in_the_Shell) — the vision of human-AI symbiosis
-- [Jorge Luis Borges](https://en.wikipedia.org/wiki/The_Aleph_(short_story)) — the Aleph metaphor: a point containing all points
