@@ -163,8 +163,8 @@ mod tests {
         let config = ToolCacheConfig::default();
         let cache = ToolResultCache::new(config);
 
-        let tool_name = "file_ops";
-        let args = serde_json::json!({"path": "/test.txt", "operation": "read"});
+        let tool_name = "search";
+        let args = serde_json::json!({"query": "test query"});
         let result = ActionResult::ToolSuccess {
             output: serde_json::json!("file content"),
             duration_ms: 100,
@@ -184,9 +184,9 @@ mod tests {
         let config = ToolCacheConfig::default();
         let cache = ToolResultCache::new(config);
 
-        let tool_name = "file_ops";
-        let args1 = serde_json::json!({"path": "/test1.txt"});
-        let args2 = serde_json::json!({"path": "/test2.txt"});
+        let tool_name = "search";
+        let args1 = serde_json::json!({"query": "query1"});
+        let args2 = serde_json::json!({"query": "query2"});
         let result = ActionResult::ToolSuccess {
             output: serde_json::json!("content"),
             duration_ms: 100,
@@ -208,8 +208,8 @@ mod tests {
         };
         let cache = ToolResultCache::new(config);
 
-        let tool_name = "file_ops";
-        let args = serde_json::json!({"path": "/test.txt"});
+        let tool_name = "search";
+        let args = serde_json::json!({"query": "test"});
         let result = ActionResult::ToolSuccess {
             output: serde_json::json!("content"),
             duration_ms: 100,
@@ -254,8 +254,8 @@ mod tests {
         let config = ToolCacheConfig::default();
         let cache = ToolResultCache::new(config);
 
-        let tool_name = "file_ops";
-        let args = serde_json::json!({"path": "/test.txt"});
+        let tool_name = "search";
+        let args = serde_json::json!({"query": "test"});
         let result = ActionResult::ToolError {
             error: "File not found".to_string(),
             retryable: false,
@@ -274,8 +274,8 @@ mod tests {
         let config = ToolCacheConfig::default();
         let cache = ToolResultCache::new(config);
 
-        let tool_name = "file_ops";
-        let args = serde_json::json!({"path": "/test.txt"});
+        let tool_name = "search";
+        let args = serde_json::json!({"query": "test"});
         let result = ActionResult::ToolSuccess {
             output: serde_json::json!("content"),
             duration_ms: 100,

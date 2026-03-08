@@ -164,6 +164,13 @@ impl BuiltinToolRegistry {
             AlephError::tool(format!("Invalid delegate arguments: {}", e))
         })?;
 
+        info!(
+            prompt = %args.prompt.chars().take(100).collect::<String>(),
+            agent = ?args.agent,
+            target = ?args.target,
+            "Delegating to sub-agent"
+        );
+
         // Create a temporary DelegateTool and execute via AlephTool trait
         let tool = DelegateTool::new(std::sync::Arc::clone(dispatcher));
         let result = AlephTool::call(&tool, args).await?;

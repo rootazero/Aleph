@@ -144,11 +144,18 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Capture embedder before it's moved into tool_config
         embedder_out = embedder.clone();
 
-        // Create SubAgentDispatcher (empty; A2A agent registered later in start_server)
-        let sub_agent_dispatcher = Arc::new(tokio::sync::RwLock::new(
-            alephcore::agents::sub_agents::SubAgentDispatcher::new(),
-        ));
-        sub_agent_disp = Some(sub_agent_dispatcher.clone());
+        // Create SubAgentDispatcher only when A2A is enabled.
+        // Without A2A, the dispatcher would be empty and the delegate tool
+        // would always return NotFound, so we skip registration entirely.
+        let sub_agent_dispatcher = if app_config.a2a.enabled {
+            let disp = Arc::new(tokio::sync::RwLock::new(
+                alephcore::agents::sub_agents::SubAgentDispatcher::new(),
+            ));
+            sub_agent_disp = Some(disp.clone());
+            Some(disp)
+        } else {
+            None
+        };
 
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
@@ -160,7 +167,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             event_bus: Some(event_bus.clone()),
             tool_policy: Some(alephcore::builtin_tools::agent_manage::new_tool_policy_handle()),
             agent_manager: Some(agent_manager.clone()),
-            sub_agent_dispatcher: Some(sub_agent_dispatcher.clone()),
+            sub_agent_dispatcher,
             ..Default::default()
         };
         let tool_registry = BuiltinToolRegistry::with_config(tool_config);

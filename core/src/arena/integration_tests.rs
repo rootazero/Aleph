@@ -152,7 +152,7 @@ fn pipeline_collaboration_full_lifecycle() {
     let translator_handle = handles.get("translator").unwrap();
     let polisher_handle = handles.get("polisher").unwrap();
 
-    // 2. Translator puts Text artifact ("中文翻译初稿...")
+    // 2. Translator puts Text artifact ("Chinese translation first draft...")
     let translation_artifact = Artifact {
         id: ArtifactId::new(),
         kind: ArtifactKind::Text,
@@ -162,7 +162,7 @@ fn pipeline_collaboration_full_lifecycle() {
     };
     translator_handle.put_artifact(translation_artifact).unwrap();
 
-    // 3. Translator adds SharedFact ("Term mapping: quantum → 量子")
+    // 3. Translator adds SharedFact ("Term mapping: quantum → 量子 (quantum)")
     let fact = SharedFact {
         content: "Term mapping: quantum → 量子".to_string(),
         source_agent: "translator".to_string(),
@@ -179,7 +179,7 @@ fn pipeline_collaboration_full_lifecycle() {
     assert_eq!(translator_artifacts.len(), 1);
     assert_eq!(translator_artifacts[0].kind, ArtifactKind::Text);
 
-    // 5. Polisher puts Text artifact ("中文润色终稿...")
+    // 5. Polisher puts Text artifact ("Chinese polished final draft...")
     let polished_artifact = Artifact {
         id: ArtifactId::new(),
         kind: ArtifactKind::Text,

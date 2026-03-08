@@ -69,11 +69,14 @@ impl A2ASubAgent {
                     }
                 }
             }
+            tracing::debug!(count = names.len(), "Refreshed A2A agent name cache");
             let mut cache = self
                 .cached_names
                 .write()
                 .unwrap_or_else(|e| e.into_inner());
             *cache = names;
+        } else {
+            tracing::warn!("Failed to list agents from SmartRouter for name cache");
         }
     }
 }
@@ -116,6 +119,12 @@ impl SubAgent for A2ASubAgent {
     }
 
     async fn execute(&self, request: SubAgentRequest) -> crate::error::Result<SubAgentResult> {
+        tracing::info!(
+            request_id = %request.id,
+            prompt = %request.prompt.chars().take(100).collect::<String>(),
+            "Executing A2A delegation"
+        );
+
         // 1. Route to best matching agent
         let decision = self
             .smart_router
@@ -132,6 +141,13 @@ impl SubAgent for A2ASubAgent {
                 ));
             }
         };
+
+        tracing::info!(
+            agent = %decision.agent.card.name,
+            confidence = %decision.confidence,
+            method = ?decision.method,
+            "Routed to remote agent"
+        );
 
         // 2. Get or create HTTP client for the target agent
         let client = self
@@ -151,9 +167,7 @@ impl SubAgent for A2ASubAgent {
 
         match task_result {
             Ok(task) => {
-                // Extract summary from the task response
                 let summary = if !task.history.is_empty() {
-                    // Prefer the last agent message from history
                     task.history
                         .iter()
                         .rev()
@@ -171,10 +185,12 @@ impl SubAgent for A2ASubAgent {
                 );
                 Ok(result)
             }
-            Err(e) => Ok(SubAgentResult::failure(
-                request.id.clone(),
-                format!("A2A call failed: {}", e),
-            )),
+            Err(e) => {
+                Ok(SubAgentResult::failure(
+                    request.id.clone(),
+                    format!("A2A call failed: {}", e),
+                ))
+            }
         }
     }
 }

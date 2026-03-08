@@ -184,15 +184,19 @@ impl SubAgentDispatcher {
     /// 4. can_handle() check on each agent
     /// 5. Default agent (if set)
     pub async fn dispatch(&self, request: SubAgentRequest) -> Result<SubAgentResult> {
-        info!("Dispatching request: {}", request.id);
+        debug!(
+            id = %request.id,
+            prompt = %request.prompt.chars().take(80).collect::<String>(),
+            target = ?request.target,
+            "Dispatching sub-agent request"
+        );
 
         // 1. Check for explicit agent_id in context
         if let Some(agent_id) = request.context.get("agent_id").and_then(|v| v.as_str()) {
             if let Some(agent) = self.agents.get(agent_id) {
-                debug!("Dispatching to explicit agent: {}", agent_id);
                 return agent.execute(request).await;
             }
-            warn!("Explicit agent_id not found: {}", agent_id);
+            warn!(agent_id, "Explicit agent_id not found in registry");
         }
 
         // 2. Try to match by agent type in context
@@ -204,7 +208,6 @@ impl SubAgentDispatcher {
                     SubAgentType::Custom => "custom_agent",
                 };
                 if let Some(agent) = self.agents.get(agent_id) {
-                    debug!("Dispatching to agent type: {:?}", agent_type);
                     return agent.execute(request).await;
                 }
             }
@@ -225,18 +228,12 @@ impl SubAgentDispatcher {
                     .then_with(|| a.name().cmp(b.name()))
             });
             let agent = capable_agents[0];
-            debug!(
-                "Dispatching to capable agent: {} ({})",
-                agent.name(),
-                agent.id()
-            );
             return agent.execute(request).await;
         }
 
         // 4. Try default agent
         if let Some(ref default_id) = self.default_agent {
             if let Some(agent) = self.agents.get(default_id) {
-                debug!("Dispatching to default agent: {}", default_id);
                 return agent.execute(request).await;
             }
         }

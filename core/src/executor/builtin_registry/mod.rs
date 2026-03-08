@@ -184,7 +184,7 @@ mod tests {
 
     mod sessions_tests {
         use super::*;
-        use crate::gateway::a2a_policy::AgentToAgentPolicy;
+        use crate::gateway::inter_agent_policy::AgentToAgentPolicy;
         use crate::gateway::agent_instance::AgentRegistry;
         use crate::gateway::context::GatewayContext;
         use crate::gateway::execution_adapter::ExecutionAdapter;

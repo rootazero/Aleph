@@ -445,6 +445,6 @@ mod tests {
 
         let p = preset.unwrap();
         assert_eq!(p.protocol, "chatgpt");
-        assert_eq!(p.default_model, "gpt-5.3-codex");
+        assert_eq!(p.default_model, "gpt-5.4");
     }
 }

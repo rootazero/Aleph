@@ -66,7 +66,7 @@ pub mod routing_config;
 pub mod inbound_router;
 pub mod intent_detector;
 pub mod execution_adapter;
-pub mod a2a_policy;
+pub mod inter_agent_policy;
 pub mod context;
 pub mod lane;
 pub mod webhook_receiver;
@@ -126,7 +126,7 @@ pub use routing_config::{RoutingConfig, DmScope};
 pub use inbound_router::{InboundMessageRouter, RoutingError, ChannelConfig as RouterChannelConfig, DmPolicy, GroupPolicy};
 pub use execution_adapter::ExecutionAdapter;
 pub use intent_detector::{IntentDetector, DetectedIntent, IntentClassifyFn};
-pub use a2a_policy::AgentToAgentPolicy;
+pub use inter_agent_policy::AgentToAgentPolicy;
 pub use context::GatewayContext;
 pub use webhook_receiver::{WebhookHandler, WebhookReceiver};
 pub use webhooks::{

@@ -52,7 +52,11 @@ fn default_ttl_secs() -> u64 {
 }
 
 fn default_exclude_tools() -> Vec<String> {
-    vec!["bash".to_string(), "code_exec".to_string()]
+    vec![
+        "bash".to_string(),
+        "code_exec".to_string(),
+        "file_ops".to_string(),
+    ]
 }
 
 impl ToolCacheConfig {
@@ -84,15 +88,17 @@ mod tests {
         assert_eq!(config.capacity, 100);
         assert_eq!(config.ttl_seconds, 300);
         assert!(config.cache_only_success);
-        assert_eq!(config.exclude_tools.len(), 2);
+        assert_eq!(config.exclude_tools.len(), 3);
     }
 
     #[test]
     fn test_should_cache() {
         let config = ToolCacheConfig::default();
-        assert!(config.should_cache("file_ops"));
+        assert!(!config.should_cache("file_ops"));
         assert!(!config.should_cache("bash"));
         assert!(!config.should_cache("code_exec"));
+        assert!(config.should_cache("search"));
+        assert!(config.should_cache("memory_search"));
     }
 
     #[test]

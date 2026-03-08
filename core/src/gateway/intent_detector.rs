@@ -39,12 +39,12 @@ pub type IntentClassifyFn =
 // Regex patterns
 // ---------------------------------------------------------------------------
 
-/// Chinese: "切换到X模式" / "换成X助手" / "切换为X" / "使用X"
+/// Chinese switch patterns: "切换到X模式" / "换成X助手" / "切换为X" / "使用X"
 static RE_CN_SWITCH: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^(?:切换到|换成|切换为|使用)(.+?)(?:模式|agent)?$").unwrap()
 });
 
-/// Chinese: "我想和X聊" / "我想跟X说" / "我想找X咨询"
+/// Chinese "I want to talk with X" patterns: "我想和X聊" / "我想跟X说" / "我想找X咨询"
 static RE_CN_WANT: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^我想(?:和|跟|找)(.+?)(?:聊|说|谈|咨询)").unwrap()
 });
@@ -228,7 +228,7 @@ fn intent_name(intent: &DetectedIntent) -> &str {
 mod tests {
     use super::*;
 
-    // -- Chinese keyword: 切换到/换成/切换为/使用 --
+    // -- Chinese keyword: switch to / change to / use (切换到/换成/切换为/使用) --
 
     #[test]
     fn cn_switch_to_agent() {
@@ -278,7 +278,7 @@ mod tests {
         );
     }
 
-    // -- Chinese keyword: 我想和/跟/找 X 聊/说/谈/咨询 --
+    // -- Chinese keyword: I want to chat/talk/consult with X (我想和/跟/找 X 聊/说/谈/咨询) --
 
     #[test]
     fn cn_want_to_chat() {

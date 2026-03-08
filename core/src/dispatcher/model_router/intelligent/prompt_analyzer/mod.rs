@@ -9,7 +9,7 @@
 //! use alephcore::dispatcher::model_router::{PromptAnalyzer, PromptAnalyzerConfig};
 //!
 //! let analyzer = PromptAnalyzer::new(PromptAnalyzerConfig::default());
-//! let features = analyzer.analyze("请用 Rust 写一个快速排序算法");
+//! let features = analyzer.analyze("Write a quicksort algorithm in Rust");
 //!
 //! println!("Tokens: {}", features.estimated_tokens);
 //! println!("Complexity: {:.2}", features.complexity_score);
