@@ -1,18 +1,18 @@
 # Aleph (ℵ)
 
-> Self-hosted personal AI assistant — one core, many shells.
+> 自托管个人 AI 助手 — 一核多端。
 
 [![Rust](https://img.shields.io/badge/Rust-1.92%2B-b7410e)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
 
-[中文文档](README_CN.md)
+[English](README.md)
 
-## What is Aleph?
+## Aleph 是什么？
 
-Aleph is a self-hosted personal AI assistant built in Rust. It runs entirely on your own devices, connecting through a unified Gateway to 15+ messaging channels (Telegram, Discord, Slack, WhatsApp, IRC, Matrix, Signal, and more). The Rust core drives an agent loop with multi-provider LLM support, 30+ built-in tools, hybrid memory search, and a plugin system — accessible through native apps, CLI, a web panel, and social bots simultaneously.
+Aleph 是一款使用 Rust 构建的自托管个人 AI 助手。它完全运行在你自己的设备上，通过统一的 Gateway 连接 15+ 消息通道（Telegram、Discord、Slack、WhatsApp、IRC、Matrix、Signal 等）。Rust 核心驱动了一个 Agent 循环，支持多供应商 LLM、30+ 内置工具、混合记忆检索和插件系统 — 可同时通过原生应用、CLI、Web 面板和社交 Bot 访问。
 
-## Architecture
+## 架构
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -34,51 +34,51 @@ Aleph is a self-hosted personal AI assistant built in Rust. It runs entirely on 
 └─────────────────────────────┴───────────────────────────────────────┘
 ```
 
-See [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) for the full architecture documentation.
+详见 [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) 获取完整架构文档。
 
-## Features
+## 功能特性
 
-### Core
+### 核心能力
 
-- Multi-provider LLM support (Claude, GPT-4, Gemini, DeepSeek, Ollama, Moonshot)
-- 15+ messaging channel interfaces via unified Gateway
-- 30+ built-in tools with JSON Schema auto-generation
-- Memory system with hybrid search (vector ANN + full-text via LanceDB)
-- MCP protocol support for external tool integration
-- POE (Principle-Operation-Evaluation) agent architecture
-- Desktop Bridge for native OS control (OCR, screenshots, input automation)
+- 多供应商 LLM 支持（Claude、GPT-4、Gemini、DeepSeek、Ollama、Moonshot）
+- 通过统一 Gateway 接入 15+ 消息通道
+- 30+ 内置工具，支持 JSON Schema 自动生成
+- 记忆系统，混合检索（向量 ANN + 全文检索，基于 LanceDB）
+- MCP 协议支持，集成外部工具
+- POE（Principle-Operation-Evaluation）Agent 架构
+- Desktop Bridge 原生系统控制（OCR、截图、输入自动化）
 
-### Developer Experience
+### 开发者体验
 
-- Hot reload for configuration changes
-- Plugin system (WASM + Node.js)
-- `just` build pipeline with one-command workflows
-- 58+ Gateway JSON-RPC handlers
-- JSON Schema auto-generation via schemars
-- Proptest and Loom concurrency test suites
+- 配置变更热重载
+- 插件系统（WASM + Node.js）
+- `just` 构建流水线，一条命令完成工作流
+- 58+ Gateway JSON-RPC 处理器
+- 通过 schemars 自动生成 JSON Schema
+- proptest 和 loom 并发测试套件
 
-## Getting Started
+## 快速开始
 
-### Prerequisites
+### 前置条件
 
-- **Rust** 1.92+ — install via [rustup](https://rustup.rs/)
+- **Rust** 1.92+ — 通过 [rustup](https://rustup.rs/) 安装
 - **just** — `cargo install just`
-- Optional: `wasm-bindgen-cli` + `npm` (for WASM panel build)
-- Optional: Xcode + [XcodeGen](https://github.com/yonaskolb/XcodeGen) (for macOS native app)
+- 可选：`wasm-bindgen-cli` + `npm`（用于 WASM 面板构建）
+- 可选：Xcode + [XcodeGen](https://github.com/yonaskolb/XcodeGen)（用于 macOS 原生应用）
 
-### Quick Start
+### 启动
 
 ```bash
 git clone https://github.com/rootazero/Aleph.git
 cd Aleph
 
-# Start the server
+# 启动服务
 cargo run --bin aleph
 ```
 
-### Configuration
+### 配置
 
-Aleph stores configuration and data at `~/.aleph/`:
+Aleph 将配置和数据存储在 `~/.aleph/`：
 
 ```
 ~/.aleph/
@@ -88,7 +88,7 @@ Aleph stores configuration and data at `~/.aleph/`:
 └── plugins/         # Extensions
 ```
 
-Channel configuration example in `aleph.toml`:
+在 `aleph.toml` 中配置通道示例：
 
 ```toml
 [channels.telegram]
@@ -96,24 +96,24 @@ enabled = true
 token = "your-bot-token"
 ```
 
-## Building
+## 构建
 
-| Command               | Description                                |
+| 命令                  | 说明                                       |
 |-----------------------|--------------------------------------------|
-| `just dev`            | Run server in debug mode (rebuilds WASM)   |
-| `just build`          | Build server in release mode               |
-| `just wasm`           | Build WASM Panel UI only                   |
-| `just macos`          | Build macOS native app (release)           |
-| `just test`           | Run core tests                             |
-| `just test-all`       | Run all tests (core + desktop + proptest)  |
-| `just clippy`         | Lint core with clippy                      |
-| `just check`          | Quick compilation check                    |
-| `just deps`           | Verify build dependencies are installed    |
-| `just clean`          | Clean all build artifacts                  |
+| `just dev`            | 以调试模式运行服务（重新构建 WASM）        |
+| `just build`          | 以 release 模式构建服务                    |
+| `just wasm`           | 仅构建 WASM Panel UI                      |
+| `just macos`          | 构建 macOS 原生应用（release）             |
+| `just test`           | 运行核心测试                               |
+| `just test-all`       | 运行全部测试（core + desktop + proptest）  |
+| `just clippy`         | 使用 clippy 检查核心代码                   |
+| `just check`          | 快速编译检查                               |
+| `just deps`           | 验证构建依赖是否已安装                     |
+| `just clean`          | 清理所有构建产物                           |
 
-No feature flags are needed for production builds.
+生产构建无需指定 feature flags。
 
-## Project Structure
+## 项目结构
 
 ```
 Aleph/
@@ -154,34 +154,34 @@ Aleph/
 └── Cargo.toml                   # Workspace root
 ```
 
-## Documentation
+## 文档
 
-| Document | Link |
-|----------|------|
-| Architecture | [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) |
-| Agent System | [AGENT_SYSTEM.md](docs/reference/AGENT_SYSTEM.md) |
-| Gateway Protocol | [GATEWAY.md](docs/reference/GATEWAY.md) |
-| Tool System | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) |
-| Memory System | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) |
-| Extension System | [EXTENSION_SYSTEM.md](docs/reference/EXTENSION_SYSTEM.md) |
-| Security | [SECURITY.md](docs/reference/SECURITY.md) |
-| Design Patterns | [DESIGN_PATTERNS.md](docs/reference/DESIGN_PATTERNS.md) |
-| Code Organization | [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md) |
-| Domain Modeling | [DOMAIN_MODELING.md](docs/reference/DOMAIN_MODELING.md) |
-| Agent Design Philosophy | [AGENT_DESIGN_PHILOSOPHY.md](docs/reference/AGENT_DESIGN_PHILOSOPHY.md) |
-| Server Development | [SERVER_DEVELOPMENT.md](docs/reference/SERVER_DEVELOPMENT.md) |
+| 文档 | 链接 |
+|------|------|
+| 架构 | [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) |
+| Agent 系统 | [AGENT_SYSTEM.md](docs/reference/AGENT_SYSTEM.md) |
+| Gateway 协议 | [GATEWAY.md](docs/reference/GATEWAY.md) |
+| 工具系统 | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) |
+| 记忆系统 | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) |
+| 扩展系统 | [EXTENSION_SYSTEM.md](docs/reference/EXTENSION_SYSTEM.md) |
+| 安全 | [SECURITY.md](docs/reference/SECURITY.md) |
+| 设计模式 | [DESIGN_PATTERNS.md](docs/reference/DESIGN_PATTERNS.md) |
+| 代码组织 | [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md) |
+| 领域建模 | [DOMAIN_MODELING.md](docs/reference/DOMAIN_MODELING.md) |
+| Agent 设计哲学 | [AGENT_DESIGN_PHILOSOPHY.md](docs/reference/AGENT_DESIGN_PHILOSOPHY.md) |
+| 服务端开发 | [SERVER_DEVELOPMENT.md](docs/reference/SERVER_DEVELOPMENT.md) |
 
-## Contributing
+## 贡献
 
-Single-branch development on `main`. Commit format: `<scope>: <description>` (English).
+在 `main` 分支上进行单分支开发。提交格式：`<scope>: <description>`（英文）。
 
-Example: `gateway: add WebSocket server foundation`
+示例：`gateway: add WebSocket server foundation`
 
-## License
+## 许可证
 
-MIT. See [LICENSE](LICENSE).
+MIT。详见 [LICENSE](LICENSE)。
 
-## Acknowledgments
+## 致谢
 
-- [Ghost in the Shell](https://en.wikipedia.org/wiki/Ghost_in_the_Shell) — the vision of human-AI symbiosis
-- [Jorge Luis Borges](https://en.wikipedia.org/wiki/The_Aleph_(short_story)) — the Aleph metaphor: a point containing all points
+- [攻壳机动队](https://en.wikipedia.org/wiki/Ghost_in_the_Shell) — 人机共生的愿景
+- [豪尔赫·路易斯·博尔赫斯](https://en.wikipedia.org/wiki/The_Aleph_(short_story)) — Aleph 的隐喻：包含一切的一点
