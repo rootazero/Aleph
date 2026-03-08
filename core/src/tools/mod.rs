@@ -33,7 +33,6 @@
 
 mod builtin;
 mod server;
-pub mod sessions;
 mod traits;
 mod types;
 

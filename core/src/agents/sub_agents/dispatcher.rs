@@ -92,8 +92,6 @@ pub struct SubAgentDispatcher {
     coordinator: Arc<ExecutionCoordinator>,
     /// Collector for tool call aggregation
     collector: Arc<ResultCollector>,
-    /// Optional authorization checker for sub-agent delegation
-    authority: Option<Arc<dyn super::authority::SubagentAuthority>>,
 }
 
 impl SubAgentDispatcher {
@@ -104,7 +102,6 @@ impl SubAgentDispatcher {
             default_agent: None,
             coordinator: Arc::new(ExecutionCoordinator::new(CoordinatorConfig::default())),
             collector: Arc::new(ResultCollector::new()),
-            authority: None,
         }
     }
 
@@ -115,7 +112,6 @@ impl SubAgentDispatcher {
             default_agent: None,
             coordinator: Arc::new(ExecutionCoordinator::new(coordinator_config)),
             collector: Arc::new(ResultCollector::new()),
-            authority: None,
         }
     }
 
@@ -132,12 +128,6 @@ impl SubAgentDispatcher {
         dispatcher.register(Arc::new(skill_agent));
 
         dispatcher
-    }
-
-    /// Set the authorization checker for sub-agent delegation
-    pub fn with_authority(mut self, authority: Arc<dyn super::authority::SubagentAuthority>) -> Self {
-        self.authority = Some(authority);
-        self
     }
 
     /// Get the execution coordinator (for external event integration)
@@ -327,23 +317,6 @@ impl SubAgentDispatcher {
         let request_id = request.id.clone();
         info!("Dispatching sync request: {}", request_id);
 
-        // Check authorization before dispatch
-        if let Some(ref authority) = self.authority {
-            let parent_id = request.context.get("parent_agent_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("main");
-            let child_id = request.context.get("agent_id")
-                .and_then(|v| v.as_str())
-                .or_else(|| request.target.as_deref())
-                .unwrap_or("unknown");
-            if !authority.can_delegate(parent_id, child_id) {
-                return Err(ExecutionError::Internal(format!(
-                    "Agent '{}' is not authorized to delegate to '{}'",
-                    parent_id, child_id
-                )));
-            }
-        }
-
         // Initialize result collection
         self.collector.init_request(&request_id).await;
 
@@ -439,29 +412,6 @@ impl SubAgentDispatcher {
         for (request, agent_id) in requests {
             let request_id = request.id.clone();
             request_ids.push(request_id.clone());
-
-            // Check authorization before dispatch
-            if let Some(ref authority) = self.authority {
-                let parent_id = request.context.get("parent_agent_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("main");
-                let child_id = agent_id.as_deref()
-                    .or_else(|| request.context.get("agent_id").and_then(|v| v.as_str()))
-                    .or_else(|| request.target.as_deref())
-                    .unwrap_or("unknown");
-                if !authority.can_delegate(parent_id, child_id) {
-                    // For parallel dispatch, track the failure without spawning
-                    let req_id = request_id.clone();
-                    self.collector.init_request(&req_id).await;
-                    let _handle = self.coordinator.start_execution(&req_id).await;
-                    let err_result = SubAgentResult::failure(
-                        &req_id,
-                        format!("Agent '{}' is not authorized to delegate to '{}'", parent_id, child_id),
-                    );
-                    self.coordinator.on_execution_completed(err_result).await;
-                    continue;
-                }
-            }
 
             // Initialize result collection
             self.collector.init_request(&request_id).await;
@@ -804,43 +754,4 @@ mod tests {
         assert_eq!(record.result_summary, "Connection timeout");
     }
 
-    #[tokio::test]
-    async fn test_dispatch_with_authority_denied() {
-        use super::super::authority::{ConfigDrivenAuthority, SubagentAuthority};
-        use crate::config::types::agents_def::SubagentPolicy;
-        use std::collections::HashMap as PolicyMap;
-
-        let mut policies = PolicyMap::new();
-        policies.insert("restricted".to_string(), SubagentPolicy {
-            allow: vec!["allowed_agent".to_string()],
-        });
-        let authority = Arc::new(ConfigDrivenAuthority::from_policies(policies));
-
-        let dispatcher = SubAgentDispatcher::new()
-            .with_authority(authority);
-
-        let mut request = SubAgentRequest::new("test task");
-        request = request
-            .with_context("parent_agent_id", serde_json::Value::String("restricted".to_string()))
-            .with_context("agent_id", serde_json::Value::String("forbidden_agent".to_string()));
-
-        let result = dispatcher.dispatch_sync(request, Duration::from_secs(5)).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("not authorized"), "Expected auth error, got: {}", err);
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_without_authority_allows_all() {
-        // Without authority set, dispatch proceeds (may fail for other reasons, but not auth)
-        let dispatcher = SubAgentDispatcher::new();
-        let request = SubAgentRequest::new("test task")
-            .with_context("parent_agent_id", serde_json::Value::String("any".to_string()));
-
-        let result = dispatcher.dispatch_sync(request, Duration::from_secs(1)).await;
-        // Should not be an auth error (may timeout or fail for other reasons)
-        if let Err(ref e) = result {
-            assert!(!e.to_string().contains("not authorized"), "Should not get auth error without authority");
-        }
-    }
 }
