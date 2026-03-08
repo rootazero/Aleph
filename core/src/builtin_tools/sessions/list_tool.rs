@@ -284,7 +284,7 @@ impl AlephTool for SessionsListTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::a2a_policy::AgentToAgentPolicy;
+    use crate::gateway::inter_agent_policy::AgentToAgentPolicy;
     use crate::gateway::agent_instance::AgentRegistry;
     use crate::gateway::execution_adapter::ExecutionAdapter;
     use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunState, RunStatus};

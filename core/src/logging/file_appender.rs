@@ -48,11 +48,12 @@ mod tests {
 
     #[test]
     fn test_log_directory_creation() {
-        let log_dir = get_log_directory().unwrap();
-        let _ = std::fs::remove_dir_all(&log_dir);
+        // Use a temp directory to avoid deleting the real ~/.aleph/logs/
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let log_dir = temp_dir.path().join("logs");
         std::fs::create_dir_all(&log_dir).unwrap();
         assert!(log_dir.exists());
         assert!(log_dir.is_dir());
-        let _ = std::fs::remove_dir_all(&log_dir);
+        // temp_dir is automatically cleaned up on drop
     }
 }

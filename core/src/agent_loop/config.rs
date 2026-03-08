@@ -391,7 +391,7 @@ fn default_compress_after() -> usize {
 }
 
 fn default_window_size() -> usize {
-    10 // 增加到10步，确保短期记忆不丢失关键信息
+    10 // Increased to 10 steps to ensure short-term memory retains critical information
 }
 
 fn default_summary_tokens() -> usize {

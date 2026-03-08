@@ -6,7 +6,7 @@
 
 use crate::sync_primitives::Arc;
 
-use super::a2a_policy::AgentToAgentPolicy;
+use super::inter_agent_policy::AgentToAgentPolicy;
 use super::agent_instance::AgentRegistry;
 use super::execution_adapter::ExecutionAdapter;
 use super::session_manager::SessionManager;

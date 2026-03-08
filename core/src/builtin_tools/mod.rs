@@ -64,11 +64,6 @@ pub mod soul_update;
 pub mod vision;
 pub mod escalate_task;
 pub mod subagent_manage;
-pub mod a2a_cancel_task;
-pub mod a2a_discover;
-pub mod a2a_get_task;
-pub mod a2a_list_agents;
-pub mod a2a_send_message;
 
 pub use agent_manage::{
     AgentCreateArgs, AgentCreateOutput, AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput,

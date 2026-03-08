@@ -103,13 +103,13 @@ impl TaskPlanner {
     /// Infer the tool name from step description
     ///
     /// Maps keywords (Chinese and English) to tool names:
-    /// - "search" / "搜索" / "查找" -> "search"
-    /// - "delete" / "删除" -> "file_delete"
-    /// - "copy" / "复制" -> "file_copy"
-    /// - "move" / "移动" -> "file_move"
-    /// - "create" / "创建" -> "file_write"
-    /// - "read" / "读取" -> "file_read"
-    /// - "fetch" / "download" / "下载" -> "web_fetch"
+    /// - "search" / "搜索" (search) / "查找" (find) -> "search"
+    /// - "delete" / "删除" (delete) -> "file_delete"
+    /// - "copy" / "复制" (copy) -> "file_copy"
+    /// - "move" / "移动" (move) -> "file_move"
+    /// - "create" / "创建" (create) -> "file_write"
+    /// - "read" / "读取" (read) -> "file_read"
+    /// - "fetch" / "download" / "下载" (download) -> "web_fetch"
     /// - Default -> "chat"
     pub fn infer_tool(&self, description: &str) -> String {
         let desc_lower = description.to_lowercase();

@@ -36,7 +36,7 @@ fn default_threshold() -> f32 {
 }
 
 // ============================================================================
-// Success Manifest (成功契约)
+// Success Manifest (Success Contract)
 // ============================================================================
 
 /// Defines success criteria for a task before execution begins.

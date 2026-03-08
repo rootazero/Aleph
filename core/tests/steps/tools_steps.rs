@@ -23,7 +23,7 @@ use alephcore::builtin_tools::sessions::{
 use alephcore::dispatcher::{
     ToolIndex, ToolIndexCategory, ToolIndexEntry, ToolRegistry, ToolSource, UnifiedTool,
 };
-use alephcore::gateway::a2a_policy::AgentToAgentPolicy;
+use alephcore::gateway::inter_agent_policy::AgentToAgentPolicy;
 use alephcore::gateway::router::SessionKey;
 use alephcore::tools::{AlephTool, AlephToolServer};
 use alephcore::Result;

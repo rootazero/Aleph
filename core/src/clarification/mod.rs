@@ -90,7 +90,7 @@ impl ClarificationOption {
 pub struct QuestionGroup {
     /// Unique ID for this group (e.g., "yunsh", "font", "cipu")
     pub id: String,
-    /// Question prompt (e.g., "请选择韵书（用于押韵与验证）")
+    /// Question prompt (e.g., "Select a rhyme dictionary (for rhyming and validation)")
     pub prompt: String,
     /// Options for this group
     pub options: Vec<ClarificationOption>,
@@ -174,23 +174,23 @@ impl ClarificationRequest {
     ///
     /// let request = ClarificationRequest::multi_group(
     ///     "poetry-config",
-    ///     "需要确认3项信息",
+    ///     "Need to confirm 3 items",
     ///     vec![
     ///         QuestionGroup::new(
     ///             "yunsh",
-    ///             "请选择韵书（用于押韵与验证）",
+    ///             "Select a rhyme dictionary (for rhyming and validation)",
     ///             vec![
-    ///                 ClarificationOption::new("pingshui", "平水韵（传统韵书）"),
-    ///                 ClarificationOption::new("cilin", "词林正韵（专门用于词的韵书）"),
-    ///                 ClarificationOption::new("xingyun", "中华新韵（现代韵书）"),
+    ///                 ClarificationOption::new("pingshui", "Pingshui Rhymes (traditional)"),
+    ///                 ClarificationOption::new("cilin", "Cilin Zhengyun (specialized for ci poetry)"),
+    ///                 ClarificationOption::new("xingyun", "Zhonghua Xinyun (modern)"),
     ///             ],
     ///         ),
     ///         QuestionGroup::new(
     ///             "font",
-    ///             "用字：简体字还是繁体字？",
+    ///             "Character set: Simplified or Traditional?",
     ///             vec![
-    ///                 ClarificationOption::new("simplified", "简体"),
-    ///                 ClarificationOption::new("traditional", "繁体"),
+    ///                 ClarificationOption::new("simplified", "Simplified"),
+    ///                 ClarificationOption::new("traditional", "Traditional"),
     ///             ],
     ///         ),
     ///     ],

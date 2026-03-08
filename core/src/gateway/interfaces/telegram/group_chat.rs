@@ -13,7 +13,7 @@ use crate::group_chat::protocol::*;
 /// Renders group chat messages in Telegram Markdown format.
 ///
 /// - Persona messages: `**[Name]**: content`
-/// - Coordinator messages: `**[主持人]**: content`
+/// - Coordinator messages: `**[主持人]**: content` (主持人 = Coordinator)
 /// - System messages: `_content_` (italic)
 pub struct TelegramGroupChatRenderer;
 

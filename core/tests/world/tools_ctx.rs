@@ -22,7 +22,7 @@ use alephcore::builtin_tools::sessions::{
 use alephcore::dispatcher::{
     ToolIndex, ToolIndexEntry, ToolRegistry, ToolDefinition, UnifiedTool,
 };
-use alephcore::gateway::a2a_policy::AgentToAgentPolicy;
+use alephcore::gateway::inter_agent_policy::AgentToAgentPolicy;
 use alephcore::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
 use alephcore::gateway::context::GatewayContext as AlephGatewayContext;
 use alephcore::gateway::event_emitter::{EventEmitter, EventEmitError, StreamEvent};

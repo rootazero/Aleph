@@ -484,7 +484,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // 7. Create client-side components (CardRegistry, SmartRouter, ClientPool)
                 let card_registry = Arc::new(CardRegistry::new());
                 card_registry.load_from_config(&a2a_config).await;
-
                 // 8. Wire LLM semantic matcher (if default provider available)
                 let smart_router = if let Some(ref provider) = agent_result.default_provider {
                     use alephcore::a2a::service::SemanticLlmMatcher;
@@ -504,9 +503,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 if let Some(ref dispatcher) = agent_result.sub_agent_dispatcher {
                     let mut disp = dispatcher.write().await;
                     disp.register(a2a_sub_agent);
-                    if !args.daemon {
-                        println!("A2A: registered A2ASubAgent with dispatcher");
-                    }
                 }
 
                 if !args.daemon {

@@ -445,7 +445,7 @@ mod tests {
         // Build prompt with non-existent dependency
         let prompt = ctx.build_prompt_context("task_1", &["nonexistent"]);
 
-        // Should show "未找到输出" for missing dependency
+        // Should show "(未找到输出)" (output not found) for missing dependency
         assert!(prompt.contains("[nonexistent]: (未找到输出)"));
     }
 }
