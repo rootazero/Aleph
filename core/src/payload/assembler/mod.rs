@@ -89,6 +89,47 @@ impl PromptAssembler {
             config,
         )
     }
+
+    /// Build prompt with agent mode injection based on `IntentResult`.
+    ///
+    /// When the result is `Execute` or `DirectTool`, injects the Agent Mode
+    /// Prompt. This is the `IntentResult`-based replacement for
+    /// `build_prompt_with_intent`.
+    pub fn build_prompt_with_intent_result(
+        &self,
+        base_prompt: &str,
+        capabilities: &[crate::capability::CapabilityDeclaration],
+        context: Option<&super::AgentContext>,
+        result: Option<&crate::intent::types::IntentResult>,
+    ) -> String {
+        intent::build_prompt_with_intent_result(
+            &self.context_format,
+            base_prompt,
+            capabilities,
+            context,
+            result,
+        )
+    }
+
+    /// Build prompt using the new `IntentResult` enum.
+    ///
+    /// This is the `IntentResult`-based replacement for
+    /// `build_prompt_with_execution_mode`.
+    pub fn build_prompt_for_intent(
+        &self,
+        result: &crate::intent::types::IntentResult,
+        tools: &[crate::prompt::ToolInfo],
+        context: Option<&super::AgentContext>,
+        config: Option<&crate::prompt::PromptConfig>,
+    ) -> String {
+        intent::build_prompt_for_intent(
+            &self.context_format,
+            result,
+            tools,
+            context,
+            config,
+        )
+    }
 }
 
 #[cfg(test)]
