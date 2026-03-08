@@ -98,6 +98,10 @@ pub struct AgentDefaults {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<String>>,
 
+    /// Default skills blacklist (blocked tools) for all agents
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills_blacklist: Option<Vec<String>>,
+
     /// Default DM (domain model) scope
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dm_scope: Option<String>,
@@ -212,6 +216,10 @@ pub struct AgentDefinition {
     /// Skills available to this agent (overrides defaults)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<String>>,
+
+    /// Skills blacklist (blocked tools) for this agent (overrides defaults)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills_blacklist: Option<Vec<String>>,
 
     /// Agent identity (emoji, description, avatar, theme)
     #[serde(default, skip_serializing_if = "Option::is_none")]

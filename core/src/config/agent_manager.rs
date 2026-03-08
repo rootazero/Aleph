@@ -50,6 +50,7 @@ pub struct AgentPatch {
     pub model_config: Option<AgentModelConfig>,
     pub params: Option<AgentParams>,
     pub skills: Option<Vec<String>>,
+    pub skills_blacklist: Option<Vec<String>>,
     pub subagents: Option<SubagentPolicy>,
 }
 
@@ -270,6 +271,14 @@ impl AgentManager {
                 arr.push(s.as_str());
             }
             agent_table["skills"] = toml_edit::value(arr);
+        }
+
+        if let Some(skills_blacklist) = &patch.skills_blacklist {
+            let mut arr = Array::new();
+            for s in skills_blacklist {
+                arr.push(s.as_str());
+            }
+            agent_table["skills_blacklist"] = toml_edit::value(arr);
         }
 
         if let Some(subagents) = &patch.subagents {
@@ -973,7 +982,7 @@ name = "Coder"
 
         // Workspace content dir
         assert!(mgr.workspace_root.join("dual").join("SOUL.md").exists());
-        assert!(mgr.workspace_root.join("dual").join("memory").is_dir());
+        assert!(mgr.workspace_root.join("dual").join("MEMORY.md").exists());
 
         // Agent state dir
         assert!(mgr.agents_root.join("dual").join("sessions").is_dir());

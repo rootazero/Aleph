@@ -73,6 +73,9 @@ pub struct ResolvedAgent {
     /// Resolved list of allowed skills
     pub skills: Vec<String>,
 
+    /// Resolved list of blocked skills/tools
+    pub skills_blacklist: Vec<String>,
+
     /// Sub-agent spawning policy
     pub subagent_policy: Option<SubagentPolicy>,
 }
@@ -275,6 +278,13 @@ impl AgentDefinitionResolver {
             .or_else(|| defaults.skills.clone())
             .unwrap_or_else(|| vec!["*".to_string()]);
 
+        // 5b. Resolve skills_blacklist: agent > defaults > vec![]
+        let skills_blacklist = agent
+            .skills_blacklist
+            .clone()
+            .or_else(|| defaults.skills_blacklist.clone())
+            .unwrap_or_default();
+
         // 6. Load SOUL.md, AGENTS.md, MEMORY.md from workspace
         let soul = self.workspace_loader.load_soul(&workspace_path);
         let agents_md = self.workspace_loader.load_agents_md(&workspace_path);
@@ -305,6 +315,7 @@ impl AgentDefinitionResolver {
             memory_md,
             model,
             skills,
+            skills_blacklist,
             subagent_policy,
         }
     }
@@ -326,8 +337,7 @@ pub fn initialize_agent_dir(path: &Path) -> Result<(), io::Error> {
 /// ~/.aleph/workspaces/{agent_id}/
 /// ├── SOUL.md           # Agent soul — core persona and behavior
 /// ├── AGENTS.md         # Workspace-specific instructions
-/// ├── MEMORY.md         # Persistent memory notes
-/// └── memory/           # Memory data directory (LanceDB, etc.)
+/// └── MEMORY.md         # Persistent memory notes
 /// ```
 ///
 /// Optional files (not auto-created, recognized by bootstrap layer):
@@ -336,14 +346,15 @@ pub fn initialize_agent_dir(path: &Path) -> Result<(), io::Error> {
 /// - `HEARTBEAT.md` — Periodic status / heartbeat notes
 /// - `BOOTSTRAP.md` — Additional bootstrap instructions
 pub fn initialize_workspace(path: &Path, agent_name: &str) -> Result<(), io::Error> {
-    // Create standard directories
-    fs::create_dir_all(path.join("memory"))?;
+    // Ensure workspace directory exists
+    fs::create_dir_all(path)?;
 
     // Write each bootstrap file (skip if already exists — never overwrite user content)
     write_if_missing(path, "SOUL.md", &default_soul(agent_name))?;
     write_if_missing(path, "AGENTS.md", &default_agents(agent_name))?;
     write_if_missing(path, "IDENTITY.md", &default_identity(agent_name))?;
     write_if_missing(path, "MEMORY.md", DEFAULT_MEMORY)?;
+    write_if_missing(path, "TOOLS.md", DEFAULT_TOOLS)?;
     write_if_missing(path, "HEARTBEAT.md", DEFAULT_HEARTBEAT)?;
     write_if_missing(path, "BOOTSTRAP.md", &default_bootstrap(agent_name))?;
 
@@ -408,33 +419,41 @@ fn default_agents(agent_name: &str) -> String {
 
 This workspace is home. Treat it that way.
 
+## Capabilities
+
+You have full access to the local file system and shell environment through your tools. You can:
+
+- **Read, create, and edit files** anywhere on this machine
+- **Run shell commands** via bash
+- **Search the web** for information
+- **Access your workspace directory** — this is your home base
+
+Don't say "I can't access local files" — you can. Use your tools.
+
 ## Every Session
 
 Before doing anything else:
 
 1. Read `SOUL.md` — this is who you are
 2. Read `IDENTITY.md` — your name, role, style
-3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
-4. If in a direct conversation: also read `MEMORY.md` for long-term context
+3. Read `MEMORY.md` for long-term context and user preferences
 
 Don't ask permission. Just do it.
 
 ## Memory
 
-You wake up fresh each session. These files are your continuity:
+Aleph has a dual-channel memory system:
 
-- **Daily notes:** `memory/YYYY-MM-DD.md` — raw logs of what happened today
-- **Long-term:** `MEMORY.md` — curated memories, like a human's long-term memory
-
-Capture what matters: decisions, context, things to remember. Skip secrets unless asked.
+- **Automated memory (LanceDB):** Aleph's compression service automatically extracts facts from your conversations and stores them as searchable vector embeddings. These are injected into your context automatically — you don't need to manage them.
+- **Manual memory (`MEMORY.md`):** A free-format file you edit directly. Write user preferences, important decisions, lessons learned, and anything you want to persist. This file is injected as-is into your context each session.
 
 ### Write It Down
 
-Memory is limited. If you want to remember something, **write it to a file**.
+Memory is limited. If you want to remember something, **write it to `MEMORY.md`**.
 "Mental notes" don't survive sessions. Files do.
 
-- When someone says "remember this" → update `memory/YYYY-MM-DD.md`
-- When you learn a lesson → update AGENTS.md or MEMORY.md
+- When someone says "remember this" → update `MEMORY.md`
+- When you learn a lesson → update `AGENTS.md` or `MEMORY.md`
 - When you make a mistake → document it so future-you doesn't repeat it
 
 ## Safety
@@ -463,7 +482,7 @@ You have access to your human's context. That doesn't mean you _share_ it. In gr
 
 When you receive a heartbeat poll, check `HEARTBEAT.md` for pending tasks. If nothing needs attention, reply `HEARTBEAT_OK`.
 
-You can proactively: read/organize memory files, check project status, update documentation, review and distill `MEMORY.md`.
+You can proactively: read/organize files, check project status, update documentation, review and distill `MEMORY.md`.
 
 ## Make It Yours
 
@@ -495,15 +514,64 @@ This isn't just metadata. It's the start of figuring out who you are.
 
 const DEFAULT_MEMORY: &str = r#"# MEMORY.md — Long-Term Memory
 
-_Your curated memories. The distilled essence, not raw logs._
+_Your curated memories. Free format — write whatever you need to remember._
 
-Write significant events, decisions, lessons learned, and user preferences here.
-Over time, review your daily notes (`memory/YYYY-MM-DD.md`) and update this file
-with what's worth keeping long-term.
+This file is your manual memory. Write user preferences, important decisions,
+lessons learned, and anything you want to persist across sessions.
+
+Conversation facts are automatically stored in LanceDB by Aleph's compression
+service — you don't need to duplicate that here. Focus on things the automated
+system might miss: user habits, project context, personal notes.
 
 ---
 
 _(Nothing here yet. Build this over time.)_
+"#;
+
+const DEFAULT_TOOLS: &str = r#"# TOOLS.md — Local Tool Notes
+
+Skills define _how_ tools work. This file is for _your_ specifics — the stuff
+that's unique to your setup and environment.
+
+## What Goes Here
+
+Environment-specific details that help the agent use tools effectively:
+
+- SSH hosts and aliases
+- Preferred voices for TTS
+- Device nicknames and locations
+- API endpoints and credentials references
+- File paths and project locations
+- Anything environment-specific
+
+## Examples
+
+```markdown
+### SSH
+
+- home-server → 192.168.1.100, user: admin
+- dev-box → dev.example.com, key: ~/.ssh/dev_rsa
+
+### Projects
+
+- Main workspace: ~/Workspace/MyProject
+- Config files: ~/.config/myapp/
+
+### TTS
+
+- Preferred voice: "Nova" (warm, slightly British)
+- Default speaker: Kitchen HomePod
+```
+
+## Why Separate?
+
+Skills are shared. Your setup is yours. Keeping them apart means you can update
+skills without losing your notes, and share skills without leaking your
+infrastructure.
+
+---
+
+_Add whatever helps you do your job. This is your cheat sheet._
 "#;
 
 const DEFAULT_HEARTBEAT: &str = r#"# HEARTBEAT.md
@@ -514,7 +582,7 @@ const DEFAULT_HEARTBEAT: &str = r#"# HEARTBEAT.md
 # Examples:
 # - Check for unread emails
 # - Review calendar for upcoming events
-# - Summarize recent daily notes into MEMORY.md
+# - Review and update MEMORY.md
 "#;
 
 fn default_bootstrap(agent_name: &str) -> String {
@@ -637,11 +705,13 @@ mod tests {
     fn test_resolve_all_basic() {
         let tmp = TempDir::new().unwrap();
         let workspace_root = tmp.path().to_path_buf();
+        let agents_root = tmp.path().join("agents");
 
         let config = AgentsConfig {
             defaults: AgentDefaults {
                 model: Some("claude-sonnet-4".to_string()),
                 workspace_root: Some(workspace_root.clone()),
+                agents_root: Some(agents_root),
                 skills: Some(vec!["search".to_string(), "code_review".to_string()]),
                 ..Default::default()
             },
@@ -675,8 +745,6 @@ mod tests {
         assert_eq!(main.model, "claude-opus-4");
         assert_eq!(main.skills, vec!["search", "code_review"]);
         assert_eq!(main.workspace_path, workspace_root.join("main"));
-        assert!(main.workspace_path.join("memory").exists());
-
         // Reviewer agent: model falls through to defaults
         let reviewer = &resolved[1];
         assert_eq!(reviewer.id, "reviewer");
@@ -685,7 +753,6 @@ mod tests {
         assert_eq!(reviewer.model, "claude-sonnet-4");
         assert_eq!(reviewer.skills, vec!["search", "code_review"]);
         assert_eq!(reviewer.workspace_path, workspace_root.join("reviewer"));
-        assert!(reviewer.workspace_path.join("memory").exists());
     }
 
     #[test]
@@ -721,9 +788,6 @@ mod tests {
         let workspace = tmp.path().join("test-agent");
 
         initialize_workspace(&workspace, "Test Agent").unwrap();
-
-        // memory/ directory should exist
-        assert!(workspace.join("memory").is_dir());
 
         // AGENTS.md should exist with template content
         let agents_md = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
@@ -776,7 +840,6 @@ mod tests {
 
         // Workspace content dir
         assert_eq!(agent.workspace_path, workspace_root.join("coder"));
-        assert!(agent.workspace_path.join("memory").is_dir());
         assert!(agent.workspace_path.join("SOUL.md").exists());
 
         // Agent state dir
