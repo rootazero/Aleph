@@ -4,6 +4,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
+use crate::components::markdown::MarkdownRenderer;
 use crate::context::DashboardState;
 use crate::api::chat::{ChatApi, ChatAttachment};
 use super::state::{ChatState, ChatPhase, ChatMessage};
@@ -67,9 +68,20 @@ pub fn ChatView() -> impl IntoView {
 #[component]
 fn MessageList() -> impl IntoView {
     let chat = expect_context::<ChatState>();
+    let scroll_ref = NodeRef::<leptos::html::Div>::new();
+
+    // Auto-scroll to bottom when messages change or during streaming
+    Effect::new(move || {
+        let _msgs = chat.messages.get();
+        let _phase = chat.phase.get();
+        if let Some(el) = scroll_ref.get() {
+            let el: &web_sys::HtmlElement = &el;
+            el.set_scroll_top(el.scroll_height());
+        }
+    });
 
     view! {
-        <div class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+        <div node_ref=scroll_ref class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
             <For
                 each=move || chat.messages.get()
                 key=|msg| format!("{}:{}:{}:{}", msg.id, msg.content.len(), msg.is_streaming, msg.tool_calls.len())
@@ -161,10 +173,18 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
             <div class=bubble_style>
                 {tool_calls_view}
 
-                // Message content
-                <div class="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                    {content}
-                </div>
+                // Message content — Markdown for assistant, plain text for user
+                {if is_user {
+                    view! {
+                        <div class="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                            {content.clone()}
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {
+                        <MarkdownRenderer content=content.clone() />
+                    }.into_any()
+                }}
 
                 // Streaming cursor
                 {streaming_cursor}
