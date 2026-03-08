@@ -287,7 +287,6 @@ impl Default for UnifiedIntentClassifier {
 // ─── Builder ─────────────────────────────────────────────────────────
 
 /// Builder for `UnifiedIntentClassifier`.
-#[derive(Default)]
 pub struct UnifiedIntentClassifierBuilder {
     command_parser: Option<Arc<CommandParser>>,
     keyword_index: Option<KeywordIndex>,
@@ -295,6 +294,19 @@ pub struct UnifiedIntentClassifierBuilder {
     cache: Option<Arc<IntentCache>>,
     calibrator: Option<ConfidenceCalibrator>,
     default_to_execute: bool,
+}
+
+impl Default for UnifiedIntentClassifierBuilder {
+    fn default() -> Self {
+        Self {
+            command_parser: None,
+            keyword_index: None,
+            ai_classifier: None,
+            cache: None,
+            calibrator: None,
+            default_to_execute: true, // Match IntentConfig::default()
+        }
+    }
 }
 
 impl UnifiedIntentClassifierBuilder {
