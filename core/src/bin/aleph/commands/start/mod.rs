@@ -485,17 +485,37 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 let card_registry = Arc::new(CardRegistry::new());
                 card_registry.load_from_config(&a2a_config).await;
 
-                let smart_router = Arc::new(SmartRouter::new(card_registry));
+                // 8. Wire LLM semantic matcher (if default provider available)
+                let smart_router = if let Some(ref provider) = agent_result.default_provider {
+                    use alephcore::a2a::service::SemanticLlmMatcher;
+                    let matcher = Arc::new(SemanticLlmMatcher::new(provider.clone()));
+                    Arc::new(SmartRouter::new(card_registry).with_llm_matcher(matcher))
+                } else {
+                    Arc::new(SmartRouter::new(card_registry))
+                };
+
                 let client_pool = Arc::new(A2AClientPool::new());
 
-                // 8. Create A2ASubAgent (for delegation to remote agents)
-                let _a2a_sub_agent = Arc::new(A2ASubAgent::new(smart_router, client_pool));
-                // TODO: Register with SubAgentDispatcher when ready
+                // 9. Create A2ASubAgent and refresh cached names for can_handle
+                let a2a_sub_agent = Arc::new(A2ASubAgent::new(smart_router, client_pool));
+                a2a_sub_agent.refresh_agent_names().await;
+
+                // 10. Register with SubAgentDispatcher (enables delegate tool)
+                if let Some(ref dispatcher) = agent_result.sub_agent_dispatcher {
+                    let mut disp = dispatcher.write().await;
+                    disp.register(a2a_sub_agent);
+                    if !args.daemon {
+                        println!("A2A: registered A2ASubAgent with dispatcher");
+                    }
+                }
 
                 if !args.daemon {
                     println!("A2A protocol: enabled");
                     println!("  - Agent Card: /.well-known/agent-card.json");
                     println!("  - RPC:        /a2a (sync), /a2a/stream (SSE)");
+                    if agent_result.default_provider.is_some() {
+                        println!("  - LLM routing: enabled (semantic agent matching)");
+                    }
                     println!();
                 }
             } else {
