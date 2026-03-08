@@ -28,6 +28,7 @@ control-plane = []
 
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util", "signal", "net"] }
 tokio-util = { version = "0.7", features = ["rt", "compat"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 # Protocol types (shared with clients)
