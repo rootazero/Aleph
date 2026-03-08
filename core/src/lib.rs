@@ -103,6 +103,7 @@ pub mod initialization {
     pub use crate::init_unified::*;
 }
 
+pub mod a2a;
 pub mod gateway;
 pub mod group_chat;
 pub mod cron;
