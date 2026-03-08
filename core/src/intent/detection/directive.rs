@@ -98,25 +98,23 @@ impl DirectiveParser {
         while i < tokens.len() {
             let token = tokens[i];
             if let Some(name) = self.match_directive(token) {
-                if let Some(def) = self.registry.get(&name) {
-                    if def.accepts_value {
-                        // Consume next token as value if available
-                        let value = if i + 1 < tokens.len() {
-                            i += 1;
-                            Some(tokens[i].to_string())
-                        } else {
-                            None
-                        };
-                        directives.push(Directive { name, value });
+                let def = &self.registry[&name];
+                if def.accepts_value {
+                    // Consume next token as value, unless it is itself a directive
+                    let value = if i + 1 < tokens.len()
+                        && self.match_directive(tokens[i + 1]).is_none()
+                    {
+                        i += 1;
+                        Some(tokens[i].to_string())
                     } else {
-                        directives.push(Directive {
-                            name,
-                            value: None,
-                        });
-                    }
+                        None
+                    };
+                    directives.push(Directive { name, value });
                 } else {
-                    // Not registered — keep in output
-                    kept_tokens.push(token);
+                    directives.push(Directive {
+                        name,
+                        value: None,
+                    });
                 }
             } else {
                 kept_tokens.push(token);
@@ -266,6 +264,15 @@ mod tests {
         assert_eq!(result.directives[0].name, "think");
         assert_eq!(result.directives[0].value.as_deref(), Some("high"));
         assert_eq!(result.cleaned_text, "help me with coding");
+    }
+
+    #[test]
+    fn consecutive_directives_without_value() {
+        let result = parser().parse("/think /verbose help me");
+        assert!(result.has_directive("think"));
+        assert!(result.has_directive("verbose"));
+        assert_eq!(result.directive_value("think"), None); // no value consumed
+        assert_eq!(result.cleaned_text, "help me");
     }
 
     #[test]
