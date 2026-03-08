@@ -9,6 +9,7 @@ mod abort;
 mod ai_binary;
 pub mod ai_detector;
 mod classifier;
+pub mod directive;
 pub mod keyword;
 mod structural;
 
@@ -20,4 +21,5 @@ pub use classifier::{
     UnifiedIntentClassifier, UnifiedIntentClassifierBuilder, intent_type_to_category,
 };
 pub use keyword::{KeywordIndex, KeywordMatch, KeywordMatchMode, KeywordRule};
+pub use directive::{Directive, DirectiveDefinition, DirectiveParser, ParsedInput};
 pub use structural::{StructuralContext, StructuralDetector};
