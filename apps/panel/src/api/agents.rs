@@ -72,6 +72,24 @@ pub struct FilesListResponse {
     pub files: Vec<WorkspaceFile>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolInfo {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolGroupInfo {
+    pub id: String,
+    pub name: String,
+    pub tools: Vec<ToolInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolsSchemaResponse {
+    pub groups: Vec<ToolGroupInfo>,
+}
+
 // -- API --
 
 pub struct AgentsApi;
@@ -146,5 +164,12 @@ impl AgentsApi {
             "filename": filename,
         })).await?;
         Ok(())
+    }
+
+    // Tools schema
+
+    pub async fn tools_schema(state: &DashboardState) -> Result<ToolsSchemaResponse, String> {
+        let result = state.rpc_call("agents.tools_schema", Value::Null).await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
     }
 }
