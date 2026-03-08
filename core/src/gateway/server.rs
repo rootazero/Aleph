@@ -162,6 +162,8 @@ pub struct GatewayServer {
     pub event_scope_guard: Arc<EventScopeGuard>,
     /// Server start time for uptime calculation
     pub start_time: Instant,
+    /// Optional A2A server state (set during startup if A2A is enabled)
+    a2a_state: Option<Arc<crate::a2a::adapter::server::A2AServerState>>,
 }
 
 impl GatewayServer {
@@ -192,6 +194,7 @@ impl GatewayServer {
             lane_manager: Arc::new(LaneManager::new(LaneConfig::default())),
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
             start_time: Instant::now(),
+            a2a_state: None,
         }
     }
 
@@ -221,6 +224,7 @@ impl GatewayServer {
             lane_manager: Arc::new(LaneManager::new(LaneConfig::default())),
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
             start_time: Instant::now(),
+            a2a_state: None,
         }
     }
 
@@ -251,6 +255,11 @@ impl GatewayServer {
     /// Set the guest session manager
     pub fn set_guest_session_manager(&mut self, manager: Arc<crate::gateway::security::GuestSessionManager>) {
         self.guest_session_manager = Some(manager);
+    }
+
+    /// Set the A2A server state (enables A2A routes in build_router)
+    pub fn set_a2a_state(&mut self, state: Arc<crate::a2a::adapter::server::A2AServerState>) {
+        self.a2a_state = Some(state);
     }
 
     /// Get the current number of active connections
@@ -285,11 +294,19 @@ impl GatewayServer {
         });
         let openai = openai_routes(openai_state);
 
-        Router::new()
+        let mut router = Router::new()
             .route("/ws", get(ws_upgrade_handler))
             .fallback_service(control_plane)
             .with_state(shared)
-            .merge(openai)
+            .merge(openai);
+
+        // Merge A2A routes if the subsystem is enabled
+        if let Some(a2a_state) = &self.a2a_state {
+            let a2a = crate::a2a::adapter::server::a2a_routes(a2a_state.clone());
+            router = router.merge(a2a);
+        }
+
+        router
     }
 
     /// Spawn background tasks for rate limiter pruning and tick heartbeat.
