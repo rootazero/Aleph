@@ -59,13 +59,24 @@ platforms/macos/Aleph/Frameworks/*.dylib.*
 # Git worktrees
 .worktrees/
 
+# Docs: only docs/reference/ is tracked (linked from README/CLAUDE.md)
+docs/*
+!docs/reference/
+openspec/
+_bmad/
+
 # Test / scratch / local files
 core/test.txt
 newinstall*.txt
-_bmad/bmm/testarch/knowledge/log.md
+*.py
+test-results/
+/tests/
+SystemPrompt.md
+CHANGELOG.md
 
 # Build pipeline artifacts
 apps/macos-native/Aleph/Resources/aleph
+apps/macos-native/build/
 
 # Misc
 agentstructure/
@@ -73,6 +84,12 @@ icons/
 !apps/desktop/src-tauri/icons/
 Aleph.dmg
 apps/macos-native/Aleph/Resources/aleph-server
+archive/
+bridges/
+clients/
+platforms/
+Scripts/
+examples/
 
 # UI node artifacts
 core/ui/
