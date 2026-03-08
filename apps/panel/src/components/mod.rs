@@ -7,6 +7,7 @@ pub mod connection_status;
 pub mod dashboard_sidebar;
 pub mod forms;
 pub mod layouts;
+pub mod markdown;
 pub mod mode_sidebar;
 pub mod settings_sidebar;
 pub mod sidebar;
