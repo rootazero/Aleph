@@ -1,166 +1,111 @@
 name: Server Release
 
+# Manual trigger only — build from a tested, stable commit.
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. v0.2.0)'
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-22.04
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: core
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler \
-            libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev \
-            libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev libx11-dev
-
-      - name: Run tests
-        run: cargo test -p alephcore --lib
-
   build:
-    name: Build (${{ matrix.target }})
-    needs: test
+    name: Build (${{ matrix.asset }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-            features: control-plane,desktop
             asset: aleph-darwin-aarch64
-          # TODO: macOS x86_64 — needs macos-15-large (paid) or cross-compile openssl fix
-          # TODO: Linux x86_64 — alephcore has cross-platform compile errors; desktop needs pipewire 0.3.77+
-          # TODO: Linux ARM64 — cross-compiling requires arch-specific system libs; use native ARM runner
-          # TODO: Windows — alephcore has 22 compile errors on MSVC (type inference issues)
+          # Uncomment as cross-compilation is resolved:
+          # - os: macos-13
+          #   target: x86_64-apple-darwin
+          #   asset: aleph-darwin-x86_64
+          # - os: ubuntu-22.04
+          #   target: x86_64-unknown-linux-gnu
+          #   asset: aleph-linux-x86_64
+          # - os: ubuntu-22.04-arm
+          #   target: aarch64-unknown-linux-gnu
+          #   asset: aleph-linux-aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }},wasm32-unknown-unknown
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: core
-
-      - name: Install protoc (Linux)
-        if: matrix.os == 'ubuntu-22.04'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Install protoc (macOS)
         if: startsWith(matrix.os, 'macos')
         run: brew install protobuf
 
-      - name: Install protoc (Windows)
-        if: matrix.os == 'windows-latest'
-        run: choco install protoc -y
-
-      # ── WASM Panel UI build ──
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install npm dependencies
-        run: npm install
-        working-directory: core/ui/control_plane
-
-      - name: Build Tailwind CSS
-        run: npm run build:css
-        working-directory: core/ui/control_plane
-
-      - name: Compile Rust to WASM
-        run: cargo build -p aleph-control-plane --target wasm32-unknown-unknown --release
-
-      - name: Install wasm-bindgen-cli
-        run: cargo install wasm-bindgen-cli --version 0.2.108
-
-      - name: Generate JS bindings
-        shell: bash
-        run: |
-          wasm-bindgen --target web --no-typescript \
-            --out-dir core/ui/control_plane/dist --out-name aleph_dashboard \
-            target/wasm32-unknown-unknown/release/aleph_dashboard.wasm
-
-      - name: Generate index.html
-        shell: bash
-        run: |
-          cat > core/ui/control_plane/dist/index.html << 'HTMLEOF'
-          <!DOCTYPE html>
-          <html lang="en">
-            <head>
-              <meta charset="utf-8" />
-              <meta name="viewport" content="width=device-width, initial-scale=1" />
-              <title>Aleph Dashboard</title>
-              <link rel="stylesheet" href="/tailwind.css" />
-            </head>
-            <body class="bg-surface text-text-primary">
-              <noscript>This application requires JavaScript to run.</noscript>
-              <script type="module">
-                import init from '/aleph_dashboard.js';
-                await init('/aleph_dashboard_bg.wasm');
-              </script>
-            </body>
-          </html>
-          HTMLEOF
-
-      # ── Platform-specific dependencies ──
+      - name: Install protoc (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Install Linux system libraries
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
-          sudo apt-get update
           sudo apt-get install -y \
             libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev \
             libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev libx11-dev \
-            libssl-dev libwayland-dev libgtk-3-dev libsoup-3.0-dev libwebkit2gtk-4.1-dev \
-            libjavascriptcoregtk-4.1-dev libpipewire-0.3-dev
+            libssl-dev
 
-      # ── Server build ──
-
+      # Panel WASM dist is pre-built and committed to git — no WASM build needed.
       - name: Build server
-        run: cargo build --bin aleph --features ${{ matrix.features }} --release --target ${{ matrix.target }}
+        run: cargo build --bin aleph --release --target ${{ matrix.target }}
 
-      - name: Rename artifact
+      - name: Package
         shell: bash
         run: |
-          SRC="target/${{ matrix.target }}/release/aleph"
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then SRC="${SRC}.exe"; fi
-          cp "$SRC" "${{ matrix.asset }}"
+          cp "target/${{ matrix.target }}/release/aleph" aleph
+          tar -czf "${{ matrix.asset }}.tar.gz" aleph
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}.tar.gz
 
   release:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
 
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/download-artifact@v4
         with:
+          path: artifacts
+
+      - name: Tag release
+        run: |
+          git tag "${{ inputs.version }}" || true
+          git push origin "${{ inputs.version }}" || true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: Aleph ${{ inputs.version }}
+          body: |
+            ## Install
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash
+            ```
+
+            Or specify version:
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash -s -- ${{ inputs.version }}
+            ```
           files: |
-            aleph-darwin-aarch64/aleph-darwin-aarch64
+            artifacts/**/*.tar.gz
