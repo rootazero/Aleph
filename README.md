@@ -8,6 +8,12 @@
 
 [中文文档](README_CN.md)
 
+## A Note from the Author
+
+This is a personal hobby project. I'm not a professional programmer — just someone who got fascinated by the possibilities of AI and started building. I've been learning AI-assisted coding along the way, and Aleph is the result of that journey. The project draws heavy inspiration from [OpenClaw](https://github.com/AIChatClaw/OpenClaw) and [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+
+I'm sharing it in the spirit of open source, in case it's useful or interesting to others. Contributions, feedback, and ideas are always welcome.
+
 ![Aleph Panel Dashboard](docs/images/panel-dashboard-1.png)
 ![Aleph Panel Chat](docs/images/panel-dashboard-2.png)
 ![Aleph Panel Settings](docs/images/panel-dashboard-3.png)
