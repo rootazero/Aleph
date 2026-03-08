@@ -47,7 +47,7 @@ impl Default for AgentInstanceConfig {
                 .join(".aleph/workspaces/main"),
             model: "claude-sonnet-4-5".to_string(),
             fallback_models: vec![],
-            max_loops: 20,
+            max_loops: 50,
             system_prompt: None,
             tool_whitelist: vec![],
             tool_blacklist: vec![],
@@ -72,7 +72,7 @@ impl AgentInstanceConfig {
             workspace: agent.workspace_path.clone(),
             model: agent.model.clone(),
             fallback_models: vec![],
-            max_loops: 10,
+            max_loops: 50,
             system_prompt: agent.agents_md.clone(),
             tool_whitelist: agent.skills.clone(),
             tool_blacklist: agent.skills_blacklist.clone(),
@@ -766,7 +766,7 @@ mod tests {
         assert_eq!(config.system_prompt.as_deref(), Some("Be a great coder."));
         assert_eq!(config.tool_whitelist, vec!["git_*", "fs_*"]);
         assert!(config.tool_blacklist.is_empty());
-        assert_eq!(config.max_loops, 10);
+        assert_eq!(config.max_loops, 50);
     }
 
     #[test]
