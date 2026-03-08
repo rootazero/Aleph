@@ -89,14 +89,6 @@ wasm:
     HTMLEOF
     echo "✓ WASM: {{panel_dist}}/"
 
-# Build WebChat UI (React)
-webchat-build:
-    cd apps/webchat && pnpm build
-
-# Dev server for WebChat
-webchat-dev:
-    cd apps/webchat && pnpm dev
-
 # Run Xcode build only (assumes server binary exists in Resources)
 xcode:
     cd {{macos_dir}} && xcodebuild \
