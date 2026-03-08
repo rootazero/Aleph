@@ -122,10 +122,11 @@ mod tests {
         );
 
         if let AlephEvent::ToolCallRequested(request) = &events[0] {
-            // Simple conversational input should default to general_chat
+            // With the unified classifier (default_to_execute=true), simple input
+            // without path/URL/keyword falls to L4 default → Execute → general_task
             assert_eq!(
-                request.tool, "general_chat",
-                "Simple input should use general_chat tool"
+                request.tool, "general_task",
+                "Simple input should use general_task tool (unified pipeline default)"
             );
         }
     }
@@ -271,7 +272,7 @@ mod tests {
                 plan.steps[1].tool, "file_copy",
                 "复制内容 should map to file_copy"
             );
-            // "保存" defaults to chat since it doesn't match specific patterns
+            // "保存" (save) defaults to chat since it doesn't match specific patterns
         }
     }
 

@@ -3,13 +3,8 @@
 //! Subscribes to: InputReceived
 //! Publishes: PlanRequested or ToolCallRequested
 //!
-//! # New Architecture (v2)
-//!
-//! This component now supports two modes via configuration:
-//! 1. Legacy mode: Uses IntentClassifier (default)
-//! 2. Unified mode: Uses ExecutionIntentDecider (experimental)
-//!
-//! Set `use_unified_decider = true` in config to enable the new mode.
+//! Uses the UnifiedIntentClassifier (v3 pipeline) which replaces both the
+//! legacy IntentClassifier and the v2 ExecutionIntentDecider.
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -19,8 +14,6 @@ use crate::event::{
     AlephEvent, EventContext, EventHandler, EventType, HandlerError, InputEvent, PlanRequest,
     ToolCallRequest,
 };
-use crate::intent::{ExecutionIntent, IntentClassifier};
-use crate::intent::{ContextSignals, ExecutionIntentDecider, ExecutionMode};
 use crate::intent::{
     IntentContext, IntentResult, StructuralContext, UnifiedIntentClassifier,
 };
@@ -115,20 +108,10 @@ static SENTENCE_BOUNDARY: Lazy<Regex> = Lazy::new(|| Regex::new(r"[。！？\.!?
 /// - Analyzes input complexity using multi-step keywords, step markers, and action sentences
 /// - Publishes either PlanRequested (for complex requests) or ToolCallRequested (for simple ones)
 ///
-/// # Dual Mode Support
-///
-/// The analyzer supports two modes:
-/// - **Legacy mode** (default): Uses `IntentClassifier` for backward compatibility
-/// - **Unified mode**: Uses `ExecutionIntentDecider` for the new architecture
+/// Uses the UnifiedIntentClassifier pipeline for intent detection.
 pub struct IntentAnalyzer {
-    /// Intent classifier for determining task category and intent type (legacy)
-    classifier: IntentClassifier,
-    /// Unified execution intent decider (new architecture)
-    decider: ExecutionIntentDecider,
-    /// Use the unified decider instead of legacy classifier
-    use_unified_decider: bool,
-    /// New unified intent classifier (v3 pipeline, additive migration)
-    unified_classifier: Option<UnifiedIntentClassifier>,
+    /// Unified intent classifier (v3 pipeline)
+    classifier: UnifiedIntentClassifier,
 }
 
 impl Default for IntentAnalyzer {
@@ -138,73 +121,16 @@ impl Default for IntentAnalyzer {
 }
 
 impl IntentAnalyzer {
-    /// Create a new IntentAnalyzer with legacy mode
+    /// Create a new IntentAnalyzer with default UnifiedIntentClassifier
     pub fn new() -> Self {
         Self {
-            classifier: IntentClassifier::new(),
-            decider: ExecutionIntentDecider::new(),
-            use_unified_decider: false,
-            unified_classifier: None,
+            classifier: UnifiedIntentClassifier::new(),
         }
     }
 
-    /// Create IntentAnalyzer with unified decider enabled
-    pub fn with_unified_decider() -> Self {
-        Self {
-            classifier: IntentClassifier::new(),
-            decider: ExecutionIntentDecider::new(),
-            use_unified_decider: true,
-            unified_classifier: None,
-        }
-    }
-
-    /// Create IntentAnalyzer with a custom classifier (legacy)
-    pub fn with_classifier(classifier: IntentClassifier) -> Self {
-        Self {
-            classifier,
-            decider: ExecutionIntentDecider::new(),
-            use_unified_decider: false,
-            unified_classifier: None,
-        }
-    }
-
-    /// Create IntentAnalyzer with the new UnifiedIntentClassifier (v3 pipeline).
-    ///
-    /// This is the newest path that uses the fully unified classification pipeline,
-    /// replacing both `IntentClassifier` and `ExecutionIntentDecider`.
+    /// Create IntentAnalyzer with a custom UnifiedIntentClassifier.
     pub fn with_unified_classifier(classifier: UnifiedIntentClassifier) -> Self {
-        Self {
-            classifier: IntentClassifier::new(),
-            decider: ExecutionIntentDecider::new(),
-            use_unified_decider: false,
-            unified_classifier: Some(classifier),
-        }
-    }
-
-    /// Enable or disable unified decider mode
-    pub fn set_unified_mode(&mut self, enabled: bool) {
-        self.use_unified_decider = enabled;
-    }
-
-    /// Check if unified mode is enabled
-    pub fn is_unified_mode(&self) -> bool {
-        self.use_unified_decider
-    }
-
-    /// Get the execution mode using the unified decider
-    ///
-    /// This is the new recommended way to classify intent.
-    pub fn get_execution_mode(&self, text: &str, context: Option<&ContextSignals>) -> ExecutionMode {
-        self.decider.decide(text, context).mode
-    }
-
-    /// Get full decision result with metadata
-    pub fn get_decision_result(
-        &self,
-        text: &str,
-        context: Option<&ContextSignals>,
-    ) -> crate::intent::DecisionResult {
-        self.decider.decide(text, context)
+        Self { classifier }
     }
 
     // ========================================================================
@@ -273,7 +199,7 @@ impl IntentAnalyzer {
     /// - Text has multiple sentences with action verbs
     ///
     /// Returns Complexity::Simple otherwise
-    pub fn analyze_complexity(&self, text: &str, _intent: &ExecutionIntent) -> Complexity {
+    pub fn analyze_complexity_for_text(&self, text: &str) -> Complexity {
         // Check for multi-step keywords
         if self.has_multi_step_keywords(text) {
             return Complexity::NeedsPlan;
@@ -321,51 +247,6 @@ impl IntentAnalyzer {
 
         // Filter empty and very short segments
         result.into_iter().filter(|s| s.len() >= 2).collect()
-    }
-
-    /// Build a direct ToolCallRequest for simple requests
-    pub fn build_direct_call(
-        &self,
-        intent: &ExecutionIntent,
-        input: &InputEvent,
-    ) -> ToolCallRequest {
-        match intent {
-            ExecutionIntent::Executable(task) => {
-                // Build tool parameters inline
-                let mut params = serde_json::json!({
-                    "action": task.action,
-                    "input_text": input.text,
-                    "confidence": task.confidence
-                });
-                if let Some(ref target) = task.target {
-                    params["target"] = serde_json::json!(target);
-                }
-                if let Some(ref ctx) = input.context {
-                    if let Some(ref app) = ctx.app_name {
-                        params["app_context"] = serde_json::json!(app);
-                    }
-                    if let Some(ref selected) = ctx.selected_text {
-                        params["selected_text"] = serde_json::json!(selected);
-                    }
-                }
-
-                ToolCallRequest {
-                    tool: task.category.as_str().to_string(),
-                    parameters: params,
-                    plan_step_id: None,
-                }
-            }
-            _ => {
-                // For conversational or ambiguous intents, default to general_chat
-                ToolCallRequest {
-                    tool: "general_chat".to_string(),
-                    parameters: serde_json::json!({
-                        "input": input.text
-                    }),
-                    plan_step_id: None,
-                }
-            }
-        }
     }
 }
 
@@ -427,217 +308,11 @@ impl EventHandler for IntentAnalyzer {
             _ => return Ok(vec![]),
         };
 
-        // Use unified decider if enabled, otherwise fall back to legacy
-        if self.use_unified_decider {
-            return self.handle_with_unified_decider(input).await;
-        }
-
-        // Legacy path: use IntentClassifier
-        let intent = self.classifier.classify(&input.text).await;
-
-        // Analyze complexity
-        let complexity = self.analyze_complexity(&input.text, &intent);
-
-        match complexity {
-            Complexity::NeedsPlan => {
-                // Extract preliminary steps for the planner
-                let detected_steps = self.extract_steps(&input.text);
-
-                // Create plan request
-                let plan_request = PlanRequest {
-                    input: input.clone(),
-                    intent_type: match &intent {
-                        ExecutionIntent::Executable(task) => Some(format!("{:?}", task.category)),
-                        _ => None,
-                    },
-                    detected_steps,
-                };
-
-                Ok(vec![AlephEvent::PlanRequested(plan_request)])
-            }
-            Complexity::Simple => {
-                // Build direct tool call
-                let tool_call = self.build_direct_call(&intent, input);
-
-                Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
-            }
-        }
-    }
-}
-
-impl IntentAnalyzer {
-    /// Handle input using the unified ExecutionIntentDecider
-    ///
-    /// This is the new path that uses the cleaner decision architecture.
-    async fn handle_with_unified_decider(
-        &self,
-        input: &InputEvent,
-    ) -> Result<Vec<AlephEvent>, HandlerError> {
-        // Build context signals from input context
-        let context_signals = input.context.as_ref().map(|ctx| ContextSignals {
-            selected_file: ctx.selected_text.clone(),
-            active_app: ctx.app_name.clone(),
-            ui_mode: None,
-            clipboard_type: None,
-        });
-
-        // Get decision from unified decider
-        let decision = self.decider.decide(&input.text, context_signals.as_ref());
-
-        // Log decision metadata for debugging
-        tracing::debug!(
-            layer = ?decision.metadata.layer,
-            confidence = decision.metadata.confidence,
-            latency_us = decision.metadata.latency_us,
-            "ExecutionIntentDecider decision"
-        );
-
-        match decision.mode {
-            ExecutionMode::DirectTool(invocation) => {
-                // Direct tool call from slash command - bypass planning entirely
-                let tool_call = ToolCallRequest {
-                    tool: invocation.tool_id,
-                    parameters: serde_json::json!({
-                        "args": invocation.args,
-                        "input_text": input.text,
-                    }),
-                    plan_step_id: None,
-                };
-                Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
-            }
-            ExecutionMode::Skill(skill) => {
-                // Skill command - run agent with skill instructions injected
-                let tool_call = ToolCallRequest {
-                    tool: "agent_with_skill".to_string(),
-                    parameters: serde_json::json!({
-                        "skill_id": skill.skill_id,
-                        "skill_name": skill.display_name,
-                        "instructions": skill.instructions,
-                        "args": skill.args,
-                        "input_text": input.text,
-                    }),
-                    plan_step_id: None,
-                };
-                Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
-            }
-            ExecutionMode::Mcp(mcp) => {
-                // MCP command - route to MCP server
-                let tool_call = ToolCallRequest {
-                    tool: format!("mcp:{}", mcp.server_name),
-                    parameters: serde_json::json!({
-                        "server_name": mcp.server_name,
-                        "tool_name": mcp.tool_name,
-                        "args": mcp.args,
-                        "input_text": input.text,
-                    }),
-                    plan_step_id: None,
-                };
-                Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
-            }
-            ExecutionMode::Custom(custom) => {
-                // Custom command - run agent with custom system prompt
-                let tool_call = ToolCallRequest {
-                    tool: "agent_with_prompt".to_string(),
-                    parameters: serde_json::json!({
-                        "command_name": custom.command_name,
-                        "system_prompt": custom.system_prompt,
-                        "provider": custom.provider,
-                        "args": custom.args,
-                        "input_text": input.text,
-                    }),
-                    plan_step_id: None,
-                };
-                Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
-            }
-            ExecutionMode::Execute(category) => {
-                // Determine if planning is needed based on complexity
-                let complexity = self.analyze_complexity_for_category(&input.text, category);
-
-                match complexity {
-                    Complexity::NeedsPlan => {
-                        let detected_steps = self.extract_steps(&input.text);
-                        let plan_request = PlanRequest {
-                            input: input.clone(),
-                            intent_type: Some(category.as_str().to_string()),
-                            detected_steps,
-                        };
-                        Ok(vec![AlephEvent::PlanRequested(plan_request)])
-                    }
-                    Complexity::Simple => {
-                        let tool_call = ToolCallRequest {
-                            tool: category.as_str().to_string(),
-                            parameters: serde_json::json!({
-                                "action": input.text,
-                                "input_text": input.text,
-                                "category": category.as_str(),
-                            }),
-                            plan_step_id: None,
-                        };
-                        Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
-                    }
-                }
-            }
-            ExecutionMode::Converse => {
-                // Pure conversation - use general_chat tool
-                let tool_call = ToolCallRequest {
-                    tool: "general_chat".to_string(),
-                    parameters: serde_json::json!({
-                        "input": input.text,
-                        "mode": "conversation",
-                    }),
-                    plan_step_id: None,
-                };
-                Ok(vec![AlephEvent::ToolCallRequested(tool_call)])
-            }
-        }
-    }
-
-    /// Analyze complexity for a given task category
-    fn analyze_complexity_for_category(
-        &self,
-        text: &str,
-        _category: crate::intent::TaskCategory,
-    ) -> Complexity {
-        // Use existing complexity detection logic
-        // This checks for multi-step keywords, step markers, etc.
-        if self.has_multi_step_keywords(text) {
-            return Complexity::NeedsPlan;
-        }
-        if self.has_step_markers(text) {
-            return Complexity::NeedsPlan;
-        }
-        if self.has_multiple_action_sentences(text) {
-            return Complexity::NeedsPlan;
-        }
-        Complexity::Simple
-    }
-
-    // ========================================================================
-    // Unified Pipeline Path (v3)
-    // ========================================================================
-
-    /// Handle input using the new UnifiedIntentClassifier pipeline.
-    ///
-    /// This is the v3 unified pipeline path that replaces both the legacy
-    /// `IntentClassifier` and the v2 `ExecutionIntentDecider`. It produces
-    /// `IntentResult` variants and maps them to the existing event types.
-    ///
-    /// Returns `Ok(None)` if no unified classifier is configured.
-    pub async fn handle_with_unified(
-        &self,
-        input: &str,
-        event: &InputEvent,
-    ) -> Result<Option<Vec<AlephEvent>>, HandlerError> {
-        let classifier = match self.unified_classifier.as_ref() {
-            Some(c) => c,
-            None => return Ok(None),
-        };
-
         // Build IntentContext from InputEvent
-        let intent_ctx = Self::build_intent_context(event);
+        let intent_ctx = Self::build_intent_context(input);
 
-        // Classify
-        let result = classifier.classify(input, &intent_ctx).await;
+        // Classify using unified pipeline
+        let result = self.classifier.classify(&input.text, &intent_ctx).await;
 
         tracing::debug!(
             intent_result = ?result,
@@ -658,7 +333,7 @@ impl IntentAnalyzer {
                     tool: tool_id,
                     parameters: serde_json::json!({
                         "args": args,
-                        "input_text": input,
+                        "input_text": input.text,
                         "source": format!("{:?}", source),
                     }),
                     plan_step_id: None,
@@ -670,13 +345,13 @@ impl IntentAnalyzer {
                 metadata,
             } => {
                 // Determine if planning is needed based on complexity
-                if self.has_multi_step_keywords(input)
-                    || self.has_step_markers(input)
-                    || self.has_multiple_action_sentences(input)
+                if self.has_multi_step_keywords(&input.text)
+                    || self.has_step_markers(&input.text)
+                    || self.has_multiple_action_sentences(&input.text)
                 {
-                    let detected_steps = self.extract_steps(input);
+                    let detected_steps = self.extract_steps(&input.text);
                     let plan_request = PlanRequest {
-                        input: event.clone(),
+                        input: input.clone(),
                         intent_type: metadata.keyword_tag.clone(),
                         detected_steps,
                     };
@@ -688,8 +363,8 @@ impl IntentAnalyzer {
                             .clone()
                             .unwrap_or_else(|| "general_task".to_string()),
                         parameters: serde_json::json!({
-                            "action": input,
-                            "input_text": input,
+                            "action": input.text,
+                            "input_text": input.text,
                             "layer": format!("{:?}", metadata.layer),
                         }),
                         plan_step_id: None,
@@ -701,7 +376,7 @@ impl IntentAnalyzer {
                 let tool_call = ToolCallRequest {
                     tool: "general_chat".to_string(),
                     parameters: serde_json::json!({
-                        "input": input,
+                        "input": input.text,
                         "mode": "conversation",
                     }),
                     plan_step_id: None,
@@ -710,9 +385,11 @@ impl IntentAnalyzer {
             }
         };
 
-        Ok(Some(events))
+        Ok(events)
     }
+}
 
+impl IntentAnalyzer {
     /// Build an `IntentContext` from an `InputEvent`.
     fn build_intent_context(event: &InputEvent) -> IntentContext {
         let structural = event
@@ -735,8 +412,6 @@ impl IntentAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::InputContext;
-    use crate::intent::ExecutableTask;
 
     fn create_test_input(text: &str) -> InputEvent {
         InputEvent {
@@ -838,19 +513,18 @@ mod tests {
     #[test]
     fn test_complexity_simple() {
         let analyzer = IntentAnalyzer::new();
-        let intent = ExecutionIntent::Conversational;
 
         // Simple single-action requests
         assert_eq!(
-            analyzer.analyze_complexity("打开文件", &intent),
+            analyzer.analyze_complexity_for_text("打开文件"),
             Complexity::Simple
         );
         assert_eq!(
-            analyzer.analyze_complexity("delete the folder", &intent),
+            analyzer.analyze_complexity_for_text("delete the folder"),
             Complexity::Simple
         );
         assert_eq!(
-            analyzer.analyze_complexity("你好", &intent),
+            analyzer.analyze_complexity_for_text("你好"),
             Complexity::Simple
         );
     }
@@ -858,25 +532,24 @@ mod tests {
     #[test]
     fn test_complexity_needs_plan() {
         let analyzer = IntentAnalyzer::new();
-        let intent = ExecutionIntent::Conversational;
 
         // Multi-step keywords
         assert_eq!(
-            analyzer.analyze_complexity("打开文件然后保存", &intent),
+            analyzer.analyze_complexity_for_text("打开文件然后保存"),
             Complexity::NeedsPlan
         );
         assert_eq!(
-            analyzer.analyze_complexity("open file then close", &intent),
+            analyzer.analyze_complexity_for_text("open file then close"),
             Complexity::NeedsPlan
         );
 
         // Step markers
         assert_eq!(
-            analyzer.analyze_complexity("1. Open file\n2. Edit content", &intent),
+            analyzer.analyze_complexity_for_text("1. Open file\n2. Edit content"),
             Complexity::NeedsPlan
         );
         assert_eq!(
-            analyzer.analyze_complexity("- Create folder\n- Add files", &intent),
+            analyzer.analyze_complexity_for_text("- Create folder\n- Add files"),
             Complexity::NeedsPlan
         );
     }
@@ -929,44 +602,6 @@ mod tests {
     }
 
     // ========================================================================
-    // Build Direct Call Tests
-    // ========================================================================
-
-    #[test]
-    fn test_build_direct_call_executable() {
-        use crate::intent::TaskCategory;
-
-        let analyzer = IntentAnalyzer::new();
-        let input = create_test_input("整理下载文件夹");
-
-        let task = ExecutableTask {
-            category: TaskCategory::FileOrganize,
-            action: "整理下载文件夹".to_string(),
-            target: Some("/Downloads".to_string()),
-            confidence: 0.9,
-        };
-        let intent = ExecutionIntent::Executable(task);
-
-        let call = analyzer.build_direct_call(&intent, &input);
-
-        assert_eq!(call.tool, "file_organize");
-        assert!(call.parameters["target"].as_str().is_some());
-        assert!(call.plan_step_id.is_none());
-    }
-
-    #[test]
-    fn test_build_direct_call_conversational() {
-        let analyzer = IntentAnalyzer::new();
-        let input = create_test_input("你好");
-        let intent = ExecutionIntent::Conversational;
-
-        let call = analyzer.build_direct_call(&intent, &input);
-
-        assert_eq!(call.tool, "general_chat");
-        assert_eq!(call.parameters["input"], "你好");
-    }
-
-    // ========================================================================
     // EventHandler Implementation Tests
     // ========================================================================
 
@@ -1001,7 +636,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handler_simple_input_returns_tool_call() {
+    async fn test_handler_simple_input_returns_event() {
         use crate::event::EventBus;
 
         let analyzer = IntentAnalyzer::new();
@@ -1012,8 +647,9 @@ mod tests {
         let event = AlephEvent::InputReceived(input);
         let result = analyzer.handle(&event, &ctx).await.unwrap();
 
+        // The unified classifier with default config (default_to_execute=true)
+        // will produce either ToolCallRequested or PlanRequested
         assert_eq!(result.len(), 1);
-        assert!(matches!(result[0], AlephEvent::ToolCallRequested(_)));
     }
 
     #[tokio::test]
@@ -1062,38 +698,5 @@ mod tests {
         let result = split_by_keyword_case_insensitive("no keyword here", "then");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], "no keyword here");
-    }
-
-    #[test]
-    fn test_with_input_context() {
-        use crate::intent::TaskCategory;
-
-        let analyzer = IntentAnalyzer::new();
-
-        let input = InputEvent {
-            text: "整理文件".to_string(),
-            topic_id: None,
-            context: Some(InputContext {
-                app_name: Some("Finder".to_string()),
-                app_bundle_id: Some("com.apple.finder".to_string()),
-                window_title: Some("Downloads".to_string()),
-                selected_text: Some("test.txt".to_string()),
-            }),
-            timestamp: 0,
-        };
-
-        let task = ExecutableTask {
-            category: TaskCategory::FileOrganize,
-            action: "整理文件".to_string(),
-            target: None,
-            confidence: 0.9,
-        };
-        let intent = ExecutionIntent::Executable(task);
-
-        let call = analyzer.build_direct_call(&intent, &input);
-
-        // Should include context information
-        assert!(call.parameters["app_context"].is_string());
-        assert!(call.parameters["selected_text"].is_string());
     }
 }

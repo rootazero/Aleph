@@ -28,7 +28,7 @@ use crate::group_chat::{
     DefaultGroupChatCommandParser, GroupChatCommandParser, GroupChatExecutor,
     GroupChatRequest, GroupChatStatus,
 };
-use crate::intent::{ExecutionIntentDecider, ExecutionMode};
+use crate::intent::ExecutionMode;
 use crate::intent::{DirectToolSource, IntentResult, UnifiedIntentClassifier};
 
 #[cfg(target_os = "macos")]
@@ -233,6 +233,7 @@ fn serialize_execution_mode(mode: &ExecutionMode) -> Option<String> {
 ///
 /// Returns `Some(json)` for `DirectTool` (which maps to a specific tool invocation),
 /// and `None` for `Execute`, `Converse`, and `Abort` (which are handled by the agent loop).
+#[allow(dead_code)]
 fn serialize_intent_result(result: &IntentResult) -> Option<String> {
     match result {
         IntentResult::DirectTool {
@@ -288,8 +289,6 @@ pub struct InboundMessageRouter {
     intent_detector: Option<IntentDetector>,
     /// LLM provider for intent classification and soul generation
     llm_provider: Option<Arc<dyn crate::providers::AiProvider>>,
-    /// Slash command intent decider (L0 fast path, fallback)
-    intent_decider: ExecutionIntentDecider,
     /// Command parser for unified slash command resolution (optional)
     /// When set, resolves all command sources (builtin, skill, MCP, custom)
     command_parser: Option<Arc<CommandParser>>,
@@ -391,7 +390,7 @@ impl InboundMessageRouter {
             active_group_sessions: Mutex::new(HashMap::new()),
             intent_detector: None,
             llm_provider: None,
-            intent_decider: ExecutionIntentDecider::default(),
+
             command_parser: None,
             unified_classifier: None,
         }
@@ -423,7 +422,7 @@ impl InboundMessageRouter {
             active_group_sessions: Mutex::new(HashMap::new()),
             intent_detector: None,
             llm_provider: None,
-            intent_decider: ExecutionIntentDecider::default(),
+
             command_parser: None,
             unified_classifier: None,
         }
@@ -457,7 +456,7 @@ impl InboundMessageRouter {
             active_group_sessions: Mutex::new(HashMap::new()),
             intent_detector: None,
             llm_provider: None,
-            intent_decider: ExecutionIntentDecider::default(),
+
             command_parser: None,
             unified_classifier: None,
         }
@@ -482,9 +481,6 @@ impl InboundMessageRouter {
     }
 
     /// Set the unified intent classifier (v3 pipeline).
-    ///
-    /// When set, `serialize_intent_result()` can be used alongside the existing
-    /// `serialize_execution_mode()` for new-pipeline metadata serialization.
     pub fn set_unified_classifier(&mut self, classifier: UnifiedIntentClassifier) {
         self.unified_classifier = Some(classifier);
     }
@@ -522,9 +518,7 @@ impl InboundMessageRouter {
     /// to built-in slash commands. Without this, only built-in commands
     /// (/screenshot, /ocr, /search, /webfetch, /gen) are recognized.
     pub fn with_command_parser(mut self, parser: Arc<CommandParser>) -> Self {
-        self.command_parser = Some(parser.clone());
-        // Also wire into intent_decider for backward compatibility (L0 fallback)
-        self.intent_decider.set_command_parser(parser);
+        self.command_parser = Some(parser);
         self
     }
 
@@ -653,16 +647,7 @@ impl InboundMessageRouter {
                 }
             }
 
-            // Fallback: ExecutionIntentDecider (builtin-only, 6 hardcoded commands)
-            let decision = self.intent_decider.decide(slash_text, None);
-            if let Some(mode_json) = serialize_execution_mode(&decision.mode) {
-                info!(
-                    "[Router] Slash command detected (fallback): layer={:?}, confidence={:.2}",
-                    decision.metadata.layer, decision.metadata.confidence
-                );
-                self.execute_for_context_with_metadata(&ctx, mode_json).await?;
-                return Ok(());
-            }
+            // Unrecognized slash command — fall through to normal message handling
         }
 
         // Natural language switch intent detection
