@@ -8,7 +8,8 @@
 
 [中文文档](README_CN.md)
 
-![Aleph Panel Dashboard](docs/images/panel-dashboard.png)
+![Aleph Panel Chat](docs/images/CleanShot3.png)
+![Aleph Panel Settings](docs/images/CleanShot2.png)
 
 ## What is Aleph?
 
@@ -19,7 +20,7 @@ Aleph is a self-hosted personal AI assistant built in Rust. It runs entirely on 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        INTERFACE LAYER (I/O)                        │
-│  macOS Native | Tauri | CLI | Panel (WASM) | WebChat | Telegram |  │
+│  macOS Native | Tauri | CLI | Panel (WASM) | Telegram |           │  │
 │  Discord | Slack | WhatsApp | IRC | Matrix | Signal | Nostr | ...  │
 ├─────────────────────────────┬───────────────────────────────────────┤
 │                       GATEWAY LAYER                                 │
@@ -146,7 +147,6 @@ Aleph/
 ├── apps/
 │   ├── cli/                     # CLI client
 │   ├── panel/                   # Leptos/WASM Panel UI
-│   ├── webchat/                 # React WebChat UI
 │   ├── desktop/                 # Tauri cross-platform app
 │   └── macos-native/            # Native macOS app (Swift/Xcode)
 ├── docs/
