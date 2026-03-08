@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 /// Default PID file location
 pub const DEFAULT_PID_FILE: &str = "~/.aleph/gateway.pid";
 /// Default log file location for daemon mode
-pub const DEFAULT_LOG_FILE: &str = "~/.aleph/gateway.log";
+pub const DEFAULT_LOG_FILE: &str = "~/.aleph/logs/gateway.log";
 
 /// Aleph Gateway - WebSocket control plane for AI agents
 #[derive(Parser, Debug)]
