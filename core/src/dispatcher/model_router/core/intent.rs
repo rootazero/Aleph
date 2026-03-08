@@ -214,11 +214,9 @@ impl TaskIntent {
         self.required_capability().is_some()
     }
 
-    /// Convert from ExecutionIntentDecider's TaskCategory
+    /// Convert from TaskCategory to TaskIntent for model routing.
     ///
-    /// This bridges the ExecutionIntentDecider (Phase 1) with the Model Router (Phase 2).
-    /// The TaskCategory represents the execution intent, and this method maps it to
-    /// the appropriate TaskIntent for model selection.
+    /// Maps the task category to the appropriate TaskIntent for model selection.
     ///
     /// # Example
     ///

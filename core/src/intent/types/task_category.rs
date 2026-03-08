@@ -2,7 +2,7 @@
 
 /// Categories of executable tasks
 ///
-/// Used by `ExecutionIntentDecider` to determine which tools to inject
+/// Used by the intent classifier to determine which tools to inject
 /// and which prompt guidelines to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TaskCategory {

@@ -1,6 +1,6 @@
 //! Conversational mode prompt - for dialogue and Q&A.
 //!
-//! This prompt is used when `ExecutionIntentDecider` determines the user wants
+//! This prompt is used when the intent classifier determines the user wants
 //! a conversation or explanation, not task execution. No tools are provided
 //! in this mode.
 
