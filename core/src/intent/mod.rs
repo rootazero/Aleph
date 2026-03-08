@@ -1,75 +1,48 @@
 //! Intent detection module for AI-powered conversation flow.
 //!
-//! This module provides a three-layer classification system for determining
-//! whether user input should trigger Agent mode (executable tasks) or
-//! remain conversational.
+//! This module provides a unified intent classification pipeline that determines
+//! whether user input should be aborted, routed to a direct tool, executed as
+//! a task, or handled conversationally.
 //!
-//! # Three-Layer Architecture
+//! # Unified Pipeline Architecture (v3)
 //!
 //! ```text
 //! User Input
 //!     ↓
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │ L1: Regex Matching (<5ms)                                   │
-//! │     - Fast pattern matching for explicit commands           │
-//! │     - Confidence: 1.0                                       │
-//! │     - Example: "organize files in folder" → FileOrganize     │
+//! │ L0: Abort Detection (<1ms)                                   │
+//! │     - Exact-match stop words (multilingual)                  │
+//! └─────────────────────────────────────────────────────────────┘
+//!     ↓ (not aborted)
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │ L1: Slash Command Detection (<1ms)                           │
+//! │     - Built-in commands (/screenshot, /ocr, /search, etc.)   │
 //! └─────────────────────────────────────────────────────────────┘
 //!     ↓ (no match)
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │ L2: Keyword Matching (<20ms)                                │
-//! │     - KeywordIndex with weighted scoring                    │
-//! │     - Supports CJK character tokenization                   │
-//! │     - Configurable via KeywordPolicy in config.toml         │
-//! │     - Confidence: 0.5-0.95 (based on score)                 │
-//! │     - Fallback: Static keyword sets                         │
+//! │ L2: Structural Detection (<5ms)                              │
+//! │     - Paths, URLs, context signals                           │
 //! └─────────────────────────────────────────────────────────────┘
 //!     ↓ (no match)
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │ L3: AI Classification (optional, 1-3s)                      │
-//! │     - AiIntentDetector for complex/ambiguous cases          │
-//! │     - Language-agnostic detection                           │
-//! │     - Extracts parameters (path, location, etc.)            │
-//! │     - Confidence: based on AI response                      │
+//! │ L3: Keyword Matching (<20ms)                                 │
+//! │     - KeywordIndex with weighted scoring                     │
+//! │     - Supports CJK character tokenization                    │
 //! └─────────────────────────────────────────────────────────────┘
-//!     ↓ (no match or AI disabled)
-//! ExecutionIntent::Conversational
+//!     ↓ (no match)
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │ L4: Default Fallback                                         │
+//! │     - Execute or Converse depending on configuration         │
+//! └─────────────────────────────────────────────────────────────┘
 //! ```
 //!
 //! # Module Structure
 //!
-//! - **detection/**: Intent detection (L1-L3 classification)
-//! - **decision/**: Execution decision making and routing
+//! - **detection/**: Intent detection (abort, structural, keyword, AI, unified classifier)
+//! - **decision/**: Execution decision making, calibration, and routing
 //! - **parameters/**: Parameter types, defaults, and context
-//! - **types/**: Core type definitions (TaskCategory, FFI)
-//! - **support/**: Caching, rollback, and legacy prompts
-//!
-//! # Usage
-//!
-//! ```ignore
-//! use alephcore::intent::IntentClassifier;
-//! use alephcore::config::KeywordPolicy;
-//!
-//! // Basic usage (L1 + L2 only)
-//! let classifier = IntentClassifier::new();
-//! let intent = classifier.classify("help me organize files").await;
-//!
-//! // With keyword policy from config
-//! let policy = KeywordPolicy::with_builtin_rules();
-//! let classifier = IntentClassifier::with_keyword_policy(&policy);
-//!
-//! // With AI L3 enabled
-//! let classifier = classifier.with_ai_provider(provider);
-//! ```
-//!
-//! # Exclusion Patterns
-//!
-//! Inputs containing analysis/understanding verbs are excluded from Agent mode:
-//! - Chinese: 分析 (analyze), 理解 (understand), 解释 (explain), 总结 (summarize), 摘要 (abstract)...
-//! - English: analyze, understand, explain, summarize...
-//!
-//! This ensures requests like "analyze this file" are
-//! handled conversationally rather than triggering file operations.
+//! - **types/**: Core type definitions (TaskCategory, IntentResult)
+//! - **support/**: Caching, rollback, and prompt templates
 
 // Submodules
 pub mod decision;
@@ -78,28 +51,33 @@ pub mod parameters;
 pub mod support;
 pub mod types;
 
-// Re-export from detection
+// Re-export from detection: unified pipeline (primary API)
 pub use detection::{
-    AiIntentDetector, AiIntentResult, ExecutableTask, ExecutionIntent, IntentClassifier,
-    KeywordIndex, KeywordMatch, KeywordMatchMode, KeywordRule,
-    UnifiedIntentClassifier, UnifiedIntentClassifierBuilder, IntentContext, StructuralContext,
+    IntentContext, KeywordIndex, KeywordMatch, KeywordMatchMode, KeywordRule, StructuralContext,
+    UnifiedIntentClassifier, UnifiedIntentClassifierBuilder,
 };
 
-// Re-export from types (new pipeline)
+// Re-export from detection: legacy types (still used internally by parameters module)
+pub use detection::{ExecutableTask, ExecutionIntent, IntentClassifier};
+// Re-export from detection: AI detector (used internally by old classifier)
+pub use detection::{AiIntentDetector, AiIntentResult};
+
+// Re-export from types: new pipeline result types
 pub use types::{DetectionLayer, DirectToolSource, ExecuteMetadata, IntentResult};
 
-// Re-export from decision
+// Re-export from types: shared
+pub use types::TaskCategory;
+
+// Re-export from decision: execution mode types (used by gateway/inbound_router)
 pub use decision::{
-    AggregatedIntent, AggregatorConfig, CalibratedSignal, CalibrationHistory, CalibratorConfig,
-    ConfidenceCalibrator, ContextSignals, CustomInvocation, DeciderConfig, DecisionMetadata,
-    DecisionResult, DirectMode, DirectRouteInfo, ExecutionIntentDecider, ExecutionMode,
-    IntentAction, IntentAggregator, IntentLayer, IntentRouter, IntentSignal, McpInvocation,
-    MissingParameter, RouteResult, RoutingLayer, SkillInvocation, SlashCommand, ThinkingContext,
-    ToolInvocation,
+    CustomInvocation, ExecutionMode, McpInvocation, SkillInvocation, ToolInvocation,
 };
-// Backward compatibility
-#[allow(deprecated)]
-pub use decision::DecisionLayer;
+
+// Re-export from decision: calibrator (used by unified classifier)
+pub use decision::{
+    CalibratedSignal, CalibrationHistory, CalibratorConfig, ConfidenceCalibrator, IntentSignal,
+    RoutingLayer,
+};
 
 // Re-export from parameters
 pub use parameters::{
@@ -107,9 +85,6 @@ pub use parameters::{
     MatchingContext, MatchingContextBuilder, OrganizeMethod, ParameterSource, PendingParam,
     PresetRegistry, ScenarioPreset, TaskParameters, TimeContext,
 };
-
-// Re-export from types
-pub use types::TaskCategory;
 
 // Re-export from support
 pub use support::{

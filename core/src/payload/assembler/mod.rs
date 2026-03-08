@@ -24,77 +24,10 @@ pub use self::core::PromptAssembler;
 
 // The PromptAssembler methods for intent-based building delegate to the intent module
 impl PromptAssembler {
-    /// Build prompt with agent mode injection based on intent.
-    ///
-    /// When the intent is `ExecutionIntent::Executable`, this method injects
-    /// the Agent Mode Prompt that guides AI to:
-    /// 1. Skip asking for options - present best plan directly
-    /// 2. Show plan summary with operations
-    /// 3. Wait for user confirmation before destructive operations
-    ///
-    /// # Arguments
-    ///
-    /// * `base_prompt` - Base system prompt
-    /// * `capabilities` - List of available capabilities
-    /// * `context` - Optional existing context
-    /// * `intent` - Optional execution intent from IntentClassifier
-    ///
-    /// # Returns
-    ///
-    /// Complete system prompt with agent mode injection if applicable
-    pub fn build_prompt_with_intent(
-        &self,
-        base_prompt: &str,
-        capabilities: &[crate::capability::CapabilityDeclaration],
-        context: Option<&super::AgentContext>,
-        execution_intent: Option<&crate::intent::ExecutionIntent>,
-    ) -> String {
-        intent::build_prompt_with_intent(
-            &self.context_format,
-            base_prompt,
-            capabilities,
-            context,
-            execution_intent,
-        )
-    }
-
-    /// Build prompt using the new unified ExecutionMode system.
-    ///
-    /// This is the new recommended method that uses `ExecutionIntentDecider`
-    /// results directly. It provides cleaner separation between execution
-    /// and conversation modes.
-    ///
-    /// # Arguments
-    ///
-    /// * `execution_mode` - Mode determined by ExecutionIntentDecider
-    /// * `tools` - Available tools (only used in Execute mode)
-    /// * `context` - Optional existing context
-    /// * `config` - Optional prompt configuration
-    ///
-    /// # Returns
-    ///
-    /// Complete system prompt appropriate for the execution mode
-    pub fn build_prompt_with_execution_mode(
-        &self,
-        execution_mode: &crate::intent::ExecutionMode,
-        tools: &[crate::prompt::ToolInfo],
-        context: Option<&super::AgentContext>,
-        config: Option<&crate::prompt::PromptConfig>,
-    ) -> String {
-        intent::build_prompt_with_execution_mode(
-            &self.context_format,
-            execution_mode,
-            tools,
-            context,
-            config,
-        )
-    }
-
     /// Build prompt with agent mode injection based on `IntentResult`.
     ///
     /// When the result is `Execute` or `DirectTool`, injects the Agent Mode
-    /// Prompt. This is the `IntentResult`-based replacement for
-    /// `build_prompt_with_intent`.
+    /// Prompt.
     pub fn build_prompt_with_intent_result(
         &self,
         base_prompt: &str,
@@ -113,8 +46,7 @@ impl PromptAssembler {
 
     /// Build prompt using the new `IntentResult` enum.
     ///
-    /// This is the `IntentResult`-based replacement for
-    /// `build_prompt_with_execution_mode`.
+    /// This is the `IntentResult`-based prompt builder.
     pub fn build_prompt_for_intent(
         &self,
         result: &crate::intent::types::IntentResult,
@@ -563,38 +495,41 @@ mod tests {
     }
 
     #[test]
-    fn test_build_prompt_with_intent_executable() {
-        use crate::intent::{ExecutableTask, ExecutionIntent, TaskCategory};
+    fn test_build_prompt_with_intent_result_execute() {
+        use crate::intent::types::{DetectionLayer, ExecuteMetadata, IntentResult};
 
         let assembler = PromptAssembler::new(ContextFormat::Markdown);
 
-        let intent = ExecutionIntent::Executable(ExecutableTask {
-            category: TaskCategory::FileOrganize,
-            action: "organize files".to_string(),
-            target: None,
+        let result = IntentResult::Execute {
             confidence: 0.9,
-        });
+            metadata: ExecuteMetadata {
+                layer: DetectionLayer::L2,
+                keyword_tag: None,
+                detected_path: Some("/Downloads".to_string()),
+                detected_url: None,
+                context_hint: None,
+            },
+        };
 
-        let prompt = assembler.build_prompt_with_intent("Base prompt.", &[], None, Some(&intent));
+        let prompt = assembler.build_prompt_with_intent_result("Base prompt.", &[], None, Some(&result));
 
         // Should contain base prompt
         assert!(prompt.contains("Base prompt."));
 
-        // Should contain agent mode prompt (simplified version using new ExecutorPrompt)
+        // Should contain agent mode prompt
         assert!(prompt.contains("# Role"));
         assert!(prompt.contains("task executor"));
-        assert!(prompt.contains("Execution Guidelines"));
     }
 
     #[test]
-    fn test_build_prompt_with_intent_conversational() {
-        use crate::intent::ExecutionIntent;
+    fn test_build_prompt_with_intent_result_converse() {
+        use crate::intent::types::IntentResult;
 
         let assembler = PromptAssembler::new(ContextFormat::Markdown);
 
-        let intent = ExecutionIntent::Conversational;
+        let result = IntentResult::Converse { confidence: 0.8 };
 
-        let prompt = assembler.build_prompt_with_intent("Base prompt.", &[], None, Some(&intent));
+        let prompt = assembler.build_prompt_with_intent_result("Base prompt.", &[], None, Some(&result));
 
         // Should contain base prompt
         assert!(prompt.contains("Base prompt."));
@@ -604,36 +539,12 @@ mod tests {
     }
 
     #[test]
-    fn test_build_prompt_with_intent_none() {
+    fn test_build_prompt_with_intent_result_none() {
         let assembler = PromptAssembler::new(ContextFormat::Markdown);
 
-        let prompt = assembler.build_prompt_with_intent("Base prompt.", &[], None, None);
+        let prompt = assembler.build_prompt_with_intent_result("Base prompt.", &[], None, None);
 
         // Should contain only base prompt
         assert_eq!(prompt, "Base prompt.");
-        assert!(!prompt.contains("Agent Execution Mode"));
-    }
-
-    #[test]
-    fn test_build_prompt_with_intent_and_capabilities() {
-        use crate::intent::{ExecutableTask, ExecutionIntent, TaskCategory};
-
-        let assembler = PromptAssembler::new(ContextFormat::Markdown);
-
-        let capabilities = vec![CapabilityDeclaration::search()];
-        let intent = ExecutionIntent::Executable(ExecutableTask {
-            category: TaskCategory::FileOrganize,
-            action: "organize files".to_string(),
-            target: None,
-            confidence: 0.9,
-        });
-
-        let prompt =
-            assembler.build_prompt_with_intent("Base prompt.", &capabilities, None, Some(&intent));
-
-        // Should contain all three: base prompt, capabilities, and agent mode
-        assert!(prompt.contains("Base prompt."));
-        assert!(prompt.contains("## CRITICAL: Proactive Search Decision System"));
-        assert!(prompt.contains("# Role")); // New simplified prompt uses "# Role" instead of "Agent Execution Mode"
     }
 }
