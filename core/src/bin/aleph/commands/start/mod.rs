@@ -425,6 +425,91 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     );
     register_identity_handlers(&mut server, &identity_resolver);
 
+    // Initialize A2A subsystem (if enabled)
+    {
+        let app_cfg = app_config_for_channels.read().await;
+        let a2a_config = app_cfg.a2a.clone();
+        drop(app_cfg);
+
+        if a2a_config.enabled {
+            use alephcore::a2a::adapter::server::{TaskStore, StreamHub, AgentLoopBridge};
+            use alephcore::a2a::adapter::server::A2AServerState;
+            use alephcore::a2a::adapter::auth::TieredAuthenticator;
+            use alephcore::a2a::service::{CardBuilder, CardRegistry, SmartRouter, NotificationService};
+            use alephcore::a2a::adapter::client::A2AClientPool;
+            use alephcore::a2a::sub_agent::A2ASubAgent;
+            use alephcore::a2a::port::{A2ATaskManager, A2AMessageHandler, A2AStreamingHandler};
+            use alephcore::a2a::port::authenticator::A2AAuthenticator;
+
+            // 1. Create server-side components
+            let task_store: Arc<dyn A2ATaskManager> = Arc::new(TaskStore::new());
+            let stream_hub: Arc<dyn A2AStreamingHandler> = Arc::new(StreamHub::new());
+
+            // 2. Create bridge (needs execution adapter + agent registry)
+            if let (Some(exec_adapter), Some(registry)) =
+                (&agent_result.execution_adapter, &agent_result.agent_registry)
+            {
+                let message_handler: Arc<dyn A2AMessageHandler> = Arc::new(AgentLoopBridge::new(
+                    registry.clone(),
+                    exec_adapter.clone(),
+                    task_store.clone(),
+                    stream_hub.clone(),
+                ));
+
+                // 3. Create authenticator
+                let authenticator: Arc<dyn A2AAuthenticator> = Arc::new(
+                    TieredAuthenticator::new(
+                        a2a_config.server.security.local_bypass,
+                        a2a_config.server.security.tokens.clone(),
+                    )
+                );
+
+                // 4. Build agent card
+                let card = CardBuilder::build(&a2a_config.server, &format!("{}", addr));
+
+                // 5. Create notification service
+                let notification = Arc::new(NotificationService::new());
+
+                // 6. Build A2AServerState and set on server
+                let a2a_server_state = Arc::new(A2AServerState {
+                    task_manager: task_store,
+                    message_handler,
+                    streaming: stream_hub,
+                    authenticator,
+                    notification,
+                    card,
+                });
+                server.set_a2a_state(a2a_server_state);
+
+                // 7. Create client-side components (CardRegistry, SmartRouter, ClientPool)
+                let card_registry = Arc::new(CardRegistry::new());
+                card_registry.load_from_config(&a2a_config).await;
+
+                let smart_router = Arc::new(SmartRouter::new(card_registry));
+                let client_pool = Arc::new(A2AClientPool::new());
+
+                // 8. Create A2ASubAgent (for delegation to remote agents)
+                let _a2a_sub_agent = Arc::new(A2ASubAgent::new(smart_router, client_pool));
+                // TODO: Register with SubAgentDispatcher when ready
+
+                if !args.daemon {
+                    println!("A2A protocol: enabled");
+                    println!("  - Agent Card: /.well-known/agent-card.json");
+                    println!("  - RPC:        /a2a (sync), /a2a/stream (SSE)");
+                    println!();
+                }
+            } else {
+                if !args.daemon {
+                    println!("A2A: skipping server (no execution adapter available)");
+                    println!();
+                }
+            }
+        } else if !args.daemon {
+            println!("A2A protocol: disabled (set [a2a] enabled = true in config)");
+            println!();
+        }
+    }
+
     // Initialize CronService
     {
         let app_cfg = app_config_for_channels.read().await;
