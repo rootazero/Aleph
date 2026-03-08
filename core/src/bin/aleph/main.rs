@@ -58,32 +58,52 @@ mod server_init;
 use clap::Parser;
 use cli::{Args, AuditAction, Command, DevicesAction, PairingAction, PluginsAction};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
+/// Entry point: parse args and daemonize BEFORE starting the tokio runtime.
+///
+/// fork() is not safe in a multi-threaded process. Since `#[tokio::main]`
+/// spawns worker threads immediately, we must daemonize in a synchronous
+/// `main()` and then build the tokio runtime manually.
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = Args::parse();
 
-    // Handle subcommands
+    // Handle synchronous subcommands that don't need tokio
     match args.command {
-        Some(Command::Stop) => {
-            return daemon::handle_stop(&args.pid_file);
+        Some(Command::Stop) => return daemon::handle_stop(&args.pid_file),
+        Some(Command::Secret { action }) => return commands::handle_secret_command(action),
+        Some(Command::Status { json }) => return daemon::handle_status(&args.pid_file, json),
+        Some(Command::Devices { action }) => {
+            return match action {
+                DevicesAction::List => commands::handle_devices_list(),
+                DevicesAction::Revoke { device_id } => commands::handle_devices_revoke(&device_id),
+            };
         }
-        Some(Command::Secret { action }) => {
-            return commands::handle_secret_command(action);
-        }
-        Some(Command::Status { json }) => {
-            return daemon::handle_status(&args.pid_file, json);
-        }
+        other => { args.command = other; }
+    }
+
+    // Daemonize BEFORE starting tokio (fork is not multi-thread safe)
+    if args.daemon && matches!(args.command, Some(Command::Start) | None) {
+        use std::path::PathBuf;
+        let log_file = args.log_file.clone().or_else(|| {
+            Some(PathBuf::from(cli::DEFAULT_LOG_FILE))
+        });
+        daemon::daemonize(&args.pid_file, log_file.as_ref())?;
+    }
+
+    // Now build the tokio runtime in the (potentially forked) child process
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async_main(args))
+}
+
+/// Async entry point — runs inside a tokio runtime that was created AFTER
+/// daemonization completed.
+async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+    // Handle async subcommands
+    match args.command {
         Some(Command::Pairing { action }) => {
             return match action {
                 PairingAction::List => commands::handle_pairing_list().await,
                 PairingAction::Approve { code } => commands::handle_pairing_approve(&code).await,
                 PairingAction::Reject { code } => commands::handle_pairing_reject(&code).await,
-            };
-        }
-        Some(Command::Devices { action }) => {
-            return match action {
-                DevicesAction::List => commands::handle_devices_list(),
-                DevicesAction::Revoke { device_id } => commands::handle_devices_revoke(&device_id),
             };
         }
         Some(Command::Plugins { action }) => {
@@ -117,6 +137,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Start) | None => {
             // Continue with start logic
         }
+        // Sync commands already handled in main()
+        Some(Command::Stop) | Some(Command::Secret { .. })
+        | Some(Command::Status { .. }) | Some(Command::Devices { .. }) => unreachable!(),
     }
 
     // Start the gateway server
