@@ -8,9 +8,9 @@
 
 [中文文档](README_CN.md)
 
-![Aleph Panel Dashboard](docs/images/panel-dashboard.png)
-![Aleph Panel Chat](docs/images/CleanShot3.png)
-![Aleph Panel Settings](docs/images/CleanShot2.png)
+![Aleph Panel Dashboard](docs/images/panel-dashboard-1.png)
+![Aleph Panel Chat](docs/images/panel-dashboard-2.png)
+![Aleph Panel Settings](docs/images/panel-dashboard-3.png)
 
 ## What is Aleph?
 
