@@ -27,6 +27,8 @@ pub struct AgentInstanceConfig {
     pub fallback_models: Vec<String>,
     /// Maximum agent loop iterations
     pub max_loops: u32,
+    /// Maximum total token usage per request (loop guard, None = use default)
+    pub max_tokens: Option<usize>,
     /// Custom system prompt (optional)
     pub system_prompt: Option<String>,
     /// Tool whitelist (empty = all allowed)
@@ -48,6 +50,7 @@ impl Default for AgentInstanceConfig {
             model: "claude-sonnet-4-5".to_string(),
             fallback_models: vec![],
             max_loops: 50,
+            max_tokens: None,
             system_prompt: None,
             tool_whitelist: vec![],
             tool_blacklist: vec![],
@@ -73,6 +76,7 @@ impl AgentInstanceConfig {
             model: agent.model.clone(),
             fallback_models: vec![],
             max_loops: 50,
+            max_tokens: None,
             system_prompt: agent.agents_md.clone(),
             tool_whitelist: agent.skills.clone(),
             tool_blacklist: agent.skills_blacklist.clone(),
