@@ -101,18 +101,12 @@ impl PromptLayer for ResponseFormatLayer {
         output.push_str("}\n");
         output.push_str("```\n\n");
         output.push_str("### Completion Summary Format\n");
-        output.push_str("When `type=complete`, the `summary` should be a well-formatted report:\n");
-        output.push_str("```\n");
-        output.push_str("## Task Completed\n");
-        output.push_str("[Brief description of what was accomplished]\n\n");
-        output.push_str("### Results\n");
-        output.push_str("[Key findings, data, or outcomes]\n\n");
-        output.push_str("### Generated Files\n");
-        output.push_str("- file1.json: [description]\n");
-        output.push_str("- file2.png: [description]\n\n");
-        output.push_str("### Notes\n");
-        output.push_str("[Any recommendations or important observations]\n");
-        output.push_str("```\n\n");
+        output.push_str("When `type=complete`, the `summary` is your final response to the user.\n");
+        output.push_str("Write it as natural conversation — the way you would speak to a person.\n\n");
+        output.push_str("- For simple greetings or questions: respond naturally and concisely\n");
+        output.push_str("- For task completions: briefly describe what was done and the outcome\n");
+        output.push_str("- Do NOT use rigid report templates (no 'Task Completed' / 'Results' / 'Generated Files' headers)\n");
+        output.push_str("- Use markdown formatting only when it genuinely helps readability\n\n");
     }
 }
 

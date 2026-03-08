@@ -46,7 +46,7 @@ pub struct IntentConfig {
 impl Default for IntentConfig {
     fn default() -> Self {
         Self {
-            default_to_execute: true,
+            default_to_execute: false,
         }
     }
 }
