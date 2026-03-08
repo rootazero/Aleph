@@ -57,6 +57,9 @@ pub use detection::{
     UnifiedIntentClassifier, UnifiedIntentClassifierBuilder,
 };
 
+// Re-export from detection: inline directive parser
+pub use detection::{Directive, DirectiveDefinition, DirectiveParser, ParsedInput};
+
 // Re-export from detection: legacy types (still used internally by parameters module)
 pub use detection::{ExecutableTask, ExecutionIntent, IntentClassifier};
 // Re-export from detection: AI detector (used internally by old classifier)

@@ -15,7 +15,8 @@ use crate::event::{
     ToolCallRequest,
 };
 use crate::intent::{
-    IntentContext, IntentResult, StructuralContext, UnifiedIntentClassifier,
+    DirectiveParser, IntentContext, IntentResult, ParsedInput, StructuralContext,
+    UnifiedIntentClassifier,
 };
 
 use super::Complexity;
@@ -112,6 +113,8 @@ static SENTENCE_BOUNDARY: Lazy<Regex> = Lazy::new(|| Regex::new(r"[。！？\.!?
 pub struct IntentAnalyzer {
     /// Unified intent classifier (v3 pipeline)
     classifier: UnifiedIntentClassifier,
+    /// Inline directive parser
+    directive_parser: DirectiveParser,
 }
 
 impl Default for IntentAnalyzer {
@@ -125,12 +128,16 @@ impl IntentAnalyzer {
     pub fn new() -> Self {
         Self {
             classifier: UnifiedIntentClassifier::new(),
+            directive_parser: DirectiveParser::default(),
         }
     }
 
     /// Create IntentAnalyzer with a custom UnifiedIntentClassifier.
     pub fn with_unified_classifier(classifier: UnifiedIntentClassifier) -> Self {
-        Self { classifier }
+        Self {
+            classifier,
+            directive_parser: DirectiveParser::default(),
+        }
     }
 
     // ========================================================================
@@ -311,8 +318,23 @@ impl EventHandler for IntentAnalyzer {
         // Build IntentContext from InputEvent
         let intent_ctx = Self::build_intent_context(input);
 
+        // Pre-process: extract inline directives
+        let parsed = self.directive_parser.parse(&input.text);
+        let classify_text = if parsed.cleaned_text.is_empty() {
+            &input.text
+        } else {
+            parsed.cleaned_text.as_str()
+        };
+
+        if !parsed.directives.is_empty() {
+            tracing::info!(
+                "[IntentAnalyzer] Extracted directives: {:?}",
+                parsed.directives.iter().map(|d| &d.name).collect::<Vec<_>>()
+            );
+        }
+
         // Classify using unified pipeline
-        let result = self.classifier.classify(&input.text, &intent_ctx).await;
+        let result = self.classifier.classify(classify_text, &intent_ctx).await;
 
         tracing::debug!(
             intent_result = ?result,
