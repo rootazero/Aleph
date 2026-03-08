@@ -16,11 +16,17 @@ mod l1_regex;
 mod l2_keywords;
 mod l3_ai;
 mod types;
+mod unified;
 
 // Re-exports for backward compatibility
 pub use core::IntentClassifier;
 pub use l2_keywords::intent_type_to_category;
 pub use types::{ExecutableTask, ExecutionIntent};
+
+// New unified pipeline
+pub use unified::{
+    IntentConfig, IntentContext, UnifiedIntentClassifier, UnifiedIntentClassifierBuilder,
+};
 
 #[cfg(test)]
 mod tests {

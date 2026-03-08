@@ -15,6 +15,9 @@ mod structural;
 pub use abort::AbortDetector;
 pub use ai_binary::{AiBinaryClassifier, AiBinaryConfig};
 pub use ai_detector::{AiIntentDetector, AiIntentResult};
-pub use classifier::{ExecutableTask, ExecutionIntent, IntentClassifier, intent_type_to_category};
+pub use classifier::{
+    ExecutableTask, ExecutionIntent, IntentClassifier, IntentConfig, IntentContext,
+    UnifiedIntentClassifier, UnifiedIntentClassifierBuilder, intent_type_to_category,
+};
 pub use keyword::{KeywordIndex, KeywordMatch, KeywordMatchMode, KeywordRule};
 pub use structural::{StructuralContext, StructuralDetector};
