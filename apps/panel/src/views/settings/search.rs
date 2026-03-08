@@ -6,6 +6,7 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 use crate::api::{SearchBackendEntry, SearchConfig, SearchConfigApi};
 
@@ -795,12 +796,11 @@ fn ProviderDetailPanel(
                                                     <label class="block text-sm font-medium text-text-secondary mb-1">
                                                         "API Key"
                                                     </label>
-                                                    <input
-                                                        type="password"
-                                                        prop:value=move || form_api_key.get()
-                                                        on:input=move |ev| form_api_key.set(event_target_value(&ev))
+                                                    <SecretInput
+                                                        value=Signal::derive(move || form_api_key.get())
+                                                        on_change=move |v| form_api_key.set(v)
                                                         placeholder=placeholder
-                                                        class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
+                                                        monospace=true
                                                     />
                                                 </div>
                                             }.into_any()
@@ -1156,12 +1156,11 @@ fn AddCustomSearchProviderPanel(
                     // API Key
                     <div>
                         <label class="block text-sm font-medium text-text-secondary mb-1">"API Key"</label>
-                        <input
-                            type="password"
-                            prop:value=move || form_api_key.get()
-                            on:input=move |ev| form_api_key.set(event_target_value(&ev))
+                        <SecretInput
+                            value=Signal::derive(move || form_api_key.get())
+                            on_change=move |v| form_api_key.set(v)
                             placeholder="Optional — leave empty if not required"
-                            class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
+                            monospace=true
                         />
                     </div>
 

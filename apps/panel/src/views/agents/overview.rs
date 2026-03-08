@@ -132,6 +132,12 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
             <div class="bg-surface-raised border border-border rounded-xl p-6">
                 <h2 class="text-lg font-semibold text-text-primary mb-4">"Identity"</h2>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="md:col-span-2">
+                        <label class="block text-sm font-medium text-text-secondary mb-1">"Agent ID"</label>
+                        <div class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-tertiary font-mono text-sm select-all">
+                            {agent_id.clone()}
+                        </div>
+                    </div>
                     <div>
                         <label class="block text-sm font-medium text-text-secondary mb-1">"Emoji"</label>
                         <input

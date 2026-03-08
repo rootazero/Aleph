@@ -85,7 +85,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
                                 .unwrap_or("");
                             if ch_type == pt {
                                 let ch_id = ch
-                                    .get("channel_id")
+                                    .get("id")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("")
                                     .to_string();

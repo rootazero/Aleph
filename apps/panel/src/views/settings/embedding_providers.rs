@@ -5,6 +5,7 @@ use crate::api::{
     EmbeddingProvidersApi, EmbeddingProviderEntry, EmbeddingProviderConfig,
     EmbeddingPresetEntry,
 };
+use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 
 #[component]
@@ -561,12 +562,11 @@ fn ProviderDetailPanel(
                     <label class="block text-sm font-medium text-text-secondary mb-1">
                         "API Key"
                     </label>
-                    <input
-                        type="password"
-                        value=move || api_key.get()
-                        on:input=move |ev| api_key.set(event_target_value(&ev))
+                    <SecretInput
+                        value=Signal::derive(move || api_key.get())
+                        on_change=move |v| api_key.set(v)
                         placeholder="Enter API key (leave blank to use env var)"
-                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        monospace=true
                     />
                     {provider_api_key_env.clone().map(|env_var| view! {
                         <p class="mt-1 text-xs text-text-tertiary">
@@ -859,12 +859,11 @@ fn AddProviderPanel(
                 // API Key
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">"API Key"</label>
-                    <input
-                        type="password"
-                        value=move || api_key.get()
-                        on:input=move |ev| api_key.set(event_target_value(&ev))
+                    <SecretInput
+                        value=Signal::derive(move || api_key.get())
+                        on_change=move |v| api_key.set(v)
                         placeholder="sk-..."
-                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        monospace=true
                     />
                 </div>
 

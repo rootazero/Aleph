@@ -9,6 +9,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::context::DashboardState;
 use crate::api::{ProvidersApi, ProviderInfo, ProviderConfig, TestResult, OAuthStatus};
+use crate::components::ui::SecretInput;
 
 // ============================================================================
 // Preset Definitions
@@ -1150,14 +1151,11 @@ fn ProviderDetailPanel(
                                             // API Key
                                             <div>
                                                 <label class="block text-sm text-text-secondary mb-1">"API Key"</label>
-                                                <input
-                                                    type="password"
-                                                    prop:value=move || form_api_key.get()
-                                                    on:input=move |ev| form_api_key.set(event_target_value(&ev))
-                                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                                    placeholder=move || {
-                                                        preset_info.map(|p| p.api_key_placeholder).unwrap_or("sk-...")
-                                                    }
+                                                <SecretInput
+                                                    value=Signal::derive(move || form_api_key.get())
+                                                    on_change=move |v| form_api_key.set(v)
+                                                    placeholder=preset_info.map(|p| p.api_key_placeholder).unwrap_or("sk-...")
+                                                    monospace=true
                                                 />
                                                 {move || if preset_info.map(|p| !p.needs_api_key).unwrap_or(false) {
                                                     view! {
