@@ -53,6 +53,11 @@ impl SmartRouter {
         self
     }
 
+    /// List all registered agents (delegates to resolver)
+    pub async fn list_agents(&self) -> A2AResult<Vec<RegisteredAgent>> {
+        self.resolver.list_agents().await
+    }
+
     /// Route user intent to the best matching agent
     pub async fn route(&self, intent: &str) -> A2AResult<Option<RoutingDecision>> {
         let agents = self.resolver.list_agents().await?;
