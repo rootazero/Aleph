@@ -544,6 +544,10 @@ impl HandlerRegistry {
             JsonRpcResponse::error(req.id, INTERNAL_ERROR,
                 "agents.files.delete requires AgentManager — wire in Gateway startup".to_string())
         });
+        registry.register("agents.tools_schema", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "agents.tools_schema requires initialization — wire in Gateway startup".to_string())
+        });
 
         // Vault configuration handlers (stateless — keychain + file I/O)
         registry.register("vault.status", vault_config::handle_status);

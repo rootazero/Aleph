@@ -409,3 +409,36 @@ pub async fn handle_files_delete(
         ),
     }
 }
+
+/// Handle agents.tools_schema — return tool group metadata for Panel UI
+pub async fn handle_tools_schema(request: JsonRpcRequest) -> JsonRpcResponse {
+    use crate::executor::{BUILTIN_TOOL_DEFINITIONS, TOOL_GROUPS};
+
+    let groups: Vec<serde_json::Value> = TOOL_GROUPS
+        .iter()
+        .map(|group| {
+            let tools: Vec<serde_json::Value> = group
+                .tools
+                .iter()
+                .map(|tool_name| {
+                    let description = BUILTIN_TOOL_DEFINITIONS
+                        .iter()
+                        .find(|d| d.name == *tool_name)
+                        .map(|d| d.description)
+                        .unwrap_or("");
+                    json!({
+                        "name": tool_name,
+                        "description": description,
+                    })
+                })
+                .collect();
+            json!({
+                "id": group.id,
+                "name": group.name,
+                "tools": tools,
+            })
+        })
+        .collect();
+
+    JsonRpcResponse::success(request.id, json!({ "groups": groups }))
+}

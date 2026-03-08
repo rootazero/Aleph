@@ -38,7 +38,7 @@ mod exec_security_gate;
 
 pub use builtin_registry::{
     create_tool_boxed, get_builtin_tool_names, is_builtin_tool, BuiltinToolConfig,
-    BuiltinToolDefinition, BuiltinToolRegistry, BUILTIN_TOOL_DEFINITIONS,
+    BuiltinToolDefinition, BuiltinToolRegistry, BUILTIN_TOOL_DEFINITIONS, TOOL_GROUPS,
 };
 pub use cache_config::ToolCacheConfig;
 pub use cache_store::{CacheStats, ToolResultCache};

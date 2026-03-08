@@ -343,6 +343,7 @@ pub(in crate::commands::start) fn register_memory_handlers(
     register_handler!(server, "memory.stats", memory_handlers::handle_stats, memory_db);
     register_handler!(server, "memory.delete", memory_handlers::handle_delete, memory_db);
     register_handler!(server, "memory.clear", memory_handlers::handle_clear, memory_db);
+    register_handler!(server, "memory.listFacts", memory_handlers::handle_list_facts, memory_db);
     register_handler!(server, "memory.clearFacts", memory_handlers::handle_clear_facts, memory_db);
     register_handler!(server, "memory.appList", memory_handlers::handle_app_list, memory_db);
     if let Some(cs) = compression_service {
@@ -739,4 +740,9 @@ pub(in crate::commands::start) fn register_agents_handlers(
     register_handler!(server, "agents.files.get", agents::handle_files_get, manager);
     register_handler!(server, "agents.files.set", agents::handle_files_set, manager);
     register_handler!(server, "agents.files.delete", agents::handle_files_delete, manager);
+
+    // Stateless handler — no manager dependency
+    server.handlers_mut().register("agents.tools_schema", |req| async move {
+        agents::handle_tools_schema(req).await
+    });
 }
