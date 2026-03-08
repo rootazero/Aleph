@@ -725,11 +725,31 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let resolved_soul = identity_resolver.resolve();
         let agent_id = request.session_key.agent_id().to_string();
 
-        // Check bootstrap state — if no soul.md, inject First Contact Protocol
+        // Check bootstrap state — if no soul.md, create a default one
+        // instead of injecting First Contact Protocol (which causes
+        // task-report formatting and breaks normal conversation flow).
         let bootstrap_detector = crate::agent_loop::bootstrap::BootstrapDetector::new(
             identity_resolver.global_path().clone(),
         );
-        let bootstrap_prompt = bootstrap_detector.bootstrap_prompt();
+        let bootstrap_prompt: Option<String> = if bootstrap_detector.detect_phase()
+            == crate::agent_loop::bootstrap::BootstrapPhase::Uninitialized
+        {
+            // Auto-create a minimal soul.md so bootstrap never triggers again
+            let soul_path = identity_resolver.global_path();
+            if let Some(parent) = soul_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let default_soul = "---\nidentity: Aleph\ndirectives:\n  - Be helpful and conversational\n  - Respond naturally in the user's language\n---\n\nI am Aleph, a personal AI assistant.\n";
+            if std::fs::write(soul_path, default_soul).is_ok() {
+                info!(run_id = run_id, "Auto-created default soul.md — bootstrap skipped");
+                // Re-resolve soul with the newly created file
+                let fresh_resolver = crate::thinker::identity::IdentityResolver::with_defaults();
+                let _ = fresh_resolver.resolve();
+            }
+            None // Skip bootstrap prompt — use normal conversation flow
+        } else {
+            None // Soul exists — bootstrap complete
+        };
 
         info!(
             run_id = run_id,
@@ -916,6 +936,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // ================================================================
         // Route dispatch: Simple runs AgentLoop; others dispatch to subsystems
         // ================================================================
+
         match task_route {
             crate::routing::TaskRoute::Simple => {
                 // Standard Agent Loop path — clone params for potential escalation re-dispatch
@@ -1225,9 +1246,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 match self.tool_registry.execute_tool(tool_id, arguments).await {
                     Ok(result) => {
                         // Prefer _display field for human-readable output,
-                        // then try string value, then fall back to JSON
+                        // then message field, then string value, then JSON
                         let response = if let Some(display) = result.get("_display").and_then(|v| v.as_str()) {
                             display.to_string()
+                        } else if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+                            msg.to_string()
                         } else if let Some(s) = result.as_str() {
                             s.to_string()
                         } else {
@@ -1355,12 +1378,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         callback: Arc<EventEmittingCallback<E>>,
     ) -> Result<String, ExecutionError> {
         let agent_loop = AgentLoop::new(thinker, executor, compressor, loop_config);
-        // Inject task router for dynamic escalation
-        let agent_loop = if let Some(ref router) = self.task_router {
-            agent_loop.with_task_router(Arc::clone(router))
-        } else {
-            agent_loop
-        };
+        // No task router for Simple route — prevents unnecessary escalation
+        // to Critical/POE for conversational messages. The LLM decides
+        // naturally whether to use tools or just chat (OpenClaw pattern).
         let mut run_context = RunContext::new(
             request.input.clone(),
             context,
