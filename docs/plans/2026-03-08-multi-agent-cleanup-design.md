@@ -1,9 +1,8 @@
 # Multi-Agent Code Redundancy Cleanup Plan
 
-> **Status**: Pending — A2A protocol implementation complete, cleanup not yet started
-> **Priority**: Medium — not blocking, but reduces maintenance burden
-> **Estimated effort**: 3-5 days
-> **Prerequisite**: A2A protocol fully integrated and stable
+> **Status**: Completed — dead code removed, active systems retained with clear boundaries
+> **Completed**: 2026-03-08
+> **Actual result**: Only 2 components were truly dead code (1,423 lines removed). Most "overlapping" systems actually serve different communication scopes and should be retained.
 
 ## Background
 
@@ -145,3 +144,29 @@ SubAgentDispatcher (unified entry point)
 | Keep `group_chat/` | Synchronous multi-party discussion ≠ async delegation; different interaction patterns |
 | Keep `ResultCollector` | Scoped to local sub-agent aggregation; A2A task history handles remote |
 | Consolidate auth first | Highest impact, lowest risk — clear duplication with clear winner |
+
+## Execution Results (2026-03-08)
+
+### What was actually removed (1,423 lines deleted)
+
+| Component | Files | Reason |
+|---|---|---|
+| `SubagentAuthority` | `agents/sub_agents/authority.rs` | Dead code — `authority` field in dispatcher was always `None`, never set in production |
+| `tools/sessions/` | 8 files (list, mod, policy, registry, send, spawn, types, visibility) | Dead code — unused domain layer duplicate of `builtin_tools/sessions/`, never imported |
+| Authority checks in dispatcher | `dispatch_sync()`, `dispatch_parallel_sync()` | Dead code paths — only executed when `authority` was `Some`, which never happened |
+
+### What was retained (with rationale from deep analysis)
+
+| Component | Reason to keep |
+|---|---|
+| `AgentToAgentPolicy` (`gateway/a2a_policy.rs`) | **Active** — used by `sessions_send` tool for intra-process authorization. Different scope from `TieredAuthenticator` (inter-process). |
+| `delegate` tool | **Core functionality** — routes to local sub-agents (MCP, Skill). No overlap with SmartRouter (which routes to remote A2A agents). |
+| `ResultCollector` | **Active** — used by `dispatch_sync()` for tool call aggregation. A2A task history only covers remote tasks. |
+| `sessions_send/list` tools | **Active** — registered in tool registry, used for intra-process agent communication. |
+| `SubAgentDispatcher` | **Active** — top-level router for all sub-agent types (MCP, Skill, A2A). |
+| `group_chat/` | **Active** — synchronous multi-party discussion, different pattern from A2A async delegation. |
+| `SubAgentHandler` | **Active** — event handler for sub-agent lifecycle, tool call tracking. |
+
+### Key insight
+
+The initial estimate of 3-5 days was based on assumed overlap. Deep analysis revealed most systems serve **different communication scopes** (intra-process vs inter-process) rather than being redundant. The actual dead code was limited to two unused modules.
