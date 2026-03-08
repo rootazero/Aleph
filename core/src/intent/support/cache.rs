@@ -37,6 +37,8 @@ use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 
+use crate::intent::types::{DetectionLayer, ExecuteMetadata, IntentResult};
+
 // =============================================================================
 // CachedIntent
 // =============================================================================
@@ -387,6 +389,46 @@ impl IntentCache {
         self.cache.read().await.len()
     }
 
+    // =========================================================================
+    // New IntentResult-based methods (Task 5)
+    // =========================================================================
+
+    /// Cache an `IntentResult` for the given input.
+    ///
+    /// Only `Execute` and `Converse` variants are cached (they carry confidence).
+    /// `DirectTool` and `Abort` are deterministic and don't benefit from caching.
+    pub async fn cache_result(&self, input: &str, result: &IntentResult) {
+        if !self.config.enabled {
+            return;
+        }
+
+        // Only cache variants that carry a meaningful confidence score
+        let cached = match result {
+            IntentResult::Execute { confidence, metadata } => {
+                let intent_type = format!("Execute:{}", layer_tag(metadata.layer));
+                CachedIntent::new(input, intent_type, "Execute", *confidence)
+            }
+            IntentResult::Converse { confidence } => {
+                CachedIntent::new(input, "Converse", "Converse", *confidence)
+            }
+            // DirectTool and Abort are deterministic — no need to cache
+            IntentResult::DirectTool { .. } | IntentResult::Abort => return,
+        };
+
+        self.put(input, cached).await;
+    }
+
+    /// Retrieve a cached `IntentResult` for the given input.
+    ///
+    /// Returns `None` if no entry exists, the entry's confidence has decayed
+    /// below the threshold, or the entry should be evicted.
+    ///
+    /// Confidence decay is applied via the existing `get()` path.
+    pub async fn get_cached_result(&self, input: &str) -> Option<IntentResult> {
+        let cached = self.get(input).await?;
+        Some(cached_to_result(&cached))
+    }
+
     /// Hash the input for use as a cache key.
     ///
     /// The input is normalized by:
@@ -399,6 +441,59 @@ impl IntentCache {
         let mut hasher = DefaultHasher::new();
         normalized.hash(&mut hasher);
         hasher.finish()
+    }
+}
+
+// =============================================================================
+// IntentResult <-> CachedIntent conversion helpers
+// =============================================================================
+
+/// Create a short tag from a `DetectionLayer` for storage in `CachedIntent.tool_name`.
+fn layer_tag(layer: DetectionLayer) -> &'static str {
+    match layer {
+        DetectionLayer::L0 => "L0",
+        DetectionLayer::L1 => "L1",
+        DetectionLayer::L2 => "L2",
+        DetectionLayer::L3 => "L3",
+        DetectionLayer::L4Default => "L4",
+    }
+}
+
+/// Parse a `DetectionLayer` from the tag stored in `CachedIntent.tool_name`.
+fn parse_layer_tag(tag: &str) -> DetectionLayer {
+    match tag {
+        "L0" => DetectionLayer::L0,
+        "L1" => DetectionLayer::L1,
+        "L2" => DetectionLayer::L2,
+        "L3" => DetectionLayer::L3,
+        _ => DetectionLayer::L4Default,
+    }
+}
+
+/// Reconstruct an `IntentResult` from a `CachedIntent`.
+fn cached_to_result(cached: &CachedIntent) -> IntentResult {
+    match cached.intent_type.as_str() {
+        "Converse" => IntentResult::Converse {
+            confidence: cached.confidence,
+        },
+        "Execute" => {
+            // tool_name is "Execute:<layer_tag>"
+            let layer = cached
+                .tool_name
+                .strip_prefix("Execute:")
+                .map(parse_layer_tag)
+                .unwrap_or(DetectionLayer::L4Default);
+            IntentResult::Execute {
+                confidence: cached.confidence,
+                metadata: ExecuteMetadata::default_with_layer(layer),
+            }
+        }
+        _ => {
+            // Fallback: treat unknown types as Converse
+            IntentResult::Converse {
+                confidence: cached.confidence,
+            }
+        }
     }
 }
 
@@ -788,5 +883,130 @@ mod tests {
 
         let entry = cache.get("test").await;
         assert!(entry.is_none());
+    }
+
+    // -------------------------------------------------------------------------
+    // IntentResult cache tests (Task 5)
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_cache_result_execute() {
+        let cache = IntentCache::new(test_config());
+
+        let result = IntentResult::Execute {
+            confidence: 0.85,
+            metadata: ExecuteMetadata::default_with_layer(DetectionLayer::L2),
+        };
+        cache.cache_result("organize my files", &result).await;
+
+        let retrieved = cache.get_cached_result("organize my files").await;
+        assert!(retrieved.is_some());
+
+        let got = retrieved.unwrap();
+        assert!(got.is_execute());
+        assert!(got.confidence() > 0.8); // slight decay possible
+        assert_eq!(got.layer(), Some(DetectionLayer::L2));
+    }
+
+    #[tokio::test]
+    async fn test_cache_result_converse() {
+        let cache = IntentCache::new(test_config());
+
+        let result = IntentResult::Converse { confidence: 0.92 };
+        cache.cache_result("hello there", &result).await;
+
+        let retrieved = cache.get_cached_result("hello there").await;
+        assert!(retrieved.is_some());
+
+        let got = retrieved.unwrap();
+        assert!(got.is_converse());
+        assert!(got.confidence() > 0.9);
+    }
+
+    #[tokio::test]
+    async fn test_cache_result_direct_tool_not_cached() {
+        let cache = IntentCache::new(test_config());
+
+        let result = IntentResult::DirectTool {
+            tool_id: "read_file".to_string(),
+            args: None,
+            source: crate::intent::types::DirectToolSource::SlashCommand,
+        };
+        cache.cache_result("/read_file", &result).await;
+
+        // DirectTool should not be cached
+        assert_eq!(cache.size().await, 0);
+        assert!(cache.get_cached_result("/read_file").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cache_result_abort_not_cached() {
+        let cache = IntentCache::new(test_config());
+
+        cache.cache_result("stop", &IntentResult::Abort).await;
+
+        assert_eq!(cache.size().await, 0);
+        assert!(cache.get_cached_result("stop").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cache_result_miss() {
+        let cache = IntentCache::new(test_config());
+        assert!(cache.get_cached_result("never cached").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cache_result_below_threshold() {
+        let mut config = test_config();
+        config.min_confidence = 0.8;
+        let cache = IntentCache::new(config);
+
+        let result = IntentResult::Execute {
+            confidence: 0.5,
+            metadata: ExecuteMetadata::default_with_layer(DetectionLayer::L3),
+        };
+        cache.cache_result("low confidence", &result).await;
+
+        // Below min_confidence threshold
+        assert!(cache.get_cached_result("low confidence").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cache_result_layer_roundtrip() {
+        let cache = IntentCache::new(test_config());
+
+        // Test each layer roundtrips correctly
+        for layer in [
+            DetectionLayer::L0,
+            DetectionLayer::L1,
+            DetectionLayer::L2,
+            DetectionLayer::L3,
+            DetectionLayer::L4Default,
+        ] {
+            let input = format!("test-{:?}", layer);
+            let result = IntentResult::Execute {
+                confidence: 0.9,
+                metadata: ExecuteMetadata::default_with_layer(layer),
+            };
+            cache.cache_result(&input, &result).await;
+
+            let got = cache.get_cached_result(&input).await.unwrap();
+            assert_eq!(got.layer(), Some(layer), "layer roundtrip failed for {:?}", layer);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cache_result_disabled() {
+        let mut config = test_config();
+        config.enabled = false;
+        let cache = IntentCache::new(config);
+
+        let result = IntentResult::Execute {
+            confidence: 0.9,
+            metadata: ExecuteMetadata::default_with_layer(DetectionLayer::L2),
+        };
+        cache.cache_result("test", &result).await;
+
+        assert!(cache.get_cached_result("test").await.is_none());
     }
 }

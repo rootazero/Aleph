@@ -33,6 +33,8 @@ use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 
+use crate::intent::types::{DetectionLayer, ExecuteMetadata, IntentResult};
+
 // =============================================================================
 // RoutingLayer
 // =============================================================================
@@ -448,6 +450,74 @@ impl ConfidenceCalibrator {
     /// Get a reference to the history (for testing/inspection)
     pub fn history(&self) -> &Arc<RwLock<CalibrationHistory>> {
         &self.history
+    }
+
+    // =========================================================================
+    // New IntentResult-based method (Task 5)
+    // =========================================================================
+
+    /// Calibrate an `IntentResult` by applying layer dampening and context boost.
+    ///
+    /// - `DirectTool` and `Abort` are returned unchanged (confidence is always 1.0).
+    /// - `Execute`: dampening from `DetectionLayer` + context boost from `recent_tools`.
+    /// - `Converse`: no dampening (no layer info), but context boost is not applied
+    ///   since there is no tool to match against.
+    ///
+    /// Layer dampening:
+    /// - L2 → `config.l2_dampening` (0.9)
+    /// - L3 → `config.l3_correction` (0.95)
+    /// - Others (L0, L1, L4Default) → 1.0 (no dampening)
+    ///
+    /// Context boost: each occurrence of a matching tool in `recent_tools` adds
+    /// `config.recent_use_boost`, capped at `config.max_context_boost`.
+    pub fn calibrate_result(
+        &self,
+        result: &IntentResult,
+        recent_tools: &[String],
+    ) -> IntentResult {
+        match result {
+            // DirectTool and Abort are deterministic — return unchanged
+            IntentResult::DirectTool { .. } | IntentResult::Abort => result.clone(),
+
+            IntentResult::Execute { confidence, metadata } => {
+                let mut conf = *confidence;
+
+                // Apply layer-specific dampening
+                conf *= match metadata.layer {
+                    DetectionLayer::L2 => self.config.l2_dampening,
+                    DetectionLayer::L3 => self.config.l3_correction,
+                    _ => 1.0,
+                };
+
+                // Apply context boost from recent tool usage
+                // Use keyword_tag as the tool identifier for matching
+                if let Some(tag) = &metadata.keyword_tag {
+                    let match_count = recent_tools
+                        .iter()
+                        .filter(|t| t.eq_ignore_ascii_case(tag))
+                        .count();
+                    if match_count > 0 {
+                        let boost = (match_count as f32 * self.config.recent_use_boost)
+                            .min(self.config.max_context_boost);
+                        conf += boost;
+                    }
+                }
+
+                conf = conf.clamp(0.0, 1.0);
+
+                IntentResult::Execute {
+                    confidence: conf,
+                    metadata: metadata.clone(),
+                }
+            }
+
+            IntentResult::Converse { confidence } => {
+                // Converse has no layer or tool — return with unchanged confidence
+                IntentResult::Converse {
+                    confidence: *confidence,
+                }
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -925,5 +995,217 @@ mod tests {
         // History boost: 0.81 + min(1.0-0.81, 0.1) = 0.81 + 0.1 = 0.91
         // Context boost: 0.91 + 0.05 = 0.96
         assert!(calibrated.calibrated_confidence > 0.9);
+    }
+
+    // -------------------------------------------------------------------------
+    // calibrate_result tests (Task 5)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_calibrate_result_direct_tool_unchanged() {
+        let calibrator = ConfidenceCalibrator::new(CalibratorConfig::default());
+
+        let result = IntentResult::DirectTool {
+            tool_id: "read_file".to_string(),
+            args: None,
+            source: crate::intent::types::DirectToolSource::SlashCommand,
+        };
+
+        let calibrated = calibrator.calibrate_result(&result, &["read_file".to_string()]);
+        assert_eq!(calibrated, result);
+    }
+
+    #[test]
+    fn test_calibrate_result_abort_unchanged() {
+        let calibrator = ConfidenceCalibrator::new(CalibratorConfig::default());
+        let result = IntentResult::Abort;
+        let calibrated = calibrator.calibrate_result(&result, &[]);
+        assert_eq!(calibrated, result);
+    }
+
+    #[test]
+    fn test_calibrate_result_execute_l2_dampening() {
+        let calibrator = ConfidenceCalibrator::new(CalibratorConfig::default());
+
+        let result = IntentResult::Execute {
+            confidence: 0.9,
+            metadata: ExecuteMetadata::default_with_layer(DetectionLayer::L2),
+        };
+
+        let calibrated = calibrator.calibrate_result(&result, &[]);
+
+        // L2 dampening: 0.9 * 0.9 = 0.81
+        match &calibrated {
+            IntentResult::Execute { confidence, .. } => {
+                assert!((*confidence - 0.81).abs() < 0.001);
+            }
+            _ => panic!("expected Execute"),
+        }
+    }
+
+    #[test]
+    fn test_calibrate_result_execute_l3_correction() {
+        let calibrator = ConfidenceCalibrator::new(CalibratorConfig::default());
+
+        let result = IntentResult::Execute {
+            confidence: 0.9,
+            metadata: ExecuteMetadata::default_with_layer(DetectionLayer::L3),
+        };
+
+        let calibrated = calibrator.calibrate_result(&result, &[]);
+
+        // L3 correction: 0.9 * 0.95 = 0.855
+        assert!((calibrated.confidence() - 0.855).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calibrate_result_execute_l1_no_dampening() {
+        let calibrator = ConfidenceCalibrator::new(CalibratorConfig::default());
+
+        let result = IntentResult::Execute {
+            confidence: 0.85,
+            metadata: ExecuteMetadata::default_with_layer(DetectionLayer::L1),
+        };
+
+        let calibrated = calibrator.calibrate_result(&result, &[]);
+
+        // L1 has no dampening
+        assert!((calibrated.confidence() - 0.85).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calibrate_result_execute_l0_no_dampening() {
+        let calibrator = ConfidenceCalibrator::new(CalibratorConfig::default());
+
+        let result = IntentResult::Execute {
+            confidence: 0.95,
+            metadata: ExecuteMetadata::default_with_layer(DetectionLayer::L0),
+        };
+
+        let calibrated = calibrator.calibrate_result(&result, &[]);
+        assert!((calibrated.confidence() - 0.95).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calibrate_result_execute_context_boost() {
+        let calibrator = ConfidenceCalibrator::new(CalibratorConfig::default());
+
+        let result = IntentResult::Execute {
+            confidence: 0.8,
+            metadata: ExecuteMetadata {
+                keyword_tag: Some("web_search".to_string()),
+                layer: DetectionLayer::L1,
+                ..Default::default()
+            },
+        };
+        let recent = vec!["web_search".to_string(), "web_search".to_string()];
+
+        let calibrated = calibrator.calibrate_result(&result, &recent);
+
+        // No dampening (L1) + context boost: 0.8 + 2*0.05 = 0.9
+        assert!((calibrated.confidence() - 0.9).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calibrate_result_execute_context_boost_capped() {
+        let calibrator = ConfidenceCalibrator::new(CalibratorConfig::default());
+
+        let result = IntentResult::Execute {
+            confidence: 0.8,
+            metadata: ExecuteMetadata {
+                keyword_tag: Some("search".to_string()),
+                layer: DetectionLayer::L1,
+                ..Default::default()
+            },
+        };
+        // 10 matches * 0.05 = 0.5 but max_context_boost = 0.15
+        let recent = vec!["search".to_string(); 10];
+
+        let calibrated = calibrator.calibrate_result(&result, &recent);
+
+        // 0.8 + 0.15 = 0.95
+        assert!((calibrated.confidence() - 0.95).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calibrate_result_execute_combined_dampening_and_boost() {
+        let calibrator = ConfidenceCalibrator::new(CalibratorConfig::default());
+
+        let result = IntentResult::Execute {
+            confidence: 0.9,
+            metadata: ExecuteMetadata {
+                keyword_tag: Some("search".to_string()),
+                layer: DetectionLayer::L2,
+                ..Default::default()
+            },
+        };
+        let recent = vec!["search".to_string()];
+
+        let calibrated = calibrator.calibrate_result(&result, &recent);
+
+        // L2 dampening: 0.9 * 0.9 = 0.81
+        // Context boost: 0.81 + 0.05 = 0.86
+        assert!((calibrated.confidence() - 0.86).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calibrate_result_execute_clamped_to_one() {
+        let calibrator = ConfidenceCalibrator::new(CalibratorConfig::default());
+
+        let result = IntentResult::Execute {
+            confidence: 0.99,
+            metadata: ExecuteMetadata {
+                keyword_tag: Some("tool".to_string()),
+                layer: DetectionLayer::L1,
+                ..Default::default()
+            },
+        };
+        let recent = vec!["tool".to_string(); 10];
+
+        let calibrated = calibrator.calibrate_result(&result, &recent);
+
+        // 0.99 + 0.15 = 1.14, clamped to 1.0
+        assert!((calibrated.confidence() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calibrate_result_converse_unchanged() {
+        let calibrator = ConfidenceCalibrator::new(CalibratorConfig::default());
+
+        let result = IntentResult::Converse { confidence: 0.75 };
+        let calibrated = calibrator.calibrate_result(&result, &["some_tool".to_string()]);
+
+        assert!((calibrated.confidence() - 0.75).abs() < 0.001);
+        assert!(calibrated.is_converse());
+    }
+
+    #[test]
+    fn test_calibrate_result_preserves_metadata() {
+        let calibrator = ConfidenceCalibrator::new(CalibratorConfig::default());
+
+        let meta = ExecuteMetadata {
+            detected_path: Some("/tmp/file.txt".to_string()),
+            detected_url: Some("https://example.com".to_string()),
+            context_hint: Some("hint".to_string()),
+            keyword_tag: Some("search".to_string()),
+            layer: DetectionLayer::L2,
+        };
+        let result = IntentResult::Execute {
+            confidence: 0.9,
+            metadata: meta.clone(),
+        };
+
+        let calibrated = calibrator.calibrate_result(&result, &[]);
+
+        match calibrated {
+            IntentResult::Execute { metadata, .. } => {
+                assert_eq!(metadata.detected_path, meta.detected_path);
+                assert_eq!(metadata.detected_url, meta.detected_url);
+                assert_eq!(metadata.context_hint, meta.context_hint);
+                assert_eq!(metadata.keyword_tag, meta.keyword_tag);
+                assert_eq!(metadata.layer, meta.layer);
+            }
+            _ => panic!("expected Execute"),
+        }
     }
 }
