@@ -379,7 +379,7 @@ fn default_max_steps() -> usize {
 }
 
 fn default_max_tokens() -> usize {
-    500_000
+    1_000_000
 }
 
 fn default_timeout_secs() -> u64 {
@@ -720,7 +720,7 @@ mod tests {
     fn test_default_config() {
         let config = LoopConfig::default();
         assert_eq!(config.max_steps, 50);
-        assert_eq!(config.max_tokens, 500_000);
+        assert_eq!(config.max_tokens, 1_000_000);
         assert_eq!(config.timeout, Duration::from_secs(600));
         assert!(!config.require_confirmation.is_empty());
         assert_eq!(config.permission_mode, PermissionMode::Normal);
