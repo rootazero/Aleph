@@ -147,10 +147,6 @@ pub struct AgentContext {
     /// Contains images, videos, or files from clipboard
     pub attachments: Option<Vec<crate::core::MediaAttachment>>,
 
-    /// Video transcript for video analysis capability
-    /// Contains extracted transcript from YouTube or other video platforms
-    pub video_transcript: Option<crate::video::VideoTranscript>,
-
     /// Web page content fetched via WebFetch capability
     /// Contains the extracted content from a URL in markdown format
     pub webfetch_content: Option<WebFetchContent>,

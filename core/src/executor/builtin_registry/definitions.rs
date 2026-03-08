@@ -21,7 +21,6 @@ use crate::sync_primitives::Arc;
 use crate::builtin_tools::{
     BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, EscalateTaskTool,
     FileOpsTool, ImageGenerateTool, PdfGenerateTool, ReadSkillTool, SearchTool, WebFetchTool,
-    YouTubeTool,
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::tools::AlephToolDyn;
@@ -54,11 +53,6 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "web_fetch",
         description: "Fetch and read content from a URL",
-        requires_config: false,
-    },
-    BuiltinToolDefinition {
-        name: "youtube",
-        description: "Extract YouTube video transcripts",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -199,7 +193,6 @@ pub fn create_tool_boxed(
             Some(Box::new(tool))
         }
         "web_fetch" => Some(Box::new(WebFetchTool::new())),
-        "youtube" => Some(Box::new(YouTubeTool::new())),
         "file_ops" => Some(Box::new(FileOpsTool::new())),
         "bash" => Some(Box::new(BashExecTool::new())),
         "code_exec" => Some(Box::new(CodeExecTool::new())),
@@ -273,7 +266,6 @@ mod tests {
         // Verify core tools
         assert!(names.contains(&"search".to_string()));
         assert!(names.contains(&"web_fetch".to_string()));
-        assert!(names.contains(&"youtube".to_string()));
         assert!(names.contains(&"file_ops".to_string()));
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"code_exec".to_string()));

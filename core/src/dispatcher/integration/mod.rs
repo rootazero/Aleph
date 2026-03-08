@@ -62,9 +62,9 @@ mod tests {
                 ToolSource::Native,
             ),
             UnifiedTool::new(
-                "native:youtube",
-                "youtube",
-                "Analyze YouTube video",
+                "native:web_fetch",
+                "web_fetch",
+                "Fetch web page content",
                 ToolSource::Native,
             ),
         ]

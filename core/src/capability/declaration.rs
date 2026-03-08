@@ -99,25 +99,6 @@ impl CapabilityDeclaration {
         .with_example("最新的科技新闻")
     }
 
-    /// Create the YouTube capability declaration.
-    pub fn youtube() -> Self {
-        Self::new(
-            "youtube",
-            "YouTube",
-            "Extract and analyze transcripts from YouTube videos. Use this when the user provides a YouTube URL (youtube.com or youtu.be) and wants to summarize, analyze, or ask questions about the video content.",
-        )
-        .with_parameter(CapabilityParameter::new(
-            "url",
-            "url",
-            "The YouTube video URL",
-            true,
-        ))
-        .with_example("Summarize this video: https://youtube.com/watch?v=xxx")
-        .with_example("What is this video about? https://youtu.be/xxx")
-        .with_example("总结一下这个视频 https://youtube.com/watch?v=xxx")
-        .with_example("分析这个 YouTube 视频")
-    }
-
     /// Create the Tool capability declaration.
     ///
     /// This capability allows the AI to invoke tools from all 5 categories:
@@ -299,8 +280,8 @@ impl CapabilityRegistry {
     }
 
     /// Build a registry with default capabilities based on configuration.
-    pub fn with_defaults(search_enabled: bool, video_enabled: bool) -> Self {
-        Self::with_all_capabilities(search_enabled, video_enabled, None)
+    pub fn with_defaults(search_enabled: bool, _video_enabled: bool) -> Self {
+        Self::with_all_capabilities(search_enabled, false, None)
     }
 
     /// Build a registry with capabilities and tool execution support.
@@ -312,21 +293,17 @@ impl CapabilityRegistry {
     /// # Arguments
     ///
     /// * `search_enabled` - Whether search capability is available
-    /// * `video_enabled` - Whether video capability is available
+    /// * `_video_enabled` - Deprecated, kept for API compatibility
     /// * `tools_enabled` - Whether tool execution capability is available
     pub fn with_capabilities(
         search_enabled: bool,
-        video_enabled: bool,
+        _video_enabled: bool,
         tools_enabled: bool,
     ) -> Self {
         let mut registry = Self::new();
 
         if search_enabled {
             registry.register(CapabilityDeclaration::search());
-        }
-
-        if video_enabled {
-            registry.register(CapabilityDeclaration::youtube());
         }
 
         // Register Tool capability (uses "mcp" id for backward compatibility)
@@ -345,21 +322,17 @@ impl CapabilityRegistry {
     /// # Arguments
     ///
     /// * `search_enabled` - Whether search capability is available
-    /// * `video_enabled` - Whether video capability is available
+    /// * `_video_enabled` - Deprecated, kept for API compatibility
     /// * `mcp_tools` - Optional list of MCP tools to register
     pub fn with_all_capabilities(
         search_enabled: bool,
-        video_enabled: bool,
+        _video_enabled: bool,
         mcp_tools: Option<Vec<McpToolInfo>>,
     ) -> Self {
         let mut registry = Self::new();
 
         if search_enabled {
             registry.register(CapabilityDeclaration::search());
-        }
-
-        if video_enabled {
-            registry.register(CapabilityDeclaration::youtube());
         }
 
         // Register MCP capability if tools are provided
@@ -409,30 +382,20 @@ mod tests {
     }
 
     #[test]
-    fn test_youtube_declaration() {
-        let youtube = CapabilityDeclaration::youtube();
-        assert_eq!(youtube.id, "youtube");
-        assert!(!youtube.parameters.is_empty());
-        assert!(youtube.available);
-    }
-
-    #[test]
     fn test_registry() {
         let mut registry = CapabilityRegistry::new();
         registry.register(CapabilityDeclaration::search());
-        registry.register(CapabilityDeclaration::youtube());
         registry.register(CapabilityDeclaration::mcp());
 
-        assert_eq!(registry.all().len(), 3);
-        assert_eq!(registry.available().len(), 3); // All are available
+        assert_eq!(registry.all().len(), 2);
+        assert_eq!(registry.available().len(), 2); // All are available
         assert!(registry.is_available("search"));
         assert!(registry.is_available("mcp"));
     }
 
     #[test]
     fn test_registry_with_defaults() {
-        let registry = CapabilityRegistry::with_defaults(true, true);
+        let registry = CapabilityRegistry::with_defaults(true, false);
         assert!(registry.is_available("search"));
-        assert!(registry.is_available("youtube"));
     }
 }

@@ -41,9 +41,6 @@ pub struct Config {
     /// Search configuration (Search Capability Integration)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<SearchConfigInternal>,
-    /// Video transcript configuration (YouTube transcript extraction)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub video: Option<VideoConfig>,
     /// Skills configuration (Claude Agent Skills standard)
     #[serde(default)]
     pub skills: SkillsConfig,
@@ -276,7 +273,6 @@ impl Default for Config {
             shortcuts: Some(ShortcutsConfig::default()),
             behavior: Some(BehaviorConfig::default()),
             search: None,
-            video: Some(VideoConfig::default()),
             skills: SkillsConfig::default(),
             tools: ToolsConfig::default(),
             mcp: McpConfig::default(),

@@ -87,7 +87,6 @@ pub mod thinker;
 pub mod tool_output;
 pub mod tools;
 pub mod utils;
-pub mod video;
 pub mod vision;
 pub mod wizard;
 pub mod spec_driven;

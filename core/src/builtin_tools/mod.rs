@@ -6,7 +6,6 @@
 //!
 //! - [`SearchTool`] - Web search via SearXNG
 //! - [`WebFetchTool`] - Web page fetching
-//! - [`YouTubeTool`] - YouTube video transcript extraction
 //! - [`FileOpsTool`] - File system operations (list, read, write, move, copy, delete, mkdir, search)
 //! - [`AtomicOpsTool`] - Atomic operations (search, replace, move) powered by Atomic Engine
 //! - [`CodeExecTool`] - Code execution (Python, JavaScript, Shell)
@@ -52,7 +51,6 @@ pub mod search;
 pub mod sessions;
 pub mod skill_reader;
 pub mod web_fetch;
-pub mod youtube;
 pub mod mcp_resource;
 pub mod mcp_prompt;
 pub mod desktop;
@@ -97,7 +95,6 @@ pub use skill_reader::{
     ReadSkillTool, SkillSummary,
 };
 pub use web_fetch::{WebFetchArgs, WebFetchTool};
-pub use youtube::{YouTubeArgs, YouTubeTool};
 pub use mcp_resource::{McpReadResourceArgs, McpReadResourceOutput, McpReadResourceTool};
 pub use mcp_prompt::{McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, PromptOutputMessage};
 pub use desktop::{DesktopArgs, DesktopOutput, DesktopTool};

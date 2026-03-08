@@ -8,7 +8,7 @@ use std::fmt;
 /// Tool category for UI grouping and filtering
 ///
 /// Tools are classified into 6 categories based on their source:
-/// - **Builtin**: Built-in rig-core tools (search, web_fetch, youtube)
+/// - **Builtin**: Built-in rig-core tools (search, web_fetch, file_ops)
 /// - **Native**: Legacy native tools (deprecated)
 /// - **Skills**: User-configured skills (instruction injection)
 /// - **Mcp**: MCP server tools (dynamically loaded)

@@ -10,7 +10,6 @@
 //! - `search`: Search capability settings (SearchConfigInternal, SearchConfig, PIIConfig)
 //! - `smart_flow`: Intent detection and matching (SmartFlowConfig, SmartMatchingConfig)
 //! - `tools`: Native and MCP tools (ToolsConfig, UnifiedToolsConfig)
-//! - `video`: Video transcript settings (VideoConfig)
 //! - `skills`: Claude Agent Skills settings (SkillsConfig)
 //! - `dispatcher`: Dispatcher Layer settings (DispatcherConfigToml)
 //! - `agent`: Agent task orchestration settings (AgentConfigToml)
@@ -39,7 +38,6 @@ pub mod smart_flow;
 pub mod subagent;
 pub mod task_routing;
 pub mod tools;
-pub mod video;
 
 // Re-export all types for backward compatibility
 // Users can still use `use crate::config::XXX` instead of `use crate::config::types::XXX`
@@ -65,4 +63,3 @@ pub use smart_flow::*;
 pub use subagent::*;
 pub use task_routing::*;
 pub use tools::*;
-pub use video::*;

@@ -112,7 +112,7 @@ pub struct UnifiedTool {
     pub localization_key: Option<String>,
 
     /// Quick check for builtin status
-    /// True for system builtin commands (/search, /youtube, /webfetch)
+    /// True for system builtin commands (/search, /webfetch)
     #[serde(default)]
     pub is_builtin: bool,
 

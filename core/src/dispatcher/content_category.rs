@@ -30,8 +30,6 @@ pub enum ContentCategory {
     Search,
     /// URL fetching and web scraping
     WebFetch,
-    /// YouTube video information and transcripts
-    YouTube,
     /// Shell/bash command execution
     Bash,
     /// Code execution (Python, JavaScript, etc.)
@@ -53,7 +51,6 @@ impl ContentCategory {
             ContentCategory::FileOps,
             ContentCategory::Search,
             ContentCategory::WebFetch,
-            ContentCategory::YouTube,
             ContentCategory::Bash,
             ContentCategory::CodeExec,
             ContentCategory::ImageGen,
@@ -75,9 +72,6 @@ impl ContentCategory {
             ],
             ContentCategory::WebFetch => &[
                 "fetch", "url", "http", "website", "web page", "download", "scrape",
-            ],
-            ContentCategory::YouTube => &[
-                "youtube", "video", "transcript", "subtitles", "yt",
             ],
             ContentCategory::Bash => &[
                 "bash", "shell", "terminal", "command", "execute", "run", "script",
@@ -138,15 +132,6 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_youtube() {
-        let categories = infer_required_tools(
-            "Download YouTube video transcript and summarize",
-            "process this content"
-        );
-        assert!(categories.contains(&ContentCategory::YouTube));
-    }
-
-    #[test]
     fn test_infer_image_gen() {
         let categories = infer_required_tools("", "create an image of a sunset");
         assert!(categories.contains(&ContentCategory::ImageGen));
@@ -170,6 +155,6 @@ mod tests {
 
     #[test]
     fn test_all_categories() {
-        assert_eq!(ContentCategory::all().len(), 10);
+        assert_eq!(ContentCategory::all().len(), 9);
     }
 }

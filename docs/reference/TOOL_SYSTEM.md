@@ -99,7 +99,6 @@ impl<T: AlephTool> AlephToolDyn for T { ... }
 |------|-------------|------|
 | `web_fetch` | Fetch URL content | `url`, `method?`, `headers?` |
 | `web_search` | Search the web | `query`, `engine?` |
-| `youtube_extract` | Extract video info | `url` |
 
 ### Generation
 

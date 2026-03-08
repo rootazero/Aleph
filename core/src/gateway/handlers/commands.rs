@@ -12,7 +12,7 @@ use crate::dispatcher::{ToolRegistry, ToolSourceType, UnifiedTool};
 /// Command info for JSON serialization
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandInfo {
-    /// Command key (e.g., "search", "youtube")
+    /// Command key (e.g., "search", "webfetch")
     pub key: String,
     /// Human-readable description
     pub description: String,
@@ -127,10 +127,6 @@ fn get_builtin_commands() -> Vec<CommandNode> {
         CommandNode::new("search", "Web search", CommandType::Action)
             .with_icon("magnifyingglass")
             .with_hint("Search the web")
-            .with_source_type(ToolSourceType::Builtin),
-        CommandNode::new("youtube", "YouTube search", CommandType::Action)
-            .with_icon("play.rectangle")
-            .with_hint("Search YouTube videos")
             .with_source_type(ToolSourceType::Builtin),
         CommandNode::new("webfetch", "Fetch web page", CommandType::Action)
             .with_icon("globe")

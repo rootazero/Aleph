@@ -11,7 +11,7 @@ use crate::agents::sub_agents::SubAgentDispatcher;
 use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
 use crate::error::{AlephError, Result};
 use crate::generation::GenerationProviderRegistry;
-use crate::builtin_tools::{BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PimTool, ProfileUpdateTool, ScratchpadTool, SearchTool, SoulUpdateTool, WebFetchTool, YouTubeTool};
+use crate::builtin_tools::{BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PimTool, ProfileUpdateTool, ScratchpadTool, SearchTool, SoulUpdateTool, WebFetchTool};
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::builtin_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillListTool};
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
@@ -33,8 +33,6 @@ pub struct BuiltinToolRegistry {
     pub(crate) search_tool: SearchTool,
     /// Web fetch tool instance
     pub(crate) web_fetch_tool: WebFetchTool,
-    /// YouTube tool instance
-    pub(crate) youtube_tool: YouTubeTool,
     /// File operations tool instance
     pub(crate) file_ops_tool: FileOpsTool,
     /// Bash execution tool instance (wraps CodeExecTool for shell commands)
@@ -115,7 +113,6 @@ impl BuiltinToolRegistry {
     pub fn with_config(config: BuiltinToolConfig) -> Self {
         let search_tool = SearchTool::with_api_key(config.tavily_api_key);
         let web_fetch_tool = WebFetchTool::new();
-        let youtube_tool = YouTubeTool::new();
         let file_ops_tool = FileOpsTool::new();
         let bash_tool = BashExecTool::new();
         let code_exec_tool = CodeExecTool::new();
@@ -198,16 +195,6 @@ impl BuiltinToolRegistry {
                 "builtin:web_fetch",
                 "web_fetch",
                 "Fetch and read content from a URL",
-                ToolSource::Builtin,
-            ),
-        );
-
-        tools.insert(
-            "youtube".to_string(),
-            UnifiedTool::new(
-                "builtin:youtube",
-                "youtube",
-                "Get information about YouTube videos",
                 ToolSource::Builtin,
             ),
         );
@@ -599,7 +586,6 @@ impl BuiltinToolRegistry {
         Self {
             search_tool,
             web_fetch_tool,
-            youtube_tool,
             file_ops_tool,
             bash_tool,
             code_exec_tool,
@@ -714,7 +700,6 @@ impl ToolRegistry for BuiltinToolRegistry {
             // Core tools - use call_json directly via AlephTool trait
             "search" => Box::pin(async move { self.search_tool.call_json(arguments).await }),
             "web_fetch" => Box::pin(async move { self.web_fetch_tool.call_json(arguments).await }),
-            "youtube" => Box::pin(async move { self.youtube_tool.call_json(arguments).await }),
             "file_ops" => Box::pin(async move { self.file_ops_tool.call_json(arguments).await }),
             "bash" => Box::pin(async move { self.bash_tool.call_json(arguments).await }),
             "code_exec" => Box::pin(async move { self.code_exec_tool.call_json(arguments).await }),

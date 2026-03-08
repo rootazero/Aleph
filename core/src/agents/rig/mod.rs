@@ -13,7 +13,7 @@
 //! │                                                      │
 //! │  ┌─────────────────────────────────────────────────┐│
 //! │  │ AlephTool ToolServer for hot-reload support    ││
-//! │  │ - SearchTool, WebFetchTool, YouTubeTool         ││
+//! │  │ - SearchTool, WebFetchTool                       ││
 //! │  │ - McpToolWrapper (hot-reload MCP tools)         ││
 //! │  └─────────────────────────────────────────────────┘│
 //! └─────────────────────────────────────────────────────┘
