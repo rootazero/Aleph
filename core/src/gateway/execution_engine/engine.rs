@@ -868,7 +868,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // Create AgentLoop with config
         let max_loops = agent.config().max_loops as usize;
-        let loop_config = LoopConfig::default().with_max_steps(max_loops);
+        let mut loop_config = LoopConfig::default().with_max_steps(max_loops);
+        if let Some(max_tokens) = agent.config().max_tokens {
+            loop_config = loop_config.with_max_tokens(max_tokens);
+        }
 
         // Build request context with workspace_id in metadata
         let mut context = RequestContext::empty();
