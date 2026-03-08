@@ -55,7 +55,7 @@ jobs:
           sudo apt-get install -y \
             libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev \
             libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev libx11-dev \
-            libssl-dev
+            libssl-dev libwayland-dev
 
       # Panel WASM dist is pre-built and committed to git — no WASM build needed.
       - name: Build server
