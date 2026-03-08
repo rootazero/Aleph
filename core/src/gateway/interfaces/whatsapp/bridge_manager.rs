@@ -80,6 +80,7 @@ impl Default for BridgeManagerConfig {
         let base_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".aleph")
+            .join("channels")
             .join("whatsapp");
 
         Self {
@@ -337,11 +338,11 @@ mod tests {
         assert_eq!(config.max_restarts, 5);
         assert_eq!(config.restart_delay_secs, 3);
 
-        // Socket and data paths should be under ~/.aleph/whatsapp/
+        // Socket and data paths should be under ~/.aleph/channels/whatsapp/
         let socket_str = config.socket_path.to_string_lossy();
         assert!(
-            socket_str.contains(".aleph/whatsapp"),
-            "socket_path should contain .aleph/whatsapp, got: {}",
+            socket_str.contains(".aleph/channels/whatsapp"),
+            "socket_path should contain .aleph/channels/whatsapp, got: {}",
             socket_str
         );
         assert!(
@@ -352,8 +353,8 @@ mod tests {
 
         let data_str = config.data_dir.to_string_lossy();
         assert!(
-            data_str.contains(".aleph/whatsapp"),
-            "data_dir should contain .aleph/whatsapp, got: {}",
+            data_str.contains(".aleph/channels/whatsapp"),
+            "data_dir should contain .aleph/channels/whatsapp, got: {}",
             data_str
         );
         assert!(

@@ -319,6 +319,7 @@ impl AlephTool for AgentCreateTool {
             workspace: workspace_path.clone(),
             model: model.to_string(),
             system_prompt: args.system_prompt.clone(),
+            agent_dir: agents_state_root.join(&args.id),
             ..Default::default()
         };
 

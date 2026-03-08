@@ -472,7 +472,7 @@ mod tests {
         db.insert_fact(&summary_fact).await.unwrap();
 
         let output = tool
-            .handle_ls("aleph://user/preferences/", "default")
+            .handle_ls("aleph://user/preferences/", "main")
             .await
             .unwrap();
 

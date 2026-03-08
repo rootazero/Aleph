@@ -113,6 +113,7 @@ impl WhatsAppChannel {
         let base_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".aleph")
+            .join("channels")
             .join("whatsapp");
 
         let binary_path = config

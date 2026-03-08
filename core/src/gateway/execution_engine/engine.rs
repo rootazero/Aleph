@@ -467,10 +467,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 if let Some(ref mb) = self.memory_backend {
                     let mb = mb.clone();
                     let sk = request.session_key.to_key_string();
+                    let agent_id = request.session_key.agent_id().to_string();
                     let ui = request.input.clone();
                     let ao = response.clone();
                     let _ = tokio::spawn(async move {
-                        write_conversation_memory(mb, sk, ui, ao).await;
+                        write_conversation_memory(mb, sk, agent_id, ui, ao).await;
                     });
                 }
                 // Record conversation turn for compression scheduling
@@ -794,16 +795,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
             }
 
-            // Inject recent daily memory logs
-            let recent = loader.load_recent_memory(&agent_workspace_dir, 7);
-            if !recent.is_empty() {
-                let daily = recent.iter()
-                    .map(|m| format!("### {}\n{}", m.date, m.content))
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                extra_instructions.push(format!("## Recent Activity\n\n{}", daily));
-            }
-
             // Load soul candidate from workspace (applied after soul variable is created)
             loader.load_soul(&agent_workspace_dir)
         };
@@ -827,24 +818,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         }
 
         // Pre-fetch LanceDB memory context for prompt augmentation
-        let mut memory_context = if let Some(ref provider) = self.memory_context_provider {
+        let memory_context = if let Some(ref provider) = self.memory_context_provider {
             let ctx = provider.fetch(&request.input, &agent_id).await;
             if ctx.is_empty() { None } else { Some(ctx) }
         } else {
             None
         };
-
-        // Load recent daily memory notes from workspace/memory/*.md
-        {
-            let daily_notes = {
-                let mut loader = self.workspace_loader.lock().unwrap_or_else(|e| e.into_inner());
-                loader.load_recent_memory(&agent_workspace_dir, 7)
-            };
-            if !daily_notes.is_empty() {
-                let ctx = memory_context.get_or_insert_with(Default::default);
-                ctx.daily_notes = daily_notes;
-            }
-        }
 
         let thinker_config = ThinkerConfig {
             prompt: PromptConfig {
@@ -1245,7 +1224,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // Execute the tool directly
                 match self.tool_registry.execute_tool(tool_id, arguments).await {
                     Ok(result) => {
-                        let response = if let Some(s) = result.as_str() {
+                        // Prefer _display field for human-readable output,
+                        // then try string value, then fall back to JSON
+                        let response = if let Some(display) = result.get("_display").and_then(|v| v.as_str()) {
+                            display.to_string()
+                        } else if let Some(s) = result.as_str() {
                             s.to_string()
                         } else {
                             serde_json::to_string_pretty(&result).unwrap_or_default()
@@ -1359,7 +1342,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         &self,
         run_id: &str,
         request: &RunRequest,
-        agent_workspace_dir: &std::path::Path,
+        _agent_workspace_dir: &std::path::Path,
         thinker: Arc<Thinker<SingleProviderRegistry>>,
         executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
         compressor: Arc<NoOpCompressor>,
@@ -1413,22 +1396,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         match result {
             LoopResult::Completed { summary, .. } => {
                 info!(run_id = %run_id, "Agent loop completed successfully");
-
-                // Append session summary to daily memory log (only for real workspaces)
-                if agent_workspace_dir.is_absolute() {
-                    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-                    let time = chrono::Local::now().format("%H:%M").to_string();
-                    let truncated_summary = if summary.len() > 500 {
-                        format!("{}...", &summary[..summary.floor_char_boundary(500)])
-                    } else {
-                        summary.clone()
-                    };
-                    let entry = format!("\n## Session {}\n\n{}\n", time, truncated_summary);
-                    let loader = self.workspace_loader.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Err(e) = loader.append_daily_memory(agent_workspace_dir, &date, &entry) {
-                        tracing::warn!(error = %e, "Failed to append daily memory");
-                    }
-                }
 
                 Ok(summary)
             }
@@ -2016,6 +1983,7 @@ where
 async fn write_conversation_memory(
     memory_backend: crate::memory::store::MemoryBackend,
     session_key: String,
+    agent_id: String,
     user_input: String,
     ai_output: String,
 ) {
@@ -2026,12 +1994,13 @@ async fn write_conversation_memory(
         session_key.clone(),
         session_key,
     );
-    let entry = MemoryEntry::new(
+    let mut entry = MemoryEntry::new(
         uuid::Uuid::new_v4().to_string(),
         context,
         user_input,
         ai_output,
     );
+    entry.workspace = agent_id;
 
     use crate::memory::store::SessionStore;
     if let Err(e) = memory_backend.insert_memory(&entry).await {

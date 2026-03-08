@@ -780,10 +780,18 @@ impl InboundMessageRouter {
 
         let mut intent = detector.detect(&msg.text).await;
 
-        // If keyword matched but id is empty, resolve via LLM
+        // If keyword matched but id is empty, resolve by name match first, then LLM
         if let DetectedIntent::SwitchAgent { ref id, ref name } = intent {
             if id.is_empty() {
-                if let Some(ref provider) = self.llm_provider {
+                // Fast path: match against registered agents by display name
+                if let Some(matched_id) = registry.find_by_name(name).await {
+                    info!("[Router] Resolved agent by name match: '{}' -> '{}'", name, matched_id);
+                    intent = DetectedIntent::SwitchAgent {
+                        id: matched_id,
+                        name: name.clone(),
+                    };
+                } else if let Some(ref provider) = self.llm_provider {
+                    // Slow path: LLM resolve
                     let prompt = build_id_resolve_prompt(name);
                     match provider.process(&prompt, None).await {
                         Ok(response) => {

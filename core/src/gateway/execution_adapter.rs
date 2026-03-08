@@ -158,6 +158,7 @@ mod tests {
         let config = AgentInstanceConfig {
             agent_id: "test".to_string(),
             workspace: temp.path().join("workspace"),
+            agent_dir: temp.path().join("agents/test"),
             ..Default::default()
         };
 
