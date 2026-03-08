@@ -27,6 +27,8 @@ pub enum SubAgentCapability {
     CodeExecution,
     /// Can generate media (images, video, audio)
     MediaGeneration,
+    /// Custom capability (e.g., A2A remote delegation)
+    Custom,
 }
 
 impl fmt::Display for SubAgentCapability {
@@ -38,6 +40,7 @@ impl fmt::Display for SubAgentCapability {
             Self::FileOperations => write!(f, "file_operations"),
             Self::CodeExecution => write!(f, "code_execution"),
             Self::MediaGeneration => write!(f, "media_generation"),
+            Self::Custom => write!(f, "custom"),
         }
     }
 }
