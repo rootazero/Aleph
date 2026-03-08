@@ -28,7 +28,6 @@ use crate::group_chat::{
     DefaultGroupChatCommandParser, GroupChatCommandParser, GroupChatExecutor,
     GroupChatRequest, GroupChatStatus,
 };
-use crate::intent::ExecutionMode;
 use crate::intent::{DirectToolSource, IntentResult, UnifiedIntentClassifier};
 
 #[cfg(target_os = "macos")]
@@ -182,58 +181,10 @@ fn strip_bot_mention(input: &str) -> String {
     }
 }
 
-/// Serialize ExecutionMode to a JSON string for RunRequest metadata.
-/// Returns None if the mode is Execute or Converse (not a direct command).
-fn serialize_execution_mode(mode: &ExecutionMode) -> Option<String> {
-    match mode {
-        ExecutionMode::DirectTool(inv) => {
-            serde_json::to_string(&serde_json::json!({
-                "type": "direct_tool",
-                "tool_id": inv.tool_id,
-                "args": inv.args,
-            }))
-            .ok()
-        }
-        ExecutionMode::Skill(inv) => {
-            serde_json::to_string(&serde_json::json!({
-                "type": "skill",
-                "skill_id": inv.skill_id,
-                "display_name": inv.display_name,
-                "instructions": inv.instructions,
-                "args": inv.args,
-                "allowed_tools": inv.allowed_tools,
-            }))
-            .ok()
-        }
-        ExecutionMode::Mcp(inv) => {
-            serde_json::to_string(&serde_json::json!({
-                "type": "mcp",
-                "server_name": inv.server_name,
-                "tool_name": inv.tool_name,
-                "args": inv.args,
-            }))
-            .ok()
-        }
-        ExecutionMode::Custom(inv) => {
-            serde_json::to_string(&serde_json::json!({
-                "type": "custom",
-                "command_name": inv.command_name,
-                "system_prompt": inv.system_prompt,
-                "provider": inv.provider,
-                "args": inv.args,
-            }))
-            .ok()
-        }
-        // Execute and Converse modes are not slash commands
-        ExecutionMode::Execute(_) | ExecutionMode::Converse => None,
-    }
-}
-
 /// Serialize an `IntentResult` to a JSON string for RunRequest metadata.
 ///
 /// Returns `Some(json)` for `DirectTool` (which maps to a specific tool invocation),
 /// and `None` for `Execute`, `Converse`, and `Abort` (which are handled by the agent loop).
-#[allow(dead_code)]
 fn serialize_intent_result(result: &IntentResult) -> Option<String> {
     match result {
         IntentResult::DirectTool {
@@ -621,8 +572,8 @@ impl InboundMessageRouter {
                         return self.handle_groupchat_command(&msg).await;
                     }
                     // All other commands → execution engine via metadata
-                    let mode = self.parsed_command_to_mode(parsed);
-                    if let Some(mode_json) = serialize_execution_mode(&mode) {
+                    let result = self.parsed_command_to_intent_result(parsed);
+                    if let Some(mode_json) = serialize_intent_result(&result) {
                         info!(
                             "[Router] Slash command resolved: source=unified, name={}",
                             ctx.message.text.trim().split_whitespace().next().unwrap_or("")
@@ -746,56 +697,31 @@ impl InboundMessageRouter {
         Ok(())
     }
 
-    /// Convert a ParsedCommand to ExecutionMode
-    fn parsed_command_to_mode(&self, cmd: crate::command::ParsedCommand) -> ExecutionMode {
+    /// Convert a ParsedCommand to IntentResult
+    fn parsed_command_to_intent_result(&self, cmd: crate::command::ParsedCommand) -> IntentResult {
         use crate::command::CommandContext;
-        use crate::intent::{
-            CustomInvocation, McpInvocation, SkillInvocation, ToolInvocation,
-        };
 
-        let args = cmd.arguments.clone().unwrap_or_default();
+        let args = cmd.arguments.clone();
 
-        match cmd.context {
-            CommandContext::Builtin { tool_name } => {
-                ExecutionMode::DirectTool(ToolInvocation {
-                    tool_id: tool_name,
-                    args,
-                })
-            }
-            CommandContext::Skill {
-                skill_id,
-                instructions,
-                display_name,
-                allowed_tools,
-            } => ExecutionMode::Skill(SkillInvocation {
-                skill_id,
-                display_name,
-                instructions,
-                args,
-                allowed_tools,
-            }),
+        let (tool_id, source) = match cmd.context {
+            CommandContext::Builtin { tool_name } => (tool_name, DirectToolSource::SlashCommand),
+            CommandContext::Skill { skill_id, .. } => (skill_id, DirectToolSource::Skill),
             CommandContext::Mcp {
                 server_name,
                 tool_name,
-            } => ExecutionMode::Mcp(McpInvocation {
-                server_name,
-                tool_name,
-                args,
-            }),
-            CommandContext::Custom {
-                system_prompt,
-                provider,
                 ..
-            } => ExecutionMode::Custom(CustomInvocation {
-                command_name: cmd.command_name,
-                system_prompt,
-                provider,
-                args,
-            }),
-            CommandContext::None => ExecutionMode::DirectTool(ToolInvocation {
-                tool_id: cmd.command_name,
-                args,
-            }),
+            } => {
+                let id = tool_name.unwrap_or(server_name);
+                (id, DirectToolSource::Mcp)
+            }
+            CommandContext::Custom { .. } => (cmd.command_name.clone(), DirectToolSource::Custom),
+            CommandContext::None => (cmd.command_name.clone(), DirectToolSource::SlashCommand),
+        };
+
+        IntentResult::DirectTool {
+            tool_id,
+            args,
+            source,
         }
     }
 
