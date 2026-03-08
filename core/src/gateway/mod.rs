@@ -51,7 +51,6 @@ pub mod session_manager;
 pub mod execution_engine;
 pub mod loop_callback_adapter;
 pub mod provider_factory;
-pub mod session_storage;
 pub mod channel;
 pub mod channel_registry;
 pub mod interfaces;
@@ -103,7 +102,6 @@ pub use provider_factory::{
     create_openai_provider_from_env, can_create_provider_from_env,
     available_provider_from_env, ProviderFactoryError
 };
-pub use session_storage::{SessionStorage, LoadedSession, SessionMeta};
 pub use channel::{
     Channel, ChannelFactory, ChannelConfig, ChannelInfo, ChannelCapabilities,
     ChannelId, ConversationId, UserId, MessageId,

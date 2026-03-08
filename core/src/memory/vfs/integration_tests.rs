@@ -34,12 +34,12 @@ mod tests {
         db.insert_fact(&fact3).await.unwrap();
 
         // 2. List children of user/
-        let user_children = db.list_by_path("aleph://user/", &NamespaceScope::Owner, "default").await.unwrap();
+        let user_children = db.list_by_path("aleph://user/", &NamespaceScope::Owner, "main").await.unwrap();
         assert!(!user_children.is_empty());
 
         // 3. Simulate L1 Overview storage
         // Get all facts and filter by path prefix
-        let all_facts = db.get_all_facts(false).await.unwrap();
+        let all_facts = db.get_all_facts(false, None).await.unwrap();
         let prefs_facts: Vec<_> = all_facts.into_iter()
             .filter(|f| f.path.starts_with("aleph://user/preferences/"))
             .collect();
@@ -53,7 +53,7 @@ mod tests {
         db.insert_fact(&l1).await.unwrap();
 
         // 4. Verify L1 retrieval via get_by_path
-        let overview = db.get_by_path("aleph://user/preferences/", &NamespaceScope::Owner, "default").await.unwrap();
+        let overview = db.get_by_path("aleph://user/preferences/", &NamespaceScope::Owner, "main").await.unwrap();
         assert!(overview.is_some());
         // Note: get_by_path returns the first matching fact at the exact path;
         // it may return any fact at that path, not necessarily the Summary.

@@ -66,7 +66,7 @@ impl MemoryBackupService {
         let path = self.backup_dir.join(&filename);
 
         // Fetch all valid facts (include_invalid = false)
-        let facts = self.database.get_all_facts(false).await?;
+        let facts = self.database.get_all_facts(false, None).await?;
         info!(
             count = facts.len(),
             path = %path.display(),

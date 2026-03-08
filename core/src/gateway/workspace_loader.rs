@@ -1,16 +1,13 @@
 //! Workspace file loader with mtime-based caching.
 //!
 //! Reads markdown files from agent workspace directories (SOUL.md, AGENTS.md,
-//! MEMORY.md, daily memory logs) with filesystem mtime caching to avoid
-//! re-reading unchanged files.
+//! MEMORY.md) with filesystem mtime caching to avoid re-reading unchanged files.
 
 use std::collections::HashMap;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::thinker::memory_context::DailyMemory;
 use crate::thinker::soul::SoulManifest;
 
 /// Cached file entry with content and modification time.
@@ -96,70 +93,6 @@ impl WorkspaceFileLoader {
         }
     }
 
-    /// Read `memory/*.md` files and return the most recent `days` entries
-    /// sorted by date descending.
-    ///
-    /// Each file is expected to be named `YYYY-MM-DD.md`.
-    pub fn load_recent_memory(&mut self, workspace: &Path, days: u32) -> Vec<DailyMemory> {
-        let memory_dir = workspace.join("memory");
-        let entries = match fs::read_dir(&memory_dir) {
-            Ok(e) => e,
-            Err(_) => return Vec::new(),
-        };
-
-        // Collect valid date-named files
-        let mut dated_files: Vec<String> = entries
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let name = entry.file_name().to_string_lossy().to_string();
-                let date = name.strip_suffix(".md")?;
-                // Basic date format validation: YYYY-MM-DD (10 chars)
-                if date.len() != 10 || date.chars().nth(4) != Some('-') {
-                    return None;
-                }
-                Some(date.to_string())
-            })
-            .collect();
-
-        // Sort descending by date and limit
-        dated_files.sort_unstable_by(|a, b| b.cmp(a));
-        dated_files.truncate(days as usize);
-
-        // Load via mtime cache
-        dated_files
-            .into_iter()
-            .filter_map(|date| {
-                let filename = format!("memory/{}.md", date);
-                let content = self.load(workspace, &filename)?;
-                Some(DailyMemory { date, content })
-            })
-            .collect()
-    }
-
-    /// Append content to `memory/YYYY-MM-DD.md`, creating the directory
-    /// and file if needed.
-    pub fn append_daily_memory(
-        &self,
-        workspace: &Path,
-        date: &str,
-        content: &str,
-    ) -> Result<(), io::Error> {
-        let memory_dir = workspace.join("memory");
-        fs::create_dir_all(&memory_dir)?;
-
-        let file_path = memory_dir.join(format!("{}.md", date));
-
-        use std::fs::OpenOptions;
-        use std::io::Write;
-
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&file_path)?;
-
-        file.write_all(content.as_bytes())?;
-        Ok(())
-    }
 }
 
 impl Default for WorkspaceFileLoader {
@@ -234,48 +167,6 @@ mod tests {
 
         // Cache should have exactly 1 entry
         assert_eq!(loader.cache.len(), 1);
-    }
-
-    #[test]
-    fn test_load_recent_memory() {
-        let tmp = TempDir::new().unwrap();
-        let workspace = tmp.path();
-        let memory_dir = workspace.join("memory");
-        fs::create_dir_all(&memory_dir).unwrap();
-
-        fs::write(memory_dir.join("2026-03-01.md"), "Day one notes").unwrap();
-        fs::write(memory_dir.join("2026-03-02.md"), "Day two notes").unwrap();
-
-        let mut loader = WorkspaceFileLoader::new();
-        let memories = loader.load_recent_memory(workspace, 10);
-
-        assert_eq!(memories.len(), 2);
-        // Should be sorted descending
-        assert_eq!(memories[0].date, "2026-03-02");
-        assert_eq!(memories[1].date, "2026-03-01");
-        assert_eq!(memories[0].content, "Day two notes");
-        assert_eq!(memories[1].content, "Day one notes");
-    }
-
-    #[test]
-    fn test_append_daily_memory() {
-        let tmp = TempDir::new().unwrap();
-        let workspace = tmp.path();
-        let memory_dir = workspace.join("memory");
-        fs::create_dir_all(&memory_dir).unwrap();
-
-        // Write initial content
-        let file_path = memory_dir.join("2026-03-04.md");
-        fs::write(&file_path, "Old content\n").unwrap();
-
-        let loader = WorkspaceFileLoader::new();
-        loader
-            .append_daily_memory(workspace, "2026-03-04", "New content\n")
-            .unwrap();
-
-        let result = fs::read_to_string(&file_path).unwrap();
-        assert!(result.contains("Old content"));
-        assert!(result.contains("New content"));
     }
 
     #[test]

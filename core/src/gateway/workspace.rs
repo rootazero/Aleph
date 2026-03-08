@@ -42,8 +42,8 @@ use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::types::SearchFilter;
 use crate::routing::SessionKey;
 
-/// Default workspace identifier
-pub const DEFAULT_WORKSPACE: &str = "default";
+/// Default workspace identifier (maps to the "main" agent)
+pub const DEFAULT_WORKSPACE: &str = "main";
 
 // =============================================================================
 // WorkspaceFilter
@@ -460,7 +460,7 @@ impl Default for WorkspaceManagerConfig {
         Self {
             db_path: dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join(".aleph/workspaces.db"),
+                .join(".aleph/data/workspaces.db"),
             default_profile: "default".to_string(),
             archive_after_days: 30,
         }
@@ -1267,7 +1267,7 @@ mod tests {
     #[test]
     fn test_workspace_context_default_owner() {
         let ctx = WorkspaceContext::default_owner();
-        assert_eq!(ctx.workspace_id(), "default");
+        assert_eq!(ctx.workspace_id(), "main");
         assert!(matches!(ctx.namespace, NamespaceScope::Owner));
     }
 
