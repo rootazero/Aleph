@@ -22,16 +22,15 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             asset: aleph-darwin-aarch64
-          # Uncomment as cross-compilation is resolved:
-          # - os: macos-13
-          #   target: x86_64-apple-darwin
-          #   asset: aleph-darwin-x86_64
-          # - os: ubuntu-22.04
-          #   target: x86_64-unknown-linux-gnu
-          #   asset: aleph-linux-x86_64
-          # - os: ubuntu-22.04-arm
-          #   target: aarch64-unknown-linux-gnu
-          #   asset: aleph-linux-aarch64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset: aleph-darwin-x86_64
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset: aleph-linux-x86_64
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: aleph-linux-aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
