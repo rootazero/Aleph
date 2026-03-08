@@ -119,6 +119,9 @@ pub struct Config {
     /// This uses opaque JSON values since each channel has a different schema.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub channels: HashMap<String, serde_json::Value>,
+    /// A2A protocol configuration
+    #[serde(default)]
+    pub a2a: crate::a2a::config::A2AConfig,
     /// Agent definitions for multi-agent configuration
     /// Defines available agents, their workspaces, profiles, and capabilities
     #[serde(default)]
@@ -297,6 +300,7 @@ impl Default for Config {
             secrets_config: SecretsConfig::default(),
             prompt: PromptSectionConfig::default(),
             channels: HashMap::new(),
+            a2a: crate::a2a::config::A2AConfig::default(),
             agents: AgentsConfig::default(),
             bindings: Vec::new(),
             presets_override: crate::config::presets_override::PresetsOverride::default(),
