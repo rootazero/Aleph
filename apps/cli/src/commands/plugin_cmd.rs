@@ -2,6 +2,7 @@
 //!
 //! These commands operate locally (no server connection needed).
 
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::error::{CliError, CliResult};
@@ -251,6 +252,140 @@ pub fn hello(input: Json<HelloInput>) -> FnResult<Json<HelloOutput>> {{
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// `aleph plugin validate`
+// ---------------------------------------------------------------------------
+
+/// Result of validating a plugin directory.
+#[derive(Debug, Default)]
+pub struct PluginValidation {
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+    pub info: Vec<String>,
+}
+
+/// Validate a plugin directory for correctness.
+pub fn validate(plugin_dir: &Path, json_mode: bool) -> CliResult<()> {
+    let result = validate_plugin_dir(plugin_dir)?;
+
+    if json_mode {
+        let json = serde_json::json!({
+            "valid": result.errors.is_empty(),
+            "errors": result.errors,
+            "warnings": result.warnings,
+            "info": result.info,
+        });
+        println!("{}", serde_json::to_string_pretty(&json).unwrap());
+    } else {
+        for msg in &result.info {
+            println!("  [info] {}", msg);
+        }
+        for msg in &result.warnings {
+            println!("  [warn] {}", msg);
+        }
+        for msg in &result.errors {
+            println!("  [error] {}", msg);
+        }
+        if result.errors.is_empty() {
+            println!("\nValidation passed.");
+        } else {
+            println!("\nValidation failed with {} error(s).", result.errors.len());
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_plugin_dir(plugin_dir: &Path) -> CliResult<PluginValidation> {
+    let mut result = PluginValidation::default();
+
+    if !plugin_dir.exists() {
+        result
+            .errors
+            .push(format!("Directory does not exist: {}", plugin_dir.display()));
+        return Ok(result);
+    }
+
+    // Check manifest
+    let manifest_path = plugin_dir.join("aleph.plugin.toml");
+    if !manifest_path.exists() {
+        result
+            .errors
+            .push("No aleph.plugin.toml found".to_string());
+        return Ok(result);
+    }
+
+    let content = std::fs::read_to_string(&manifest_path).map_err(CliError::Io)?;
+    let toml: toml::Value = match content.parse() {
+        Ok(v) => v,
+        Err(e) => {
+            result.errors.push(format!("Invalid TOML: {}", e));
+            return Ok(result);
+        }
+    };
+
+    // Check [plugin] section
+    let plugin = match toml.get("plugin") {
+        Some(p) => p,
+        None => {
+            result.errors.push("Missing [plugin] section".to_string());
+            return Ok(result);
+        }
+    };
+
+    // Required fields
+    for field in ["id", "name", "kind", "entry"] {
+        match plugin.get(field).and_then(|v| v.as_str()) {
+            Some(val) if !val.is_empty() => {}
+            _ => result
+                .errors
+                .push(format!("Missing or empty required field: plugin.{}", field)),
+        }
+    }
+
+    let id = plugin
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<unknown>");
+    let name = plugin
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<unknown>");
+    result.info.push(format!("Plugin: {} ({})", name, id));
+
+    // Check entry file
+    if let Some(entry) = plugin.get("entry").and_then(|v| v.as_str()) {
+        let entry_path = plugin_dir.join(entry);
+        if !entry_path.exists() {
+            result.warnings.push(format!(
+                "Entry file not found: {} (run build first?)",
+                entry
+            ));
+        }
+    }
+
+    // Check for duplicate tool names
+    if let Some(tools) = toml.get("tools").and_then(|v| v.as_array()) {
+        let mut names = std::collections::HashSet::new();
+        for tool in tools {
+            if let Some(tool_name) = tool.get("name").and_then(|v| v.as_str()) {
+                if !names.insert(tool_name) {
+                    result
+                        .errors
+                        .push(format!("Duplicate tool name: '{}'", tool_name));
+                }
+            }
+        }
+        result.info.push(format!("{} tool(s) defined", tools.len()));
+    }
+
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// `aleph plugin init` — Static template scaffold
+// ---------------------------------------------------------------------------
+
 fn scaffold_static(target: &Path, name: &str) -> CliResult<()> {
     let skill_md = format!(
         r#"---
@@ -344,6 +479,68 @@ mod tests {
 
         let result = scaffold_plugin(&target, "empty", PluginTemplate::NodeJs);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_valid_plugin() {
+        let dir = tempdir().unwrap();
+        scaffold_plugin(dir.path().join("p").as_path(), "test", PluginTemplate::Static).unwrap();
+
+        let result = validate_plugin_dir(dir.path().join("p").as_path()).unwrap();
+        assert!(result.errors.is_empty(), "Errors: {:?}", result.errors);
+        assert!(!result.info.is_empty());
+    }
+
+    #[test]
+    fn validate_missing_manifest() {
+        let dir = tempdir().unwrap();
+        let result = validate_plugin_dir(dir.path()).unwrap();
+        assert!(!result.errors.is_empty());
+        assert!(result.errors[0].contains("aleph.plugin.toml"));
+    }
+
+    #[test]
+    fn validate_missing_required_fields() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("aleph.plugin.toml"),
+            "[plugin]\nid = \"test\"\n",
+        )
+        .unwrap();
+        let result = validate_plugin_dir(dir.path()).unwrap();
+        assert!(result.errors.iter().any(|e| e.contains("plugin.name")));
+        assert!(result.errors.iter().any(|e| e.contains("plugin.kind")));
+        assert!(result.errors.iter().any(|e| e.contains("plugin.entry")));
+    }
+
+    #[test]
+    fn validate_duplicate_tool_names() {
+        let dir = tempdir().unwrap();
+        let manifest = r#"
+[plugin]
+id = "dup"
+name = "dup"
+kind = "static"
+entry = "SKILL.md"
+
+[[tools]]
+name = "foo"
+description = "first"
+
+[[tools]]
+name = "foo"
+description = "duplicate"
+"#;
+        std::fs::write(dir.path().join("aleph.plugin.toml"), manifest).unwrap();
+        let result = validate_plugin_dir(dir.path()).unwrap();
+        assert!(result.errors.iter().any(|e| e.contains("Duplicate tool name: 'foo'")));
+    }
+
+    #[test]
+    fn validate_nonexistent_directory() {
+        let result = validate_plugin_dir(Path::new("/tmp/does-not-exist-aleph-test")).unwrap();
+        assert!(!result.errors.is_empty());
+        assert!(result.errors[0].contains("does not exist"));
     }
 
     #[test]
