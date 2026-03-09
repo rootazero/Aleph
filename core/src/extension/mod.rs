@@ -740,7 +740,7 @@ impl ExtensionManager {
 
     // ── Configuration ─────────────────────────────────────────────────────────
 
-    /// Get all MCP server configurations from loaded plugins
+    /// Get all MCP server configurations from config
     pub async fn get_mcp_servers(&self) -> HashMap<String, McpServerConfig> {
         let mut servers = HashMap::new();
 
@@ -771,68 +771,36 @@ impl ExtensionManager {
             }
         }
 
-        // Get from loaded plugins
-        for plugin in self.registry.read().await.get_all_plugins() {
-            for (name, config) in &plugin.mcp_servers {
-                let full_name = format!("{}:{}", plugin.name, name);
-                servers.insert(full_name, config.clone());
-            }
-        }
-
         servers
     }
 
     // ── Plugin Info ───────────────────────────────────────────────────────────
 
-    /// Get all plugin info (legacy ComponentRegistry + V2 manifest discovery)
+    /// Get all plugin info — single source from PluginRegistry
     pub async fn get_plugin_info(&self) -> Vec<PluginInfo> {
-        let mut plugins: Vec<PluginInfo> = self.registry
+        self.plugin_registry
             .read()
             .await
-            .get_all_plugins()
+            .list_plugins()
             .into_iter()
-            .map(|p| p.info())
-            .collect();
-
-        // Also discover V2 plugins from ~/.aleph/plugins/ via manifest scanning
-        let existing_names: std::collections::HashSet<String> =
-            plugins.iter().map(|p| p.name.clone()).collect();
-
-        if let Ok(_plugins_dir) = crate::discovery::aleph_plugins_dir() {
-            if let Ok(scanner) = crate::discovery::DirectoryScanner::new(
-                &crate::discovery::DiscoveryConfig::default(),
-            ) {
-                for discovered in scanner.discover_plugins().unwrap_or_default() {
-                    if existing_names.contains(&discovered.name) {
-                        continue;
-                    }
-                    // Try to parse V2 manifest for richer info
-                    if let Ok(manifest) =
-                        crate::extension::manifest::parse_manifest_from_dir_sync(&discovered.path)
-                    {
-                        plugins.push(PluginInfo {
-                            name: manifest.id.clone(),
-                            version: manifest.version.clone(),
-                            description: manifest.description.clone(),
-                            enabled: true,
-                            path: discovered.path.display().to_string(),
-                            skills_count: 0,
-                            commands_count: 0,
-                            agents_count: 0,
-                            hooks_count: manifest.hooks_v2.as_ref().map_or(0, |h| h.len()),
-                            mcp_servers_count: 0,
-                        });
-                    }
-                }
-            }
-        }
-
-        plugins
+            .map(|record| PluginInfo {
+                name: record.id.clone(),
+                version: record.version.clone(),
+                description: record.description.clone(),
+                enabled: record.status.is_active(),
+                path: record.root_dir.display().to_string(),
+                skills_count: 0,
+                commands_count: 0,
+                agents_count: 0,
+                hooks_count: record.hook_count,
+                mcp_servers_count: 0,
+            })
+            .collect()
     }
 
-    /// Get a specific plugin by name
-    pub async fn get_plugin(&self, name: &str) -> Option<ExtensionPlugin> {
-        self.registry.read().await.get_plugin(name).cloned()
+    /// Get a specific plugin record by name
+    pub async fn get_plugin_record(&self, name: &str) -> Option<PluginRecord> {
+        self.plugin_registry.read().await.get_plugin(name).cloned()
     }
 
     // ── Primary / Sub-Agent Support ───────────────────────────────────────────

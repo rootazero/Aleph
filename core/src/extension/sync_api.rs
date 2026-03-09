@@ -16,8 +16,8 @@
 
 use super::{
     ExtensionAgent, ExtensionCommand, ExtensionConfig, ExtensionError, ExtensionManager,
-    ExtensionPlugin, ExtensionResult, ExtensionSkill, HookEvent, LoadSummary, McpServerConfig,
-    PluginInfo,
+    ExtensionResult, ExtensionSkill, HookEvent, LoadSummary, McpServerConfig,
+    PluginInfo, PluginRecord,
 };
 use crate::extension::hooks::{HookContext, HookResult};
 use std::collections::HashMap;
@@ -195,10 +195,10 @@ impl SyncExtensionManager {
         })
     }
 
-    /// Get a specific plugin by name
-    pub fn get_plugin(&self, name: &str) -> Option<ExtensionPlugin> {
+    /// Get a specific plugin record by name
+    pub fn get_plugin_record(&self, name: &str) -> Option<PluginRecord> {
         self.runtime.block_on(async {
-            self.inner.read().await.get_plugin(name).await
+            self.inner.read().await.get_plugin_record(name).await
         })
     }
 
