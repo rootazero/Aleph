@@ -57,6 +57,26 @@ use crate::agent_loop::{CompressionConfig, CompressedHistory, CompressorTrait, L
 use crate::error::Result;
 use crate::providers::AiProvider;
 
+/// Generates the system prompt injected before context compaction
+/// to give the agent a chance to persist important information to long-term memory.
+pub struct PreCompactionPrompt;
+
+impl PreCompactionPrompt {
+    /// Build the flush prompt that instructs the agent to save key facts
+    /// before context compaction discards older turns.
+    pub fn build() -> String {
+        concat!(
+            "SYSTEM: Your conversation context is about to be compacted to save space. ",
+            "Before this happens, review the recent conversation and use the memory_store tool ",
+            "to persist any important information that should be remembered long-term. ",
+            "Focus on: user preferences, decisions made, key facts learned, and task progress. ",
+            "Do NOT store trivial greetings or small talk. ",
+            "After storing, respond with only: [memory_flush_complete]"
+        )
+        .to_string()
+    }
+}
+
 /// Context compressor for managing conversation history
 ///
 /// The compressor monitors session state and compresses history
@@ -236,6 +256,14 @@ mod tests {
             tokens_used: 100,
             duration_ms: 100,
         }
+    }
+
+    #[test]
+    fn test_pre_compaction_prompt_contains_required_elements() {
+        let prompt = PreCompactionPrompt::build();
+        assert!(prompt.contains("memory_store"));
+        assert!(prompt.contains("compacted"));
+        assert!(prompt.contains("memory_flush_complete"));
     }
 
     #[test]

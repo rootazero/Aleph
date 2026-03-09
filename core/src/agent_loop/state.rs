@@ -36,6 +36,9 @@ pub struct LoopState {
     pub poe_hint: Option<String>,
     /// Whether the escalation check has already fired (fire-once guard)
     pub escalation_checked: bool,
+    /// Silent mode: when true, the current turn is an internal housekeeping turn
+    /// (e.g., pre-compaction memory flush) and responses should NOT be streamed to the user.
+    pub silent_mode: bool,
 }
 
 impl LoopState {
@@ -53,6 +56,7 @@ impl LoopState {
             compressed_until_step: 0,
             poe_hint: None,
             escalation_checked: false,
+            silent_mode: false,
         }
     }
 

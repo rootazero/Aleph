@@ -20,6 +20,7 @@ use super::session_sync::SessionSync;
 use super::state::{LoopState, LoopStep, RequestContext};
 use super::traits::{ActionExecutor, CompressorTrait, ThinkerTrait};
 use super::events::AgentLoopEvent;
+use crate::compressor::PreCompactionPrompt;
 use crate::poe::StepDirective;
 
 static FIRST_CYCLE_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -525,8 +526,23 @@ where
                 }
             }
 
-            // ===== Compression =====
+            // ===== Pre-Compaction Memory Flush + Compression =====
             if self.compressor.should_compress(&state) {
+                if !state.silent_mode {
+                    // First pass: inject a silent turn to flush memories before compacting.
+                    // The agent will process the flush prompt, use memory_store to persist
+                    // important information, then we come back here with silent_mode == true
+                    // to perform the actual compression.
+                    let flush_prompt = PreCompactionPrompt::build();
+                    tracing::info!("Pre-compaction: injecting silent memory flush turn");
+                    state.original_request = flush_prompt;
+                    state.silent_mode = true;
+                    continue; // Re-enter loop to process the flush prompt
+                }
+
+                // Second pass: silent turn completed, perform actual compression
+                state.silent_mode = false;
+
                 match self
                     .compressor
                     .compress(&state.steps, &state.history_summary)
