@@ -31,7 +31,9 @@ pub use events::{
     DaemonEvent, DerivedEvent, FsEventType, PressureLevel, PressureType, ProcessEventType,
     RawEvent, SystemEvent, SystemStateType, TimeTrigger,
 };
-pub use ipc::{IpcServer, JsonRpcRequest, JsonRpcResponse};
+#[cfg(unix)]
+pub use ipc::IpcServer;
+pub use ipc::{JsonRpcRequest, JsonRpcResponse};
 pub use perception::{
     FSEventWatcher, FSWatcherConfig, PerceptionConfig, ProcessWatcher, ProcessWatcherConfig,
     SystemStateWatcher, SystemWatcherConfig, TimeWatcher, TimeWatcherConfig, Watcher,
