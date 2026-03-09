@@ -1,4 +1,4 @@
-// Browser snapshot tool — captures an accessibility tree snapshot of the page.
+// Browser select tool — selects an option from a dropdown/select element.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -9,52 +9,53 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_snapshot tool.
+/// Arguments for the browser_select tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct BrowserSnapshotArgs {
+pub struct BrowserSelectArgs {
     /// Browser profile name (default: "default").
     #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
     pub profile: String,
+    /// CSS selector of the dropdown/select element.
+    pub selector: String,
+    /// Value to select from the dropdown.
+    pub value: String,
 }
 
-/// Output from the browser_snapshot tool.
+/// Output from the browser_select tool.
 #[derive(Debug, Serialize)]
-pub struct BrowserSnapshotOutput {
+pub struct BrowserSelectOutput {
     pub success: bool,
-    pub aria_tree: Option<String>,
     pub message: Option<String>,
 }
 
-/// Captures an accessibility tree (ARIA) snapshot of the current page.
+/// Selects an option from a dropdown/select element on the page.
 #[derive(Clone)]
-pub struct BrowserSnapshotTool {
+pub struct BrowserSelectTool {
     manager: Arc<ProfileManager>,
 }
 
-impl BrowserSnapshotTool {
+impl BrowserSelectTool {
     pub fn new(manager: Arc<ProfileManager>) -> Self {
         Self { manager }
     }
 }
 
 #[async_trait]
-impl AlephTool for BrowserSnapshotTool {
-    const NAME: &'static str = "browser_snapshot";
-    const DESCRIPTION: &'static str =
-        "Get an accessibility tree snapshot of the current browser page for structured understanding";
-    type Args = BrowserSnapshotArgs;
-    type Output = BrowserSnapshotOutput;
+impl AlephTool for BrowserSelectTool {
+    const NAME: &'static str = "browser_select";
+    const DESCRIPTION: &'static str = "Select an option from a dropdown/select element";
+    type Args = BrowserSelectArgs;
+    type Output = BrowserSelectOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.manager.record_activity(&args.profile);
 
         // TODO: Route through PlaywrightBridge or BrowserRuntime
-        Ok(BrowserSnapshotOutput {
+        Ok(BrowserSelectOutput {
             success: true,
-            aria_tree: Some("[placeholder] ARIA tree for current page".into()),
             message: Some(format!(
-                "Snapshot captured in profile '{}'",
-                args.profile
+                "Selected '{}' in '{}' in profile '{}'",
+                args.value, args.selector, args.profile
             )),
         })
     }
@@ -66,19 +67,23 @@ mod tests {
     use crate::browser::profile::BrowserSystemConfig;
 
     #[tokio::test]
-    async fn test_snapshot_returns_aria_tree() {
+    async fn test_select_option() {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
-        let tool = BrowserSnapshotTool::new(manager);
+        let tool = BrowserSelectTool::new(manager);
 
         let result = tool
-            .call(BrowserSnapshotArgs {
+            .call(BrowserSelectArgs {
                 profile: "default".into(),
+                selector: "select#country".into(),
+                value: "us".into(),
             })
             .await
             .unwrap();
 
         assert!(result.success);
-        assert!(result.aria_tree.is_some());
+        let msg = result.message.unwrap();
+        assert!(msg.contains("us"));
+        assert!(msg.contains("select#country"));
     }
 }

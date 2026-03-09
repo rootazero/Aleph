@@ -11,15 +11,11 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-fn default_profile() -> String {
-    "default".into()
-}
-
 /// Arguments for the browser_type tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserTypeArgs {
     /// Browser profile name (default: "default").
-    #[serde(default = "default_profile")]
+    #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
     pub profile: String,
     /// Text to type into the element.
     pub text: String,

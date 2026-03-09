@@ -1,4 +1,4 @@
-// Browser screenshot tool — captures a screenshot of the current page.
+// Browser evaluate tool — executes JavaScript in the browser.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -9,56 +9,55 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-/// Arguments for the browser_screenshot tool.
+/// Arguments for the browser_evaluate tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct BrowserScreenshotArgs {
+pub struct BrowserEvaluateArgs {
     /// Browser profile name (default: "default").
     #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
     pub profile: String,
-    /// Capture the full page (default: false, captures viewport only).
-    #[serde(default)]
-    pub full_page: bool,
-    /// CSS selector to screenshot a specific element.
-    pub selector: Option<String>,
+    /// JavaScript code to execute in the browser context.
+    pub script: String,
 }
 
-/// Output from the browser_screenshot tool.
+/// Output from the browser_evaluate tool.
 #[derive(Debug, Serialize)]
-pub struct BrowserScreenshotOutput {
+pub struct BrowserEvaluateOutput {
     pub success: bool,
-    pub image_base64: Option<String>,
+    pub result: Option<serde_json::Value>,
     pub message: Option<String>,
 }
 
-/// Captures a screenshot of the current page or a specific element.
+/// Executes JavaScript in the browser and returns the result.
 #[derive(Clone)]
-pub struct BrowserScreenshotTool {
+pub struct BrowserEvaluateTool {
     manager: Arc<ProfileManager>,
 }
 
-impl BrowserScreenshotTool {
+impl BrowserEvaluateTool {
     pub fn new(manager: Arc<ProfileManager>) -> Self {
         Self { manager }
     }
 }
 
 #[async_trait]
-impl AlephTool for BrowserScreenshotTool {
-    const NAME: &'static str = "browser_screenshot";
-    const DESCRIPTION: &'static str = "Take a screenshot of the current browser page or a specific element";
-    type Args = BrowserScreenshotArgs;
-    type Output = BrowserScreenshotOutput;
+impl AlephTool for BrowserEvaluateTool {
+    const NAME: &'static str = "browser_evaluate";
+    const DESCRIPTION: &'static str =
+        "Execute JavaScript in the browser and return the result";
+    type Args = BrowserEvaluateArgs;
+    type Output = BrowserEvaluateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.manager.record_activity(&args.profile);
 
         // TODO: Route through PlaywrightBridge or BrowserRuntime
-        Ok(BrowserScreenshotOutput {
+        Ok(BrowserEvaluateOutput {
             success: true,
-            image_base64: None,
+            result: Some(serde_json::Value::Null),
             message: Some(format!(
-                "Screenshot captured in profile '{}' (full_page={}, selector={:?})",
-                args.profile, args.full_page, args.selector
+                "Evaluated {} chars of JS in profile '{}'",
+                args.script.len(),
+                args.profile
             )),
         })
     }
@@ -70,39 +69,38 @@ mod tests {
     use crate::browser::profile::BrowserSystemConfig;
 
     #[tokio::test]
-    async fn test_screenshot_default_args() {
+    async fn test_evaluate_script() {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
-        let tool = BrowserScreenshotTool::new(manager);
+        let tool = BrowserEvaluateTool::new(manager);
 
         let result = tool
-            .call(BrowserScreenshotArgs {
+            .call(BrowserEvaluateArgs {
                 profile: "default".into(),
-                full_page: false,
-                selector: None,
+                script: "document.title".into(),
             })
             .await
             .unwrap();
 
         assert!(result.success);
+        assert!(result.result.is_some());
     }
 
     #[tokio::test]
-    async fn test_screenshot_with_selector() {
+    async fn test_evaluate_empty_script() {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
-        let tool = BrowserScreenshotTool::new(manager);
+        let tool = BrowserEvaluateTool::new(manager);
 
         let result = tool
-            .call(BrowserScreenshotArgs {
+            .call(BrowserEvaluateArgs {
                 profile: "default".into(),
-                full_page: false,
-                selector: Some("#main-content".into()),
+                script: String::new(),
             })
             .await
             .unwrap();
 
         assert!(result.success);
-        assert!(result.message.unwrap().contains("#main-content"));
+        assert!(result.message.unwrap().contains("0 chars"));
     }
 }
