@@ -51,7 +51,7 @@ async fn test_full_memory_lifecycle() {
     // Insert a memory so the memories table has data for FTS indexing
     let mem1 = MemoryEntry::with_embedding(
         "mem-int-1".to_string(),
-        ContextAnchor::with_timestamp("com.test".to_string(), "test.txt".to_string(), 1700000000),
+        ContextAnchor::with_timestamp("test.txt".to_string(), 1700000000),
         "What is Aleph?".to_string(),
         "Aleph is an AI assistant".to_string(),
         vec![0.4f32; 1024],
@@ -185,7 +185,7 @@ async fn test_ensure_indexes_idempotent() {
 
     let mem = MemoryEntry::with_embedding(
         "mem-test".to_string(),
-        ContextAnchor::with_timestamp("com.test".to_string(), "test".to_string(), 0),
+        ContextAnchor::with_timestamp("test".to_string(), 0),
         "input".to_string(),
         "output".to_string(),
         vec![0.1f32; 1024],

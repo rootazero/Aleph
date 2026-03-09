@@ -599,7 +599,7 @@ mod tests {
     }
 
     fn create_test_payload() -> AgentPayload {
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
         PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
             .config("openai".to_string(), vec![], ContextFormat::Markdown)

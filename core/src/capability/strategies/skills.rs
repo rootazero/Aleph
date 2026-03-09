@@ -237,7 +237,7 @@ description: {}
 
         let strategy = SkillsStrategy::new(Some(registry));
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
         let payload = PayloadBuilder::new()
             .meta(Intent::Skills("refine-text".to_string()), 1000, anchor)
             .config(
@@ -286,7 +286,7 @@ description: {}
 
         let strategy = SkillsStrategy::new(Some(registry));
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
         // GeneralChat instead of Intent::Skills
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
@@ -337,7 +337,7 @@ description: {}
 
         let strategy = SkillsStrategy::new(Some(registry));
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
             .config(
@@ -371,7 +371,7 @@ description: {}
 
         let strategy = SkillsStrategy::new(Some(registry));
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
             .config(
@@ -401,7 +401,7 @@ description: {}
 
         let strategy = SkillsStrategy::new(Some(registry));
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
         let payload = PayloadBuilder::new()
             .meta(Intent::Skills("nonexistent".to_string()), 1000, anchor)
             .config(

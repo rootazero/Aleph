@@ -53,7 +53,7 @@ async fn test_llm_scoring_high_value() {
 
     let entry = MemoryEntry::new(
         uuid::Uuid::new_v4().to_string(),
-        ContextAnchor::now("test".to_string(), "test".to_string()),
+        ContextAnchor::now("test".to_string()),
         "I prefer using Rust for systems programming".to_string(),
         "That's a great choice!".to_string(),
     );
@@ -71,7 +71,7 @@ async fn test_llm_scoring_low_value() {
 
     let entry = MemoryEntry::new(
         uuid::Uuid::new_v4().to_string(),
-        ContextAnchor::now("test".to_string(), "test".to_string()),
+        ContextAnchor::now("test".to_string()),
         "Hello".to_string(),
         "Hi there!".to_string(),
     );
@@ -90,7 +90,7 @@ async fn test_llm_scoring_hybrid() {
 
     let entry = MemoryEntry::new(
         uuid::Uuid::new_v4().to_string(),
-        ContextAnchor::now("test".to_string(), "test".to_string()),
+        ContextAnchor::now("test".to_string()),
         "I prefer using Rust".to_string(), // Keyword: preference
         "Good choice!".to_string(),
     );
@@ -109,7 +109,7 @@ async fn test_keyword_only_scoring() {
 
     let entry = MemoryEntry::new(
         uuid::Uuid::new_v4().to_string(),
-        ContextAnchor::now("test".to_string(), "test".to_string()),
+        ContextAnchor::now("test".to_string()),
         "I prefer using Rust".to_string(),
         "Good choice!".to_string(),
     );
@@ -128,13 +128,13 @@ async fn test_batch_scoring_with_llm() {
     let entries = vec![
         MemoryEntry::new(
             uuid::Uuid::new_v4().to_string(),
-            ContextAnchor::now("test".to_string(), "test".to_string()),
+            ContextAnchor::now("test".to_string()),
             "Entry 1".to_string(),
             "Response 1".to_string(),
         ),
         MemoryEntry::new(
             uuid::Uuid::new_v4().to_string(),
-            ContextAnchor::now("test".to_string(), "test".to_string()),
+            ContextAnchor::now("test".to_string()),
             "Entry 2".to_string(),
             "Response 2".to_string(),
         ),

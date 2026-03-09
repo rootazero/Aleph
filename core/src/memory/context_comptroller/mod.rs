@@ -34,7 +34,7 @@ mod tests {
         let entry_id = uuid::Uuid::new_v4().to_string();
         let mut transcript = MemoryEntry::new(
             entry_id.clone(),
-            ContextAnchor::now("test".to_string(), "test".to_string()),
+            ContextAnchor::now("test".to_string()),
             "I really prefer Rust".to_string(),
             "Rust is great for systems programming".to_string(),
         );
@@ -73,7 +73,7 @@ mod tests {
         let entry_id = uuid::Uuid::new_v4().to_string();
         let mut transcript = MemoryEntry::new(
             entry_id,
-            ContextAnchor::now("test".to_string(), "test".to_string()),
+            ContextAnchor::now("test".to_string()),
             "What is Rust?".to_string(),
             "Rust is a systems language".to_string(),
         );
@@ -117,7 +117,7 @@ mod tests {
             let entry_id = uuid::Uuid::new_v4().to_string();
             let mut transcript = MemoryEntry::new(
                 entry_id,
-                ContextAnchor::now("test".to_string(), "test".to_string()),
+                ContextAnchor::now("test".to_string()),
                 format!("Question {}", i),
                 format!("Answer {}", i),
             );

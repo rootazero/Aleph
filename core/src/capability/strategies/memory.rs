@@ -312,7 +312,7 @@ mod tests {
     async fn test_memory_strategy_execute_no_db() {
         let strategy = MemoryStrategy::new(None, None);
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
             .config(
