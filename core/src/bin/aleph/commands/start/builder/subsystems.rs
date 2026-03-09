@@ -430,6 +430,7 @@ pub(in crate::commands::start) async fn initialize_channels(
 
 /// Initialize InboundMessageRouter and start it.
 /// Connects the channel registry to the agent router for unified routing.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) async fn initialize_inbound_router(
     channel_registry: Arc<ChannelRegistry>,
     router: Arc<AgentRouter>,

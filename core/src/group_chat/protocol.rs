@@ -171,7 +171,7 @@ impl GroupChatStatus {
     /// Parses a status from a string.
     ///
     /// Returns `None` if the string doesn't match any known status.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "active" => Some(GroupChatStatus::Active),
             "paused" => Some(GroupChatStatus::Paused),
@@ -362,13 +362,13 @@ mod tests {
         assert_eq!(GroupChatStatus::Ended.as_str(), "ended");
 
         // Test from_str() roundtrip
-        assert_eq!(GroupChatStatus::from_str("active"), Some(GroupChatStatus::Active));
-        assert_eq!(GroupChatStatus::from_str("paused"), Some(GroupChatStatus::Paused));
-        assert_eq!(GroupChatStatus::from_str("ended"), Some(GroupChatStatus::Ended));
+        assert_eq!(GroupChatStatus::parse("active"), Some(GroupChatStatus::Active));
+        assert_eq!(GroupChatStatus::parse("paused"), Some(GroupChatStatus::Paused));
+        assert_eq!(GroupChatStatus::parse("ended"), Some(GroupChatStatus::Ended));
 
         // Test invalid input
-        assert_eq!(GroupChatStatus::from_str("unknown"), None);
-        assert_eq!(GroupChatStatus::from_str(""), None);
+        assert_eq!(GroupChatStatus::parse("unknown"), None);
+        assert_eq!(GroupChatStatus::parse(""), None);
     }
 
     #[test]

@@ -89,6 +89,7 @@ pub struct ResolvedAgent {
 /// Merges `AgentDefinition` entries with `AgentDefaults`, `ProfileConfig`,
 /// and workspace files (SOUL.md, AGENTS.md, MEMORY.md) to produce fully
 /// resolved `ResolvedAgent` instances.
+#[derive(Default)]
 pub struct AgentDefinitionResolver {
     workspace_loader: WorkspaceFileLoader,
 }
@@ -96,9 +97,7 @@ pub struct AgentDefinitionResolver {
 impl AgentDefinitionResolver {
     /// Create a new resolver with a fresh workspace file loader.
     pub fn new() -> Self {
-        Self {
-            workspace_loader: WorkspaceFileLoader::new(),
-        }
+        Self::default()
     }
 
     /// Resolve all agent definitions from configuration.

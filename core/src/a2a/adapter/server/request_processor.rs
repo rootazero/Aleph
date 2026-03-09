@@ -7,7 +7,7 @@ use crate::a2a::domain::*;
 use crate::a2a::port::authenticator::{A2AAction, A2AAuthPrincipal, A2AAuthenticator};
 use crate::a2a::port::message_handler::A2AMessageHandler;
 use crate::a2a::port::streaming::A2AStreamingHandler;
-use crate::a2a::port::task_manager::{A2AResult, A2ATaskManager};
+use crate::a2a::port::task_manager::A2ATaskManager;
 use crate::a2a::service::notification::NotificationService;
 
 /// Shared state for the A2A HTTP server.
@@ -522,6 +522,7 @@ mod tests {
 
         use crate::a2a::domain::security::TrustLevel;
         use crate::a2a::port::authenticator::A2AAuthContext;
+        use crate::a2a::port::task_manager::A2AResult;
 
         // Minimal mock authenticator that always allows
         struct AllowAllAuth;

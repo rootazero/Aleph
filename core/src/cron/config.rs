@@ -333,7 +333,7 @@ impl ScheduleKind {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s {
             "every" => Self::Every,
             "at" => Self::At,
@@ -362,7 +362,7 @@ impl TriggerSource {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s {
             "chain" => Self::Chain,
             "manual" => Self::Manual,
@@ -595,10 +595,10 @@ mod tests {
 
     #[test]
     fn test_schedule_kind_roundtrip() {
-        assert_eq!(ScheduleKind::from_str("cron"), ScheduleKind::Cron);
-        assert_eq!(ScheduleKind::from_str("every"), ScheduleKind::Every);
-        assert_eq!(ScheduleKind::from_str("at"), ScheduleKind::At);
-        assert_eq!(ScheduleKind::from_str("invalid"), ScheduleKind::Cron);
+        assert_eq!(ScheduleKind::parse("cron"), ScheduleKind::Cron);
+        assert_eq!(ScheduleKind::parse("every"), ScheduleKind::Every);
+        assert_eq!(ScheduleKind::parse("at"), ScheduleKind::At);
+        assert_eq!(ScheduleKind::parse("invalid"), ScheduleKind::Cron);
     }
 
     #[test]
@@ -625,7 +625,7 @@ mod tests {
             ("manual", TriggerSource::Manual),
             ("catchup", TriggerSource::Catchup),
         ] {
-            assert_eq!(TriggerSource::from_str(s), v);
+            assert_eq!(TriggerSource::parse(s), v);
             assert_eq!(v.as_str(), s);
         }
     }

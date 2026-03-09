@@ -28,6 +28,7 @@ pub struct InterruptChannel;
 
 impl InterruptChannel {
     /// Create a new interrupt channel with a bounded buffer of 16.
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> (InterruptSender, InterruptReceiver) {
         let (tx, rx) = mpsc::channel(16);
         (InterruptSender { tx }, InterruptReceiver { rx })

@@ -33,7 +33,7 @@ use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 
-use crate::intent::types::{DetectionLayer, ExecuteMetadata, IntentResult};
+use crate::intent::types::{DetectionLayer, IntentResult};
 
 // =============================================================================
 // RoutingLayer
@@ -607,6 +607,7 @@ impl ConfidenceCalibrator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::intent::types::ExecuteMetadata;
 
     // -------------------------------------------------------------------------
     // RoutingLayer tests

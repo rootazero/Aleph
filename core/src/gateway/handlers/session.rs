@@ -579,7 +579,7 @@ pub async fn handle_create_db(
             request.id,
             json!({
                 "session_key": session_key.to_key_string(),
-                "name": name.unwrap_or_else(|| session_key_str),
+                "name": name.unwrap_or(session_key_str),
             }),
         ),
         Err(e) => JsonRpcResponse::error(

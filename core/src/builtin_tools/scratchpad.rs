@@ -76,6 +76,12 @@ pub struct ScratchpadOutput {
 #[derive(Clone)]
 pub struct ScratchpadTool;
 
+impl Default for ScratchpadTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScratchpadTool {
     pub fn new() -> Self {
         Self

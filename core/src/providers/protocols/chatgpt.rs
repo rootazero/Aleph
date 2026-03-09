@@ -86,15 +86,12 @@ impl ChatGptProtocol {
     fn extract_text(response: &ResponseResource) -> Option<String> {
         let mut texts = Vec::new();
         for item in &response.output {
-            match item {
-                crate::providers::chatgpt::types::OutputItem::Message { content, .. } => {
-                    for part in content {
-                        if !part.text.is_empty() {
-                            texts.push(part.text.clone());
-                        }
+            if let crate::providers::chatgpt::types::OutputItem::Message { content, .. } = item {
+                for part in content {
+                    if !part.text.is_empty() {
+                        texts.push(part.text.clone());
                     }
                 }
-                _ => {}
             }
         }
         if texts.is_empty() {

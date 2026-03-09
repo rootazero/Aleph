@@ -33,7 +33,7 @@ pub use definitions::{
     create_tool_boxed, get_builtin_tool_names, is_builtin_tool, BuiltinToolDefinition,
     BUILTIN_TOOL_DEFINITIONS,
 };
-pub use groups::{ToolGroup, TOOL_GROUPS};
+pub use groups::TOOL_GROUPS;
 pub use registry::BuiltinToolRegistry;
 
 // Re-import ToolRegistry from single_step for internal use
