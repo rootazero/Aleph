@@ -583,7 +583,7 @@ mod tests {
     #[tokio::test]
     async fn test_composite_executor_empty() {
         let executor = CompositeCapabilityExecutor::new();
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
@@ -619,7 +619,7 @@ mod tests {
             .with_strategy(memory_strategy.clone())
             .with_strategy(search_strategy.clone());
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)

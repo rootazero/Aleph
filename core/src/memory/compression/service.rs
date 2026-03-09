@@ -604,7 +604,6 @@ mod tests {
 
         // Store a memory with learning signal
         let context = crate::memory::context::ContextAnchor::now(
-            "test.app".to_string(),
             "test.txt".to_string(),
         );
         // Create dummy embedding (1024-dim)

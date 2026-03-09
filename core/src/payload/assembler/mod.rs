@@ -78,7 +78,7 @@ mod tests {
     fn test_assemble_system_prompt_no_context() {
         let assembler = PromptAssembler::new(ContextFormat::Markdown);
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
@@ -95,10 +95,10 @@ mod tests {
     fn test_assemble_system_prompt_with_memory() {
         let assembler = PromptAssembler::new(ContextFormat::Markdown);
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let memory_anchor =
-            MemoryContextAnchor::with_timestamp("com.app".to_string(), "Window".to_string(), 1000);
+            MemoryContextAnchor::with_timestamp("Window".to_string(), 1000);
 
         let memories = vec![MemoryEntry {
             id: "test-id".to_string(),
@@ -131,7 +131,6 @@ mod tests {
     #[test]
     fn test_format_memory_markdown() {
         let memory_anchor = MemoryContextAnchor::with_timestamp(
-            "com.app".to_string(),
             "Window".to_string(),
             1609459200, // 2021-01-01 00:00:00 UTC
         );
@@ -194,7 +193,7 @@ mod tests {
     fn test_xml_format_reserved() {
         let assembler = PromptAssembler::new(ContextFormat::Xml);
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
@@ -213,7 +212,7 @@ mod tests {
     fn test_json_format_reserved() {
         let assembler = PromptAssembler::new(ContextFormat::Json);
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
@@ -280,7 +279,7 @@ mod tests {
     fn test_assemble_system_prompt_with_search_results() {
         let assembler = PromptAssembler::new(ContextFormat::Markdown);
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let results = vec![SearchResult {
             title: "Test Result".to_string(),
@@ -336,10 +335,10 @@ mod tests {
     fn test_assemble_with_memory_and_search() {
         let assembler = PromptAssembler::new(ContextFormat::Markdown);
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let memory_anchor =
-            MemoryContextAnchor::with_timestamp("com.app".to_string(), "Window".to_string(), 1000);
+            MemoryContextAnchor::with_timestamp("Window".to_string(), 1000);
 
         let memories = vec![MemoryEntry {
             id: "test-id".to_string(),
@@ -457,7 +456,7 @@ mod tests {
 
         // Create a context with memory
         let memory_anchor =
-            MemoryContextAnchor::with_timestamp("com.app".to_string(), "Window".to_string(), 1000);
+            MemoryContextAnchor::with_timestamp("Window".to_string(), 1000);
 
         let memories = vec![MemoryEntry {
             id: "test-id".to_string(),

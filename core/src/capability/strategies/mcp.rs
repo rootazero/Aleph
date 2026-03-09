@@ -202,7 +202,7 @@ mod tests {
 
         let strategy = McpStrategy::new();
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
             .config(

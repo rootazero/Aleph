@@ -147,8 +147,6 @@ mod tests {
     #[test]
     fn test_builder_basic() {
         let anchor = ContextAnchor::new(
-            "com.apple.Notes".to_string(),
-            "Notes".to_string(),
             Some("Document.txt".to_string()),
         );
 
@@ -173,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_builder_with_custom_temperature() {
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
@@ -189,10 +187,10 @@ mod tests {
     fn test_builder_with_memory() {
         use crate::memory::ContextAnchor as MemoryContextAnchor;
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let memory_anchor =
-            MemoryContextAnchor::now("com.app".to_string(), "Window Title".to_string());
+            MemoryContextAnchor::now("Window Title".to_string());
 
         let memories = vec![MemoryEntry {
             id: "test-id".to_string(),
@@ -234,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_builder_missing_config() {
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let result = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
@@ -247,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_builder_missing_user_input() {
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let result = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
@@ -268,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_builder_multiple_capabilities() {
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)

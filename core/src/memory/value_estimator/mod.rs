@@ -27,7 +27,7 @@ mod tests {
         // High-value: user preference
         let entry = MemoryEntry::new(
             uuid::Uuid::new_v4().to_string(),
-            ContextAnchor::now("test".to_string(), "test".to_string()),
+            ContextAnchor::now("test".to_string()),
             "I prefer using Rust for systems programming".to_string(),
             "That's a great choice!".to_string(),
         );
@@ -43,7 +43,7 @@ mod tests {
         // Low-value: greeting
         let entry = MemoryEntry::new(
             uuid::Uuid::new_v4().to_string(),
-            ContextAnchor::now("test".to_string(), "test".to_string()),
+            ContextAnchor::now("test".to_string()),
             "Hello".to_string(),
             "Hi there!".to_string(),
         );
@@ -59,7 +59,7 @@ mod tests {
         // Medium-value: question and answer
         let entry = MemoryEntry::new(
             uuid::Uuid::new_v4().to_string(),
-            ContextAnchor::now("test".to_string(), "test".to_string()),
+            ContextAnchor::now("test".to_string()),
             "What is the capital of France?".to_string(),
             "The capital of France is Paris.".to_string(),
         );

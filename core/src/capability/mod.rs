@@ -460,7 +460,7 @@ mod tests {
     async fn test_execute_all_no_capabilities() {
         let executor = CapabilityExecutor::new(None, None);
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
@@ -477,7 +477,7 @@ mod tests {
     async fn test_execute_all_with_mcp_capability() {
         let executor = CapabilityExecutor::new(None, None);
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
@@ -499,7 +499,7 @@ mod tests {
     async fn test_execute_memory_no_database() {
         let executor = CapabilityExecutor::new(None, None);
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
@@ -520,7 +520,7 @@ mod tests {
     async fn test_capability_priority_ordering() {
         let executor = CapabilityExecutor::new(None, None);
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         // Test that capabilities are executed in order: Memory, Mcp, Skills
         let payload = PayloadBuilder::new()
@@ -547,7 +547,7 @@ mod tests {
         // Test that CapabilityExecutor can be created with memory db
         let executor = CapabilityExecutor::new(None, None);
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
@@ -568,7 +568,7 @@ mod tests {
         // Test that CapabilityExecutor can be created
         let executor = CapabilityExecutor::new(None, None);
 
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+        let anchor = ContextAnchor::new(None);
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)

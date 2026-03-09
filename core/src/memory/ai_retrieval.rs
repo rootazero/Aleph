@@ -403,7 +403,7 @@ mod tests {
     fn create_test_memory(id: &str, user_input: &str, ai_output: &str) -> MemoryEntry {
         MemoryEntry::new(
             id.to_string(),
-            ContextAnchor::now("com.test.app".to_string(), "Test".to_string()),
+            ContextAnchor::now("Test".to_string()),
             user_input.to_string(),
             ai_output.to_string(),
         )
