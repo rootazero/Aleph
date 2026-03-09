@@ -1,0 +1,155 @@
+[plugin]
+id = "llm-task"
+name = "LLM Task Runner"
+version = "0.1.0"
+description = "Batch LLM operations: parallel prompts, map, chain, and evaluate"
+kind = "nodejs"
+entry = "src/index.js"
+
+[permissions]
+network = true
+filesystem = "read"
+
+# -- Tool: llm_batch --------------------------------------------------------
+
+[[tools]]
+name = "llm_batch"
+description = "Send multiple prompts to an LLM in parallel with concurrency control"
+handler = "llmBatch"
+
+[tools.parameters]
+type = "object"
+required = ["prompts"]
+
+[tools.parameters.properties.prompts]
+type = "array"
+description = "Array of prompt strings to send in parallel"
+
+[tools.parameters.properties.prompts.items]
+type = "string"
+
+[tools.parameters.properties.model]
+type = "string"
+description = "Model identifier"
+default = "claude-sonnet-4-5-20241022"
+
+[tools.parameters.properties.max_concurrent]
+type = "number"
+description = "Maximum number of concurrent requests"
+default = 5
+
+[tools.parameters.properties.temperature]
+type = "number"
+description = "Sampling temperature"
+default = 0.7
+
+# -- Tool: llm_map -----------------------------------------------------------
+
+[[tools]]
+name = "llm_map"
+description = "Apply a prompt template to each item in an array, processing in parallel"
+handler = "llmMap"
+
+[tools.parameters]
+type = "object"
+required = ["template", "items"]
+
+[tools.parameters.properties.template]
+type = "string"
+description = "Prompt template with {{item}} placeholder"
+
+[tools.parameters.properties.items]
+type = "array"
+description = "Array of items to substitute into the template"
+
+[tools.parameters.properties.items.items]
+type = "string"
+
+[tools.parameters.properties.model]
+type = "string"
+description = "Model identifier"
+default = "claude-sonnet-4-5-20241022"
+
+[tools.parameters.properties.max_concurrent]
+type = "number"
+description = "Maximum number of concurrent requests"
+default = 3
+
+[tools.parameters.properties.temperature]
+type = "number"
+description = "Sampling temperature"
+default = 0.7
+
+# -- Tool: llm_chain ---------------------------------------------------------
+
+[[tools]]
+name = "llm_chain"
+description = "Sequential LLM calls where each step's output feeds into the next step's input"
+handler = "llmChain"
+
+[tools.parameters]
+type = "object"
+required = ["steps"]
+
+[tools.parameters.properties.steps]
+type = "array"
+description = "Array of step objects with prompt and optional model"
+
+[[tools.parameters.properties.steps.items.properties]]
+
+[tools.parameters.properties.steps.items]
+type = "object"
+required = ["prompt"]
+
+[tools.parameters.properties.steps.items.properties.prompt]
+type = "string"
+description = "Prompt template with {{input}} placeholder for previous output"
+
+[tools.parameters.properties.steps.items.properties.model]
+type = "string"
+description = "Optional model override for this step"
+
+[tools.parameters.properties.initial_input]
+type = "string"
+description = "Initial input text for the first step"
+
+# -- Tool: llm_evaluate ------------------------------------------------------
+
+[[tools]]
+name = "llm_evaluate"
+description = "Test a prompt template against expected outputs using an LLM judge"
+handler = "llmEvaluate"
+
+[tools.parameters]
+type = "object"
+required = ["test_cases", "prompt_template"]
+
+[tools.parameters.properties.test_cases]
+type = "array"
+description = "Array of test case objects with input and expected output"
+
+[tools.parameters.properties.test_cases.items]
+type = "object"
+required = ["input", "expected"]
+
+[tools.parameters.properties.test_cases.items.properties.input]
+type = "string"
+description = "Test input"
+
+[tools.parameters.properties.test_cases.items.properties.expected]
+type = "string"
+description = "Expected output"
+
+[tools.parameters.properties.prompt_template]
+type = "string"
+description = "Prompt template with {{input}} placeholder"
+
+[tools.parameters.properties.model]
+type = "string"
+description = "Model for generating responses"
+default = "claude-sonnet-4-5-20241022"
+
+[tools.parameters.properties.judge_model]
+type = "string"
+description = "Model for judging response quality"
+default = "claude-sonnet-4-5-20241022"

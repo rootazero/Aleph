@@ -1,0 +1,10 @@
+{
+  "name": "@aleph/llm-task",
+  "version": "0.1.0",
+  "description": "Aleph plugin — batch LLM operations with map, chain, and evaluate",
+  "main": "src/index.js",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js"
+  }
+}
