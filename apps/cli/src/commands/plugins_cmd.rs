@@ -14,7 +14,7 @@ use crate::output;
 
 /// Well-known URL for the plugin index
 const PLUGIN_INDEX_URL: &str =
-    "https://raw.githubusercontent.com/rootazero/aleph-plugins/main/plugins-index.json";
+    "https://raw.githubusercontent.com/rootazero/Aleph-plugins/main/plugins-index.json";
 
 /// Cache TTL for the plugin index (1 hour)
 const INDEX_CACHE_TTL: Duration = Duration::from_secs(3600);
@@ -589,8 +589,8 @@ mod tests {
                 "description": "System health monitoring",
                 "version": "0.1.0",
                 "kind": "nodejs",
-                "repo": "github:rootazero/aleph-plugins",
-                "download_url": "https://github.com/rootazero/aleph-plugins/releases/download/diagnostics-v0.1.0/diagnostics.aleph-plugin.zip",
+                "repo": "github:rootazero/Aleph-plugins",
+                "download_url": "https://github.com/rootazero/Aleph-plugins/releases/download/diagnostics-v0.1.0/diagnostics.aleph-plugin.zip",
                 "keywords": ["diagnostics", "health"]
             }
         ]"#;
@@ -630,7 +630,7 @@ mod tests {
                 description: "System health monitoring".into(),
                 version: "0.1.0".into(),
                 kind: "nodejs".into(),
-                repo: "github:rootazero/aleph-plugins".into(),
+                repo: "github:rootazero/Aleph-plugins".into(),
                 download_url: "https://example.com/diag.zip".into(),
                 keywords: vec!["health".into(), "metrics".into()],
             },
@@ -640,7 +640,7 @@ mod tests {
                 description: "Code diff viewing".into(),
                 version: "0.1.0".into(),
                 kind: "wasm".into(),
-                repo: "github:rootazero/aleph-plugins".into(),
+                repo: "github:rootazero/Aleph-plugins".into(),
                 download_url: "https://example.com/diff.zip".into(),
                 keywords: vec!["diff".into(), "code".into()],
             },
@@ -694,16 +694,16 @@ mod tests {
     #[test]
     fn github_source_parsing() {
         // owner/repo format
-        let (owner, repo, name) = parse_github_source("github:rootazero/aleph-plugins").unwrap();
+        let (owner, repo, name) = parse_github_source("github:rootazero/Aleph-plugins").unwrap();
         assert_eq!(owner, "rootazero");
-        assert_eq!(repo, "aleph-plugins");
+        assert_eq!(repo, "Aleph-plugins");
         assert!(name.is_none());
 
         // owner/repo/plugin-name format
         let (owner, repo, name) =
-            parse_github_source("github:rootazero/aleph-plugins/diagnostics").unwrap();
+            parse_github_source("github:rootazero/Aleph-plugins/diagnostics").unwrap();
         assert_eq!(owner, "rootazero");
-        assert_eq!(repo, "aleph-plugins");
+        assert_eq!(repo, "Aleph-plugins");
         assert_eq!(name.unwrap(), "diagnostics");
 
         // Invalid format

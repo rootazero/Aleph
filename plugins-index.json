@@ -5,8 +5,8 @@
     "description": "System health monitoring, performance diagnostics, and OpenTelemetry trace collection",
     "version": "0.1.0",
     "kind": "nodejs",
-    "repo": "github:rootazero/aleph-plugins",
-    "download_url": "https://github.com/rootazero/aleph-plugins/releases/download/diagnostics-v0.1.0/diagnostics.aleph-plugin.zip",
+    "repo": "github:rootazero/Aleph-plugins",
+    "download_url": "https://github.com/rootazero/Aleph-plugins/releases/download/diagnostics-v0.1.0/diagnostics.aleph-plugin.zip",
     "keywords": ["diagnostics", "health", "metrics", "opentelemetry"]
   },
   {
@@ -15,8 +15,8 @@
     "description": "Batch LLM operations: parallel prompts, map/reduce over data, prompt chaining",
     "version": "0.1.0",
     "kind": "nodejs",
-    "repo": "github:rootazero/aleph-plugins",
-    "download_url": "https://github.com/rootazero/aleph-plugins/releases/download/llm-task-v0.1.0/llm-task.aleph-plugin.zip",
+    "repo": "github:rootazero/Aleph-plugins",
+    "download_url": "https://github.com/rootazero/Aleph-plugins/releases/download/llm-task-v0.1.0/llm-task.aleph-plugin.zip",
     "keywords": ["llm", "batch", "ai", "prompt"]
   },
   {
@@ -25,8 +25,8 @@
     "description": "Memory usage analytics: fact distribution, decay stats, compression metrics",
     "version": "0.1.0",
     "kind": "wasm",
-    "repo": "github:rootazero/aleph-plugins",
-    "download_url": "https://github.com/rootazero/aleph-plugins/releases/download/memory-analytics-v0.1.0/memory-analytics.aleph-plugin.zip",
+    "repo": "github:rootazero/Aleph-plugins",
+    "download_url": "https://github.com/rootazero/Aleph-plugins/releases/download/memory-analytics-v0.1.0/memory-analytics.aleph-plugin.zip",
     "keywords": ["memory", "analytics", "statistics"]
   },
   {
@@ -35,8 +35,8 @@
     "description": "Code diff viewing: unified diffs, side-by-side comparison",
     "version": "0.1.0",
     "kind": "wasm",
-    "repo": "github:rootazero/aleph-plugins",
-    "download_url": "https://github.com/rootazero/aleph-plugins/releases/download/diff-viewer-v0.1.0/diff-viewer.aleph-plugin.zip",
+    "repo": "github:rootazero/Aleph-plugins",
+    "download_url": "https://github.com/rootazero/Aleph-plugins/releases/download/diff-viewer-v0.1.0/diff-viewer.aleph-plugin.zip",
     "keywords": ["diff", "code", "compare"]
   },
   {
@@ -45,8 +45,8 @@
     "description": "Voice calling with WebRTC/SIP: initiate calls, manage sessions, real-time transcription",
     "version": "0.1.0",
     "kind": "nodejs",
-    "repo": "github:rootazero/aleph-plugins",
-    "download_url": "https://github.com/rootazero/aleph-plugins/releases/download/voice-call-v0.1.0/voice-call.aleph-plugin.zip",
+    "repo": "github:rootazero/Aleph-plugins",
+    "download_url": "https://github.com/rootazero/Aleph-plugins/releases/download/voice-call-v0.1.0/voice-call.aleph-plugin.zip",
     "keywords": ["voice", "call", "webrtc", "sip", "transcription"]
   },
   {
@@ -55,8 +55,8 @@
     "description": "Android phone control via ADB: screen interaction, app management, file transfer",
     "version": "0.1.0",
     "kind": "nodejs",
-    "repo": "github:rootazero/aleph-plugins",
-    "download_url": "https://github.com/rootazero/aleph-plugins/releases/download/phone-control-v0.1.0/phone-control.aleph-plugin.zip",
+    "repo": "github:rootazero/Aleph-plugins",
+    "download_url": "https://github.com/rootazero/Aleph-plugins/releases/download/phone-control-v0.1.0/phone-control.aleph-plugin.zip",
     "keywords": ["phone", "android", "adb", "mobile"]
   }
 ]
