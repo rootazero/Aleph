@@ -10,6 +10,8 @@
 use async_trait::async_trait;
 use std::collections::VecDeque;
 
+use super::interrupt::{InterruptSender, InterruptSignal};
+
 /// Queue mode determines how new messages are handled while agent is busy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -78,6 +80,44 @@ impl SessionQueue for FollowupQueue {
     }
 }
 
+/// Steering queue: interrupts the agent loop when a new message arrives.
+///
+/// When `enqueue` is called, SteerQueue sends an [`InterruptSignal::NewMessage`]
+/// through the interrupt channel AND stores the message for later retrieval.
+/// This allows the agent loop to cancel its current tool execution and re-think
+/// with the new user intent.
+pub struct SteerQueue {
+    interrupt_tx: InterruptSender,
+    pending: VecDeque<String>,
+}
+
+impl SteerQueue {
+    pub fn new(interrupt_tx: InterruptSender) -> Self {
+        Self {
+            interrupt_tx,
+            pending: VecDeque::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl SessionQueue for SteerQueue {
+    async fn enqueue(&mut self, content: String) {
+        self.interrupt_tx.send(InterruptSignal::NewMessage {
+            content: content.clone(),
+        });
+        self.pending.push_back(content);
+    }
+
+    async fn next(&mut self) -> Option<String> {
+        self.pending.pop_front()
+    }
+
+    fn mode(&self) -> QueueMode {
+        QueueMode::Steer
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +175,32 @@ mod tests {
     fn test_followup_queue_mode() {
         let queue = FollowupQueue::new();
         assert_eq!(queue.mode(), QueueMode::Followup);
+    }
+
+    #[tokio::test]
+    async fn test_steer_queue_sends_interrupt() {
+        use crate::agent_loop::InterruptChannel;
+
+        let (interrupt_tx, mut interrupt_rx) = InterruptChannel::new();
+        let mut queue = SteerQueue::new(interrupt_tx);
+
+        queue.enqueue("change of plan".into()).await;
+
+        let signal: Option<InterruptSignal> = interrupt_rx.try_recv();
+        assert!(signal.is_some());
+        match signal.unwrap() {
+            InterruptSignal::NewMessage { content } => {
+                assert_eq!(content, "change of plan");
+            }
+        }
+
+        assert_eq!(queue.next().await, Some("change of plan".to_string()));
+    }
+
+    #[test]
+    fn test_steer_queue_mode() {
+        let (interrupt_tx, _rx) = crate::agent_loop::InterruptChannel::new();
+        let queue = SteerQueue::new(interrupt_tx);
+        assert_eq!(queue.mode(), QueueMode::Steer);
     }
 }
