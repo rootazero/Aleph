@@ -285,6 +285,28 @@ async fn then_headers_identical(w: &mut AlephWorld) {
     );
 }
 
+#[then("the first part headers should be different")]
+async fn then_headers_different(w: &mut AlephWorld) {
+    let ctx = w.thinker.as_ref().expect("Thinker context not initialized");
+
+    let first_header = ctx.cached_parts
+        .as_ref()
+        .and_then(|v: &Vec<_>| v.first())
+        .map(|p| &p.content)
+        .expect("No first cached parts");
+
+    let second_header = ctx.second_cached_parts
+        .as_ref()
+        .and_then(|v: &Vec<_>| v.first())
+        .map(|p| &p.content)
+        .expect("No second cached parts");
+
+    assert_ne!(
+        first_header, second_header,
+        "Headers should be different (stable part includes tools)"
+    );
+}
+
 #[then("the dynamic parts should be different")]
 async fn then_dynamic_parts_different(w: &mut AlephWorld) {
     let ctx = w.thinker.as_ref().expect("Thinker context not initialized");

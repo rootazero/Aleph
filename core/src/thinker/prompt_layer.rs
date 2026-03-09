@@ -10,6 +10,18 @@ use super::prompt_mode::PromptMode;
 use super::soul::SoulManifest;
 use super::workspace_files::WorkspaceFiles;
 
+/// Whether a layer's content is stable across requests or changes per request.
+///
+/// Used by the prompt cache optimisation to partition the system prompt
+/// into a stable prefix (cacheable) and a dynamic suffix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerStability {
+    /// Content rarely changes between requests (persona, tools, skills).
+    Stable,
+    /// Content changes per request (time, session context, memory).
+    Dynamic,
+}
+
 /// Which assembly path a layer participates in.
 ///
 /// The pipeline filters layers by the active path so that only
@@ -164,6 +176,16 @@ pub trait PromptLayer: Send + Sync {
     /// that should be excluded from Compact or Minimal prompts.
     fn supports_mode(&self, _mode: PromptMode) -> bool {
         true
+    }
+
+    /// Whether this layer produces stable or dynamic content.
+    ///
+    /// Stable layers are grouped before dynamic layers in the assembled
+    /// prompt so that the stable prefix can be cached by the LLM provider.
+    /// The default is [`LayerStability::Stable`]; override to `Dynamic`
+    /// for layers whose output changes per request.
+    fn stability(&self) -> LayerStability {
+        LayerStability::Stable
     }
 
     /// Append this layer's content to `output`.

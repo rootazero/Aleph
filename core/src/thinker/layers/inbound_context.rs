@@ -1,13 +1,14 @@
-//! InboundContextLayer — per-request dynamic context injection (priority 55)
+//! InboundContextLayer — per-request dynamic context injection (priority 1700)
 
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 pub struct InboundContextLayer;
 
 impl PromptLayer for InboundContextLayer {
     fn name(&self) -> &'static str { "inbound_context" }
-    fn priority(&self) -> u32 { 55 }
+    fn priority(&self) -> u32 { 1700 }
+    fn stability(&self) -> LayerStability { LayerStability::Dynamic }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Soul, AssemblyPath::Context, AssemblyPath::Cached]
     }
@@ -35,7 +36,7 @@ mod tests {
     fn metadata() {
         let layer = InboundContextLayer;
         assert_eq!(layer.name(), "inbound_context");
-        assert_eq!(layer.priority(), 55);
+        assert_eq!(layer.priority(), 1700);
     }
 
     #[test]

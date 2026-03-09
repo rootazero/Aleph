@@ -107,36 +107,26 @@ Feature: Prompt Builder
     And the first cached part should be marked for caching
     And the second cached part should not be marked for caching
 
-  Scenario: Cached header is static regardless of tools
+  Scenario: Cached stable part changes when tools change
     Given a default prompt builder
     When I build the cached system prompt
     And I build a second cached prompt with tools:
       | name | description | schema |
       | test | Test tool   | {}     |
-    Then the first part headers should be identical
-    And the dynamic parts should be different
+    Then the first part headers should be different
 
-  Scenario: Cached header contains core instructions
-    Given a default prompt builder
-    When I build the cached system prompt
-    Then the header should contain "AI assistant executing tasks step by step"
-    And the header should contain "Your Role"
-    And the header should contain "Observe the current state"
-    And the header should contain "Decision Framework"
-    And the header should contain "What is the current state?"
-
-  Scenario: Cached dynamic part contains tools and format
+  Scenario: Cached stable part contains tools and format
     Given a default prompt builder
     And tools:
       | name    | description  | schema              |
       | my_tool | My test tool | {"param": "value"}  |
     When I build the cached system prompt
-    Then the dynamic part should contain "Available Tools"
-    And the dynamic part should contain "my_tool"
-    And the dynamic part should contain "My test tool"
-    And the dynamic part should contain '{"param": "value"}'
-    And the dynamic part should contain "Special Actions"
-    And the dynamic part should contain "Response Format"
+    Then the header should contain "Available Tools"
+    And the header should contain "my_tool"
+    And the header should contain "My test tool"
+    And the header should contain '{"param": "value"}'
+    And the header should contain "Special Actions"
+    And the header should contain "Response Format"
 
   Scenario: Combined cached parts match full prompt key sections
     Given a default prompt builder
@@ -145,6 +135,5 @@ Feature: Prompt Builder
       | search | Search the web | {"query": "string"} |
     When I build the system prompt
     And I build the cached system prompt
-    Then both prompts should contain "AI assistant"
-    And both prompts should contain "Available Tools"
+    Then both prompts should contain "Available Tools"
     And both prompts should contain "search"

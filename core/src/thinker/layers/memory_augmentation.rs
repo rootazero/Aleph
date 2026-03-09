@@ -4,7 +4,7 @@
 //! The async retrieval happens before prompt assembly; this layer only
 //! formats and injects the pre-fetched results.
 
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 pub struct MemoryAugmentationLayer;
@@ -15,7 +15,11 @@ impl PromptLayer for MemoryAugmentationLayer {
     }
 
     fn priority(&self) -> u32 {
-        1575
+        1740
+    }
+
+    fn stability(&self) -> LayerStability {
+        LayerStability::Dynamic
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
@@ -55,7 +59,7 @@ mod tests {
     fn metadata() {
         let layer = MemoryAugmentationLayer;
         assert_eq!(layer.name(), "memory_augmentation");
-        assert_eq!(layer.priority(), 1575);
+        assert_eq!(layer.priority(), 1740);
         assert!(layer.paths().contains(&AssemblyPath::Basic));
         assert!(layer.paths().contains(&AssemblyPath::Soul));
     }
