@@ -22,6 +22,11 @@ use crate::builtin_tools::{
     BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, EscalateTaskTool,
     FileOpsTool, ImageGenerateTool, PdfGenerateTool, ReadSkillTool, SearchTool, WebFetchTool,
 };
+use crate::builtin_tools::browser_tools::{
+    BrowserOpenTool, BrowserClickTool, BrowserTypeTool, BrowserScreenshotTool,
+    BrowserSnapshotTool, BrowserNavigateTool, BrowserTabsTool, BrowserSelectTool,
+    BrowserEvaluateTool, BrowserFillFormTool, BrowserProfileTool,
+};
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::tools::AlephToolDyn;
 
@@ -165,6 +170,62 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Terminate a running sub-agent",
         requires_config: true, // Requires sub_agent_dispatcher + sub_agent_registry
     },
+    // Browser tools — always available, share a ProfileManager
+    BuiltinToolDefinition {
+        name: "browser_open",
+        description: "Open URL in browser",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_click",
+        description: "Click element in browser",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_type",
+        description: "Type text in browser element",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_screenshot",
+        description: "Capture browser screenshot",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_snapshot",
+        description: "Get browser ARIA accessibility tree",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_navigate",
+        description: "Navigate browser back/forward/refresh",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_tabs",
+        description: "List, switch, or close browser tabs",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_select",
+        description: "Select dropdown option in browser",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_evaluate",
+        description: "Execute JavaScript in browser",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_fill_form",
+        description: "Fill multiple form fields in browser",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_profile",
+        description: "List and manage browser profiles",
+        requires_config: false,
+    },
 ];
 
 /// Create a boxed tool instance by name
@@ -236,6 +297,32 @@ pub fn create_tool_boxed(
         // created dynamically in BuiltinToolRegistry::with_config().
         "subagent_spawn" | "subagent_steer" | "subagent_kill" => None,
         "escalate_task" => Some(Box::new(EscalateTaskTool)),
+        // Browser tools — create ProfileManager from config or use default
+        "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
+        | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
+        | "browser_evaluate" | "browser_fill_form" | "browser_profile" => {
+            let manager = config
+                .and_then(|cfg| cfg.browser_profile_manager.clone())
+                .unwrap_or_else(|| {
+                    Arc::new(crate::browser::manager::ProfileManager::new(
+                        crate::browser::profile::BrowserSystemConfig::default(),
+                    ))
+                });
+            match name {
+                "browser_open" => Some(Box::new(BrowserOpenTool::new(manager))),
+                "browser_click" => Some(Box::new(BrowserClickTool::new(manager))),
+                "browser_type" => Some(Box::new(BrowserTypeTool::new(manager))),
+                "browser_screenshot" => Some(Box::new(BrowserScreenshotTool::new(manager))),
+                "browser_snapshot" => Some(Box::new(BrowserSnapshotTool::new(manager))),
+                "browser_navigate" => Some(Box::new(BrowserNavigateTool::new(manager))),
+                "browser_tabs" => Some(Box::new(BrowserTabsTool::new(manager))),
+                "browser_select" => Some(Box::new(BrowserSelectTool::new(manager))),
+                "browser_evaluate" => Some(Box::new(BrowserEvaluateTool::new(manager))),
+                "browser_fill_form" => Some(Box::new(BrowserFillFormTool::new(manager))),
+                "browser_profile" => Some(Box::new(BrowserProfileTool::new(manager))),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -273,6 +360,19 @@ mod tests {
         assert!(names.contains(&"generate_image".to_string()));
         assert!(names.contains(&"read_skill".to_string()));
         assert!(names.contains(&"list_skills".to_string()));
+
+        // Verify browser tools
+        assert!(names.contains(&"browser_open".to_string()));
+        assert!(names.contains(&"browser_click".to_string()));
+        assert!(names.contains(&"browser_type".to_string()));
+        assert!(names.contains(&"browser_screenshot".to_string()));
+        assert!(names.contains(&"browser_snapshot".to_string()));
+        assert!(names.contains(&"browser_navigate".to_string()));
+        assert!(names.contains(&"browser_tabs".to_string()));
+        assert!(names.contains(&"browser_select".to_string()));
+        assert!(names.contains(&"browser_evaluate".to_string()));
+        assert!(names.contains(&"browser_fill_form".to_string()));
+        assert!(names.contains(&"browser_profile".to_string()));
     }
 
     #[test]
@@ -318,6 +418,19 @@ mod tests {
 
         // Test tool requiring config (should return None without config)
         assert!(create_tool_boxed("generate_image", None).is_none());
+
+        // Test browser tools (always available, no config required)
+        assert!(create_tool_boxed("browser_open", None).is_some());
+        assert!(create_tool_boxed("browser_click", None).is_some());
+        assert!(create_tool_boxed("browser_type", None).is_some());
+        assert!(create_tool_boxed("browser_screenshot", None).is_some());
+        assert!(create_tool_boxed("browser_snapshot", None).is_some());
+        assert!(create_tool_boxed("browser_navigate", None).is_some());
+        assert!(create_tool_boxed("browser_tabs", None).is_some());
+        assert!(create_tool_boxed("browser_select", None).is_some());
+        assert!(create_tool_boxed("browser_evaluate", None).is_some());
+        assert!(create_tool_boxed("browser_fill_form", None).is_some());
+        assert!(create_tool_boxed("browser_profile", None).is_some());
     }
 
     #[test]

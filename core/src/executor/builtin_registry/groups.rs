@@ -44,6 +44,23 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
         tools: &["desktop", "config_read", "config_update"],
     },
     ToolGroup {
+        id: "browser",
+        name: "浏览器",
+        tools: &[
+            "browser_open",
+            "browser_click",
+            "browser_type",
+            "browser_screenshot",
+            "browser_snapshot",
+            "browser_navigate",
+            "browser_tabs",
+            "browser_select",
+            "browser_evaluate",
+            "browser_fill_form",
+            "browser_profile",
+        ],
+    },
+    ToolGroup {
         id: "agent_mgmt",
         name: "Agent 管理",
         tools: &[

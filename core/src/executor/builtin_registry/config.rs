@@ -45,4 +45,6 @@ pub struct BuiltinToolConfig {
     pub event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Agent manager for persistent agent definition storage (TOML config)
     pub agent_manager: Option<Arc<crate::config::agent_manager::AgentManager>>,
+    /// Browser profile manager for browser_* tools
+    pub browser_profile_manager: Option<Arc<crate::browser::manager::ProfileManager>>,
 }
