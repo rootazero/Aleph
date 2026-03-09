@@ -56,7 +56,7 @@ use crate::extension::types::{DirectCommandResult, PluginKind};
 ///
 /// - `NodeJs`: JavaScript/TypeScript plugins using Node.js subprocess
 /// - `Wasm`: WebAssembly plugins using Extism
-/// - `Static`: Static content plugins (handled by ComponentLoader, not this loader)
+/// - `Static`: Static content plugins (handled by ContentLoader, not this loader)
 ///
 /// # Thread Safety and Write Lock Requirement
 ///
@@ -145,7 +145,7 @@ impl PluginLoader {
     ///
     /// # Static Plugins
     ///
-    /// Static plugins (PluginKind::Static) are handled by the ComponentLoader,
+    /// Static plugins (PluginKind::Static) are handled by the ContentLoader,
     /// not this runtime loader. Calling this method with a static plugin
     /// returns `Ok(())` without any action.
     pub fn load_plugin(
@@ -163,7 +163,7 @@ impl PluginLoader {
             PluginKind::NodeJs => self.load_nodejs_plugin(manifest, registry),
             PluginKind::Wasm => self.load_wasm_plugin(manifest, registry),
             PluginKind::Static => {
-                // Static plugins are handled by ComponentLoader, not runtime
+                // Static plugins are handled by ContentLoader, not runtime
                 info!(
                     "Plugin {} is static, skipping runtime loading",
                     manifest.id

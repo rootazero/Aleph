@@ -9,7 +9,7 @@ use crate::sync_primitives::Arc;
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::handlers::parse_params;
-use crate::extension::{ComponentLoader, ExtensionManager};
+use crate::extension::{ContentLoader, ExtensionManager};
 
 use super::types::*;
 
@@ -122,7 +122,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
     match git2::Repository::clone(&params.url, &dest_path) {
         Ok(_) => {
             // Load the installed plugin to get info
-            let loader = ComponentLoader::new();
+            let loader = ContentLoader::new();
             match loader.load_plugin(&dest_path).await {
                 Ok(plugin) => {
                     let info = PluginInfoJson::from(plugin.info());

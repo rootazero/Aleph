@@ -43,7 +43,7 @@ pub async fn handle_plugins_list() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Handle plugins install command
 pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use alephcore::extension::{default_plugins_dir, ComponentLoader};
+    use alephcore::extension::{default_plugins_dir, ContentLoader};
 
     println!("Installing plugin from {}...", url);
 
@@ -74,7 +74,7 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
             println!("Repository cloned successfully.");
 
             // Try to load the plugin to verify it's valid
-            let loader = ComponentLoader::new();
+            let loader = ContentLoader::new();
 
             match loader.load_plugin(&dest_path).await {
                 Ok(plugin) => {
