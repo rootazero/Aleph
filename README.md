@@ -165,21 +165,22 @@ Aleph implements **first-class MCP** with three transport layers:
 
 Plus: `McpResourceManager` (resource discovery), `McpPromptManager` (prompt templates), `OAuthStorage` (token persistence), and `SamplingCallback` (LLM sampling support).
 
-### Intent Detection: 5-Layer Pipeline vs Simple Routing
+### Intent Detection: Unified LLM-Forward Pipeline vs Simple Routing
 
 OpenClaw routes messages based on session configuration and agent assignment.
 
-Aleph uses a **5-layer intent detection pipeline**:
+Aleph originally designed a 5-layer intent detection pipeline with per-language keyword rules. In practice, maintaining keyword dictionaries across Chinese, English, German, Japanese, Korean, and more turned out to be an enormous and brittle effort. The system was refactored into a **unified, LLM-forward pipeline** (`UnifiedIntentClassifier`) where the heavy lifting is done by AI:
 
-| Layer | Name | Method |
-|-------|------|--------|
-| L0 | Commands | Directive parsing (abort, reset, help) |
-| L1 | Structural | Linguistic analysis (question? statement? directive?) |
-| L2 | Keywords | Fast keyword matching with `KeywordIndex` |
-| L3 | AI | LLM-based semantic classification |
-| L4 | Default | Conversational fallback |
+| Layer | Name | What It Does |
+|-------|------|-------------|
+| Abort | `AbortDetector` | Exact-match multilingual stop words (11 languages: EN/ZH/JA/KO/RU/DE/FR/ES/PT/AR/HI). Fast, no LLM needed |
+| L0 | Slash commands | Built-in commands (`/screenshot`, `/ocr`, `/search`, etc.) + runtime-registered directives (`/think`, `/model`, `/notools`) |
+| L1 | `StructuralDetector` | Pattern matching for file paths (Unix/Windows), URLs, context signals (selected file, clipboard). No language dependency |
+| L2 | `KeywordIndex` | **Optional** weighted keyword matching with CJK-aware tokenization. Kept as fast-path shortcut, not relied upon |
+| L3 | `AiBinaryClassifier` | **Core decision maker** — LLM binary classification (execute vs converse) with 3s timeout and confidence threshold |
+| L4 | Default fallback | If all layers abstain, falls back to execute (confidence 0.5) or converse |
 
-With `ConfidenceCalibrator` for score normalization, `IntentCache` for memoization, and `RollbackManager` for undo.
+Early-exit optimization: first layer to match wins. The pipeline output is a single `IntentResult` enum (DirectTool / Execute / Converse / Abort) that carries the detection layer and confidence metadata. Optional `ConfidenceCalibrator` applies post-pipeline tuning based on history and context.
 
 ### Resilience: State Recovery vs None
 
