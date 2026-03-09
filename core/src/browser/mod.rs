@@ -3,6 +3,7 @@ pub mod discovery;
 pub mod error;
 pub mod manager;
 pub mod network_policy;
+pub mod playwright_bridge;
 pub mod profile;
 pub mod runtime;
 pub mod snapshot;
