@@ -215,22 +215,36 @@ To be fair:
 - **Simpler setup** — `npm install` vs Rust toolchain
 - **Mobile nodes** — iOS/Android companion apps with camera/location/canvas
 
-## Getting Started
+## Installation
 
-### Prerequisites
-
-- **Rust** 1.92+ — install via [rustup](https://rustup.rs/)
-- **just** — `cargo install just`
-- Optional: `wasm-bindgen-cli` + `npm` (for WASM panel build)
-- Optional: Xcode + [XcodeGen](https://github.com/yonaskolb/XcodeGen) (for macOS native app)
-
-### Quick Start
+### macOS / Linux
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash
+```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex
+```
+
+The installer automatically detects your platform and architecture (x86_64 / ARM64), downloads the latest release binary, installs it to your PATH, and optionally sets up auto-start as a system service.
+
+After installation, run:
+
+```bash
+aleph
+```
+
+### Build from Source
+
+If you prefer to build from source:
+
+```bash
+# Prerequisites: Rust 1.92+, just (cargo install just)
 git clone https://github.com/rootazero/Aleph.git
 cd Aleph
-
-# Start the server
 cargo run --bin aleph
 ```
 
