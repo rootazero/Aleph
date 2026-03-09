@@ -95,11 +95,6 @@ impl ConversationSession {
         (now - self.last_activity) > timeout_seconds
     }
 
-    /// Get the app bundle ID where this session started.
-    pub fn origin_app(&self) -> &str {
-        &self.context.app_bundle_id
-    }
-
     /// Get the window title where this session started.
     pub fn origin_window(&self) -> Option<&str> {
         self.context.window_title.as_deref()
@@ -112,7 +107,6 @@ mod tests {
 
     fn create_test_context() -> CapturedContext {
         CapturedContext {
-            app_bundle_id: "com.apple.Notes".to_string(),
             window_title: Some("Test Note".to_string()),
             attachments: None,
             topic_id: None,
@@ -137,7 +131,6 @@ mod tests {
         assert!(session.turns.is_empty());
         assert!(session.active);
         assert_eq!(session.turn_count(), 0);
-        assert_eq!(session.origin_app(), "com.apple.Notes");
     }
 
     #[test]

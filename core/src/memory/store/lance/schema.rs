@@ -111,11 +111,10 @@ pub fn graph_edges_schema() -> Arc<Schema> {
     ]))
 }
 
-/// Schema for the `memories` table (11 columns).
+/// Schema for the `memories` table (10 columns).
 pub fn memories_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
-        Field::new("app_bundle_id", DataType::Utf8, false),
         Field::new("window_title", DataType::Utf8, false),
         Field::new("user_input", DataType::Utf8, false),
         Field::new("ai_output", DataType::Utf8, false),
@@ -234,7 +233,7 @@ mod tests {
     #[test]
     fn memories_schema_is_valid() {
         let schema = memories_schema();
-        assert_eq!(schema.fields().len(), 11);
+        assert_eq!(schema.fields().len(), 10);
     }
 
     #[test]

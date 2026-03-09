@@ -2,25 +2,20 @@ use crate::memory::context::*;
 
 #[test]
 fn test_context_anchor_now() {
-    let anchor = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
-    assert_eq!(anchor.app_bundle_id, "com.apple.Notes");
+    let anchor = ContextAnchor::now("Test.txt".to_string());
     assert_eq!(anchor.window_title, "Test.txt");
     assert!(anchor.timestamp > 0);
 }
 
 #[test]
 fn test_context_anchor_with_timestamp() {
-    let anchor = ContextAnchor::with_timestamp(
-        "com.apple.Notes".to_string(),
-        "Test.txt".to_string(),
-        1234567890,
-    );
+    let anchor = ContextAnchor::with_timestamp("Test.txt".to_string(), 1234567890);
     assert_eq!(anchor.timestamp, 1234567890);
 }
 
 #[test]
 fn test_memory_entry_new() {
-    let context = ContextAnchor::now("app".to_string(), "window".to_string());
+    let context = ContextAnchor::now("window".to_string());
     let entry = MemoryEntry::new(
         "id-123".to_string(),
         context.clone(),
@@ -35,7 +30,7 @@ fn test_memory_entry_new() {
 
 #[test]
 fn test_memory_entry_with_embedding() {
-    let context = ContextAnchor::now("app".to_string(), "window".to_string());
+    let context = ContextAnchor::now("window".to_string());
     let embedding = vec![0.1, 0.2, 0.3];
     let entry = MemoryEntry::with_embedding(
         "id-123".to_string(),
@@ -49,7 +44,7 @@ fn test_memory_entry_with_embedding() {
 
 #[test]
 fn test_memory_entry_with_score() {
-    let context = ContextAnchor::now("app".to_string(), "window".to_string());
+    let context = ContextAnchor::now("window".to_string());
     let entry = MemoryEntry::new(
         "id".to_string(),
         context,
@@ -62,11 +57,7 @@ fn test_memory_entry_with_score() {
 
 #[test]
 fn test_context_anchor_serialization() {
-    let anchor = ContextAnchor::with_timestamp(
-        "com.apple.Notes".to_string(),
-        "Test.txt".to_string(),
-        1234567890,
-    );
+    let anchor = ContextAnchor::with_timestamp("Test.txt".to_string(), 1234567890);
     let json = serde_json::to_string(&anchor).unwrap();
     let deserialized: ContextAnchor = serde_json::from_str(&json).unwrap();
     assert_eq!(anchor, deserialized);

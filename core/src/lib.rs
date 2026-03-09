@@ -333,7 +333,7 @@ pub use crate::metrics::StageTimer;
 pub use crate::event_handler::{ErrorType, McpServerError, McpStartupReport, ProcessingState};
 
 // Core types (for backward compatibility)
-pub use crate::core::{AppMemoryInfo, CapturedContext, CompressionStats, MediaAttachment, MemoryEntry};
+pub use crate::core::{CapturedContext, CompressionStats, MediaAttachment, MemoryEntry};
 
 // =============================================================================
 // Initialization Function

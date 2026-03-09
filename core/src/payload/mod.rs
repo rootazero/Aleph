@@ -60,41 +60,22 @@ pub struct PayloadMeta {
     pub context_anchor: ContextAnchor,
 }
 
-/// Context anchor - captures the application context at the moment of hotkey press
+/// Context anchor - captures the application context at the moment of interaction
 #[derive(Debug, Clone)]
 pub struct ContextAnchor {
-    /// Application bundle ID (e.g., "com.apple.Notes")
-    pub app_bundle_id: String,
-
-    /// Application name (e.g., "Notes")
-    pub app_name: String,
-
     /// Window title (if available)
     pub window_title: Option<String>,
 }
 
 impl ContextAnchor {
     /// Create a new context anchor
-    pub fn new(app_bundle_id: String, app_name: String, window_title: Option<String>) -> Self {
-        Self {
-            app_bundle_id,
-            app_name,
-            window_title,
-        }
+    pub fn new(window_title: Option<String>) -> Self {
+        Self { window_title }
     }
 
     /// Create from CapturedContext (for compatibility with existing code)
     pub fn from_captured_context(ctx: &crate::core::CapturedContext) -> Self {
-        let app_name = ctx
-            .app_bundle_id
-            .split('.')
-            .next_back()
-            .unwrap_or("Unknown")
-            .to_string();
-
         Self {
-            app_bundle_id: ctx.app_bundle_id.clone(),
-            app_name,
             window_title: ctx.window_title.clone(),
         }
     }
@@ -252,14 +233,8 @@ mod tests {
 
     #[test]
     fn test_context_anchor_creation() {
-        let anchor = ContextAnchor::new(
-            "com.apple.Notes".to_string(),
-            "Notes".to_string(),
-            Some("Document.txt".to_string()),
-        );
+        let anchor = ContextAnchor::new(Some("Document.txt".to_string()));
 
-        assert_eq!(anchor.app_bundle_id, "com.apple.Notes");
-        assert_eq!(anchor.app_name, "Notes");
         assert_eq!(anchor.window_title, Some("Document.txt".to_string()));
     }
 

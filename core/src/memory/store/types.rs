@@ -291,8 +291,6 @@ pub struct ScoredFact {
 /// Used to restrict searches by context anchor fields and time range.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryFilter {
-    /// Filter by application bundle ID.
-    pub app_bundle_id: Option<String>,
     /// Filter by window title.
     pub window_title: Option<String>,
     /// Restrict to a specific namespace scope.
@@ -309,12 +307,10 @@ impl MemoryFilter {
         Self::default()
     }
 
-    /// Create a filter scoped to a specific application context.
-    pub fn for_context(app_bundle_id: impl Into<String>, window_title: impl Into<String>) -> Self {
+    /// Create a filter scoped to a specific window title.
+    pub fn for_window(window_title: impl Into<String>) -> Self {
         Self {
-            app_bundle_id: Some(app_bundle_id.into()),
             window_title: Some(window_title.into()),
-            workspace: None,
             ..Default::default()
         }
     }
@@ -324,10 +320,6 @@ impl MemoryFilter {
     /// Returns `None` when no constraints are set.
     pub fn to_lance_filter(&self) -> Option<String> {
         let mut clauses: Vec<String> = Vec::new();
-
-        if let Some(ref app_id) = self.app_bundle_id {
-            clauses.push(format!("app_bundle_id = '{}'", escape_sql_string(app_id)));
-        }
 
         if let Some(ref title) = self.window_title {
             clauses.push(format!("window_title = '{}'", escape_sql_string(title)));
@@ -412,10 +404,9 @@ mod tests {
     }
 
     #[test]
-    fn memory_filter_for_context() {
-        let f = MemoryFilter::for_context("com.example.app", "My Window");
+    fn memory_filter_for_window() {
+        let f = MemoryFilter::for_window("My Window");
         let expr = f.to_lance_filter().unwrap();
-        assert!(expr.contains("app_bundle_id = 'com.example.app'"));
         assert!(expr.contains("window_title = 'My Window'"));
     }
 

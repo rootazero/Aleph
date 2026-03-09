@@ -241,7 +241,6 @@ pub struct InputEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputContext {
     pub app_name: Option<String>,
-    pub app_bundle_id: Option<String>,
     pub window_title: Option<String>,
     pub selected_text: Option<String>,
 }

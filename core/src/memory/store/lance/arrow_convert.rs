@@ -637,8 +637,6 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
     let schema = memories_schema();
 
     let id_arr = StringArray::from_iter_values(memories.iter().map(|m| m.id.as_str()));
-    let app_arr =
-        StringArray::from_iter_values(memories.iter().map(|m| m.context.app_bundle_id.as_str()));
     let window_arr =
         StringArray::from_iter_values(memories.iter().map(|m| m.context.window_title.as_str()));
     let user_input_arr =
@@ -667,16 +665,15 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
         schema,
         vec![
             Arc::new(id_arr),           // 0 id
-            Arc::new(app_arr),          // 1 app_bundle_id
-            Arc::new(window_arr),       // 2 window_title
-            Arc::new(user_input_arr),   // 3 user_input
-            Arc::new(ai_output_arr),    // 4 ai_output
-            Arc::new(timestamp_arr),    // 5 timestamp
-            Arc::new(topic_id_arr),     // 6 topic_id
-            Arc::new(session_key_arr),  // 7 session_key
-            Arc::new(namespace_arr),    // 8 namespace
-            Arc::new(workspace_arr),    // 9 workspace
-            Arc::new(vec_768),          // 10 vec_768
+            Arc::new(window_arr),       // 1 window_title
+            Arc::new(user_input_arr),   // 2 user_input
+            Arc::new(ai_output_arr),    // 3 ai_output
+            Arc::new(timestamp_arr),    // 4 timestamp
+            Arc::new(topic_id_arr),     // 5 topic_id
+            Arc::new(session_key_arr),  // 6 session_key
+            Arc::new(namespace_arr),    // 7 namespace
+            Arc::new(workspace_arr),    // 8 workspace
+            Arc::new(vec_768),          // 9 vec_768
         ],
     )
     .map_err(conv_err)?;
@@ -692,7 +689,6 @@ pub fn record_batch_to_memories(batch: &RecordBatch) -> Result<Vec<MemoryEntry>,
     }
 
     let id_col = col::<StringArray>(batch, "id")?;
-    let app_col = col::<StringArray>(batch, "app_bundle_id")?;
     let window_col = col::<StringArray>(batch, "window_title")?;
     let user_input_col = col::<StringArray>(batch, "user_input")?;
     let ai_output_col = col::<StringArray>(batch, "ai_output")?;
@@ -710,7 +706,6 @@ pub fn record_batch_to_memories(batch: &RecordBatch) -> Result<Vec<MemoryEntry>,
             .unwrap_or_else(|| crate::memory::context::SINGLE_TURN_TOPIC_ID.to_string());
 
         let context = ContextAnchor {
-            app_bundle_id: app_col.value(i).to_string(),
             window_title: window_col.value(i).to_string(),
             timestamp: timestamp_col.value(i),
             topic_id,
@@ -978,7 +973,6 @@ mod tests {
     #[test]
     fn test_memory_entry_roundtrip() {
         let context = ContextAnchor {
-            app_bundle_id: "com.apple.Notes".to_string(),
             window_title: "Project Plan".to_string(),
             timestamp: 1700000000,
             topic_id: "topic-abc".to_string(),
@@ -1002,7 +996,6 @@ mod tests {
 
         let m = &recovered[0];
         assert_eq!(m.id, entry.id);
-        assert_eq!(m.context.app_bundle_id, entry.context.app_bundle_id);
         assert_eq!(m.context.window_title, entry.context.window_title);
         assert_eq!(m.context.timestamp, entry.context.timestamp);
         assert_eq!(m.context.topic_id, "topic-abc");
@@ -1017,7 +1010,6 @@ mod tests {
     #[test]
     fn test_memory_entry_no_embedding() {
         let context = ContextAnchor {
-            app_bundle_id: "com.test.app".to_string(),
             window_title: "Window".to_string(),
             timestamp: 1700000500,
             topic_id: crate::memory::context::SINGLE_TURN_TOPIC_ID.to_string(),

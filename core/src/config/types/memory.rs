@@ -28,9 +28,6 @@ pub struct MemoryConfig {
     /// Minimum similarity score to include memory (0.0-1.0)
     #[serde(default = "default_similarity_threshold")]
     pub similarity_threshold: f32,
-    /// List of app bundle IDs to exclude from memory storage
-    #[serde(default)]
-    pub excluded_apps: Vec<String>,
 
     // AI-based memory retrieval settings
     /// Enable AI-based memory retrieval (replaces embedding similarity)
@@ -572,12 +569,6 @@ impl Default for MemoryConfig {
             retention_days: default_retention_days(),
             vector_db: default_vector_db(),
             similarity_threshold: default_similarity_threshold(),
-            excluded_apps: vec![
-                "com.apple.keychainaccess".to_string(),
-                "com.agilebits.onepassword7".to_string(),
-                "com.lastpass.LastPass".to_string(),
-                "com.bitwarden.desktop".to_string(),
-            ],
             ai_retrieval_enabled: default_ai_retrieval_enabled(),
             ai_retrieval_timeout_ms: default_ai_retrieval_timeout_ms(),
             ai_retrieval_max_candidates: default_ai_retrieval_max_candidates(),
