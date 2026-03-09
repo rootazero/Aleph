@@ -9,17 +9,13 @@ use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-fn default_profile() -> String {
-    "default".into()
-}
-
 /// Arguments for the browser_click tool.
 ///
 /// At least one targeting method must be provided: `selector`, `ref_id`, or coordinates (`x`/`y`).
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserClickArgs {
     /// Browser profile name (default: "default").
-    #[serde(default = "default_profile")]
+    #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
     pub profile: String,
     /// CSS selector of the element to click.
     pub selector: Option<String>,
