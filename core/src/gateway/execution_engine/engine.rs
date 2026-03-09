@@ -615,9 +615,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let thinker_registry = Arc::new(SingleProviderRegistry::new(provider));
 
         // Inject skill instructions from SkillSystem v2 snapshot into prompt
-        let skill_instructions = match get_extension_manager().ok().and_then(|m| m.skill_system()) {
-            Some(sys) => {
-                let snapshot = sys.current_snapshot().await;
+        let skill_instructions = match get_extension_manager().ok() {
+            Some(m) => {
+                let snapshot = m.skill_system().current_snapshot().await;
                 if snapshot.prompt_xml.is_empty() { None } else { Some(snapshot.prompt_xml) }
             }
             None => None,

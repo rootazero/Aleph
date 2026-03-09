@@ -163,7 +163,7 @@ pub struct ExtensionManager {
     service_manager: Arc<RwLock<ServiceManager>>,
 
     /// Skill System v2 (independent bounded context)
-    skill_system: Option<crate::skill::SkillSystem>,
+    skill_system: crate::skill::SkillSystem,
 }
 
 impl ExtensionManager {
@@ -191,7 +191,7 @@ impl ExtensionManager {
             plugin_loader,
             plugin_registry,
             service_manager,
-            skill_system: None,
+            skill_system: crate::skill::SkillSystem::new(),
         })
     }
 
@@ -212,6 +212,16 @@ impl ExtensionManager {
             &self.registry,
             &self.hook_executor,
         ).await?;
+
+        // Initialize SkillSystem with discovered skill directories
+        let skill_dirs: Vec<PathBuf> = self.discovery.discover_skill_dirs()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| d.path)
+            .collect();
+        if let Err(e) = self.skill_system.init(skill_dirs).await {
+            tracing::warn!("Failed to init skill system: {}", e);
+        }
 
         let mut cache = self.cache_state.write().await;
         cache.loaded = true;
@@ -879,19 +889,8 @@ impl ExtensionManager {
     // ── Skill System ──────────────────────────────────────────────────────────
 
     /// Get the Skill System v2 instance.
-    pub fn skill_system(&self) -> Option<&crate::skill::SkillSystem> {
-        self.skill_system.as_ref()
-    }
-
-    /// Initialize the Skill System v2 with given directories.
-    pub async fn init_skill_system(
-        &mut self,
-        dirs: Vec<PathBuf>,
-    ) -> Result<(), crate::skill::SkillSystemError> {
-        let sys = crate::skill::SkillSystem::new();
-        sys.init(dirs).await?;
-        self.skill_system = Some(sys);
-        Ok(())
+    pub fn skill_system(&self) -> &crate::skill::SkillSystem {
+        &self.skill_system
     }
 }
 

@@ -169,24 +169,9 @@ async fn initialize_session_manager(daemon: bool) -> Arc<SessionManager> {
 /// Initialize the ExtensionManager for the plugin system.
 async fn initialize_extension_manager(daemon: bool) {
     match alephcore::extension::ExtensionManager::with_defaults().await {
-        Ok(mut extension_manager) => {
-            // Initialize the skill system before wrapping in Arc
-            match alephcore::utils::paths::get_all_skills_dirs(None) {
-                Ok(dirs) => {
-                    if let Err(e) = extension_manager.init_skill_system(dirs.clone()).await {
-                        if !daemon {
-                            eprintln!("Warning: Failed to initialize skill system: {}", e);
-                        }
-                    } else if !daemon {
-                        println!("Skill system initialized ({} dirs scanned)", dirs.len());
-                    }
-                }
-                Err(e) => {
-                    if !daemon {
-                        eprintln!("Warning: Failed to discover skill dirs: {}", e);
-                    }
-                }
-            }
+        Ok(extension_manager) => {
+            // SkillSystem is now always initialized; load_all() will init it
+            // with discovered skill directories automatically.
 
             let manager = Arc::new(extension_manager);
             if let Err(_existing) = alephcore::gateway::init_extension_manager(manager) {
