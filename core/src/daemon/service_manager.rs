@@ -1,4 +1,4 @@
-use crate::daemon::{DaemonConfig, DaemonError, DaemonStatus, Result, ServiceStatus};
+use crate::daemon::{DaemonConfig, DaemonStatus, Result, ServiceStatus};
 use async_trait::async_trait;
 
 /// Cross-platform service management interface

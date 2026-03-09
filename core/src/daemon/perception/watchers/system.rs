@@ -8,7 +8,6 @@ use chrono::Utc;
 use crate::sync_primitives::Arc;
 use sysinfo::System;
 use tokio::sync::watch;
-use tracing::warn;
 use tokio::time::{interval, Duration};
 use tracing::{debug, info};
 use user_idle::UserIdle;

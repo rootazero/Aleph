@@ -404,7 +404,7 @@ impl EmailMessageOps {
                     .await
                 {
                     // Consume the stream to apply the flag changes
-                    while let Some(_) = store_stream.next().await {}
+                    while store_stream.next().await.is_some() {}
                 }
             }
         }
@@ -523,25 +523,24 @@ impl EmailMessageOps {
         let mut result = text.to_string();
 
         loop {
-            if let Some(start) = result.find(marker) {
-                let after_start = start + marker.len();
-                if after_start >= result.len() {
-                    break;
-                }
-                if let Some(rel_end) = result[after_start..].find(marker) {
-                    let end = after_start + rel_end;
-                    let inner = &result[after_start..end];
-                    result = format!(
-                        "{}{}{}{}{}",
-                        &result[..start],
-                        open,
-                        inner,
-                        close,
-                        &result[end + marker.len()..]
-                    );
-                } else {
-                    break;
-                }
+            let Some(start) = result.find(marker) else {
+                break;
+            };
+            let after_start = start + marker.len();
+            if after_start >= result.len() {
+                break;
+            }
+            if let Some(rel_end) = result[after_start..].find(marker) {
+                let end = after_start + rel_end;
+                let inner = &result[after_start..end];
+                result = format!(
+                    "{}{}{}{}{}",
+                    &result[..start],
+                    open,
+                    inner,
+                    close,
+                    &result[end + marker.len()..]
+                );
             } else {
                 break;
             }

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::a2a::domain::*;
 use crate::a2a::port::*;
 
 /// How the routing decision was made
@@ -200,6 +199,7 @@ fn extract_quoted_name(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::a2a::domain::*;
     use chrono::Utc;
     use std::sync::Mutex;
 

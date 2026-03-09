@@ -191,11 +191,13 @@ impl A2AClient {
     }
 
     /// Construct the agent card URL for this client's base URL
+    #[allow(dead_code)]
     fn agent_card_url(&self) -> String {
         format!("{}/.well-known/agent-card.json", self.base_url)
     }
 
     /// Construct the RPC endpoint URL for this client's base URL
+    #[allow(dead_code)]
     fn rpc_url(&self) -> String {
         format!("{}/a2a", self.base_url)
     }

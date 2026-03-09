@@ -36,7 +36,7 @@ pub use message_ops::XmppMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId,
     OutboundMessage, SendResult,
 };
 use async_trait::async_trait;
@@ -231,6 +231,7 @@ impl ChannelFactory for XmppChannelFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::channel::MessageId;
 
     #[test]
     fn test_channel_capabilities() {

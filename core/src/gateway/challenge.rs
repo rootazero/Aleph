@@ -88,10 +88,16 @@ pub struct ChallengeManager {
 const TIMESTAMP_WINDOW_SECS: u64 = 30;
 
 
+impl Default for ChallengeManager {
+    fn default() -> Self {
+        Self::with_server_id(Uuid::new_v4().to_string())
+    }
+}
+
 impl ChallengeManager {
     /// Create a new `ChallengeManager` with an auto-generated server id.
     pub fn new() -> Self {
-        Self::with_server_id(Uuid::new_v4().to_string())
+        Self::default()
     }
 
     /// Create a new `ChallengeManager` with an explicit server id.

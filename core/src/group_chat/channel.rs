@@ -152,8 +152,7 @@ fn parse_inline_role(spec: &str) -> Option<Persona> {
 
     let id = name
         .to_lowercase()
-        .replace(' ', "_")
-        .replace('-', "_");
+        .replace([' ', '-'], "_");
 
     Some(Persona {
         id,

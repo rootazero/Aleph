@@ -470,7 +470,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     let agent_id = request.session_key.agent_id().to_string();
                     let ui = request.input.clone();
                     let ao = response.clone();
-                    let _ = tokio::spawn(async move {
+                    tokio::spawn(async move {
                         write_conversation_memory(mb, sk, agent_id, ui, ao).await;
                     });
                 }
@@ -1370,7 +1370,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         request: &RunRequest,
         _agent_workspace_dir: &std::path::Path,
         thinker: Arc<Thinker<SingleProviderRegistry>>,
-        executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
+        executor: Arc<SingleStepExecutor<impl ToolRegistry + 'static>>,
         compressor: Arc<NoOpCompressor>,
         loop_config: LoopConfig,
         context: RequestContext,
@@ -1467,7 +1467,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         request: &RunRequest,
         agent_workspace_dir: &std::path::Path,
         thinker: Arc<Thinker<SingleProviderRegistry>>,
-        executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
+        executor: Arc<SingleStepExecutor<impl ToolRegistry + 'static>>,
         compressor: Arc<NoOpCompressor>,
         loop_config: LoopConfig,
         _context: RequestContext,
@@ -1547,7 +1547,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         agent_workspace_dir: &std::path::Path,
         manifest_hints: &crate::routing::ManifestHints,
         thinker: Arc<Thinker<SingleProviderRegistry>>,
-        executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
+        executor: Arc<SingleStepExecutor<impl ToolRegistry + 'static>>,
         compressor: Arc<NoOpCompressor>,
         loop_config: LoopConfig,
         allowed_tools: Vec<UnifiedTool>,
@@ -1641,7 +1641,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         _agent_workspace_dir: &std::path::Path,
         strategy: &crate::routing::CollabStrategy,
         thinker: Arc<Thinker<SingleProviderRegistry>>,
-        executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
+        executor: Arc<SingleStepExecutor<impl ToolRegistry + 'static>>,
         compressor: Arc<NoOpCompressor>,
         loop_config: LoopConfig,
         context: RequestContext,
@@ -1683,7 +1683,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         run_id: &str,
         request: &RunRequest,
         thinker: Arc<Thinker<SingleProviderRegistry>>,
-        executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
+        executor: Arc<SingleStepExecutor<impl ToolRegistry + 'static>>,
         compressor: Arc<NoOpCompressor>,
         loop_config: LoopConfig,
         context: RequestContext,
@@ -1774,7 +1774,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         run_id: &str,
         request: &RunRequest,
         thinker: Arc<Thinker<SingleProviderRegistry>>,
-        executor: Arc<SingleStepExecutor<impl ToolRegistry + Send + Sync + 'static>>,
+        executor: Arc<SingleStepExecutor<impl ToolRegistry + 'static>>,
         compressor: Arc<NoOpCompressor>,
         loop_config: LoopConfig,
         context: RequestContext,

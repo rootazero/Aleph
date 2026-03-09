@@ -15,7 +15,7 @@ use crate::event::{
     ToolCallRequest,
 };
 use crate::intent::{
-    DirectiveParser, IntentContext, IntentResult, ParsedInput, StructuralContext,
+    DirectiveParser, IntentContext, IntentResult, StructuralContext,
     UnifiedIntentClassifier,
 };
 

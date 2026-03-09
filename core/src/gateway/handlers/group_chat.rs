@@ -7,9 +7,10 @@
 //! - `handle_xxx`: real handlers that delegate to `GroupChatOrchestrator` + `GroupChatExecutor`
 //!
 //! All real handlers follow the per-session locking pattern:
-//!   1. Briefly lock the orchestrator to obtain a `SharedSession` handle
-//!   2. Drop the orchestrator lock
-//!   3. Lock only the target session for the duration of the operation
+//!  1. Briefly lock the orchestrator to obtain a `SharedSession` handle
+//!  2. Drop the orchestrator lock
+//!  3. Lock only the target session for the duration of the operation
+//!
 //! This allows different sessions to proceed concurrently.
 
 use serde_json::{json, Value};

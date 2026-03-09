@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use crate::domain::Entity;
 use crate::sync_primitives::{Arc, RwLock};
 
-use super::arena::SharedArena;
+use super::aggregate::SharedArena;
 use super::handle::ArenaHandle;
 use super::types::*;
 

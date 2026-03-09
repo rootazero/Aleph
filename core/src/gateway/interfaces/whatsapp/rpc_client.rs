@@ -32,6 +32,12 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use super::bridge_manager::BridgeError;
 use super::bridge_protocol::BridgeEvent;
 
+/// Writer half wrapped in a tokio Mutex behind an Arc.
+type SharedWriter = Arc<Mutex<Option<WriteHalf<UnixStream>>>>;
+
+/// Pending RPC requests map — keyed by request id.
+type PendingRequests = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
+
 // ─── Wire Types ──────────────────────────────────────────────────────────────
 
 /// JSON-RPC 2.0 request sent to the Go bridge.
@@ -77,9 +83,9 @@ pub struct BridgeRpcClient {
     /// Path to the Unix domain socket.
     socket_path: PathBuf,
     /// Writer half of the connected socket (None when disconnected).
-    writer: Arc<Mutex<Option<WriteHalf<UnixStream>>>>,
+    writer: SharedWriter,
     /// Pending RPC requests awaiting a response, keyed by request id.
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>,
+    pending: PendingRequests,
     /// Monotonically increasing request id counter.
     next_id: AtomicU64,
     /// Channel for forwarding push notifications from the bridge.
@@ -164,7 +170,7 @@ impl BridgeRpcClient {
     ///   notification and forwarded via `event_tx`.
     async fn read_loop(
         reader: tokio::io::ReadHalf<UnixStream>,
-        pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>,
+        pending: PendingRequests,
         event_tx: mpsc::Sender<BridgeEvent>,
     ) {
         let mut buf_reader = BufReader::new(reader);
@@ -315,7 +321,6 @@ impl BridgeRpcClient {
             .map_err(|_| {
                 // Remove from pending on timeout
                 let pending = Arc::clone(&self.pending);
-                let id = id;
                 tokio::spawn(async move {
                     let mut map = pending.lock().await;
                     map.remove(&id);

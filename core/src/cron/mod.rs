@@ -565,7 +565,7 @@ impl CronService {
             consecutive_failures: row.get::<_, Option<u32>>(13)?.unwrap_or(0),
             max_retries: row.get::<_, Option<u32>>(14)?.unwrap_or(3),
             priority: row.get::<_, Option<u32>>(15)?.unwrap_or(5),
-            schedule_kind: ScheduleKind::from_str(&schedule_kind_str),
+            schedule_kind: ScheduleKind::parse(&schedule_kind_str),
             every_ms: row.get(17)?,
             at_time: row.get(18)?,
             delete_after_run: row.get::<_, Option<i32>>(19)?.unwrap_or(0) != 0,
@@ -660,7 +660,7 @@ impl CronService {
             error: row.get(6)?,
             response: row.get(7)?,
             retry_count: row.get::<_, Option<u32>>(8)?.unwrap_or(0),
-            trigger_source: TriggerSource::from_str(&trigger_str),
+            trigger_source: TriggerSource::parse(&trigger_str),
             delivery_status: row.get(10)?,
             delivery_error: row.get(11)?,
         })

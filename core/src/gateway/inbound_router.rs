@@ -576,7 +576,7 @@ impl InboundMessageRouter {
                     if let Some(mode_json) = serialize_intent_result(&result) {
                         info!(
                             "[Router] Slash command resolved: source=unified, name={}",
-                            ctx.message.text.trim().split_whitespace().next().unwrap_or("")
+                            ctx.message.text.split_whitespace().next().unwrap_or("")
                         );
                         self.execute_for_context_with_metadata(&ctx, mode_json).await?;
                         return Ok(());
@@ -927,6 +927,7 @@ impl InboundMessageRouter {
     }
 
     /// Handle `/groupchat start` command
+    #[allow(clippy::too_many_arguments)]
     async fn handle_group_chat_start(
         &self,
         orch: &SharedOrchestrator,

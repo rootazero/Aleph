@@ -58,5 +58,15 @@
     "repo": "github:rootazero/Aleph-plugins",
     "download_url": "https://github.com/rootazero/Aleph-plugins/releases/download/phone-control-v0.1.0/phone-control.aleph-plugin.zip",
     "keywords": ["phone", "android", "adb", "mobile"]
+  },
+  {
+    "id": "media-office",
+    "name": "Media Office",
+    "description": "Office document processing: DOCX/XLSX/PPTX text extraction, table parsing, metadata",
+    "version": "0.1.0",
+    "kind": "nodejs",
+    "repo": "github:rootazero/Aleph-plugins",
+    "download_url": "https://github.com/rootazero/Aleph-plugins/releases/download/media-office-v0.1.0/media-office.aleph-plugin.zip",
+    "keywords": ["office", "docx", "xlsx", "pptx", "document"]
   }
 ]

@@ -7,6 +7,12 @@ use crate::error::AlephError;
 use super::StateDatabase;
 use rusqlite::params;
 
+/// A single conversation turn: (round, sequence, speaker_type, speaker_id, speaker_name, content, timestamp).
+pub type GroupChatTurn = (u32, u32, String, Option<String>, String, String, i64);
+
+/// An active session summary: (id, topic, source_channel, created_at).
+pub type GroupChatSessionSummary = (String, Option<String>, String, i64);
+
 impl StateDatabase {
     // =========================================================================
     // Group Chat Sessions CRUD
@@ -63,6 +69,7 @@ impl StateDatabase {
     }
 
     /// Insert a conversation turn into a group chat session.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_group_chat_turn(
         &self,
         session_id: &str,
@@ -105,7 +112,7 @@ impl StateDatabase {
     pub fn get_group_chat_turns(
         &self,
         session_id: &str,
-    ) -> Result<Vec<(u32, u32, String, Option<String>, String, String, i64)>, AlephError> {
+    ) -> Result<Vec<GroupChatTurn>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
@@ -149,7 +156,7 @@ impl StateDatabase {
     /// Returns tuples of (id, topic, source_channel, created_at).
     pub fn list_active_group_chats(
         &self,
-    ) -> Result<Vec<(String, Option<String>, String, i64)>, AlephError> {
+    ) -> Result<Vec<GroupChatSessionSummary>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(

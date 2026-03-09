@@ -149,7 +149,7 @@ impl UserProfile {
         }
 
         let yaml = serde_yaml::to_string(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         let content = format!("---\n{}---\n", yaml);
         std::fs::write(path, content)
     }

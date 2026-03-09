@@ -52,7 +52,7 @@ pub async fn handle_store_key(request: JsonRpcRequest) -> JsonRpcResponse {
                 // If vault has entries, try decrypting one to verify the key is correct
                 let names: Vec<String> = vault.list().into_iter().map(|(n, _)| n).collect();
                 if let Some(first) = names.first() {
-                    if let Err(_) = vault.get(first) {
+                    if vault.get(first).is_err() {
                         return JsonRpcResponse::error(
                             request.id,
                             INVALID_PARAMS,

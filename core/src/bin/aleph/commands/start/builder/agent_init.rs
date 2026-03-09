@@ -79,6 +79,7 @@ pub(in crate::commands::start) struct AgentHandlersResult {
 /// Selects real ExecutionEngine when an API key is available (env or config),
 /// otherwise uses the simulated AgentRunManager.
 /// Returns execution support components for inbound routing.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) async fn register_agent_handlers(
     server: &mut GatewayServer,
     session_manager: Arc<SessionManager>,
@@ -258,14 +259,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Create compression service for Layer 1 -> Layer 2 fact extraction
         let compression_svc: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>> =
             if let Some(ref emb) = embedder_out {
-                if let Some(ref prov) = default_prov {
-                    Some(super::init_compression_service(
+                default_prov.as_ref().map(|prov| super::init_compression_service(
                         memory_db, prov.clone(), emb.clone(),
                         &app_config.policies.memory.compression, daemon,
                     ))
-                } else {
-                    None
-                }
             } else {
                 None
             };

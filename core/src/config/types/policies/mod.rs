@@ -40,7 +40,7 @@ pub mod web_fetch;
 
 pub use experimental::ExperimentalPolicy;
 pub use intent::IntentDetectionPolicy;
-pub use keyword::{KeywordPolicy, PolicyKeywordRule};
+pub use keyword::KeywordPolicy;
 pub use memory::{AiRetrievalPolicy, CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
 pub use retry::RetryPolicy;

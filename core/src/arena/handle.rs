@@ -6,7 +6,7 @@
 use crate::domain::Entity;
 use crate::sync_primitives::{Arc, RwLock};
 
-use super::arena::SharedArena;
+use super::aggregate::SharedArena;
 use super::types::*;
 
 /// Permission-guarded handle for an agent to interact with a SharedArena.

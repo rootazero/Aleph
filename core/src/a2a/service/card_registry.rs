@@ -15,6 +15,12 @@ pub struct CardRegistry {
     agents: RwLock<Vec<RegisteredAgent>>,
 }
 
+impl Default for CardRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CardRegistry {
     pub fn new() -> Self {
         Self {

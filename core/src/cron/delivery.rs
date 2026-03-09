@@ -46,6 +46,12 @@ pub struct DeliveryEngine {
     targets: HashMap<String, Arc<dyn DeliveryTarget>>,
 }
 
+impl Default for DeliveryEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DeliveryEngine {
     pub fn new() -> Self {
         Self {

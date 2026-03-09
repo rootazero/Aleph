@@ -59,11 +59,9 @@ platforms/macos/Aleph/Frameworks/*.dylib.*
 # Git worktrees
 .worktrees/
 
-# Docs: only docs/reference/ is tracked (linked from README/CLAUDE.md)
+# Docs: only docs/images/ and docs/reference/ are tracked
 docs/*
 !docs/reference/
-!docs/guides/
-!docs/plans/
 !docs/images/
 openspec/
 _bmad/
