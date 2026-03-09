@@ -18,9 +18,14 @@ trap cleanup EXIT
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 case "$OS" in
-    darwin) PLATFORM="darwin" ;;
-    linux)  PLATFORM="linux" ;;
-    *)      echo "Error: unsupported OS: $OS"; exit 1 ;;
+    darwin)  PLATFORM="darwin" ;;
+    linux)   PLATFORM="linux" ;;
+    mingw*|msys*|cygwin*)
+        echo "Error: This script does not support Windows natively."
+        echo "Use the PowerShell installer instead:"
+        echo "  irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex"
+        exit 1 ;;
+    *)       echo "Error: unsupported OS: $OS"; exit 1 ;;
 esac
 case "$ARCH" in
     x86_64|amd64)  ARCH="x86_64" ;;

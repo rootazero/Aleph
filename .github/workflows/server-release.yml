@@ -30,6 +30,9 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             asset: aleph-linux-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: aleph-windows-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +51,10 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
+      - name: Install protoc (Windows)
+        if: startsWith(matrix.os, 'windows')
+        run: choco install protoc -y
+
       - name: Install Linux system libraries
         if: startsWith(matrix.os, 'ubuntu')
         run: |
@@ -62,16 +69,26 @@ jobs:
       - name: Build server
         run: cargo build --bin aleph --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package (Unix)
+        if: "!startsWith(matrix.os, 'windows')"
         shell: bash
         run: |
           cp "target/${{ matrix.target }}/release/aleph" aleph
           tar -czf "${{ matrix.asset }}.tar.gz" aleph
 
+      - name: Package (Windows)
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        run: |
+          Copy-Item "target/${{ matrix.target }}/release/aleph.exe" aleph.exe
+          Compress-Archive -Path aleph.exe -DestinationPath "${{ matrix.asset }}.zip"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}.tar.gz
+          path: |
+            ${{ matrix.asset }}.tar.gz
+            ${{ matrix.asset }}.zip
 
   release:
     name: Create Release
@@ -99,6 +116,7 @@ jobs:
           body: |
             ## Install
 
+            **macOS / Linux:**
             ```bash
             curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash
             ```
@@ -107,5 +125,16 @@ jobs:
             ```bash
             curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash -s -- ${{ inputs.version }}
             ```
+
+            **Windows (PowerShell):**
+            ```powershell
+            irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex
+            ```
+
+            Or specify version:
+            ```powershell
+            $env:ALEPH_VERSION="${{ inputs.version }}"; irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex
+            ```
           files: |
             artifacts/**/*.tar.gz
+            artifacts/**/*.zip
