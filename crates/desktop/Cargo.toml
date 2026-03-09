@@ -43,6 +43,9 @@ windows = { version = "0.58", features = [
     "Globalization",
     "Graphics_Imaging",
     "Storage_Streams",
+    # Collections support (Lines(), Words() return IVectorView)
+    "Foundation_Collections",
+    "Foundation",
     # UI Automation (AX tree)
     "Win32_UI_Accessibility",
     "Win32_System_Com",

@@ -129,9 +129,10 @@ pub fn perform_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
 #[cfg(target_os = "windows")]
 fn windows_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
     use crate::{BoundingBox, OcrLine};
+    use windows::core::Interface;
     use windows::Globalization::Language;
     use windows::Graphics::Imaging::BitmapDecoder;
-    use windows::Media::Ocr::OcrEngine;
+    use windows::Media::Ocr as WinOcr;
     use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream, IRandomAccessStream};
 
     // 1. Write PNG bytes into an IRandomAccessStream via DataWriter.
@@ -189,9 +190,9 @@ fn windows_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
         let zh = Language::CreateLanguage(&windows::core::HSTRING::from("zh-Hans")).ok();
         let en = Language::CreateLanguage(&windows::core::HSTRING::from("en-US")).ok();
 
-        let try_create = |lang: &Language| -> Option<OcrEngine> {
-            if OcrEngine::IsLanguageSupported(lang).unwrap_or(false) {
-                OcrEngine::TryCreateFromLanguage(lang).ok()
+        let try_create = |lang: &Language| -> Option<WinOcr::OcrEngine> {
+            if WinOcr::OcrEngine::IsLanguageSupported(lang).unwrap_or(false) {
+                WinOcr::OcrEngine::TryCreateFromLanguage(lang).ok()
             } else {
                 None
             }
@@ -200,7 +201,7 @@ fn windows_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
         zh.as_ref()
             .and_then(try_create)
             .or_else(|| en.as_ref().and_then(try_create))
-            .or_else(|| OcrEngine::TryCreateFromUserProfileLanguages().ok())
+            .or_else(|| WinOcr::OcrEngine::TryCreateFromUserProfileLanguages().ok())
             .ok_or_else(|| {
                 DesktopError::OcrFailed("No OCR language available on this system".into())
             })?
@@ -219,19 +220,20 @@ fn windows_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
         .unwrap_or_default();
 
     // 5. Build lines array with bounding boxes.
-    let ocr_lines = result
+    let ocr_lines: windows::Foundation::Collections::IVectorView<WinOcr::OcrLine> = result
         .Lines()
         .map_err(|e| DesktopError::OcrFailed(format!("Failed to get OCR lines: {e}")))?;
 
     let mut lines: Vec<OcrLine> = Vec::new();
     for line in &ocr_lines {
+        let line: WinOcr::OcrLine = line;
         let text = line
             .Text()
             .map(|s| s.to_string_lossy())
             .unwrap_or_default();
 
         // Merge bounding boxes of all words in this line.
-        let words = line
+        let words: windows::Foundation::Collections::IVectorView<WinOcr::OcrWord> = line
             .Words()
             .map_err(|e| DesktopError::OcrFailed(format!("Failed to get words: {e}")))?;
 
@@ -242,6 +244,7 @@ fn windows_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
         let mut has_bounds = false;
 
         for word in &words {
+            let word: WinOcr::OcrWord = word;
             if let Ok(rect) = word.BoundingRect() {
                 has_bounds = true;
                 min_x = min_x.min(rect.X as f64);
