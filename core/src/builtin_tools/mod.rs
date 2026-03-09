@@ -108,7 +108,11 @@ pub use profile_update::{ProfileField, ProfileOperation, ProfileUpdateArgs, Prof
 pub use scratchpad::{ScratchpadAction, ScratchpadArgs, ScratchpadOutput, ScratchpadTool};
 pub use soul_update::{SoulField, SoulOperation, SoulUpdateArgs, SoulUpdateOutput, SoulUpdateTool};
 pub use vision::{VisionAction, VisionArgs, VisionOutput, VisionTool};
-pub use media_tools::{MediaUnderstandArgs, MediaUnderstandOutput, MediaUnderstandTool};
+pub use media_tools::{
+    AudioTranscribeArgs, AudioTranscribeOutput, AudioTranscribeTool, DocumentExtractArgs,
+    DocumentExtractOutput, DocumentExtractTool, MediaUnderstandArgs, MediaUnderstandOutput,
+    MediaUnderstandTool,
+};
 pub use escalate_task::{EscalateTaskArgs, EscalateTaskOutput, EscalateTaskTool};
 pub use subagent_manage::{
     SubagentKillArgs, SubagentKillOutput, SubagentKillTool, SubagentSpawnArgs, SubagentSpawnOutput,
