@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use super::interrupt::{InterruptSender, InterruptSignal};
 
 /// Queue mode determines how new messages are handled while agent is busy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum QueueMode {
     /// Messages wait in line, processed one by one after current turn.
@@ -175,6 +175,32 @@ impl SessionQueue for CollectQueue {
     }
 }
 
+/// Create a session queue based on the configured mode.
+///
+/// This factory function instantiates the appropriate queue implementation
+/// based on the given `QueueMode`. For `Steer` mode, an `InterruptSender`
+/// is required. For `Collect` mode, an optional window duration can be
+/// specified (defaults to 3000ms).
+pub fn create_session_queue(
+    mode: QueueMode,
+    collect_window_ms: Option<u64>,
+    interrupt_tx: Option<InterruptSender>,
+) -> Box<dyn SessionQueue> {
+    match mode {
+        QueueMode::Followup => Box::new(FollowupQueue::new()),
+        QueueMode::Steer => {
+            let tx = interrupt_tx.expect("SteerQueue requires interrupt channel");
+            Box::new(SteerQueue::new(tx))
+        }
+        QueueMode::Collect => {
+            let window = std::time::Duration::from_millis(
+                collect_window_ms.unwrap_or(3000),
+            );
+            Box::new(CollectQueue::new(window))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +317,51 @@ mod tests {
     fn test_collect_queue_mode() {
         let queue = CollectQueue::new(std::time::Duration::from_millis(100));
         assert_eq!(queue.mode(), QueueMode::Collect);
+    }
+
+    #[test]
+    fn test_queue_mode_deserializes_from_json() {
+        let json = r#""steer""#;
+        let mode: QueueMode = serde_json::from_str(json).unwrap();
+        assert_eq!(mode, QueueMode::Steer);
+
+        let json = r#""followup""#;
+        let mode: QueueMode = serde_json::from_str(json).unwrap();
+        assert_eq!(mode, QueueMode::Followup);
+
+        let json = r#""collect""#;
+        let mode: QueueMode = serde_json::from_str(json).unwrap();
+        assert_eq!(mode, QueueMode::Collect);
+    }
+
+    #[test]
+    fn test_create_session_queue_followup() {
+        let queue = create_session_queue(QueueMode::Followup, None, None);
+        assert_eq!(queue.mode(), QueueMode::Followup);
+    }
+
+    #[test]
+    fn test_create_session_queue_steer() {
+        let (tx, _rx) = crate::agent_loop::InterruptChannel::new();
+        let queue = create_session_queue(QueueMode::Steer, None, Some(tx));
+        assert_eq!(queue.mode(), QueueMode::Steer);
+    }
+
+    #[test]
+    fn test_create_session_queue_collect() {
+        let queue = create_session_queue(QueueMode::Collect, Some(5000), None);
+        assert_eq!(queue.mode(), QueueMode::Collect);
+    }
+
+    #[test]
+    fn test_create_session_queue_collect_default_window() {
+        let queue = create_session_queue(QueueMode::Collect, None, None);
+        assert_eq!(queue.mode(), QueueMode::Collect);
+    }
+
+    #[test]
+    #[should_panic(expected = "SteerQueue requires interrupt channel")]
+    fn test_create_session_queue_steer_panics_without_interrupt() {
+        create_session_queue(QueueMode::Steer, None, None);
     }
 }
