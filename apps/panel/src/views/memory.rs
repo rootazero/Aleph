@@ -324,7 +324,6 @@ fn RawMemoriesTable(
                     <tr class="bg-surface-sunken text-[10px] font-bold text-text-tertiary uppercase tracking-widest">
                         <th class="p-4 pl-8">"Content"</th>
                         <th class="p-4">"Agent"</th>
-                        <th class="p-4">"Source"</th>
                         <th class="p-4">"Date"</th>
                         <th class="p-4 pr-8 text-right">"Actions"</th>
                     </tr>
@@ -333,19 +332,19 @@ fn RawMemoriesTable(
                     {move || {
                         if !connected.get() {
                             view! {
-                                <tr><td colspan="5" class="p-8 text-center text-text-tertiary">"Connect to Gateway to view raw memories"</td></tr>
+                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">"Connect to Gateway to view raw memories"</td></tr>
                             }.into_any()
                         } else if searching.get() {
                             view! {
-                                <tr><td colspan="5" class="p-8 text-center text-text-tertiary">"Searching..."</td></tr>
+                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">"Searching..."</td></tr>
                             }.into_any()
                         } else if !loaded.get() {
                             view! {
-                                <tr><td colspan="5" class="p-8 text-center text-text-tertiary">"Loading..."</td></tr>
+                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">"Loading..."</td></tr>
                             }.into_any()
                         } else if memories.get().is_empty() {
                             view! {
-                                <tr><td colspan="5" class="p-8 text-center text-text-tertiary">"No raw memories stored yet. Chat with Aleph to start building memory."</td></tr>
+                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">"No raw memories stored yet. Chat with Aleph to start building memory."</td></tr>
                             }.into_any()
                         } else {
                             let on_delete = on_delete.clone();
@@ -355,7 +354,6 @@ fn RawMemoriesTable(
                                     key=|m| m.id.clone()
                                     children=move |entry| {
                                         let created_at = entry.created_at.clone().unwrap_or_else(|| "Unknown".to_string());
-                                        let source = entry.source.clone().unwrap_or_else(|| "Memory".to_string());
                                         let agent_id = entry.agent_id.clone();
                                         let entry_id = entry.id.clone();
                                         let on_delete = on_delete.clone();
@@ -363,7 +361,6 @@ fn RawMemoriesTable(
                                             <MemoryRow
                                                 content=entry.content
                                                 agent_id=agent_id
-                                                source=source
                                                 date=created_at
                                                 on_delete=move |_| on_delete(entry_id.clone())
                                             />
@@ -383,7 +380,6 @@ fn RawMemoriesTable(
 fn MemoryRow(
     content: String,
     agent_id: String,
-    source: String,
     date: String,
     on_delete: impl Fn(()) + 'static,
 ) -> impl IntoView {
@@ -394,11 +390,6 @@ fn MemoryRow(
             </td>
             <td class="p-4">
                 <Badge variant=BadgeVariant::Indigo>{agent_id}</Badge>
-            </td>
-            <td class="p-4">
-                <Badge variant=BadgeVariant::Slate>
-                    {source}
-                </Badge>
             </td>
             <td class="p-4">
                 <div class="flex items-center gap-2 text-xs text-text-tertiary font-mono">
