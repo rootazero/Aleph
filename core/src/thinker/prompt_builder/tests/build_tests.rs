@@ -118,12 +118,13 @@ fn test_build_system_prompt_with_context_includes_runtime_context() {
     assert!(prompt.contains("os=linux"));
     assert!(prompt.contains("model=gpt-4"));
 
-    // Runtime context should appear before environment contract
+    // Runtime context is a dynamic layer (priority 1710) so it appears
+    // after stable layers like environment (priority 300).
     let runtime_pos = prompt.find("## Runtime Environment").unwrap();
     let env_pos = prompt.find("## Environment").unwrap();
     assert!(
-        runtime_pos < env_pos,
-        "Runtime context should appear before environment contract"
+        runtime_pos > env_pos,
+        "Runtime context (dynamic) should appear after environment (stable)"
     );
 }
 
@@ -223,17 +224,13 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
         "Missing response format section"
     );
 
-    // Verify ordering: RuntimeContext -> Environment -> Protocol -> Guidelines -> Citations
-    let runtime_pos = prompt.find("## Runtime Environment").unwrap();
+    // Verify ordering: Environment -> Protocol -> Guidelines -> Citations -> RuntimeContext(dynamic)
     let env_pos = prompt.find("## Environment").unwrap();
     let protocol_pos = prompt.find("Response Protocol Tokens").unwrap();
     let guidelines_pos = prompt.find("System Operational Awareness").unwrap();
     let citation_pos = prompt.find("Citation Standards").unwrap();
+    let runtime_pos = prompt.find("## Runtime Environment").unwrap();
 
-    assert!(
-        runtime_pos < env_pos,
-        "RuntimeContext should appear before Environment contract"
-    );
     assert!(
         env_pos < protocol_pos,
         "Environment should appear before Protocol tokens"
@@ -241,6 +238,10 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
     assert!(
         protocol_pos < guidelines_pos,
         "Protocol tokens should appear before Operational guidelines"
+    );
+    assert!(
+        citation_pos < runtime_pos,
+        "RuntimeContext (dynamic) should appear after stable layers"
     );
     assert!(
         guidelines_pos < citation_pos,

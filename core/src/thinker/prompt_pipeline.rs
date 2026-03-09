@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 use super::layers::*;
-use super::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_budget::{TokenBudget, PromptResult, enforce_budget};
 use super::prompt_mode::PromptMode;
 
@@ -94,7 +94,7 @@ impl PromptPipeline {
         let refs: Vec<(u32, &str, &str)> = sections.iter()
             .map(|(p, n, c)| (*p, *n, c.as_str()))
             .collect();
-        let protected = &[50u32, 55, 75, 100, 500, 501, 1200];
+        let protected = &[50u32, 75, 100, 500, 501, 1200];
         let (prompt, stats) = enforce_budget(&refs, budget.max_total_chars, protected);
 
         PromptResult {
@@ -104,18 +104,91 @@ impl PromptPipeline {
         }
     }
 
+    /// Execute only stable layers for the given path and input.
+    ///
+    /// Returns the assembled string from layers whose
+    /// [`stability()`](PromptLayer::stability) is [`LayerStability::Stable`].
+    pub fn execute_stable_only(&self, path: AssemblyPath, input: &LayerInput) -> String {
+        let mut output = String::with_capacity(16384);
+        for layer in &self.layers {
+            if layer.paths().contains(&path) && layer.stability() == LayerStability::Stable {
+                layer.inject(&mut output, input);
+            }
+        }
+        output
+    }
+
+    /// Execute only dynamic layers for the given path and input.
+    ///
+    /// Returns the assembled string from layers whose
+    /// [`stability()`](PromptLayer::stability) is [`LayerStability::Dynamic`].
+    pub fn execute_dynamic_only(&self, path: AssemblyPath, input: &LayerInput) -> String {
+        let mut output = String::with_capacity(4096);
+        for layer in &self.layers {
+            if layer.paths().contains(&path) && layer.stability() == LayerStability::Dynamic {
+                layer.inject(&mut output, input);
+            }
+        }
+        output
+    }
+
+    /// Execute only stable layers with mode filtering.
+    pub fn execute_stable_with_mode(
+        &self,
+        path: AssemblyPath,
+        input: &LayerInput,
+        mode: PromptMode,
+    ) -> String {
+        let mut output = String::with_capacity(16384);
+        for layer in &self.layers {
+            if layer.paths().contains(&path)
+                && layer.supports_mode(mode)
+                && layer.stability() == LayerStability::Stable
+            {
+                layer.inject(&mut output, input);
+            }
+        }
+        output
+    }
+
+    /// Execute only dynamic layers with mode filtering.
+    pub fn execute_dynamic_with_mode(
+        &self,
+        path: AssemblyPath,
+        input: &LayerInput,
+        mode: PromptMode,
+    ) -> String {
+        let mut output = String::with_capacity(4096);
+        for layer in &self.layers {
+            if layer.paths().contains(&path)
+                && layer.supports_mode(mode)
+                && layer.stability() == LayerStability::Dynamic
+            {
+                layer.inject(&mut output, input);
+            }
+        }
+        output
+    }
+
+    /// Return `(priority, name, stability)` for each layer, sorted by priority.
+    pub fn layer_info(&self) -> Vec<(u32, &'static str, LayerStability)> {
+        self.layers
+            .iter()
+            .map(|l| (l.priority(), l.name(), l.stability()))
+            .collect()
+    }
+
     /// Create a pipeline pre-loaded with the 25 default layers.
     ///
     /// Layer order (by priority):
+    ///
+    /// **Stable zone** (cacheable):
     ///   50  SoulLayer
-    ///   55  InboundContextLayer
     ///   75  ProfileLayer
     ///  100  RoleLayer
-    ///  200  RuntimeContextLayer
     ///  300  EnvironmentLayer
     ///  400  RuntimeCapabilitiesLayer
     ///  500  ToolsLayer + HydratedToolsLayer
-    ///  505  PoePromptLayer
     ///  600  SecurityLayer
     ///  700  ProtocolTokensLayer
     ///  710  HeartbeatLayer
@@ -129,9 +202,14 @@ impl PromptPipeline {
     /// 1350  ThinkingGuidanceLayer
     /// 1400  SkillModeLayer
     /// 1500  CustomInstructionsLayer
-    /// 1550  WorkspaceFilesLayer
-    /// 1575  MemoryAugmentationLayer
     /// 1600  LanguageLayer
+    ///
+    /// **Dynamic zone** (per-request, not cacheable):
+    /// 1700  InboundContextLayer
+    /// 1710  RuntimeContextLayer
+    /// 1720  PoePromptLayer
+    /// 1730  WorkspaceFilesLayer
+    /// 1740  MemoryAugmentationLayer
     pub fn default_layers() -> Self {
         Self::new(vec![
             Box::new(SoulLayer),
@@ -471,5 +549,77 @@ mod budget_tests {
 
         // Minimal should still have content (response format at minimum)
         assert!(!minimal.prompt.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod stability_tests {
+    use super::*;
+    use crate::thinker::prompt_layer::LayerStability;
+
+    #[test]
+    fn stable_layers_come_before_dynamic() {
+        let pipeline = PromptPipeline::default_layers();
+        let layers = pipeline.layer_info();
+
+        let mut found_dynamic = false;
+        for (priority, name, stability) in &layers {
+            if *stability == LayerStability::Dynamic {
+                found_dynamic = true;
+            }
+            if found_dynamic && *stability == LayerStability::Stable {
+                panic!(
+                    "Stable layer '{}' (priority {}) found after dynamic layer",
+                    name, priority
+                );
+            }
+        }
+        // Ensure we actually found both stable and dynamic layers
+        let stable_count = layers.iter().filter(|(_, _, s)| *s == LayerStability::Stable).count();
+        let dynamic_count = layers.iter().filter(|(_, _, s)| *s == LayerStability::Dynamic).count();
+        assert!(stable_count > 0, "Should have stable layers");
+        assert!(dynamic_count > 0, "Should have dynamic layers");
+    }
+
+    #[test]
+    fn dynamic_layers_are_correctly_classified() {
+        let pipeline = PromptPipeline::default_layers();
+        let dynamic_names: Vec<&str> = pipeline
+            .layer_info()
+            .into_iter()
+            .filter(|(_, _, s)| *s == LayerStability::Dynamic)
+            .map(|(_, n, _)| n)
+            .collect();
+
+        assert!(dynamic_names.contains(&"inbound_context"));
+        assert!(dynamic_names.contains(&"runtime_context"));
+        assert!(dynamic_names.contains(&"poe_success_criteria"));
+        assert!(dynamic_names.contains(&"workspace_files"));
+        assert!(dynamic_names.contains(&"memory_augmentation"));
+        assert_eq!(dynamic_names.len(), 5, "Exactly 5 dynamic layers expected");
+    }
+
+    #[test]
+    fn execute_stable_only_excludes_dynamic() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = crate::thinker::prompt_builder::PromptConfig::default();
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+
+        let stable = pipeline.execute_stable_only(AssemblyPath::Basic, &input);
+        let dynamic = pipeline.execute_dynamic_only(AssemblyPath::Basic, &input);
+        let full = pipeline.execute(AssemblyPath::Basic, &input);
+
+        // stable + dynamic should reconstruct the full output
+        let combined = format!("{}{}", stable, dynamic);
+        assert_eq!(combined, full);
+    }
+
+    #[test]
+    fn layer_info_returns_sorted_entries() {
+        let pipeline = PromptPipeline::default_layers();
+        let info = pipeline.layer_info();
+        let priorities: Vec<u32> = info.iter().map(|(p, _, _)| *p).collect();
+        assert!(priorities.windows(2).all(|w| w[0] <= w[1]));
     }
 }

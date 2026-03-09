@@ -5,7 +5,7 @@
 //! current progress, and any step-level hints.
 
 use crate::poe::types::ValidationRule;
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 /// All five assembly paths — this layer participates everywhere.
@@ -19,9 +19,9 @@ const ALL_PATHS: &[AssemblyPath] = &[
 
 /// PromptLayer that injects POE success criteria into the system prompt.
 ///
-/// Priority **505** places it right after `HydratedToolsLayer` (501)
-/// and before `SecurityLayer` (600), so the LLM sees the success
-/// contract early but after tool definitions.
+/// Priority **1720** places it in the dynamic zone at the end of the
+/// system prompt, after all stable layers.  Per-request POE success
+/// criteria change with each task, so caching them is counterproductive.
 pub struct PoePromptLayer;
 
 impl PromptLayer for PoePromptLayer {
@@ -30,7 +30,11 @@ impl PromptLayer for PoePromptLayer {
     }
 
     fn priority(&self) -> u32 {
-        505
+        1720
+    }
+
+    fn stability(&self) -> LayerStability {
+        LayerStability::Dynamic
     }
 
     fn supports_mode(&self, mode: PromptMode) -> bool {
@@ -264,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_priority_is_505() {
-        assert_eq!(PoePromptLayer.priority(), 505);
+        assert_eq!(PoePromptLayer.priority(), 1720);
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! (priority 75). This layer injects the rest: IDENTITY.md, TOOLS.md,
 //! MEMORY.md, HEARTBEAT.md, BOOTSTRAP.md.
 
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 /// File names handled by dedicated layers — excluded from this layer.
@@ -18,7 +18,11 @@ impl PromptLayer for WorkspaceFilesLayer {
     }
 
     fn priority(&self) -> u32 {
-        1550
+        1730
+    }
+
+    fn stability(&self) -> LayerStability {
+        LayerStability::Dynamic
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
@@ -97,7 +101,7 @@ mod tests {
     fn metadata() {
         let layer = WorkspaceFilesLayer;
         assert_eq!(layer.name(), "workspace_files");
-        assert_eq!(layer.priority(), 1550);
+        assert_eq!(layer.priority(), 1730);
         assert_eq!(layer.paths().len(), 5);
         assert!(layer.paths().contains(&AssemblyPath::Basic));
         assert!(layer.paths().contains(&AssemblyPath::Soul));
