@@ -116,21 +116,22 @@ Aleph 实现了**一等 MCP 支持**，包含三种传输层：
 
 以及：`McpResourceManager`（资源发现）、`McpPromptManager`（提示模板）、`OAuthStorage`（token 持久化）和 `SamplingCallback`（LLM 采样支持）。
 
-### 意图检测：5 层流水线 vs 简单路由
+### 意图检测：统一 LLM 驱动流水线 vs 简单路由
 
 OpenClaw 基于会话配置和 Agent 分配来路由消息。
 
-Aleph 使用 **5 层意图检测流水线**：
+Aleph 最初设计了 5 层意图检测流水线，包含多语言关键词规则。但实践中发现，维护中文、英文、德文、日文、韩文等多语言的关键词词典是一项巨大而脆弱的工程。系统最终重构为**统一的 LLM 驱动流水线**（`UnifiedIntentClassifier`），将核心分类交给 AI：
 
-| 层级 | 名称 | 方法 |
+| 层级 | 名称 | 功能 |
 |------|------|------|
-| L0 | 命令 | 指令解析（abort、reset、help） |
-| L1 | 结构 | 语言分析（疑问？陈述？指令？） |
-| L2 | 关键词 | 基于 `KeywordIndex` 的快速匹配 |
-| L3 | AI | LLM 语义分类 |
-| L4 | 默认 | 对话兜底 |
+| Abort | `AbortDetector` | 多语言停止词精确匹配（11 种语言：中/英/日/韩/俄/德/法/西/葡/阿/印）。快速，无需 LLM |
+| L0 | 斜杠命令 | 内置命令（`/screenshot`、`/ocr`、`/search` 等）+ 运行时注册指令（`/think`、`/model`、`/notools`） |
+| L1 | `StructuralDetector` | 文件路径（Unix/Windows）、URL、上下文信号（选中文件、剪贴板）的模式匹配。无语言依赖 |
+| L2 | `KeywordIndex` | **可选的**加权关键词匹配，支持 CJK 分词。作为快速路径保留，不作为核心依赖 |
+| L3 | `AiBinaryClassifier` | **核心决策者** — LLM 二分类（执行 vs 对话），3 秒超时，置信度阈值过滤 |
+| L4 | 默认兜底 | 所有层都弃权时，回退到执行（置信度 0.5）或对话 |
 
-配合 `ConfidenceCalibrator` 进行评分归一化，`IntentCache` 记忆化，以及 `RollbackManager` 撤销。
+早退优化：第一个匹配的层即返回。流水线输出为统一的 `IntentResult` 枚举（DirectTool / Execute / Converse / Abort），携带检测层和置信度元数据。可选的 `ConfidenceCalibrator` 基于历史和上下文进行后处理调优。
 
 ### 弹性：状态恢复 vs 无
 
