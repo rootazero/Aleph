@@ -1,0 +1,10 @@
+{
+  "name": "@aleph-examples/media-video",
+  "version": "0.1.0",
+  "description": "Aleph example plugin — video frame extraction and media enrichment",
+  "main": "src/index.js",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js"
+  }
+}

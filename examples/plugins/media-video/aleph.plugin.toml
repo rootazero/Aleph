@@ -1,0 +1,41 @@
+[plugin]
+id = "media-video"
+name = "Media Video Processor"
+version = "0.1.0"
+description = "Video understanding via ffmpeg keyframe extraction"
+kind = "nodejs"
+entry = "src/index.js"
+
+[permissions]
+shell = true
+filesystem = "read"
+
+[[tools]]
+name = "video_extract_frames"
+description = "Extract keyframes from a video file using ffmpeg"
+handler = "videoExtractFrames"
+
+[tools.parameters]
+type = "object"
+required = ["file_path"]
+
+[tools.parameters.properties.file_path]
+type = "string"
+description = "Absolute path to the video file"
+
+[tools.parameters.properties.count]
+type = "number"
+description = "Number of frames to extract"
+default = 10
+
+[tools.parameters.properties.format]
+type = "string"
+description = "Output image format (png, jpg, webp)"
+default = "png"
+
+[[hooks]]
+event = "PreToolUse"
+kind = "interceptor"
+handler = "onPreToolUse"
+priority = "normal"
+filter = "media_understand"
