@@ -25,8 +25,6 @@ pub use paths::{compute_parent_path, PRESET_PATHS};
 /// Context anchor that identifies when and where an interaction occurred
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContextAnchor {
-    /// Application bundle ID (e.g., "com.apple.Notes")
-    pub app_bundle_id: String,
     /// Window title (e.g., "Project Plan.txt")
     pub window_title: String,
     /// Unix timestamp when interaction occurred
@@ -41,18 +39,13 @@ pub const SINGLE_TURN_TOPIC_ID: &str = "single-turn";
 
 impl ContextAnchor {
     /// Create a new context anchor with current timestamp (for single-turn)
-    pub fn now(app_bundle_id: String, window_title: String) -> Self {
-        Self::with_topic(
-            app_bundle_id,
-            window_title,
-            SINGLE_TURN_TOPIC_ID.to_string(),
-        )
+    pub fn now(window_title: String) -> Self {
+        Self::with_topic(window_title, SINGLE_TURN_TOPIC_ID.to_string())
     }
 
     /// Create context anchor with specific timestamp (for single-turn)
-    pub fn with_timestamp(app_bundle_id: String, window_title: String, timestamp: i64) -> Self {
+    pub fn with_timestamp(window_title: String, timestamp: i64) -> Self {
         Self {
-            app_bundle_id,
             window_title,
             timestamp,
             topic_id: SINGLE_TURN_TOPIC_ID.to_string(),
@@ -60,14 +53,13 @@ impl ContextAnchor {
     }
 
     /// Create context anchor with topic ID (for multi-turn conversations)
-    pub fn with_topic(app_bundle_id: String, window_title: String, topic_id: String) -> Self {
+    pub fn with_topic(window_title: String, topic_id: String) -> Self {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
 
         Self {
-            app_bundle_id,
             window_title,
             timestamp,
             topic_id,

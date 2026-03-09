@@ -57,7 +57,6 @@ impl StateDatabase {
             -- Main memories table
             CREATE TABLE IF NOT EXISTS memories (
                 id TEXT PRIMARY KEY,
-                app_bundle_id TEXT NOT NULL,
                 window_title TEXT NOT NULL,
                 user_input TEXT NOT NULL,
                 ai_output TEXT NOT NULL,
@@ -66,8 +65,8 @@ impl StateDatabase {
                 topic_id TEXT NOT NULL
             );
 
-            -- Index for fast context-based filtering
-            CREATE INDEX IF NOT EXISTS idx_context ON memories(app_bundle_id, window_title);
+            -- Index for fast window-title-based filtering
+            CREATE INDEX IF NOT EXISTS idx_window_title ON memories(window_title);
 
             -- Index for timestamp-based queries (retention policy)
             CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp);

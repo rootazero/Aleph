@@ -5,7 +5,6 @@
 //! - CapturedContext: Context from active application
 //! - CompressionStats: Memory compression statistics
 //! - MemoryEntry: Memory entry for API responses
-//! - AppMemoryInfo: App memory info for UI
 
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +28,6 @@ pub struct MediaAttachment {
 /// Captured context from active application (Swift → Rust)
 #[derive(Debug, Clone)]
 pub struct CapturedContext {
-    pub app_bundle_id: String,
     pub window_title: Option<String>,
     pub attachments: Option<Vec<MediaAttachment>>, // Multimodal content support
     pub topic_id: Option<String>,                  // Topic ID for multi-turn conversations
@@ -54,17 +52,9 @@ pub struct CompressionStats {
 #[derive(Debug, Clone)]
 pub struct MemoryEntry {
     pub id: String,
-    pub app_bundle_id: String,
     pub window_title: String,
     pub user_input: String,
     pub ai_output: String,
     pub timestamp: i64,
     pub similarity_score: Option<f32>,
-}
-
-/// App memory info for UI filtering
-#[derive(Debug, Clone)]
-pub struct AppMemoryInfo {
-    pub app_bundle_id: String,
-    pub memory_count: u64,
 }

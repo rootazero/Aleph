@@ -404,13 +404,12 @@ pub trait SessionStore: Send + Sync {
         cutoff_timestamp: i64,
     ) -> Result<u64, AlephError>;
 
-    /// Clear memories with optional app/window filters.
+    /// Clear memories with an optional window title filter.
     ///
-    /// When both filters are `None`, clears all memories.
+    /// When the filter is `None`, clears all memories.
     /// Returns the number of deleted entries.
     async fn clear_memories(
         &self,
-        app_filter: Option<&str>,
         window_filter: Option<&str>,
     ) -> Result<u64, AlephError>;
 

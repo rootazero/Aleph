@@ -251,17 +251,12 @@ impl SessionStore for LanceMemoryBackend {
 
     async fn clear_memories(
         &self,
-        app_filter: Option<&str>,
         window_filter: Option<&str>,
     ) -> Result<u64, AlephError> {
         use crate::memory::store::types::escape_sql_string;
-        let filter = match (app_filter, window_filter) {
-            (Some(app), Some(win)) => {
-                format!("app_bundle_id = '{}' AND window_title = '{}'", escape_sql_string(app), escape_sql_string(win))
-            }
-            (Some(app), None) => format!("app_bundle_id = '{}'", escape_sql_string(app)),
-            (None, Some(win)) => format!("window_title = '{}'", escape_sql_string(win)),
-            (None, None) => "true".to_string(),
+        let filter = match window_filter {
+            Some(win) => format!("window_title = '{}'", escape_sql_string(win)),
+            None => "true".to_string(),
         };
 
         let count =
@@ -387,11 +382,7 @@ mod tests {
     fn make_test_memory(id: &str, user_input: &str, timestamp: i64) -> MemoryEntry {
         MemoryEntry::with_embedding(
             id.to_string(),
-            ContextAnchor::with_timestamp(
-                "com.test".to_string(),
-                "test.txt".to_string(),
-                timestamp,
-            ),
+            ContextAnchor::with_timestamp("test.txt".to_string(), timestamp),
             user_input.to_string(),
             "ai response".to_string(),
             vec![0.1_f32; 768],
