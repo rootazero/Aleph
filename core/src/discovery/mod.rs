@@ -32,10 +32,12 @@
 //! let configs = manager.find_config_files("aleph.jsonc")?;
 //! ```
 
+mod bootstrap;
 mod paths;
 mod scanner;
 mod types;
 
+pub use bootstrap::bootstrap_repositories;
 pub use paths::*;
 pub use scanner::*;
 pub use types::*;
