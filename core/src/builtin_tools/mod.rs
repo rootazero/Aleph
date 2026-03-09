@@ -57,6 +57,7 @@ pub mod desktop;
 pub mod pim;
 pub mod browser;
 pub mod browser_tools;
+pub mod media_tools;
 pub mod config_read;
 pub mod config_update;
 pub mod profile_update;
@@ -107,6 +108,7 @@ pub use profile_update::{ProfileField, ProfileOperation, ProfileUpdateArgs, Prof
 pub use scratchpad::{ScratchpadAction, ScratchpadArgs, ScratchpadOutput, ScratchpadTool};
 pub use soul_update::{SoulField, SoulOperation, SoulUpdateArgs, SoulUpdateOutput, SoulUpdateTool};
 pub use vision::{VisionAction, VisionArgs, VisionOutput, VisionTool};
+pub use media_tools::{MediaUnderstandArgs, MediaUnderstandOutput, MediaUnderstandTool};
 pub use escalate_task::{EscalateTaskArgs, EscalateTaskOutput, EscalateTaskTool};
 pub use subagent_manage::{
     SubagentKillArgs, SubagentKillOutput, SubagentKillTool, SubagentSpawnArgs, SubagentSpawnOutput,
