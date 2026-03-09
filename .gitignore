@@ -63,6 +63,7 @@ platforms/macos/Aleph/Frameworks/*.dylib.*
 docs/*
 !docs/reference/
 !docs/guides/
+!docs/plans/
 !docs/images/
 openspec/
 _bmad/
