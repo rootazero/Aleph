@@ -2,12 +2,13 @@
 
 use std::collections::HashMap;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::network_policy::SsrfConfig;
 
 /// Supported browser engines.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum BrowserType {
     Chromium,
@@ -23,7 +24,7 @@ impl Default for BrowserType {
 }
 
 /// Per-profile browser configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProfileConfig {
     /// Which browser engine to use.
     #[serde(default)]
@@ -107,7 +108,7 @@ impl ProfileState {
 }
 
 /// Configuration for the Playwright MCP integration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PlaywrightMcpConfig {
     /// Whether Playwright MCP is enabled.
     #[serde(default = "default_true")]
@@ -145,7 +146,7 @@ impl Default for PlaywrightMcpConfig {
 }
 
 /// Top-level browser system configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserSystemConfig {
     /// Named browser profiles.
     #[serde(default)]

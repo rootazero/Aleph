@@ -1,0 +1,23 @@
+# Browser System Configuration Example
+# Add this to your ~/.aleph/aleph.toml
+
+[browser.profiles.default]
+browser = "chromium"
+cdp_port = 18800
+headless = false
+idle_timeout_secs = 1800
+
+[browser.profiles.work]
+browser = "chrome"
+cdp_port = 18801
+proxy = "socks5://127.0.0.1:1080"
+
+[browser.policy]
+block_private = true
+blocked_domains = ["*.malware.com"]
+allowed_domains = []
+
+[browser.playwright_mcp]
+enabled = true
+command = "npx"
+args = ["@anthropic/mcp-playwright"]
