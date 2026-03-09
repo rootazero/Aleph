@@ -118,6 +118,63 @@ impl SessionQueue for SteerQueue {
     }
 }
 
+/// Collecting queue: buffers messages within a time window, then merges them.
+///
+/// When the first message arrives, a timer starts. Subsequent messages within
+/// the window are buffered. Once the window elapses, `next()` returns all
+/// buffered messages merged with double-newline separators.
+///
+/// Useful for group chat or rapid-fire input scenarios where you want to
+/// batch multiple messages into one before triggering the agent.
+pub struct CollectQueue {
+    buffer: Vec<String>,
+    window: std::time::Duration,
+    first_received: Option<std::time::Instant>,
+}
+
+impl CollectQueue {
+    pub fn new(window: std::time::Duration) -> Self {
+        Self {
+            buffer: Vec::new(),
+            window,
+            first_received: None,
+        }
+    }
+}
+
+#[async_trait]
+impl SessionQueue for CollectQueue {
+    async fn enqueue(&mut self, content: String) {
+        if self.first_received.is_none() {
+            self.first_received = Some(std::time::Instant::now());
+        }
+        self.buffer.push(content);
+    }
+
+    async fn next(&mut self) -> Option<String> {
+        if self.buffer.is_empty() {
+            return None;
+        }
+
+        // Check if window has elapsed since first message
+        if let Some(first) = self.first_received {
+            if first.elapsed() < self.window {
+                return None; // Still collecting
+            }
+        }
+
+        // Window elapsed — merge and return
+        let merged = self.buffer.join("\n\n");
+        self.buffer.clear();
+        self.first_received = None;
+        Some(merged)
+    }
+
+    fn mode(&self) -> QueueMode {
+        QueueMode::Collect
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +259,37 @@ mod tests {
         let (interrupt_tx, _rx) = crate::agent_loop::InterruptChannel::new();
         let queue = SteerQueue::new(interrupt_tx);
         assert_eq!(queue.mode(), QueueMode::Steer);
+    }
+
+    #[tokio::test]
+    async fn test_collect_queue_merges_within_window() {
+        let mut queue = CollectQueue::new(std::time::Duration::from_millis(50));
+
+        queue.enqueue("hello".into()).await;
+        queue.enqueue("world".into()).await;
+
+        // Within window — should not yield yet
+        assert_eq!(queue.next().await, None);
+
+        // Wait for window to elapse
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+
+        let merged = queue.next().await;
+        assert!(merged.is_some());
+        let text = merged.unwrap();
+        assert!(text.contains("hello"));
+        assert!(text.contains("world"));
+    }
+
+    #[tokio::test]
+    async fn test_collect_queue_empty_returns_none() {
+        let mut queue = CollectQueue::new(std::time::Duration::from_millis(50));
+        assert_eq!(queue.next().await, None);
+    }
+
+    #[test]
+    fn test_collect_queue_mode() {
+        let queue = CollectQueue::new(std::time::Duration::from_millis(100));
+        assert_eq!(queue.mode(), QueueMode::Collect);
     }
 }

@@ -100,7 +100,7 @@ pub use guards::{GuardViolation, LoopGuard};
 pub use message_builder::{Message, MessageBuilder, MessageBuilderConfig, ToolCall};
 pub use meta_cognition_integration::{MetaCognitionConfig, MetaCognitionIntegration};
 pub use overflow::{ModelLimit, OverflowConfig, OverflowDetector};
-pub use queue::{FollowupQueue, QueueMode, SessionQueue, SteerQueue};
+pub use queue::{CollectQueue, FollowupQueue, QueueMode, SessionQueue, SteerQueue};
 pub use session_sync::SessionSync;
 pub use state::{LoopState, LoopStep, Observation, RequestContext, StepSummary, Thinking, ToolInfo};
 pub use thinking::{ConfidenceLevel, ReasoningStep, ReasoningStepType, StructuredThinking, ThinkingParser};
