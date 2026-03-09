@@ -356,6 +356,13 @@ enum PluginsAction {
         /// JSON params (optional)
         params: Option<String>,
     },
+    /// Search for plugins in the registry
+    Search {
+        /// Search query
+        query: String,
+    },
+    /// Check for plugin updates
+    Update,
 }
 
 #[derive(Subcommand)]
@@ -824,6 +831,12 @@ async fn main() -> CliResult<()> {
                     cli.json,
                 )
                 .await?;
+            }
+            PluginsAction::Search { query } => {
+                commands::plugins_cmd::search(&query, cli.json).await?;
+            }
+            PluginsAction::Update => {
+                commands::plugins_cmd::update(&server_url, cli.json).await?;
             }
         },
         Some(Commands::Plugin { action }) => {
