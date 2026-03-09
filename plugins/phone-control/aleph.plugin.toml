@@ -1,0 +1,203 @@
+[plugin]
+id = "phone-control"
+name = "Phone Control"
+version = "0.1.0"
+description = "Android phone control via ADB — screenshots, taps, swipes, shell commands and file transfer"
+kind = "nodejs"
+entry = "src/index.js"
+
+[permissions]
+shell = true
+filesystem = "read"
+
+# ---------- phone_devices ----------
+
+[[tools]]
+name = "phone_devices"
+description = "List connected Android devices"
+handler = "phoneDevices"
+
+[tools.parameters]
+type = "object"
+required = []
+
+# ---------- phone_screenshot ----------
+
+[[tools]]
+name = "phone_screenshot"
+description = "Take a screenshot of the device screen"
+handler = "phoneScreenshot"
+
+[tools.parameters]
+type = "object"
+required = []
+
+[tools.parameters.properties.device]
+type = "string"
+description = "Device serial (from phone_devices). Uses default if omitted."
+
+[tools.parameters.properties.output]
+type = "string"
+description = "Local path to save the screenshot (default: /tmp/phone_screenshot.png)"
+
+# ---------- phone_tap ----------
+
+[[tools]]
+name = "phone_tap"
+description = "Tap a point on the device screen"
+handler = "phoneTap"
+
+[tools.parameters]
+type = "object"
+required = ["x", "y"]
+
+[tools.parameters.properties.x]
+type = "number"
+description = "X coordinate"
+
+[tools.parameters.properties.y]
+type = "number"
+description = "Y coordinate"
+
+[tools.parameters.properties.device]
+type = "string"
+description = "Device serial (from phone_devices). Uses default if omitted."
+
+# ---------- phone_swipe ----------
+
+[[tools]]
+name = "phone_swipe"
+description = "Perform a swipe gesture on the device screen"
+handler = "phoneSwipe"
+
+[tools.parameters]
+type = "object"
+required = ["x1", "y1", "x2", "y2"]
+
+[tools.parameters.properties.x1]
+type = "number"
+description = "Start X coordinate"
+
+[tools.parameters.properties.y1]
+type = "number"
+description = "Start Y coordinate"
+
+[tools.parameters.properties.x2]
+type = "number"
+description = "End X coordinate"
+
+[tools.parameters.properties.y2]
+type = "number"
+description = "End Y coordinate"
+
+[tools.parameters.properties.duration_ms]
+type = "number"
+description = "Swipe duration in milliseconds"
+default = 300
+
+[tools.parameters.properties.device]
+type = "string"
+description = "Device serial (from phone_devices). Uses default if omitted."
+
+# ---------- phone_type ----------
+
+[[tools]]
+name = "phone_type"
+description = "Type text on the device (via ADB input)"
+handler = "phoneType"
+
+[tools.parameters]
+type = "object"
+required = ["text"]
+
+[tools.parameters.properties.text]
+type = "string"
+description = "Text to type"
+
+[tools.parameters.properties.device]
+type = "string"
+description = "Device serial (from phone_devices). Uses default if omitted."
+
+# ---------- phone_shell ----------
+
+[[tools]]
+name = "phone_shell"
+description = "Execute a shell command on the device"
+handler = "phoneShell"
+
+[tools.parameters]
+type = "object"
+required = ["command"]
+
+[tools.parameters.properties.command]
+type = "string"
+description = "Shell command to run on the device"
+
+[tools.parameters.properties.device]
+type = "string"
+description = "Device serial (from phone_devices). Uses default if omitted."
+
+# ---------- phone_install ----------
+
+[[tools]]
+name = "phone_install"
+description = "Install an APK on the device"
+handler = "phoneInstall"
+
+[tools.parameters]
+type = "object"
+required = ["apk_path"]
+
+[tools.parameters.properties.apk_path]
+type = "string"
+description = "Local path to the APK file"
+
+[tools.parameters.properties.device]
+type = "string"
+description = "Device serial (from phone_devices). Uses default if omitted."
+
+# ---------- phone_push ----------
+
+[[tools]]
+name = "phone_push"
+description = "Push a local file to the device"
+handler = "phonePush"
+
+[tools.parameters]
+type = "object"
+required = ["local_path", "remote_path"]
+
+[tools.parameters.properties.local_path]
+type = "string"
+description = "Local file path"
+
+[tools.parameters.properties.remote_path]
+type = "string"
+description = "Destination path on the device"
+
+[tools.parameters.properties.device]
+type = "string"
+description = "Device serial (from phone_devices). Uses default if omitted."
+
+# ---------- phone_pull ----------
+
+[[tools]]
+name = "phone_pull"
+description = "Pull a file from the device to local filesystem"
+handler = "phonePull"
+
+[tools.parameters]
+type = "object"
+required = ["remote_path"]
+
+[tools.parameters.properties.remote_path]
+type = "string"
+description = "File path on the device"
+
+[tools.parameters.properties.local_path]
+type = "string"
+description = "Local destination path (default: current directory)"
+
+[tools.parameters.properties.device]
+type = "string"
+description = "Device serial (from phone_devices). Uses default if omitted."
