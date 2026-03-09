@@ -432,8 +432,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             use alephcore::gateway::handlers::plugins::get_extension_manager;
             use alephcore::domain::Entity;
             if let Ok(ext_manager) = get_extension_manager() {
-                if let Some(skill_sys) = ext_manager.skill_system() {
-                    let skill_manifests = skill_sys.list_skills().await;
+                {
+                    let skill_manifests = ext_manager.skill_system().list_skills().await;
                     let skill_infos: Vec<alephcore::skills::SkillInfo> = skill_manifests
                         .iter()
                         .filter(|s| s.is_user_invocable())
