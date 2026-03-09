@@ -27,6 +27,7 @@
 
 mod aleph_plugin;
 mod aleph_plugin_toml;
+pub mod legacy_adapter;
 mod package_json;
 mod types;
 
