@@ -479,6 +479,77 @@ pub async fn update(server_url: &str, json: bool) -> CliResult<()> {
     Ok(())
 }
 
+/// Reload all plugins
+pub async fn reload(server_url: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url).await?;
+
+    let result: Value = client.call("plugins.reload", None::<()>).await?;
+
+    if json {
+        output::print_json(&result);
+    } else {
+        println!("Plugins reloaded.");
+    }
+
+    client.close().await?;
+    Ok(())
+}
+
+/// Show detailed info about a specific plugin
+pub async fn info(server_url: &str, name: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url).await?;
+
+    let result: Value = client.call("plugins.list", None::<()>).await?;
+
+    let plugin = result
+        .as_array()
+        .and_then(|plugins| {
+            plugins.iter().find(|p| {
+                p.get("name").and_then(|v| v.as_str()) == Some(name)
+                    || p.get("id").and_then(|v| v.as_str()) == Some(name)
+            })
+        })
+        .cloned();
+
+    match plugin {
+        Some(p) => {
+            if json {
+                output::print_json(&p);
+            } else {
+                let get_str = |key: &str| -> &str {
+                    p.get(key).and_then(|v| v.as_str()).unwrap_or("-")
+                };
+                let get_count = |key: &str| -> usize {
+                    p.get(key)
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.len())
+                        .or_else(|| p.get(key).and_then(|v| v.as_u64()).map(|n| n as usize))
+                        .unwrap_or(0)
+                };
+
+                println!("Plugin: {}", get_str("name"));
+                println!("  Version:     {}", get_str("version"));
+                println!("  Type:        {}", get_str("type"));
+                println!("  Status:      {}", get_str("status"));
+                println!("  Description: {}", get_str("description"));
+                println!("  Path:        {}", get_str("path"));
+                println!("  Tools:       {}", get_count("tools"));
+                println!("  Hooks:       {}", get_count("hooks"));
+            }
+        }
+        None => {
+            if json {
+                output::print_json(&serde_json::json!({ "error": format!("Plugin '{}' not found", name) }));
+            } else {
+                println!("Plugin '{}' not found.", name);
+            }
+        }
+    }
+
+    client.close().await?;
+    Ok(())
+}
+
 /// Truncate a string to max_len characters, appending "..." if truncated
 fn truncate_str(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
