@@ -1,28 +1,26 @@
-//! Extension System - Plugin and Component Management
+//! Extension System - Plugin and Skill Management
 //!
-//! This module provides a complete extension system for Aleph, compatible with
-//! Claude Code plugins while supporting enhanced features like TypeScript plugins
-//! and npm package installation.
+//! This module provides a unified extension system for Aleph.
 //!
 //! # Architecture
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────────────┐
-//! │                        ExtensionManager                                  │
-//! │  - Orchestrates discovery, loading, registration, integration           │
-//! └────────────────────────────┬────────────────────────────────────────────┘
+//! │                        ExtensionManager                                │
+//! │  - Orchestrates discovery, loading, registration, integration          │
+//! └────────────────────────────┬───────────────────────────────────────────┘
 //!                              │
 //!          ┌───────────────────┼───────────────────┐
 //!          ▼                   ▼                   ▼
-//!     ConfigManager      ContentLoader      PluginRegistry
-//!     (aleph.jsonc)     (skills, agents)    (runtime plugins)
+//!     PluginRegistry      PluginLoader        SkillSystem
+//!   (unified registry)  (Node.js, WASM)    (skills, agents)
 //!          │                   │                   │
 //!          └───────────────────┼───────────────────┘
 //!                              │
 //!          ┌───────────────────┴───────────────────┐
 //!          ▼                                       ▼
-//!     PluginRuntime                           HookExecutor
-//!     (Node.js, npm)                          (event hooks)
+//!     HookExecutor                          ContentLoader
+//!     (unified hooks)                    (Markdown parsing)
 //! ```
 //!
 //! # Usage
