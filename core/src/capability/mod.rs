@@ -263,7 +263,6 @@ impl CapabilityExecutor {
 
         info!(
             query_length = query.len(),
-            app = %anchor.app_bundle_id,
             window = ?anchor.window_title,
             max_facts = config.max_facts_in_context,
             raw_fallback = config.raw_memory_fallback_count,

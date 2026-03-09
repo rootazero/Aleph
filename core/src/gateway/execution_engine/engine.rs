@@ -2013,7 +2013,6 @@ async fn write_conversation_memory(
     use crate::memory::context::{ContextAnchor, MemoryEntry};
 
     let context = ContextAnchor::with_topic(
-        "aleph.chat".to_string(),
         session_key.clone(),
         session_key,
     );

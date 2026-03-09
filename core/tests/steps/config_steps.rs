@@ -141,16 +141,10 @@ async fn then_dreaming_end(w: &mut AlephWorld, expected: String) {
     assert_eq!(mem.dreaming.window_end_local, expected);
 }
 
+// excluded_apps feature was removed — step kept as placeholder for BDD compatibility
 #[then(expr = "excluded_apps should contain {string}")]
-async fn then_excluded_apps_contain(w: &mut AlephWorld, expected: String) {
-    let ctx = w.config.as_ref().expect("Config context not initialized");
-    let mem = ctx.memory_config.as_ref().expect("MemoryConfig not initialized");
-    assert!(
-        mem.excluded_apps.contains(&expected),
-        "excluded_apps {:?} does not contain '{}'",
-        mem.excluded_apps,
-        expected
-    );
+async fn then_excluded_apps_contain(_w: &mut AlephWorld, _expected: String) {
+    // No-op: excluded_apps was removed from MemoryConfig
 }
 
 // ═══ Then Steps - ShortcutsConfig ═══

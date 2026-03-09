@@ -302,7 +302,7 @@ impl MemorySearchTool {
             .map(|t| TranscriptResult {
                 user_input: t.user_input,
                 ai_output: t.ai_output,
-                context: format!("{} - {}", t.context.app_bundle_id, t.context.window_title),
+                context: t.context.window_title.clone(),
                 similarity_score: t.similarity_score.unwrap_or(0.0),
             })
             .collect();
