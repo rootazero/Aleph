@@ -363,6 +363,13 @@ enum PluginsAction {
     },
     /// Check for plugin updates
     Update,
+    /// Reload all plugins (hot reload)
+    Reload,
+    /// Show detailed info about a specific plugin
+    Info {
+        /// Plugin name or ID
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -837,6 +844,12 @@ async fn main() -> CliResult<()> {
             }
             PluginsAction::Update => {
                 commands::plugins_cmd::update(&server_url, cli.json).await?;
+            }
+            PluginsAction::Reload => {
+                commands::plugins_cmd::reload(&server_url, cli.json).await?;
+            }
+            PluginsAction::Info { name } => {
+                commands::plugins_cmd::info(&server_url, &name, cli.json).await?;
             }
         },
         Some(Commands::Plugin { action }) => {
