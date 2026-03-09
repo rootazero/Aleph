@@ -62,6 +62,7 @@ platforms/macos/Aleph/Frameworks/*.dylib.*
 # Docs: only docs/reference/ is tracked (linked from README/CLAUDE.md)
 docs/*
 !docs/reference/
+!docs/guides/
 !docs/images/
 openspec/
 _bmad/
