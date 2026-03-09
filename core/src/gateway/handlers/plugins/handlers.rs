@@ -292,6 +292,12 @@ pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
         }
     }
 
+    // Sync with PluginRegistry
+    if let Ok(manager) = get_extension_manager() {
+        let mut registry = manager.get_plugin_registry_mut().await;
+        registry.enable_plugin(&params.name);
+    }
+
     tracing::info!(plugin = %params.name, "Plugin enabled");
     JsonRpcResponse::success(request.id, json!({ "ok": true }))
 }
@@ -326,6 +332,12 @@ pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
                 format!("Failed to disable plugin: {}", e),
             );
         }
+    }
+
+    // Sync with PluginRegistry
+    if let Ok(manager) = get_extension_manager() {
+        let mut registry = manager.get_plugin_registry_mut().await;
+        registry.disable_plugin(&params.name);
     }
 
     tracing::info!(plugin = %params.name, "Plugin disabled");

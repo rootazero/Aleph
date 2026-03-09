@@ -527,6 +527,14 @@ impl ExtensionManager {
         self.plugin_registry.read().await
     }
 
+    /// Get mutable access to the plugin registry.
+    ///
+    /// This provides write access for operations that modify plugin state,
+    /// such as enabling/disabling plugins.
+    pub async fn get_plugin_registry_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, PluginRegistry> {
+        self.plugin_registry.write().await
+    }
+
     /// Get the plugin loader for runtime plugins.
     ///
     /// This provides read access to the plugin loader for checking plugin status.
