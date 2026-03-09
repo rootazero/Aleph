@@ -36,7 +36,6 @@ fn test_memory_config_deserialization() {
         "retention_days": 30,
         "vector_db": "lancedb",
         "similarity_threshold": 0.8,
-        "excluded_apps": ["com.example.app"],
         "embedding": {
             "active_provider_id": "openai"
         },
@@ -66,7 +65,6 @@ fn test_memory_config_deserialization() {
     assert_eq!(config.retention_days, 30);
     assert_eq!(config.vector_db, "lancedb");
     assert_eq!(config.similarity_threshold, 0.8);
-    assert_eq!(config.excluded_apps, vec!["com.example.app"]);
     assert!(!config.dreaming.enabled);
     assert_eq!(config.dreaming.window_start_local, "01:00");
     assert_eq!(config.graph_decay.min_score, 0.2);

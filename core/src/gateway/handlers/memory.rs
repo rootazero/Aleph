@@ -16,7 +16,6 @@ use crate::sync_primitives::Arc;
 pub struct MemoryEntry {
     pub id: String,
     pub agent_id: String,
-    pub app_bundle_id: String,
     pub window_title: String,
     pub user_input: String,
     pub ai_output: String,
@@ -25,10 +24,10 @@ pub struct MemoryEntry {
     pub similarity_score: Option<f32>,
 }
 
-/// App memory info
+/// Window memory info
 #[derive(Debug, Clone, Serialize)]
-pub struct AppMemoryInfo {
-    pub app_bundle_id: String,
+pub struct WindowMemoryInfo {
+    pub window_title: String,
     pub memory_count: i64,
 }
 
@@ -69,9 +68,6 @@ pub struct SearchParams {
     /// Filter by agent ID (workspace isolation)
     #[serde(default)]
     pub agent_id: Option<String>,
-    /// Filter by app bundle ID
-    #[serde(default)]
-    pub app_bundle_id: Option<String>,
     /// Filter by window title
     #[serde(default)]
     pub window_title: Option<String>,
@@ -89,7 +85,6 @@ impl Default for SearchParams {
         Self {
             query: None,
             agent_id: None,
-            app_bundle_id: None,
             window_title: None,
             limit: default_limit(),
         }
@@ -114,7 +109,6 @@ pub async fn handle_search(
         .unwrap_or_default();
 
     let filter = crate::memory::store::types::MemoryFilter {
-        app_bundle_id: params.app_bundle_id.clone(),
         window_title: params.window_title.clone(),
         workspace: params.agent_id.clone().map(WorkspaceFilter::Single),
         ..Default::default()
@@ -131,7 +125,6 @@ pub async fn handle_search(
                 .map(|m| MemoryEntry {
                     id: m.id,
                     agent_id: m.workspace,
-                    app_bundle_id: m.context.app_bundle_id,
                     window_title: m.context.window_title,
                     user_input: m.user_input,
                     ai_output: m.ai_output,
@@ -188,9 +181,6 @@ pub async fn handle_delete(
 /// Parameters for memory.clear
 #[derive(Debug, Default, Deserialize)]
 pub struct ClearParams {
-    /// Filter by app bundle ID (optional)
-    #[serde(default)]
-    pub app_bundle_id: Option<String>,
     /// Filter by window title (optional)
     #[serde(default)]
     pub window_title: Option<String>,
@@ -208,7 +198,7 @@ pub async fn handle_clear(
         .unwrap_or_default();
 
     match db
-        .clear_memories(params.app_bundle_id.as_deref(), params.window_title.as_deref())
+        .clear_memories(params.window_title.as_deref())
         .await
     {
         Ok(deleted_count) => {
@@ -381,22 +371,22 @@ pub async fn handle_compress(
 // App List
 // ============================================================================
 
-/// Get list of apps with memories
+/// Get list of windows with memories
 pub async fn handle_app_list(
     request: JsonRpcRequest,
     _db: MemoryBackend,
 ) -> JsonRpcResponse {
-    // TODO: Implement get_app_list via new store API
+    // TODO: Implement get_window_list via new store API
     match Ok::<Vec<(String, usize)>, crate::error::AlephError>(Vec::new()) {
-        Ok(apps) => {
-            let app_list: Vec<AppMemoryInfo> = apps
+        Ok(windows) => {
+            let window_list: Vec<WindowMemoryInfo> = windows
                 .into_iter()
-                .map(|(app_bundle_id, memory_count)| AppMemoryInfo {
-                    app_bundle_id,
+                .map(|(window_title, memory_count)| WindowMemoryInfo {
+                    window_title,
                     memory_count: memory_count as i64,
                 })
                 .collect();
-            JsonRpcResponse::success(request.id, json!({ "apps": app_list }))
+            JsonRpcResponse::success(request.id, json!({ "windows": window_list }))
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -416,7 +406,6 @@ mod tests {
         let params: SearchParams = serde_json::from_value(json).unwrap();
         assert!(params.query.is_none());
         assert!(params.agent_id.is_none());
-        assert!(params.app_bundle_id.is_none());
         assert_eq!(params.limit, 20);
     }
 
@@ -425,7 +414,6 @@ mod tests {
         let entry = MemoryEntry {
             id: "test-id".to_string(),
             agent_id: "main".to_string(),
-            app_bundle_id: "com.example.app".to_string(),
             window_title: "Test Window".to_string(),
             user_input: "Hello".to_string(),
             ai_output: "Hi there".to_string(),
@@ -443,7 +431,6 @@ mod tests {
         let entry = MemoryEntry {
             id: "test-id".to_string(),
             agent_id: "main".to_string(),
-            app_bundle_id: "".to_string(),
             window_title: "".to_string(),
             user_input: "".to_string(),
             ai_output: "".to_string(),

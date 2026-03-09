@@ -41,7 +41,6 @@ pub fn format_memory_markdown(memories: &[MemoryEntry]) -> String {
             i + 1,
             format_timestamp(entry.context.timestamp)
         ));
-        lines.push(format!("   App: {}", entry.context.app_bundle_id));
         lines.push(format!("   Window: {}", entry.context.window_title));
         lines.push(format!(
             "   User: {}",

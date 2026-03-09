@@ -443,7 +443,7 @@ impl GraphStore {
     ) -> Result<(), AlephError> {
         let mut context_map: HashMap<String, String> = HashMap::new();
         for memory in memories {
-            let key = format!("app:{}|window:{}", memory.context.app_bundle_id, memory.context.window_title);
+            let key = format!("window:{}", memory.context.window_title);
             context_map.insert(memory.id.clone(), key);
         }
 

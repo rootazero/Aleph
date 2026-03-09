@@ -44,13 +44,12 @@ impl MemoryIngestion {
     ///
     /// Process flow:
     /// 1. Check if memory is enabled
-    /// 2. Check if app is excluded
-    /// 3. Apply PII scrubbing
+    /// 2. Apply PII scrubbing
     /// 4. Generate embedding
     /// 5. Insert into database
     ///
     /// # Arguments
-    /// * `context` - Context anchor (app + window + timestamp)
+    /// * `context` - Context anchor (window + timestamp)
     /// * `user_input` - Original user input
     /// * `ai_output` - AI response
     ///
@@ -64,7 +63,6 @@ impl MemoryIngestion {
     ) -> Result<String, AlephError> {
         record_activity();
         debug!(
-            app = %context.app_bundle_id,
             window = %context.window_title,
             input_len = user_input.len(),
             output_len = ai_output.len(),
@@ -75,15 +73,6 @@ impl MemoryIngestion {
         if !self.config.enabled {
             debug!("Memory ingestion skipped: memory disabled");
             return Err(AlephError::config("Memory is disabled"));
-        }
-
-        // 2. Check if app is excluded
-        if self.config.excluded_apps.contains(&context.app_bundle_id) {
-            debug!(app = %context.app_bundle_id, "Memory ingestion skipped: app excluded");
-            return Err(AlephError::config(format!(
-                "App is excluded from memory: {}",
-                context.app_bundle_id
-            )));
         }
 
         // 2.5 Noise filter: reject noisy content before embedding
@@ -141,7 +130,6 @@ impl MemoryIngestion {
 
         info!(
             memory_id = %memory_id,
-            app = %context.app_bundle_id,
             window = %context.window_title,
             pii_scrubbed = pii_scrubbed,
             "Memory stored successfully"
@@ -190,7 +178,7 @@ mod tests {
         let config = create_test_config();
         let ingestion = MemoryIngestion::new(db.clone(), model, config);
 
-        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+        let context = ContextAnchor::now("Test.txt".to_string());
         let user_input = "What is the capital of France?";
         let ai_output = "The capital of France is Paris.";
 
@@ -214,7 +202,7 @@ mod tests {
         let config = create_test_config();
         let ingestion = MemoryIngestion::new(db.clone(), model, config);
 
-        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+        let context = ContextAnchor::now("Test.txt".to_string());
         let user_input = "My email is john@example.com and phone is 123-456-7890";
         let ai_output = "I understand, john@example.com.";
 
@@ -225,8 +213,7 @@ mod tests {
 
         // Retrieve and verify PII was scrubbed
         let embedding = vec![0.0; 1024]; // Dummy query embedding
-        let filter = crate::memory::store::types::MemoryFilter::for_context(
-            &context.app_bundle_id,
+        let filter = crate::memory::store::types::MemoryFilter::for_window(
             &context.window_title,
         );
         let memories = db.search_memories(&embedding, &filter, 10).await.unwrap();
@@ -250,7 +237,7 @@ mod tests {
         let config = Arc::new(config);
         let ingestion = MemoryIngestion::new(db.clone(), model, config);
 
-        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+        let context = ContextAnchor::now("Test.txt".to_string());
 
         let result = ingestion
             .store_memory(context, "test input", "test output")
@@ -260,24 +247,7 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("disabled"));
     }
 
-    #[tokio::test]
-    #[ignore = "Requires embedding model download"]
-    async fn test_store_memory_excluded_app() {
-        let db = create_test_db();
-        let model = create_test_model();
-        let config = create_test_config();
-        let ingestion = MemoryIngestion::new(db.clone(), model, config);
-
-        let context = ContextAnchor::now(
-            "com.apple.keychainaccess".to_string(), // Excluded by default
-            "Keychain.txt".to_string(),
-        );
-
-        let result = ingestion.store_memory(context, "password", "secret").await;
-
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("excluded"));
-    }
+    // test_store_memory_excluded_app removed: excluded_apps feature was removed
 
     #[tokio::test]
     #[ignore = "Requires embedding model download (run with --ignored)"]
@@ -287,7 +257,7 @@ mod tests {
         let config = create_test_config();
         let ingestion = MemoryIngestion::new(db.clone(), model, config);
 
-        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+        let context = ContextAnchor::now("Test.txt".to_string());
 
         let memory_id = ingestion
             .store_memory(context.clone(), "test input", "test output")
@@ -296,8 +266,7 @@ mod tests {
 
         // Retrieve memory and verify embedding exists
         let query_embedding = vec![0.0; 1024];
-        let filter = crate::memory::store::types::MemoryFilter::for_context(
-            &context.app_bundle_id,
+        let filter = crate::memory::store::types::MemoryFilter::for_window(
             &context.window_title,
         );
         let memories = db
@@ -322,7 +291,7 @@ mod tests {
         let config = create_test_config();
         let ingestion = MemoryIngestion::new(db.clone(), model, config);
 
-        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+        let context = ContextAnchor::now("Test.txt".to_string());
 
         // Store multiple memories
         for i in 0..5 {

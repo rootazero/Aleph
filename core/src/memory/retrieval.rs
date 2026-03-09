@@ -1,7 +1,7 @@
 /// Memory retrieval module
 ///
 /// This module handles retrieval of semantically similar past interactions
-/// filtered by current context (app + window).
+/// filtered by current context (window).
 use crate::config::MemoryConfig;
 use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
@@ -47,8 +47,8 @@ impl MemoryRetrieval {
         }
 
         let context_key = format!(
-            "app:{}|window:{}",
-            context.app_bundle_id, context.window_title
+            "window:{}",
+            context.window_title
         );
 
         for hint in hints {
@@ -74,7 +74,7 @@ impl MemoryRetrieval {
     /// 5. Return top-K results
     ///
     /// # Arguments
-    /// * `context` - Context anchor (app + window)
+    /// * `context` - Context anchor (window)
     /// * `query` - User query text
     ///
     /// # Returns
@@ -86,7 +86,6 @@ impl MemoryRetrieval {
     ) -> Result<Vec<MemoryEntry>, AlephError> {
         record_activity();
         debug!(
-            app = %context.app_bundle_id,
             window = %context.window_title,
             query_len = query.len(),
             max_items = self.config.max_context_items,
@@ -112,7 +111,7 @@ impl MemoryRetrieval {
         );
 
         // 3. Search database with optional graph entity filter
-        let filter = MemoryFilter::for_context(&context.app_bundle_id, &context.window_title);
+        let filter = MemoryFilter::for_window(&context.window_title);
         let limit = self.config.max_context_items as usize;
         let mut memories = if let Some(entity_id) = self.resolve_entity_filter(context, query).await
         {
@@ -150,7 +149,6 @@ impl MemoryRetrieval {
         }
 
         info!(
-            app = %context.app_bundle_id,
             window = %context.window_title,
             memories_count = filtered_count,
             threshold = self.config.similarity_threshold,
@@ -167,7 +165,7 @@ impl MemoryRetrieval {
     /// This is useful for AI-based retrieval where we need more candidates.
     ///
     /// # Arguments
-    /// * `context` - Context anchor (app + window)
+    /// * `context` - Context anchor (window)
     /// * `query` - User query text
     /// * `limit` - Maximum number of memories to return
     ///
@@ -181,7 +179,6 @@ impl MemoryRetrieval {
     ) -> Result<Vec<MemoryEntry>, AlephError> {
         record_activity();
         debug!(
-            app = %context.app_bundle_id,
             window = %context.window_title,
             query_len = query.len(),
             limit = limit,
@@ -207,7 +204,7 @@ impl MemoryRetrieval {
         );
 
         // 3. Search database with optional graph entity filter and custom limit
-        let filter = MemoryFilter::for_context(&context.app_bundle_id, &context.window_title);
+        let filter = MemoryFilter::for_window(&context.window_title);
         let mut memories = if let Some(entity_id) = self.resolve_entity_filter(context, query).await
         {
             let filtered = self
@@ -244,7 +241,6 @@ impl MemoryRetrieval {
         }
 
         info!(
-            app = %context.app_bundle_id,
             window = %context.window_title,
             memories_count = filtered_count,
             limit = limit,
@@ -303,7 +299,7 @@ mod tests {
         let config = create_test_config();
         let retrieval = MemoryRetrieval::new(db, model, config);
 
-        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+        let context = ContextAnchor::now("Test.txt".to_string());
         let memories = retrieval
             .retrieve_memories(&context, "any query")
             .await
@@ -329,7 +325,7 @@ mod tests {
 
         let retrieval = MemoryRetrieval::new(db, model, config);
 
-        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+        let context = ContextAnchor::now("Test.txt".to_string());
         let memories = retrieval
             .retrieve_memories(&context, "any query")
             .await

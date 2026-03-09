@@ -264,7 +264,6 @@ mod tests {
             user_input: "Hello".to_string(),
             ai_output: "Hi there".to_string(),
             context: ContextAnchor {
-                app_bundle_id: String::new(),
                 window_title: String::new(),
                 timestamp: 0,
                 topic_id: "single-turn".to_string(),

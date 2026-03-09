@@ -761,7 +761,6 @@ mod tests {
             topic_id: Some("topic-1".to_string()),
             context: Some(InputContext {
                 app_name: Some("Terminal".to_string()),
-                app_bundle_id: Some("com.apple.Terminal".to_string()),
                 window_title: Some("bash".to_string()),
                 selected_text: None,
             }),

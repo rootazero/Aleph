@@ -84,7 +84,6 @@ impl ConversationManager {
 
         info!(
             session_id = %session_id,
-            app = %session.origin_app(),
             "Started new conversation session"
         );
 
@@ -216,9 +215,9 @@ impl ConversationManager {
             .unwrap_or(0)
     }
 
-    /// Get the origin app bundle ID of the active session.
-    pub fn origin_app(&self) -> Option<&str> {
-        self.active_session.as_ref().map(|s| s.origin_app())
+    /// Get the window title of the active session's origin context.
+    pub fn origin_window(&self) -> Option<&str> {
+        self.active_session.as_ref().and_then(|s| s.context.window_title.as_deref())
     }
 
     /// Check and handle session timeout.
@@ -259,7 +258,6 @@ mod tests {
 
     fn create_test_context() -> CapturedContext {
         CapturedContext {
-            app_bundle_id: "com.apple.Notes".to_string(),
             window_title: Some("Test Note".to_string()),
             attachments: None,
             topic_id: None,
@@ -281,7 +279,7 @@ mod tests {
         let session_id = manager.start_session(context);
         assert!(!session_id.is_empty());
         assert!(manager.has_active_session());
-        assert_eq!(manager.origin_app(), Some("com.apple.Notes"));
+        assert_eq!(manager.origin_window(), Some("Test Note"));
     }
 
     #[test]

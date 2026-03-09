@@ -142,7 +142,6 @@ struct DreamRunReport {
 
 #[derive(Debug, Clone)]
 struct DreamCluster {
-    app_bundle_id: String,
     window_title: String,
     memories: Vec<MemoryEntry>,
 }
@@ -581,15 +580,14 @@ fn cluster_memories(memories: Vec<MemoryEntry>) -> Vec<DreamCluster> {
     let mut buckets: HashMap<String, DreamCluster> = HashMap::new();
 
     for memory in memories {
-        let key = format!("{}::{}", memory.context.app_bundle_id, memory.context.window_title);
+        let key = memory.context.window_title.clone();
         if let Some(cluster) = buckets.get_mut(&key) {
             cluster.memories.push(memory);
         } else {
             buckets.insert(
-                key,
+                key.clone(),
                 DreamCluster {
-                    app_bundle_id: memory.context.app_bundle_id.clone(),
-                    window_title: memory.context.window_title.clone(),
+                    window_title: key,
                     memories: vec![memory],
                 },
             );
@@ -611,9 +609,9 @@ fn build_summary(clusters: &[DreamCluster], date: &str) -> String {
 
     for cluster in clusters.iter().take(10) {
         let label = if cluster.window_title.is_empty() {
-            cluster.app_bundle_id.clone()
+            "(unknown window)".to_string()
         } else {
-            format!("{} / {}", cluster.app_bundle_id, cluster.window_title)
+            cluster.window_title.clone()
         };
 
         let mut samples: Vec<String> = Vec::new();

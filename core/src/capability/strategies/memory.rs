@@ -180,7 +180,6 @@ impl CapabilityStrategy for MemoryStrategy {
 
         info!(
             query_length = query.len(),
-            app = %anchor.app_bundle_id,
             window = ?anchor.window_title,
             use_ai_retrieval = self.use_ai_retrieval,
             "Retrieving memory snippets"
@@ -188,7 +187,6 @@ impl CapabilityStrategy for MemoryStrategy {
 
         // Convert payload::ContextAnchor to memory::ContextAnchor
         let memory_anchor = MemoryContextAnchor::with_timestamp(
-            anchor.app_bundle_id.clone(),
             anchor.window_title.clone().unwrap_or_default(),
             payload.meta.timestamp,
         );

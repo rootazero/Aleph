@@ -37,8 +37,6 @@ pub struct MemoryCandidate {
     pub ai_output: String,
     /// Unix timestamp
     pub timestamp: i64,
-    /// App bundle ID (for context)
-    pub app_bundle_id: String,
 }
 
 impl From<&MemoryEntry> for MemoryCandidate {
@@ -49,7 +47,6 @@ impl From<&MemoryEntry> for MemoryCandidate {
             // Truncate AI output to save tokens
             ai_output: entry.ai_output.chars().take(300).collect(),
             timestamp: entry.context.timestamp,
-            app_bundle_id: entry.context.app_bundle_id.clone(),
         }
     }
 }
@@ -141,7 +138,6 @@ impl AiMemoryRetriever {
                 .take(self.content_truncate_length)
                 .collect(),
             timestamp: entry.context.timestamp,
-            app_bundle_id: entry.context.app_bundle_id.clone(),
         }
     }
 
