@@ -67,6 +67,153 @@ See [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) for the ful
 - JSON Schema auto-generation via schemars
 - Proptest and Loom concurrency test suites
 
+## Why Aleph? — Comparison with OpenClaw
+
+Aleph started as a personal fork inspired by [OpenClaw](https://github.com/AIChatClaw/OpenClaw). Over time it diverged significantly in architecture and capabilities. Here is a honest, code-level comparison.
+
+### At a Glance
+
+| | OpenClaw | Aleph |
+|---|---|---|
+| **Language** | TypeScript (Node.js ≥22) | Rust (tokio async runtime) |
+| **Binary size** | ~200MB+ (node_modules) | Single static binary (~50MB) |
+| **Memory footprint** | ~150-300MB (V8 heap) | ~20-50MB (no GC) |
+| **Concurrency model** | Single-threaded event loop | Multi-threaded async (tokio) |
+| **Type safety** | TypeScript (runtime exceptions possible) | Rust (compile-time guarantees, no null/undefined) |
+
+### Architecture: Brain-Limb Separation vs Monolith
+
+OpenClaw runs everything in a single Node.js process — gateway, agent, tools, and desktop control share one runtime. If a tool crashes or a memory leak occurs, the entire assistant goes down.
+
+Aleph enforces strict **Brain-Limb separation** (Architectural Redline R1). The Rust Core (brain) communicates with Desktop Bridge, UI shells, and external tools through typed IPC protocols. Each layer can crash independently without taking down the core. This is enforced at compile time through Rust's trait system — platform-specific code physically cannot be imported into `core/src`.
+
+### Security: Defense in Depth vs Trust-Based
+
+OpenClaw operates on a **single-user trust model** — once authenticated, the operator has full access. Exec approval is available but optional. Sandbox mode uses Docker containers for isolation.
+
+Aleph implements **layered security with compile-time enforcement**:
+
+- **Three-tier exec security** — `AllowlistEntry` (pre-approved patterns) → `RiskAssessment` (pattern-based danger scoring with SAFE/DANGER/BLOCKED categories) → `ApprovalManager` (async user confirmation via Unix socket IPC)
+- **10-type action approval system** — every action type (BrowserNavigate, DesktopClick, ShellExec, FileWrite, etc.) passes through `ConfigApprovalPolicy` with blocklist → allowlist → defaults → ask chain
+- **Secret masking** — `SecretMasker` redacts sensitive data in logs and tool outputs
+- **Sandbox profiles** — macOS sandbox profiles for tool execution, beyond Docker
+- **Lock safety** — all mutex access uses poison recovery (`.unwrap_or_else(|e| e.into_inner())`) as a project-wide convention
+- **UTF-8 safety** — string slicing uses `char_indices()` / `.get(..n)`, never `&s[..n]`
+
+### Agent Intelligence: POE Architecture vs Simple Loop
+
+OpenClaw's agent loop is powered by `@mariozechner/pi-agent-core` — a third-party library that handles observe-think-act. The agent runs until it produces a response or hits a token limit.
+
+Aleph implements a **POE (Principle-Operation-Evaluation) architecture** — a self-correcting agent loop with three phases:
+
+1. **Principle** — Before execution, `SuccessManifest` defines success criteria with `ValidationRule` (hard constraints: file exists, command passes) and `SoftMetric` (weighted quality scores)
+2. **Operation** — The agent executes with budget tracking (`PoeBudget` monitors tokens, attempts, and entropy-based stuck detection with `BudgetStatus`: Improving/Stable/Degrading/Stuck/Exhausted)
+3. **Evaluation** — Two-phase validation: `HardValidator` (deterministic checks) + `SemanticValidator` (LLM-based quality assessment). If evaluation fails, the loop self-corrects with strategy switching
+
+This means Aleph doesn't just "try until done" — it defines success upfront, monitors its own progress, detects when it's stuck, and can switch strategies autonomously.
+
+### Multi-Agent: Swarm Intelligence vs Config Routing
+
+OpenClaw supports multi-agent through config-driven routing — you define agents in config, each gets a workspace, and `sessions_send` tool passes messages between them. It's functional but static.
+
+Aleph has **three multi-agent systems**:
+
+1. **A2A Protocol** — Full HTTP-based agent-to-agent communication with server/client adapters, SSE streaming, task store, smart router, agent card discovery, and tiered authentication
+2. **Swarm Intelligence** — `SwarmCoordinator` orchestrates multiple agents with `AgentMessageBus` (event bus), `SemanticAggregator` (compresses insights from N agents), `CollectiveMemory` (shared team history), and `RuleEngine` (event filtering)
+3. **SharedArena** — Multi-agent collaboration workspace with slot-based events, settlement protocol, and persistent storage via `ArenaManager`
+
+### Memory: Cognitive Architecture vs Flat Storage
+
+OpenClaw uses LanceDB for vector search with batch embedding and compression. It works well for basic RAG retrieval.
+
+Aleph's memory system is a **cognitive architecture** with 50+ modules:
+
+- **Tiered storage** — `MemoryTier`: Ephemeral → Short-term → Long-term → Archive, with automatic decay (`DecayScheduler`)
+- **Fact typing** — `FactType`: Fact, Hypothesis, Pattern, Policy, Config, Observation, Artifact
+- **Memory layers** — `MemoryLayer`: Operational (working), Tactical (recent), Strategic (long-term)
+- **Specialized stores** — `MemoryStore` (facts), `SessionStore` (conversations), `GraphStore` (entity relationships), `DreamStore` (daily insights), `CompressionStore` (summarization)
+- **Dreaming** — `CompressionDaemon` runs background consolidation, generating insights from accumulated experiences (similar to human sleep-based memory consolidation)
+- **Adaptive retrieval** — `AdaptiveRetrievalGate` decides when to search memory, `Reranker` re-orders results, `ValueEstimator` scores importance via LLM
+- **Ripple effects** — `RippleEffect` propagates memory impact across related facts
+
+### Self-Learning: Experience Crystallization vs None
+
+OpenClaw has no self-learning mechanism. Session facts are stored but never analyzed for patterns.
+
+Aleph implements a **skill evolution pipeline**:
+
+```
+EvolutionTracker → SolidificationDetector → SkillGenerator → GitCommitter
+```
+
+1. `EvolutionTracker` logs every execution to SQLite
+2. `SolidificationDetector` identifies recurring patterns that cross a success threshold
+3. `SkillGenerator` creates new skills (SKILL.md) from solidified patterns
+4. `GitCommitter` auto-commits new skills to the repository
+
+Safety gates (`SafetyLevel`: Benign → Caution → Warning → Danger → Blocked) and user approval workflows prevent unsafe skills from being generated.
+
+### MCP: First-Class Protocol vs Bridge
+
+OpenClaw supports MCP through `mcporter` — a skill that bridges MCP servers as OpenClaw tools. This adds latency and limits feature coverage.
+
+Aleph implements **first-class MCP** with three transport layers:
+
+- `StdioTransport` — local subprocess communication
+- `HttpTransport` — remote HTTP servers
+- `SseTransport` — HTTP + Server-Sent Events for streaming
+
+Plus: `McpResourceManager` (resource discovery), `McpPromptManager` (prompt templates), `OAuthStorage` (token persistence), and `SamplingCallback` (LLM sampling support).
+
+### Intent Detection: 5-Layer Pipeline vs Simple Routing
+
+OpenClaw routes messages based on session configuration and agent assignment.
+
+Aleph uses a **5-layer intent detection pipeline**:
+
+| Layer | Name | Method |
+|-------|------|--------|
+| L0 | Commands | Directive parsing (abort, reset, help) |
+| L1 | Structural | Linguistic analysis (question? statement? directive?) |
+| L2 | Keywords | Fast keyword matching with `KeywordIndex` |
+| L3 | AI | LLM-based semantic classification |
+| L4 | Default | Conversational fallback |
+
+With `ConfidenceCalibrator` for score normalization, `IntentCache` for memoization, and `RollbackManager` for undo.
+
+### Resilience: State Recovery vs None
+
+OpenClaw has no crash recovery mechanism. If the process dies, context is lost.
+
+Aleph includes:
+
+- `ShadowReplayEngine` — replay execution traces after crash
+- `RecoveryManager` — coordinates recovery decisions (Resume, Rollback, Replay, Fail)
+- `ResourceGovernor` + `QuotaManager` — per-agent resource quotas (tokens, tasks, memory)
+- `RecursiveSentry` — prevents infinite recursion in agent loops
+- `GracefulShutdown` — clean agent termination with state persistence
+- `StateDatabase` (SQLite) — persistent event/task/trace/session tracking
+
+### Performance: Compiled vs Interpreted
+
+| Metric | OpenClaw (Node.js) | Aleph (Rust) |
+|--------|-------------------|--------------|
+| Startup time | ~2-3s (V8 warmup) | ~100ms |
+| Tool dispatch | JS event loop (single-threaded) | tokio multi-threaded async |
+| Concurrency testing | Vitest (unit tests) | Loom (exhaustive state exploration) |
+| Property testing | None | Proptest (1024+ cases per test) |
+| Memory safety | GC-managed (potential leaks) | Ownership system (compile-time guarantees) |
+
+### What OpenClaw Does Better
+
+To be fair:
+
+- **Easier to extend** — TypeScript plugins vs Rust compilation
+- **Larger skill library** — 52 bundled skills + ClawHub registry
+- **More mature channels** — WhatsApp (Baileys), Signal, Zalo are production-tested
+- **Simpler setup** — `npm install` vs Rust toolchain
+- **Mobile nodes** — iOS/Android companion apps with camera/location/canvas
+
 ## Getting Started
 
 ### Prerequisites
