@@ -165,7 +165,7 @@ impl PluginStatus {
 // Load Summary
 // =============================================================================
 
-/// Summary of extension loading returned by ComponentLoader::load_all()
+/// Summary of extension loading returned by ContentLoader::load_all()
 #[derive(Debug, Default)]
 pub struct LoadSummary {
     /// Number of skills loaded

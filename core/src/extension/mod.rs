@@ -14,8 +14,8 @@
 //!                              │
 //!          ┌───────────────────┼───────────────────┐
 //!          ▼                   ▼                   ▼
-//!     ConfigManager      ComponentLoader      ComponentRegistry
-//!     (aleph.jsonc)     (skills, agents)    (state management)
+//!     ConfigManager      ContentLoader      PluginRegistry
+//!     (aleph.jsonc)     (skills, agents)    (runtime plugins)
 //!          │                   │                   │
 //!          └───────────────────┼───────────────────┘
 //!                              │
@@ -54,7 +54,7 @@ pub mod validation;
 mod channel_manager;
 mod error;
 mod http_handler;
-mod loader;
+mod content_loader;
 pub mod manifest;
 mod provider_adapter;
 pub mod registry;
@@ -67,7 +67,7 @@ pub mod watcher;
 pub use channel_manager::{ChannelHandle, ChannelManager};
 pub use error::*;
 pub use http_handler::{match_path, PluginHttpHandler};
-pub use loader::*;
+pub use content_loader::*;
 pub use manifest::*;
 pub use plugin_loader::PluginLoader;
 pub use provider_adapter::PluginProviderAdapter;
@@ -141,11 +141,17 @@ pub struct ExtensionManager {
     /// Config manager (aleph.jsonc)
     config_manager: ConfigManager,
 
-    /// Component registry
-    registry: Arc<RwLock<ComponentRegistry>>,
+    /// Loaded skills by qualified name
+    skills: Arc<RwLock<HashMap<String, ExtensionSkill>>>,
+
+    /// Loaded commands by name
+    commands: Arc<RwLock<HashMap<String, ExtensionCommand>>>,
+
+    /// Loaded agents by qualified name
+    agents: Arc<RwLock<HashMap<String, ExtensionAgent>>>,
 
     /// Component loader
-    loader: ComponentLoader,
+    loader: ContentLoader,
 
     /// Hook executor
     hook_executor: Arc<RwLock<HookExecutor>>,
@@ -173,8 +179,7 @@ impl ExtensionManager {
     pub async fn new(config: ExtensionConfig) -> ExtensionResult<Self> {
         let discovery = DiscoveryManager::new(config.discovery.clone())?;
         let config_manager = ConfigManager::new(&discovery).await?;
-        let registry = Arc::new(RwLock::new(ComponentRegistry::new()));
-        let loader = ComponentLoader::new();
+        let loader = ContentLoader::new();
         let hook_executor = Arc::new(RwLock::new(HookExecutor::empty()));
         let cache_state = Arc::new(RwLock::new(CacheState::default()));
         let plugin_loader = Arc::new(RwLock::new(PluginLoader::new()));
@@ -184,7 +189,9 @@ impl ExtensionManager {
         Ok(Self {
             discovery,
             config_manager,
-            registry,
+            skills: Arc::new(RwLock::new(HashMap::new())),
+            commands: Arc::new(RwLock::new(HashMap::new())),
+            agents: Arc::new(RwLock::new(HashMap::new())),
             loader,
             hook_executor,
             cache_state,
@@ -204,14 +211,45 @@ impl ExtensionManager {
 
     /// Load all extensions.
     ///
-    /// Delegates the discovery-and-registration loops to `ComponentLoader::load_all()`,
-    /// then marks the cache as loaded.
+    /// Delegates the discovery-and-registration loops to `ContentLoader::load_all()`,
+    /// then stores the loaded components and marks the cache as loaded.
     pub async fn load_all(&self) -> ExtensionResult<LoadSummary> {
-        let summary = self.loader.load_all(
-            &self.discovery,
-            &self.registry,
-            &self.hook_executor,
-        ).await?;
+        let load_result = self.loader.load_all(&self.discovery).await?;
+
+        // Store loaded skills
+        {
+            let mut skills = self.skills.write().await;
+            for skill in load_result.skills {
+                let name = skill.qualified_name();
+                skills.insert(name, skill);
+            }
+        }
+
+        // Store loaded commands
+        {
+            let mut commands = self.commands.write().await;
+            for cmd in load_result.commands {
+                let name = cmd.qualified_name();
+                commands.insert(name, cmd);
+            }
+        }
+
+        // Store loaded agents
+        {
+            let mut agents = self.agents.write().await;
+            for agent in load_result.agents {
+                let name = agent.qualified_name();
+                agents.insert(name, agent);
+            }
+        }
+
+        // Register hooks
+        {
+            let mut executor = self.hook_executor.write().await;
+            for hook in load_result.hooks {
+                executor.add_hook(hook);
+            }
+        }
 
         // Initialize SkillSystem with discovered skill directories
         let skill_dirs: Vec<PathBuf> = self.discovery.discover_skill_dirs()
@@ -227,7 +265,7 @@ impl ExtensionManager {
         cache.loaded = true;
         cache.loaded_at = Some(Instant::now());
 
-        Ok(summary)
+        Ok(load_result.summary)
     }
 
     /// Ensure extensions are loaded (lazy-loading entry point).
@@ -277,8 +315,10 @@ impl ExtensionManager {
             state.loaded_at = None;
         }
 
-        // Clear registry
-        self.registry.write().await.clear();
+        // Clear component maps
+        self.skills.write().await.clear();
+        self.commands.write().await.clear();
+        self.agents.write().await.clear();
 
         // Clear hooks
         *self.hook_executor.write().await = HookExecutor::empty();
@@ -296,37 +336,43 @@ impl ExtensionManager {
 
     /// Get all skills (from enabled sources)
     pub async fn get_all_skills(&self) -> Vec<ExtensionSkill> {
-        self.registry.read().await.get_all_skills()
+        self.skills.read().await.values().cloned().collect()
     }
 
     /// Get auto-invocable skills (for LLM prompt injection)
     pub async fn get_auto_invocable_skills(&self) -> Vec<ExtensionSkill> {
-        self.registry.read().await.get_auto_invocable_skills()
+        self.skills
+            .read()
+            .await
+            .values()
+            .filter(|s| s.is_auto_invocable())
+            .cloned()
+            .collect()
     }
 
     /// Get all commands
     pub async fn get_all_commands(&self) -> Vec<ExtensionCommand> {
-        self.registry.read().await.get_all_commands()
+        self.commands.read().await.values().cloned().collect()
     }
 
     /// Get all agents
     pub async fn get_all_agents(&self) -> Vec<ExtensionAgent> {
-        self.registry.read().await.get_all_agents()
+        self.agents.read().await.values().cloned().collect()
     }
 
     /// Get a specific skill by qualified name
     pub async fn get_skill(&self, qualified_name: &str) -> Option<ExtensionSkill> {
-        self.registry.read().await.get_skill(qualified_name)
+        self.skills.read().await.get(qualified_name).cloned()
     }
 
     /// Get a specific command by name
     pub async fn get_command(&self, name: &str) -> Option<ExtensionCommand> {
-        self.registry.read().await.get_command(name)
+        self.commands.read().await.get(name).cloned()
     }
 
     /// Get a specific agent by name
     pub async fn get_agent(&self, name: &str) -> Option<ExtensionAgent> {
-        self.registry.read().await.get_agent(name)
+        self.agents.read().await.get(name).cloned()
     }
 
     // ── Discovery Access ─────────────────────────────────────────────────────
@@ -807,23 +853,23 @@ impl ExtensionManager {
 
     /// Get all primary agents (can be selected by user)
     pub async fn get_primary_agents(&self) -> Vec<ExtensionAgent> {
-        self.registry
+        self.agents
             .read()
             .await
-            .get_all_agents()
-            .into_iter()
+            .values()
             .filter(|a| a.is_primary() && !a.hidden)
+            .cloned()
             .collect()
     }
 
     /// Get all sub-agents (can be delegated to)
     pub async fn get_sub_agents(&self) -> Vec<ExtensionAgent> {
-        self.registry
+        self.agents
             .read()
             .await
-            .get_all_agents()
-            .into_iter()
+            .values()
             .filter(|a| a.is_subagent())
+            .cloned()
             .collect()
     }
 

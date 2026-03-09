@@ -1,4 +1,4 @@
-//! Component loader - loads skills, commands, agents, and plugins
+//! Content loader - loads skills, commands, agents, and plugins
 
 use super::error::*;
 use super::manifest::{
@@ -13,18 +13,31 @@ use crate::discovery::{
 };
 use std::collections::HashMap;
 use std::path::Path;
-use crate::sync_primitives::Arc;
-use tokio::sync::RwLock;
 use tracing::{debug, trace};
 
-/// Component loader
+/// Result of loading all components from discovery
 #[derive(Debug, Default)]
-pub struct ComponentLoader {
+pub struct LoadResult {
+    /// All loaded skills (standalone + from plugins)
+    pub skills: Vec<ExtensionSkill>,
+    /// All loaded commands (standalone + from plugins)
+    pub commands: Vec<ExtensionCommand>,
+    /// All loaded agents (standalone + from plugins)
+    pub agents: Vec<ExtensionAgent>,
+    /// All loaded hook configurations
+    pub hooks: Vec<HookConfig>,
+    /// Load summary with counts and errors
+    pub summary: LoadSummary,
+}
+
+/// Content loader
+#[derive(Debug, Default)]
+pub struct ContentLoader {
     // Future: could hold caches, runtime references, etc.
 }
 
-impl ComponentLoader {
-    /// Create a new component loader
+impl ContentLoader {
+    /// Create a new content loader
     pub fn new() -> Self {
         Self::default()
     }
@@ -561,25 +574,26 @@ impl ComponentLoader {
     /// This is the primary coordination method for the loading phase.
     /// Called by `ExtensionManager::load_all()` as a single delegation point,
     /// keeping the manager a thin facade over the loader.
+    ///
+    /// Returns a `LoadResult` containing all loaded components. The caller
+    /// (ExtensionManager) is responsible for storing them.
     pub async fn load_all(
         &self,
         discovery: &DiscoveryManager,
-        registry: &Arc<RwLock<super::registry::ComponentRegistry>>,
-        hook_executor: &Arc<RwLock<super::hooks::HookExecutor>>,
-    ) -> ExtensionResult<LoadSummary> {
-        let mut summary = LoadSummary::default();
+    ) -> ExtensionResult<LoadResult> {
+        let mut result = LoadResult::default();
 
         // 1. Load skills
         let skill_dirs = discovery.discover_skill_dirs()?;
         for dir in skill_dirs {
             match self.load_skill(&dir.path).await {
                 Ok(skill) => {
-                    registry.write().await.register_skill(skill);
-                    summary.skills_loaded += 1;
+                    result.skills.push(skill);
+                    result.summary.skills_loaded += 1;
                 }
                 Err(e) => {
                     tracing::warn!("Failed to load skill from {:?}: {}", dir.path, e);
-                    summary.errors.push(format!("{}: {}", dir.path.display(), e));
+                    result.summary.errors.push(format!("{}: {}", dir.path.display(), e));
                 }
             }
         }
@@ -589,12 +603,12 @@ impl ComponentLoader {
         for dir in command_dirs {
             match self.load_command(&dir.path).await {
                 Ok(cmd) => {
-                    registry.write().await.register_command(cmd);
-                    summary.commands_loaded += 1;
+                    result.commands.push(cmd);
+                    result.summary.commands_loaded += 1;
                 }
                 Err(e) => {
                     tracing::warn!("Failed to load command from {:?}: {}", dir.path, e);
-                    summary.errors.push(format!("{}: {}", dir.path.display(), e));
+                    result.summary.errors.push(format!("{}: {}", dir.path.display(), e));
                 }
             }
         }
@@ -604,12 +618,12 @@ impl ComponentLoader {
         for dir in agent_dirs {
             match self.load_agent(&dir.path).await {
                 Ok(agent) => {
-                    registry.write().await.register_agent(agent);
-                    summary.agents_loaded += 1;
+                    result.agents.push(agent);
+                    result.summary.agents_loaded += 1;
                 }
                 Err(e) => {
                     tracing::warn!("Failed to load agent from {:?}: {}", dir.path, e);
-                    summary.errors.push(format!("{}: {}", dir.path.display(), e));
+                    result.summary.errors.push(format!("{}: {}", dir.path.display(), e));
                 }
             }
         }
@@ -619,53 +633,48 @@ impl ComponentLoader {
         for dir in plugin_dirs {
             match self.load_plugin(&dir.path).await {
                 Ok(plugin) => {
-                    // Register plugin hooks
-                    if !plugin.hooks.is_empty() {
-                        let mut executor = hook_executor.write().await;
-                        for hook in plugin.hooks.clone() {
-                            executor.add_hook(hook);
-                            summary.hooks_loaded += 1;
-                        }
+                    // Collect plugin hooks
+                    for hook in &plugin.hooks {
+                        result.hooks.push(hook.clone());
+                        result.summary.hooks_loaded += 1;
                     }
 
-                    // Register plugin components
-                    let reg = &mut *registry.write().await;
-                    for skill in plugin.skills.clone() {
-                        reg.register_skill(skill);
-                        summary.skills_loaded += 1;
+                    // Collect plugin components
+                    for skill in &plugin.skills {
+                        result.skills.push(skill.clone());
+                        result.summary.skills_loaded += 1;
                     }
-                    for cmd in plugin.commands.clone() {
-                        reg.register_command(cmd);
-                        summary.commands_loaded += 1;
+                    for cmd in &plugin.commands {
+                        result.commands.push(cmd.clone());
+                        result.summary.commands_loaded += 1;
                     }
-                    for agent in plugin.agents.clone() {
-                        reg.register_agent(agent);
-                        summary.agents_loaded += 1;
+                    for agent in &plugin.agents {
+                        result.agents.push(agent.clone());
+                        result.summary.agents_loaded += 1;
                     }
-                    reg.register_plugin(plugin);
-                    summary.plugins_loaded += 1;
+                    result.summary.plugins_loaded += 1;
                 }
                 Err(e) => {
                     tracing::warn!("Failed to load plugin from {:?}: {}", dir.path, e);
-                    summary.errors.push(format!("{}: {}", dir.path.display(), e));
+                    result.summary.errors.push(format!("{}: {}", dir.path.display(), e));
                 }
             }
         }
 
         // 5. Runtime plugins (Node.js, WASM) are discovered separately via PluginLoader.
-        // They register with PluginRegistry (not ComponentRegistry) and are handled
-        // through separate API calls on ExtensionManager.
+        // They register with PluginRegistry and are handled through separate API
+        // calls on ExtensionManager.
 
         tracing::info!(
             "Extension loading complete: {} skills, {} commands, {} agents, {} plugins, {} hooks",
-            summary.skills_loaded,
-            summary.commands_loaded,
-            summary.agents_loaded,
-            summary.plugins_loaded,
-            summary.hooks_loaded
+            result.summary.skills_loaded,
+            result.summary.commands_loaded,
+            result.summary.agents_loaded,
+            result.summary.plugins_loaded,
+            result.summary.hooks_loaded
         );
 
-        Ok(summary)
+        Ok(result)
     }
 }
 
@@ -727,7 +736,7 @@ Hello $ARGUMENTS!"#,
         )
         .unwrap();
 
-        let loader = ComponentLoader::new();
+        let loader = ContentLoader::new();
         let skill = loader.load_skill(&skill_dir).await.unwrap();
 
         assert_eq!(skill.name, "my-skill");
@@ -752,7 +761,7 @@ You are a code reviewer..."#,
         )
         .unwrap();
 
-        let loader = ComponentLoader::new();
+        let loader = ContentLoader::new();
         let agent = loader.load_agent(&agent_file).await.unwrap();
 
         assert_eq!(agent.name, "reviewer");
@@ -816,7 +825,7 @@ You are a helpful assistant."#,
             http_routes_v2: None,
         };
 
-        let loader = ComponentLoader::new();
+        let loader = ContentLoader::new();
         let skill = loader.load_v2_prompt(&manifest, plugin_dir).await.unwrap();
 
         assert!(skill.is_some());
@@ -871,7 +880,7 @@ You are a helpful assistant."#,
             http_routes_v2: None,
         };
 
-        let loader = ComponentLoader::new();
+        let loader = ContentLoader::new();
         let skill = loader.load_v2_prompt(&manifest, plugin_dir).await.unwrap();
 
         // Should return None for disabled prompt
@@ -927,7 +936,7 @@ You are a helpful assistant."#,
             http_routes_v2: None,
         };
 
-        let loader = ComponentLoader::new();
+        let loader = ContentLoader::new();
         let skill = loader.load_v2_prompt(&manifest, plugin_dir).await.unwrap();
 
         assert!(skill.is_some());
@@ -1014,7 +1023,7 @@ You are a helpful assistant."#,
             http_routes_v2: None,
         };
 
-        let loader = ComponentLoader::new();
+        let loader = ContentLoader::new();
         let skills = loader.load_v2_tool_prompts(&manifest, plugin_dir).await.unwrap();
 
         // Should load 2 instruction files (the third tool has no instruction_file)
@@ -1081,7 +1090,7 @@ You are a helpful assistant."#,
             http_routes_v2: None,
         };
 
-        let loader = ComponentLoader::new();
+        let loader = ContentLoader::new();
         let skills = loader.load_v2_tool_prompts(&manifest, plugin_dir).await.unwrap();
 
         // Should gracefully skip missing files

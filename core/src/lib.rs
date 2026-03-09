@@ -184,7 +184,7 @@ pub use crate::dispatcher::tool_index::{
 // =============================================================================
 
 pub use crate::extension::{
-    ComponentLoader, ComponentRegistry, ExtensionConfig, ExtensionError,
+    ContentLoader, ExtensionConfig, ExtensionError,
     ExtensionManager, ExtensionResult, LoadSummary, PluginInfo, SyncExtensionManager,
 };
 
