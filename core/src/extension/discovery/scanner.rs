@@ -75,11 +75,22 @@ pub fn scan_directory(
     results
 }
 
+/// Check if a plugin directory is disabled via `.disabled` marker file
+pub fn is_plugin_disabled(dir: &Path) -> bool {
+    dir.join(".disabled").exists()
+}
+
 /// Scan a single directory as a potential plugin
 fn scan_plugin_dir(
     dir: &Path,
     origin: PluginOrigin,
 ) -> Result<Option<PluginCandidate>, ExtensionError> {
+    // Skip disabled plugins
+    if is_plugin_disabled(dir) {
+        debug!("Skipping disabled plugin: {:?}", dir);
+        return Ok(None);
+    }
+
     // Try manifest-based plugins first
     if let Ok(manifest) = parse_manifest_from_dir_sync(dir) {
         return Ok(Some(PluginCandidate {
@@ -236,5 +247,44 @@ mod tests {
         let candidate = results[0].as_ref().unwrap();
         assert_eq!(candidate.id, "standalone");
         assert_eq!(candidate.kind, PluginKind::Wasm);
+    }
+
+    #[test]
+    fn test_scan_directory_skips_disabled() {
+        let dir = tempdir().unwrap();
+
+        // Create a plugin with .disabled marker
+        let disabled_dir = dir.path().join("disabled-plugin");
+        fs::create_dir(&disabled_dir).unwrap();
+        fs::write(disabled_dir.join("SKILL.md"), "# Disabled").unwrap();
+        fs::write(disabled_dir.join(".disabled"), "").unwrap();
+
+        // Create an enabled plugin
+        let enabled_dir = dir.path().join("enabled-plugin");
+        fs::create_dir(&enabled_dir).unwrap();
+        fs::write(enabled_dir.join("SKILL.md"), "# Enabled").unwrap();
+
+        let results = scan_directory(dir.path(), PluginOrigin::Global);
+        assert_eq!(results.len(), 1);
+        let candidate = results[0].as_ref().unwrap();
+        assert_eq!(candidate.id, "enabled-plugin");
+    }
+
+    #[test]
+    fn test_is_plugin_disabled() {
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("test-plugin");
+        fs::create_dir(&plugin_dir).unwrap();
+
+        // Not disabled initially
+        assert!(!is_plugin_disabled(&plugin_dir));
+
+        // Disabled after creating marker
+        fs::write(plugin_dir.join(".disabled"), "").unwrap();
+        assert!(is_plugin_disabled(&plugin_dir));
+
+        // Enabled again after removing marker
+        fs::remove_file(plugin_dir.join(".disabled")).unwrap();
+        assert!(!is_plugin_disabled(&plugin_dir));
     }
 }

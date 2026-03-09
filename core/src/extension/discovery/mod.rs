@@ -25,7 +25,7 @@ mod resolver;
 mod scanner;
 
 pub use resolver::{resolve_conflicts, ResolvedPlugins};
-pub use scanner::{scan_directory, PluginCandidate};
+pub use scanner::{is_plugin_disabled, scan_directory, PluginCandidate};
 
 use std::path::PathBuf;
 use tracing::debug;
