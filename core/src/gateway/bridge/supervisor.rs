@@ -41,6 +41,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::gateway::bridge::types::{BridgeRuntime, TransportType};
 use crate::gateway::link::LinkId;
+#[cfg(unix)]
 use crate::gateway::transport::unix_socket::UnixSocketTransport;
 use crate::gateway::transport::{StdioTransport, Transport};
 
@@ -341,6 +342,7 @@ impl BridgeSupervisor {
 
         // 5. Create transport and connect.
         let transport: Arc<dyn Transport> = match config.transport_type {
+            #[cfg(unix)]
             TransportType::UnixSocket => {
                 // Wait for the bridge to create its socket.
                 Self::wait_for_socket(&socket_path, Duration::from_secs(10)).await?;
@@ -352,6 +354,12 @@ impl BridgeSupervisor {
                     ))
                 })?;
                 Arc::new(transport)
+            }
+            #[cfg(not(unix))]
+            TransportType::UnixSocket => {
+                return Err(BridgeSupervisorError::ConnectionFailed(
+                    "Unix socket transport is not supported on this platform".to_string(),
+                ));
             }
             TransportType::Stdio => {
                 let stdin = child.stdin.take().ok_or_else(|| {

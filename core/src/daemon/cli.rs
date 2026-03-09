@@ -109,6 +109,7 @@ impl DaemonCli {
     }
 
     async fn run(&self) -> Result<()> {
+        #[cfg(unix)]
         use crate::daemon::ipc::IpcServer;
         use crate::daemon::dispatcher::{Dispatcher, DispatcherConfig};
         use crate::daemon::worldmodel::{WorldModel, WorldModelConfig};
@@ -186,13 +187,16 @@ impl DaemonCli {
         });
         info!("Dispatcher started");
 
-        // 7. Start IPC Server
-        let server = IpcServer::new(config.socket_path.clone());
-        let server_handle = tokio::spawn(async move {
-            if let Err(e) = server.start().await {
-                error!("IPC server error: {}", e);
-            }
-        });
+        // 7. Start IPC Server (Unix only — uses Unix domain sockets)
+        #[cfg(unix)]
+        let server_handle = {
+            let server = IpcServer::new(config.socket_path.clone());
+            tokio::spawn(async move {
+                if let Err(e) = server.start().await {
+                    error!("IPC server error: {}", e);
+                }
+            })
+        };
 
         // 8. Wait for Ctrl+C
         tokio::signal::ctrl_c().await?;
@@ -202,6 +206,7 @@ impl DaemonCli {
         registry.shutdown_all().await?;
         worldmodel_handle.abort();
         dispatcher_handle.abort();
+        #[cfg(unix)]
         server_handle.abort();
         info!("Daemon stopped");
 

@@ -15,6 +15,7 @@ pub mod bridge;
 pub mod config;
 pub mod decision;
 pub mod forwarder;
+#[cfg(unix)]
 pub mod ipc;
 pub mod kernel;
 pub mod leak_detector;
@@ -40,6 +41,7 @@ pub use forwarder::{
     ApprovalMessage, ExecApprovalForwarder, ForwardMode, ForwardTarget, ForwarderConfig,
     ForwarderEvent,
 };
+#[cfg(unix)]
 pub use ipc::{IpcClient, IpcConnection, IpcError, IpcMessage, IpcServer, PendingInfo};
 pub use kernel::{RiskAssessment, SecurityKernel};
 pub use manager::{ExecApprovalManager, ExecApprovalRecord, PendingApproval};

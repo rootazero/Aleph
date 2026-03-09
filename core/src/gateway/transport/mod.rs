@@ -11,6 +11,7 @@
 
 mod traits;
 pub mod stdio;
+#[cfg(unix)]
 pub mod unix_socket;
 
 pub use stdio::StdioTransport;
