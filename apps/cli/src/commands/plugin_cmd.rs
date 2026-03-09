@@ -408,6 +408,99 @@ Describe when and how to use this skill.
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// `aleph plugin pack`
+// ---------------------------------------------------------------------------
+
+const PACK_EXCLUDE: &[&str] = &[
+    "node_modules",
+    ".git",
+    "target",
+    ".DS_Store",
+    ".aleph-plugin.zip",
+    "__pycache__",
+    ".mypy_cache",
+];
+
+/// Pack a plugin directory into a distributable archive.
+pub fn pack(plugin_dir: &Path, output: Option<&Path>) -> CliResult<()> {
+    // 1. Validate first
+    let validation = validate_plugin_dir(plugin_dir)?;
+    if !validation.errors.is_empty() {
+        for err in &validation.errors {
+            eprintln!("  [error] {}", err);
+        }
+        return Err(CliError::Other(
+            "Plugin validation failed. Fix errors before packing.".into(),
+        ));
+    }
+
+    // 2. Determine output path
+    let plugin_name = plugin_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("plugin");
+    let output_path = output
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| plugin_dir.join(format!("{}.aleph-plugin.zip", plugin_name)));
+
+    // 3. Create zip
+    let file = std::fs::File::create(&output_path).map_err(CliError::Io)?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    // 4. Walk directory, add files
+    add_dir_to_zip(&mut zip, plugin_dir, plugin_dir, &options)?;
+
+    zip.finish()
+        .map_err(|e| CliError::Other(format!("Failed to finalize zip: {}", e)))?;
+
+    println!("Packed plugin to: {}", output_path.display());
+    let size = std::fs::metadata(&output_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    println!("Archive size: {} bytes", size);
+
+    Ok(())
+}
+
+fn add_dir_to_zip(
+    zip: &mut zip::ZipWriter<std::fs::File>,
+    base: &Path,
+    dir: &Path,
+    options: &zip::write::SimpleFileOptions,
+) -> CliResult<()> {
+    for entry in std::fs::read_dir(dir).map_err(CliError::Io)? {
+        let entry = entry.map_err(CliError::Io)?;
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        // Skip excluded patterns
+        if PACK_EXCLUDE
+            .iter()
+            .any(|ex| name == *ex || name.ends_with(ex))
+        {
+            continue;
+        }
+
+        let relative = path.strip_prefix(base).unwrap_or(&path);
+        let relative_str = relative.to_string_lossy().replace('\\', "/");
+
+        if path.is_dir() {
+            add_dir_to_zip(zip, base, &path, options)?;
+        } else {
+            zip.start_file(&relative_str, *options)
+                .map_err(|e| CliError::Other(format!("Zip error: {}", e)))?;
+            let mut f = std::fs::File::open(&path).map_err(CliError::Io)?;
+            let mut buf = Vec::new();
+            f.read_to_end(&mut buf).map_err(CliError::Io)?;
+            zip.write_all(&buf).map_err(CliError::Io)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,5 +659,39 @@ description = "duplicate"
             PluginTemplate::Static
         ));
         assert!("unknown".parse::<PluginTemplate>().is_err());
+    }
+
+    #[test]
+    fn pack_creates_zip() {
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("my-plugin");
+        scaffold_plugin(&plugin_dir, "my-plugin", PluginTemplate::Static).unwrap();
+
+        let output = dir.path().join("out.aleph-plugin.zip");
+        pack(&plugin_dir, Some(&output)).unwrap();
+
+        assert!(output.exists());
+        assert!(output.metadata().unwrap().len() > 0);
+    }
+
+    #[test]
+    fn pack_excludes_node_modules() {
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("p");
+        scaffold_plugin(&plugin_dir, "p", PluginTemplate::NodeJs).unwrap();
+
+        // Create fake node_modules
+        std::fs::create_dir_all(plugin_dir.join("node_modules/dep")).unwrap();
+        std::fs::write(plugin_dir.join("node_modules/dep/index.js"), "").unwrap();
+
+        let output = dir.path().join("out.zip");
+        pack(&plugin_dir, Some(&output)).unwrap();
+
+        let file = std::fs::File::open(&output).unwrap();
+        let archive = zip::ZipArchive::new(file).unwrap();
+        let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+        assert!(names.iter().all(|n| !n.contains("node_modules")));
+        // But should include other files
+        assert!(names.iter().any(|n| n.contains("aleph.plugin.toml")));
     }
 }
