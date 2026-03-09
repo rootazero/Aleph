@@ -297,6 +297,12 @@ pub use crate::search::{ProviderTestResult, SearchProviderTestConfig};
 
 pub use crate::generation::{GenerationProvider, GenerationProviderRegistry, GenerationType};
 
+// Media Pipeline Exports
+pub use crate::media::{
+    AudioFormat, DocFormat, MediaChunk, MediaError, MediaImageFormat, MediaInput, MediaOutput,
+    MediaPipeline, MediaPolicy, MediaProvider, MediaType, VideoFormat,
+};
+
 // =============================================================================
 // Conversation Exports
 // =============================================================================
