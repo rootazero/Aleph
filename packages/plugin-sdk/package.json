@@ -1,0 +1,33 @@
+{
+  "name": "@aleph/plugin-sdk",
+  "version": "0.1.0",
+  "description": "SDK for building Aleph plugins — TypeScript types and helpers for the plugin IPC protocol",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "npx tsx src/__tests__/types.test.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "aleph",
+    "plugin",
+    "sdk",
+    "ai-assistant"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "tsx": "^4.7.0"
+  }
+}
