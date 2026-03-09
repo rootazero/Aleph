@@ -59,6 +59,7 @@ pub mod decision;
 pub mod events;
 pub mod guards;
 pub mod heartbeat;
+pub mod interrupt;
 pub mod message_builder;
 pub mod meta_cognition_integration;
 pub mod overflow;
