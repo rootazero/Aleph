@@ -364,4 +364,119 @@ mod tests {
     fn test_create_session_queue_steer_panics_without_interrupt() {
         create_session_queue(QueueMode::Steer, None, None);
     }
+
+    // ── Integration tests ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_steering_full_chain() {
+        use crate::agent_loop::{InterruptChannel, InterruptSignal};
+
+        // Setup: create interrupt channel and steer queue
+        let (interrupt_tx, mut interrupt_rx) = InterruptChannel::new();
+        let mut queue = SteerQueue::new(interrupt_tx);
+
+        // Simulate: user sends message while agent is "busy"
+        queue.enqueue("actually, do something else".into()).await;
+
+        // Verify: interrupt signal was sent
+        let signal = interrupt_rx.try_recv();
+        assert!(signal.is_some(), "Expected interrupt signal from SteerQueue");
+        match signal.unwrap() {
+            InterruptSignal::NewMessage { content } => {
+                assert_eq!(content, "actually, do something else");
+            }
+        }
+
+        // Verify: message is still available for processing
+        let next_msg = queue.next().await;
+        assert_eq!(next_msg, Some("actually, do something else".to_string()));
+
+        // Verify: queue is drained
+        assert_eq!(queue.next().await, None);
+        assert!(interrupt_rx.try_recv().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_steer_queue_multiple_steers_in_sequence() {
+        use crate::agent_loop::{InterruptChannel, InterruptSignal};
+
+        let (tx, mut rx) = InterruptChannel::new();
+        let mut queue = SteerQueue::new(tx);
+
+        // First steer
+        queue.enqueue("stop, do X".into()).await;
+        let sig = rx.try_recv().unwrap();
+        match sig {
+            InterruptSignal::NewMessage { content } => assert_eq!(content, "stop, do X"),
+        }
+        assert_eq!(queue.next().await, Some("stop, do X".into()));
+
+        // Second steer — channel should still work
+        queue.enqueue("no wait, do Y".into()).await;
+        let sig = rx.try_recv().unwrap();
+        match sig {
+            InterruptSignal::NewMessage { content } => assert_eq!(content, "no wait, do Y"),
+        }
+        assert_eq!(queue.next().await, Some("no wait, do Y".into()));
+
+        // Both drained
+        assert_eq!(queue.next().await, None);
+        assert!(rx.try_recv().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_all_queue_modes_lifecycle() {
+        use crate::agent_loop::InterruptChannel;
+
+        // Followup: FIFO, no merging
+        let mut followup = FollowupQueue::new();
+        assert_eq!(followup.mode(), QueueMode::Followup);
+        followup.enqueue("a".into()).await;
+        followup.enqueue("b".into()).await;
+        assert_eq!(followup.next().await, Some("a".into()));
+        assert_eq!(followup.next().await, Some("b".into()));
+        assert_eq!(followup.next().await, None);
+
+        // Steer: sends interrupt + retains message
+        let (tx, mut rx) = InterruptChannel::new();
+        let mut steer = SteerQueue::new(tx);
+        assert_eq!(steer.mode(), QueueMode::Steer);
+        steer.enqueue("x".into()).await;
+        assert!(rx.try_recv().is_some());
+        assert_eq!(steer.next().await, Some("x".into()));
+        assert_eq!(steer.next().await, None);
+
+        // Collect: buffers within window, merges after
+        let mut collect = CollectQueue::new(std::time::Duration::from_millis(30));
+        assert_eq!(collect.mode(), QueueMode::Collect);
+        collect.enqueue("1".into()).await;
+        collect.enqueue("2".into()).await;
+        assert_eq!(collect.next().await, None); // Still in window
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        let merged = collect.next().await.unwrap();
+        assert!(merged.contains("1") && merged.contains("2"));
+        assert_eq!(collect.next().await, None);
+    }
+
+    #[test]
+    fn test_create_session_queue_factory_all_modes() {
+        use crate::agent_loop::InterruptChannel;
+
+        // Followup mode
+        let queue = create_session_queue(QueueMode::Followup, None, None);
+        assert_eq!(queue.mode(), QueueMode::Followup);
+
+        // Steer mode
+        let (tx, _rx) = InterruptChannel::new();
+        let queue = create_session_queue(QueueMode::Steer, None, Some(tx));
+        assert_eq!(queue.mode(), QueueMode::Steer);
+
+        // Collect mode with custom window
+        let queue = create_session_queue(QueueMode::Collect, Some(5000), None);
+        assert_eq!(queue.mode(), QueueMode::Collect);
+
+        // Collect mode with default window
+        let queue = create_session_queue(QueueMode::Collect, None, None);
+        assert_eq!(queue.mode(), QueueMode::Collect);
+    }
 }
