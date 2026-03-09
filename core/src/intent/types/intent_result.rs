@@ -15,7 +15,7 @@ pub enum DirectToolSource {
 }
 
 /// Which detection layer resolved the intent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DetectionLayer {
     /// L0 — system-level / bypass
     L0,
@@ -26,13 +26,8 @@ pub enum DetectionLayer {
     /// L3 — lightweight classifier
     L3,
     /// L4 — fallback default (conversation)
+    #[default]
     L4Default,
-}
-
-impl Default for DetectionLayer {
-    fn default() -> Self {
-        Self::L4Default
-    }
 }
 
 /// Metadata attached to an `Execute` intent.

@@ -514,11 +514,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     }
                     println!();
                 }
-            } else {
-                if !args.daemon {
-                    println!("A2A: skipping server (no execution adapter available)");
-                    println!();
-                }
+            } else if !args.daemon {
+                println!("A2A: skipping server (no execution adapter available)");
+                println!();
             }
         } else if !args.daemon {
             println!("A2A protocol: disabled (set [a2a] enabled = true in config)");

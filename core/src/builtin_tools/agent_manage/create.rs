@@ -52,7 +52,7 @@ pub fn generate_agent_id_from_name(name: &str) -> String {
         && slug
             .chars()
             .next()
-            .map_or(false, |c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
     {
         return slug;
     }

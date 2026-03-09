@@ -155,10 +155,8 @@ async fn update_config_api_key(
         provider.api_key = Some(token.to_string());
         provider.enabled = true;
         provider.verified = true;
-    } else {
-        if let Some(provider) = cfg.providers.get_mut(provider_name) {
-            provider.api_key = None;
-        }
+    } else if let Some(provider) = cfg.providers.get_mut(provider_name) {
+        provider.api_key = None;
     }
 
     if let Err(e) = cfg.save() {

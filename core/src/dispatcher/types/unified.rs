@@ -14,18 +14,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// How a command is dispatched when invoked by user
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DispatchMode {
     /// Execute directly, bypass Agent Loop (e.g., /help, /status)
     Direct,
     /// Inject into Agent Loop with context (e.g., /search, /translate)
+    #[default]
     AgentLoop,
-}
-
-impl Default for DispatchMode {
-    fn default() -> Self {
-        DispatchMode::AgentLoop
-    }
 }
 
 /// Channel types for visibility filtering

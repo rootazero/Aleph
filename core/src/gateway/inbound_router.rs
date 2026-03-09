@@ -592,10 +592,8 @@ impl InboundMessageRouter {
             }
 
             // Fallback: /groupchat without unified registry
-            if slash_text.starts_with("/groupchat") {
-                if self.group_chat_orch.is_some() {
-                    return self.handle_groupchat_command(&msg).await;
-                }
+            if slash_text.starts_with("/groupchat") && self.group_chat_orch.is_some() {
+                return self.handle_groupchat_command(&msg).await;
             }
 
             // Unrecognized slash command — fall through to normal message handling

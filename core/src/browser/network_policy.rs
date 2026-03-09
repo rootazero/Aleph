@@ -73,17 +73,9 @@ impl fmt::Display for PolicyViolation {
 impl std::error::Error for PolicyViolation {}
 
 /// SSRF protection policy that validates URLs before navigation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SsrfPolicy {
     config: SsrfConfig,
-}
-
-impl Default for SsrfPolicy {
-    fn default() -> Self {
-        Self {
-            config: SsrfConfig::default(),
-        }
-    }
 }
 
 impl SsrfPolicy {

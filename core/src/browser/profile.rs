@@ -8,19 +8,14 @@ use serde::{Deserialize, Serialize};
 use super::network_policy::SsrfConfig;
 
 /// Supported browser engines.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum BrowserType {
+    #[default]
     Chromium,
     Chrome,
     Brave,
     Edge,
-}
-
-impl Default for BrowserType {
-    fn default() -> Self {
-        Self::Chromium
-    }
 }
 
 /// Per-profile browser configuration.
@@ -146,7 +141,7 @@ impl Default for PlaywrightMcpConfig {
 }
 
 /// Top-level browser system configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserSystemConfig {
     /// Named browser profiles.
     #[serde(default)]
@@ -159,16 +154,6 @@ pub struct BrowserSystemConfig {
     /// Playwright MCP integration settings.
     #[serde(default)]
     pub playwright_mcp: PlaywrightMcpConfig,
-}
-
-impl Default for BrowserSystemConfig {
-    fn default() -> Self {
-        Self {
-            profiles: HashMap::new(),
-            policy: SsrfConfig::default(),
-            playwright_mcp: PlaywrightMcpConfig::default(),
-        }
-    }
 }
 
 #[cfg(test)]

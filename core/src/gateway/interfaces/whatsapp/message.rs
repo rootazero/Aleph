@@ -39,7 +39,7 @@ pub fn bridge_message_to_inbound(
 
             let attachments = media
                 .as_ref()
-                .and_then(|m| media_payload_to_attachment(m))
+                .and_then(media_payload_to_attachment)
                 .into_iter()
                 .collect();
 
@@ -52,7 +52,7 @@ pub fn bridge_message_to_inbound(
                 text: text.clone(),
                 attachments,
                 timestamp: ts,
-                reply_to: reply_to.as_ref().map(|r| MessageId::new(r)),
+                reply_to: reply_to.as_ref().map(MessageId::new),
                 is_group: *is_group,
                 raw: None,
             })
@@ -66,7 +66,7 @@ pub fn outbound_to_send_request(message: &OutboundMessage) -> SendRequest {
     let media = message
         .attachments
         .first()
-        .and_then(|a| attachment_to_media_payload(a));
+        .and_then(attachment_to_media_payload);
 
     SendRequest {
         to: message.conversation_id.0.clone(),

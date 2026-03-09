@@ -228,7 +228,7 @@ impl MemorySearchTool {
         let use_smart_recall = matches!(&workspace_filter, WorkspaceFilter::Single(_))
             && args.cross_workspace.is_none()
             && args.workspaces.is_none()
-            && smart_recall_cfg.as_ref().map_or(false, |c| c.enabled);
+            && smart_recall_cfg.as_ref().is_some_and(|c| c.enabled);
 
         // Step 1: Fact-first retrieval (with optional Smart Recall Phase 2)
         let (retrieval_result, cross_workspace_results, recall_triggered) = if use_smart_recall {

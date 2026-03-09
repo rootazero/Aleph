@@ -11,19 +11,14 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 /// - `Lan`: Bind to 0.0.0.0 (all interfaces, accessible from LAN).
 /// - `Tailnet`: Bind to the Tailscale IP (future: auto-detect via `tailscale status`).
 /// - `Auto`: Automatically choose the best bind address (currently falls back to loopback).
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum BindMode {
+    #[default]
     Loopback,
     Lan,
     Tailnet,
     Auto,
-}
-
-impl Default for BindMode {
-    fn default() -> Self {
-        Self::Loopback
-    }
 }
 
 impl BindMode {

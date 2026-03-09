@@ -361,7 +361,7 @@ impl BuiltinToolRegistry {
         ] {
             tools.insert(
                 name.to_string(),
-                UnifiedTool::new(&format!("builtin:{name}"), name, desc, ToolSource::Builtin),
+                UnifiedTool::new(format!("builtin:{name}"), name, desc, ToolSource::Builtin),
             );
         }
         info!("Registered browser tools (11 tools) in BuiltinToolRegistry");
@@ -625,7 +625,7 @@ impl BuiltinToolRegistry {
                 ] {
                     tools.insert(
                         name.to_string(),
-                        UnifiedTool::new(&format!("builtin:{}", name), name, desc, ToolSource::Builtin),
+                        UnifiedTool::new(format!("builtin:{}", name), name, desc, ToolSource::Builtin),
                     );
                 }
 

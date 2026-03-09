@@ -691,8 +691,7 @@ impl XmppMessageOps {
                                         tracing::warn!("XMPP bind send failed: {e}");
                                         break 'inner true;
                                     }
-                                } else if stanza.contains("<iq") && stanza.contains("type='result'") || stanza.contains("type=\"result\"") {
-                                    if stanza.contains("bind") {
+                                } else if (stanza.contains("<iq") && stanza.contains("type='result'") || stanza.contains("type=\"result\"")) && stanza.contains("bind") {
                                         tracing::info!("XMPP resource bound");
 
                                         // Start session
@@ -721,7 +720,6 @@ impl XmppMessageOps {
                                             }
                                             tracing::info!("XMPP joining MUC room {room}");
                                         }
-                                    }
                                 }
                             } else {
                                 // Fully connected — handle messages and pings
