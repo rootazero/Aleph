@@ -24,11 +24,6 @@ Feature: Basic Configuration
     And dreaming window_start should be "02:00"
     And dreaming window_end should be "05:00"
 
-  Scenario: Default excluded apps include security apps
-    Given a default MemoryConfig
-    Then excluded_apps should contain "com.apple.keychainaccess"
-    And excluded_apps should contain "com.agilebits.onepassword7"
-
   Scenario: Shortcuts config has expected defaults
     Given a default ShortcutsConfig
     Then the summon shortcut should be "Command+Grave"

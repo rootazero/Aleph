@@ -1,7 +1,7 @@
 //! Memory module for context-aware local RAG
 //!
 //! This module provides functionality for storing and retrieving interaction memories
-//! with context anchors (app_bundle_id + window_title).
+//! with context anchors (window_title + topic_id).
 //!
 //! ## Architecture
 //!

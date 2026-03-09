@@ -232,7 +232,7 @@ impl MemoryContext {
     }
 
     /// Set context anchor for memory operations
-    pub fn set_context(&mut self, _app_bundle_id: &str, window_title: &str) {
+    pub fn set_context(&mut self, window_title: &str) {
         self.context_anchor = Some(ContextAnchor::now(
             window_title.to_string(),
         ));
