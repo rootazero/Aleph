@@ -7,6 +7,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::thinker::cache::CacheControl;
+
 /// Request body for Claude Messages API
 #[derive(Debug, Serialize)]
 pub struct MessagesRequest {
@@ -31,14 +33,27 @@ pub struct SystemBlock {
     #[serde(rename = "type")]
     pub block_type: String,
     pub text: String,
+    /// Optional cache control marker for Anthropic prompt caching
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
 }
 
 impl SystemBlock {
-    /// Create a text system block
+    /// Create a text system block (no caching)
     pub fn text(content: impl Into<String>) -> Self {
         Self {
             block_type: "text".to_string(),
             text: content.into(),
+            cache_control: None,
+        }
+    }
+
+    /// Create a text system block with ephemeral cache control
+    pub fn cached_text(content: impl Into<String>) -> Self {
+        Self {
+            block_type: "text".to_string(),
+            text: content.into(),
+            cache_control: Some(CacheControl::ephemeral()),
         }
     }
 }
@@ -255,6 +270,38 @@ mod tests {
         assert_eq!(usage.input_tokens, 200);
         assert_eq!(usage.output_tokens, 100);
         assert_eq!(usage.cache_read_input_tokens, Some(150));
+    }
+
+    #[test]
+    fn test_system_block_with_cache_control_serializes() {
+        let block = SystemBlock {
+            block_type: "text".into(),
+            text: "You are a helpful assistant.".into(),
+            cache_control: Some(CacheControl::ephemeral()),
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(json.contains("cache_control"));
+        assert!(json.contains("ephemeral"));
+    }
+
+    #[test]
+    fn test_system_block_without_cache_control_omits_field() {
+        let block = SystemBlock {
+            block_type: "text".into(),
+            text: "You are a helpful assistant.".into(),
+            cache_control: None,
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(!json.contains("cache_control"));
+    }
+
+    #[test]
+    fn test_system_block_cached_text_constructor() {
+        let block = SystemBlock::cached_text("Stable system prompt");
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(json.contains("cache_control"));
+        assert!(json.contains("ephemeral"));
+        assert!(json.contains("Stable system prompt"));
     }
 
     #[test]
