@@ -96,7 +96,7 @@ impl GroupChatConfig {
 /// provider = "anthropic"
 /// model = "claude-sonnet-4-20250514"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct PersonaConfig {
     /// Unique identifier for this persona
     pub id: String,
@@ -118,19 +118,6 @@ pub struct PersonaConfig {
     /// Optional thinking level override (e.g., "low", "medium", "high")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<String>,
-}
-
-impl Default for PersonaConfig {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            name: String::new(),
-            system_prompt: String::new(),
-            provider: None,
-            model: None,
-            thinking_level: None,
-        }
-    }
 }
 
 impl PersonaConfig {

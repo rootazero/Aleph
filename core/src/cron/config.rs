@@ -316,17 +316,12 @@ impl std::fmt::Display for JobStatus {
 // --- New types for extended scheduling ---
 
 /// Kind of schedule expression
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScheduleKind {
+    #[default]
     Cron,
     Every,
     At,
-}
-
-impl Default for ScheduleKind {
-    fn default() -> Self {
-        Self::Cron
-    }
 }
 
 impl ScheduleKind {
@@ -348,18 +343,13 @@ impl ScheduleKind {
 }
 
 /// What triggered a job run
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TriggerSource {
+    #[default]
     Schedule,
     Chain,
     Manual,
     Catchup,
-}
-
-impl Default for TriggerSource {
-    fn default() -> Self {
-        Self::Schedule
-    }
 }
 
 impl TriggerSource {

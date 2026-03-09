@@ -23,7 +23,7 @@ pub struct A2AConfig {
 }
 
 /// A2A server endpoint configuration
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct A2AServerConfig {
     /// Enable A2A server endpoints
     #[serde(default)]
@@ -48,19 +48,6 @@ pub struct A2AServerConfig {
     /// Manually defined skills (auto-generated from ToolRegistry if empty)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<A2ASkillConfig>,
-}
-
-impl Default for A2AServerConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            card_name: None,
-            card_description: None,
-            card_version: None,
-            security: A2ASecurityConfig::default(),
-            skills: Vec::new(),
-        }
-    }
 }
 
 /// A2A security settings

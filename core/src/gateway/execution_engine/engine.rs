@@ -686,7 +686,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             *sr = active_workspace.profile.smart_recall.clone();
             debug!(
                 run_id = run_id,
-                enabled = active_workspace.profile.smart_recall.as_ref().map_or(false, |c| c.enabled),
+                enabled = active_workspace.profile.smart_recall.as_ref().is_some_and(|c| c.enabled),
                 "Updated tool smart recall config"
             );
         }

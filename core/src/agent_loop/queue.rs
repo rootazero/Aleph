@@ -13,21 +13,16 @@ use std::collections::VecDeque;
 use super::interrupt::{InterruptSender, InterruptSignal};
 
 /// Queue mode determines how new messages are handled while agent is busy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum QueueMode {
     /// Messages wait in line, processed one by one after current turn.
+    #[default]
     Followup,
     /// New message interrupts current tool execution (steering).
     Steer,
     /// Collect messages for N seconds, then merge into one.
     Collect,
-}
-
-impl Default for QueueMode {
-    fn default() -> Self {
-        Self::Followup
-    }
 }
 
 /// Abstraction for session message queuing strategies.

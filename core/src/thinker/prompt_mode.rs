@@ -9,9 +9,10 @@
 /// prompt.  Each layer declares which modes it supports via
 /// [`PromptLayer::supports_mode`]; the pipeline skips layers that
 /// return `false` for the active mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum PromptMode {
     /// All layers participate — maximum context.
+    #[default]
     Full,
     /// Heavy/verbose layers are excluded to save tokens.
     Compact,
@@ -27,12 +28,6 @@ impl PromptMode {
             Self::Compact => "compact",
             Self::Minimal => "minimal",
         }
-    }
-}
-
-impl Default for PromptMode {
-    fn default() -> Self {
-        Self::Full
     }
 }
 
