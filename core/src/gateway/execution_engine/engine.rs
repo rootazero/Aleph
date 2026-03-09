@@ -1218,15 +1218,45 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // Build tool arguments — map slash command args to the
                 // correct field names for each tool's expected schema.
                 let arguments = match tool_id {
-                    "agent_switch" => serde_json::json!({
+                    "agent_switch" | "agent_delete" => serde_json::json!({
                         "agent_id": args_str,
                     }),
                     "agent_create" => serde_json::json!({
                         "input": args_str,
                     }),
-                    "agent_delete" => serde_json::json!({
-                        "agent_id": args_str,
+                    // URL-based tools
+                    "browser_open" | "web_fetch" => serde_json::json!({
+                        "url": args_str,
                     }),
+                    // Selector-based browser tools
+                    "browser_click" | "browser_select" => serde_json::json!({
+                        "selector": args_str,
+                    }),
+                    "browser_type" => {
+                        // /browser_type <selector> <text>
+                        let (sel, txt) = args_str.split_once(' ')
+                            .unwrap_or((args_str, ""));
+                        serde_json::json!({
+                            "selector": sel,
+                            "text": txt,
+                        })
+                    }
+                    "browser_evaluate" => serde_json::json!({
+                        "script": args_str,
+                    }),
+                    // Query-based tools
+                    "search" | "memory_search" => serde_json::json!({
+                        "query": args_str,
+                    }),
+                    // Tools with no required args or profile-only
+                    "browser_screenshot" | "browser_snapshot" | "browser_tabs"
+                    | "browser_navigate" | "browser_profile" => {
+                        if args_str.is_empty() {
+                            serde_json::json!({})
+                        } else {
+                            serde_json::json!({ "action": args_str })
+                        }
+                    }
                     _ => serde_json::json!({
                         "input": args_str,
                         "query": args_str,
