@@ -19,15 +19,9 @@ pub fn detect_plugin_kind(dir: &Path) -> PluginKind {
 }
 
 /// Detect entry point based on plugin kind and directory contents
-pub fn detect_entry_point(dir: &Path, kind: &PluginKind) -> String {
+pub fn detect_entry_point(_dir: &Path, kind: &PluginKind) -> String {
     match kind {
-        PluginKind::NodeJs => {
-            if dir.join("index.js").exists() {
-                "index.js".to_string()
-            } else {
-                "index.js".to_string()
-            }
-        }
+        PluginKind::NodeJs => "index.js".to_string(),
         PluginKind::Wasm => "plugin.wasm".to_string(),
         PluginKind::Static => ".".to_string(),
     }
