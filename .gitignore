@@ -90,7 +90,8 @@ bridges/
 clients/
 platforms/
 Scripts/
-examples/
+examples/*
+!examples/plugins/
 
 # UI node artifacts
 core/ui/
