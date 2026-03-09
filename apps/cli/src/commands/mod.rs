@@ -16,6 +16,7 @@ pub mod info;
 pub mod mcp_cmd;
 pub mod memory_cmd;
 pub mod models_cmd;
+pub mod plugin_cmd;
 pub mod plugins_cmd;
 pub mod poe_cmd;
 pub mod providers_cmd;
