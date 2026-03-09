@@ -49,6 +49,7 @@ pub mod hooks;
 mod plugin_loader;
 pub mod runtime;
 pub mod sync_api;
+pub mod validation;
 
 mod channel_manager;
 mod error;
