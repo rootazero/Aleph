@@ -95,6 +95,9 @@ pub struct Config {
     /// Skill evolution configuration (Skill Compiler - Phase 10)
     #[serde(default)]
     pub evolution: EvolutionConfig,
+    /// Media understanding pipeline configuration
+    #[serde(default)]
+    pub media: MediaConfig,
     /// Privacy and PII filtering configuration
     #[serde(default)]
     pub privacy: PrivacyConfig,
@@ -293,6 +296,7 @@ impl Default for Config {
             cron: CronConfig::default(),
             personas: Vec::new(),
             evolution: EvolutionConfig::default(),
+            media: MediaConfig::default(),
             privacy: PrivacyConfig::default(),
             profiles: HashMap::new(),
             secret_providers: HashMap::new(),
