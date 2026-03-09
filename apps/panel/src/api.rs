@@ -23,8 +23,6 @@ pub struct RawMemory {
     /// Combined display content (mapped from user_input + ai_output)
     pub content: String,
     #[serde(default)]
-    pub source: Option<String>,
-    #[serde(default)]
     pub created_at: Option<String>,
 }
 
@@ -57,8 +55,6 @@ struct BackendMemoryEntry {
     id: String,
     #[serde(default)]
     agent_id: String,
-    #[serde(default)]
-    app_bundle_id: String,
     #[serde(default)]
     window_title: String,
     #[serde(default)]
@@ -131,17 +127,10 @@ impl MemoryApi {
                 None
             };
 
-            let source = if !entry.app_bundle_id.is_empty() {
-                Some(entry.app_bundle_id)
-            } else {
-                None
-            };
-
             RawMemory {
                 id: entry.id,
                 agent_id: entry.agent_id,
                 content,
-                source,
                 created_at,
             }
         }).collect();
