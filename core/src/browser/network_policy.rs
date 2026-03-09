@@ -4,11 +4,12 @@
 use std::fmt;
 use std::net::IpAddr;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 /// Configuration for SSRF protection policy.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SsrfConfig {
     /// Block requests to private/loopback networks (default: true).
     #[serde(default = "default_true")]

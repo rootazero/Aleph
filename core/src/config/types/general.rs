@@ -30,6 +30,9 @@ pub struct GeneralConfig {
     /// Only used when queue_mode = "collect". Default: 3000ms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collect_window_ms: Option<u64>,
+    /// Browser system configuration (profiles, SSRF policy, Playwright MCP).
+    #[serde(default)]
+    pub browser: crate::browser::profile::BrowserSystemConfig,
 }
 
 // =============================================================================
@@ -114,6 +117,40 @@ impl Default for BehaviorConfig {
             output_mode: default_output_mode(),
             typing_speed: default_typing_speed(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_browser_config_in_general_config() {
+        let toml_str = r#"
+        [browser.profiles.default]
+        browser = "chromium"
+        cdp_port = 18800
+
+        [browser.policy]
+        block_private = true
+        blocked_domains = ["evil.com"]
+
+        [browser.playwright_mcp]
+        enabled = true
+        "#;
+
+        let config: GeneralConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.browser.policy.block_private);
+        assert_eq!(config.browser.profiles.len(), 1);
+        assert!(config.browser.playwright_mcp.enabled);
+    }
+
+    #[test]
+    fn test_general_config_default_browser() {
+        let toml_str = "";
+        let config: GeneralConfig = toml::from_str(toml_str).unwrap();
+        // Browser config should use defaults
+        assert!(config.browser.profiles.is_empty());
     }
 }
 
