@@ -226,6 +226,12 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "List and manage browser profiles",
         requires_config: false,
     },
+    // Media tools — require MediaPipeline
+    BuiltinToolDefinition {
+        name: "media_understand",
+        description: "Understand media content (images, audio, video, documents) with auto-detection and multi-provider fallback",
+        requires_config: true, // Requires media_pipeline
+    },
 ];
 
 /// Create a boxed tool instance by name
@@ -297,6 +303,12 @@ pub fn create_tool_boxed(
         // created dynamically in BuiltinToolRegistry::with_config().
         "subagent_spawn" | "subagent_steer" | "subagent_kill" => None,
         "escalate_task" => Some(Box::new(EscalateTaskTool)),
+        // Media tools — require MediaPipeline
+        "media_understand" => {
+            config.and_then(|c| c.media_pipeline.as_ref()).map(|pipeline| {
+                Box::new(crate::builtin_tools::media_tools::MediaUnderstandTool::new(Arc::clone(pipeline))) as Box<dyn AlephToolDyn>
+            })
+        }
         // Browser tools — create ProfileManager from config or use default
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
