@@ -131,6 +131,11 @@ pub trait LoopCallback: Send + Sync {
     /// Called when task fails
     async fn on_failed(&self, reason: &str);
 
+    /// Called when an action is cancelled due to interrupt (soft steering)
+    async fn on_action_cancelled(&self, _action: &Action, _reason: &str) {
+        // Default: no-op
+    }
+
     /// Called when loop is aborted by user
     async fn on_aborted(&self) {
         // Default: no-op
@@ -237,6 +242,9 @@ impl<T: LoopCallback + ?Sized> LoopCallback for &T {
     }
     async fn on_failed(&self, reason: &str) {
         (*self).on_failed(reason).await
+    }
+    async fn on_action_cancelled(&self, action: &Action, reason: &str) {
+        (*self).on_action_cancelled(action, reason).await
     }
     async fn on_aborted(&self) {
         (*self).on_aborted().await

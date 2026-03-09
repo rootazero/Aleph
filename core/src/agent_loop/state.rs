@@ -132,6 +132,33 @@ impl LoopState {
     pub fn elapsed(&self) -> std::time::Duration {
         self.started_at.elapsed()
     }
+
+    /// Record that an action was cancelled due to interrupt and inject
+    /// the new user message so the next think cycle picks it up.
+    pub fn record_interrupted_action(
+        &mut self,
+        action: &Action,
+        thinking: &Thinking,
+        new_input: &str,
+    ) {
+        // Record a step with ToolError result indicating cancellation
+        let step = LoopStep {
+            step_id: self.step_count,
+            observation_summary: String::new(),
+            thinking: thinking.clone(),
+            action: action.clone(),
+            result: ActionResult::ToolError {
+                error: format!("Interrupted: user sent new message: {}", new_input),
+                retryable: false,
+            },
+            tokens_used: 0,
+            duration_ms: 0,
+        };
+        self.record_step(step);
+
+        // Replace the original request so the next think cycle sees the new input
+        self.original_request = new_input.to_string();
+    }
 }
 
 /// Single loop step record
