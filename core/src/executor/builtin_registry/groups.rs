@@ -63,7 +63,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
     ToolGroup {
         id: "media",
         name: "媒体理解",
-        tools: &["media_understand"],
+        tools: &["media_understand", "audio_transcribe", "document_extract"],
     },
     ToolGroup {
         id: "agent_mgmt",

@@ -232,6 +232,16 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Understand media content (images, audio, video, documents) with auto-detection and multi-provider fallback",
         requires_config: true, // Requires media_pipeline
     },
+    BuiltinToolDefinition {
+        name: "audio_transcribe",
+        description: "Transcribe audio files to text with language detection",
+        requires_config: true, // Requires media_pipeline
+    },
+    BuiltinToolDefinition {
+        name: "document_extract",
+        description: "Extract text and structured data from documents",
+        requires_config: true, // Requires media_pipeline
+    },
 ];
 
 /// Create a boxed tool instance by name
@@ -307,6 +317,16 @@ pub fn create_tool_boxed(
         "media_understand" => {
             config.and_then(|c| c.media_pipeline.as_ref()).map(|pipeline| {
                 Box::new(crate::builtin_tools::media_tools::MediaUnderstandTool::new(Arc::clone(pipeline))) as Box<dyn AlephToolDyn>
+            })
+        }
+        "audio_transcribe" => {
+            config.and_then(|c| c.media_pipeline.as_ref()).map(|pipeline| {
+                Box::new(crate::builtin_tools::media_tools::AudioTranscribeTool::new(Arc::clone(pipeline))) as Box<dyn AlephToolDyn>
+            })
+        }
+        "document_extract" => {
+            config.and_then(|c| c.media_pipeline.as_ref()).map(|pipeline| {
+                Box::new(crate::builtin_tools::media_tools::DocumentExtractTool::new(Arc::clone(pipeline))) as Box<dyn AlephToolDyn>
             })
         }
         // Browser tools — create ProfileManager from config or use default
