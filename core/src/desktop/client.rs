@@ -13,11 +13,17 @@
 //! `DesktopBridgeClient::new()` probes both paths, preferring managed mode.
 
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::time::Duration;
+#[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(unix)]
 use tokio::net::UnixStream;
+#[cfg(unix)]
 use tokio::time::timeout;
+#[cfg(unix)]
 use tracing::debug;
+#[cfg(unix)]
 use uuid::Uuid;
 
 use super::error::DesktopError;
@@ -29,6 +35,7 @@ pub struct DesktopBridgeClient {
     socket_path: PathBuf,
 }
 
+#[cfg(unix)]
 impl DesktopBridgeClient {
     /// Create a new client.
     ///
@@ -114,6 +121,34 @@ impl DesktopBridgeClient {
         }
 
         Ok(response["result"].clone())
+    }
+}
+
+#[cfg(not(unix))]
+impl DesktopBridgeClient {
+    /// Create a new client (stub on non-Unix platforms).
+    pub fn new() -> Self {
+        Self {
+            socket_path: PathBuf::from(""),
+        }
+    }
+
+    /// Create a client pointing at a specific socket path (stub on non-Unix).
+    pub fn with_path(socket_path: PathBuf) -> Self {
+        Self { socket_path }
+    }
+
+    /// Returns `false` on non-Unix platforms (Unix domain sockets not available).
+    pub fn is_available(&self) -> bool {
+        false
+    }
+
+    /// Always returns `AppNotRunning` on non-Unix platforms.
+    pub async fn send(
+        &self,
+        _request: DesktopRequest,
+    ) -> Result<serde_json::Value, DesktopError> {
+        Err(DesktopError::AppNotRunning)
     }
 }
 

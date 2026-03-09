@@ -328,7 +328,7 @@ impl BridgeRpcClient {
             .map_err(|_| {
                 BridgeError::SocketError("Response channel closed unexpectedly".to_string())
             })?
-            .map_err(|e| BridgeError::SocketError(e))?;
+            .map_err(BridgeError::SocketError)?;
 
         serde_json::from_value(result).map_err(|e| {
             BridgeError::SocketError(format!("Failed to deserialize RPC response: {}", e))

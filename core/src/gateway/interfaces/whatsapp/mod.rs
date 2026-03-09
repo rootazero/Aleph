@@ -26,6 +26,7 @@ pub mod bridge_protocol;
 pub mod config;
 pub mod message;
 pub mod pairing;
+#[cfg(unix)]
 pub mod rpc_client;
 
 pub use config::WhatsAppConfig;
@@ -44,6 +45,7 @@ use tokio::sync::{mpsc, oneshot, RwLock};
 use bridge_manager::{BridgeManager, BridgeManagerConfig};
 use bridge_protocol::BridgeEvent;
 use pairing::PairingState;
+#[cfg(unix)]
 use rpc_client::BridgeRpcClient;
 
 /// WhatsApp channel implementation backed by a Go bridge process.
@@ -56,7 +58,8 @@ pub struct WhatsAppChannel {
     channel_state: ChannelState,
     /// Bridge process manager
     bridge_manager: BridgeManager,
-    /// JSON-RPC client for communicating with the bridge
+    /// JSON-RPC client for communicating with the bridge (Unix only)
+    #[cfg(unix)]
     rpc_client: Option<BridgeRpcClient>,
     /// Fine-grained pairing state
     pairing_state: Arc<RwLock<PairingState>>,
@@ -83,6 +86,7 @@ impl WhatsAppChannel {
             config,
             channel_state: ChannelState::new(100),
             bridge_manager,
+            #[cfg(unix)]
             rpc_client: None,
             pairing_state: Arc::new(RwLock::new(PairingState::Idle)),
             shutdown_tx: None,
@@ -329,59 +333,69 @@ impl Channel for WhatsAppChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
-        self.config.validate().map_err(ChannelError::ConfigError)?;
-
-        // 1. Set pairing state to Initializing
-        *self.pairing_state.write().await = PairingState::Initializing;
-        tracing::info!("Starting WhatsApp channel...");
-
-        // 2. Start the bridge process
-        if let Err(e) = self.bridge_manager.start().await {
-            *self.pairing_state.write().await = PairingState::Idle;
-            return Err(ChannelError::Internal(format!("Failed to start bridge: {}", e)));
+        #[cfg(not(unix))]
+        {
+            return Err(ChannelError::Internal(
+                "WhatsApp bridge requires Unix domain sockets (not available on this platform)".to_string(),
+            ));
         }
 
-        // 3. Create event channel and RPC client
-        let (event_tx, event_rx) = mpsc::channel(64);
-        let socket_path = self.bridge_manager.socket_path().clone();
-        let rpc_client = BridgeRpcClient::new(&socket_path, event_tx);
+        #[cfg(unix)]
+        {
+            self.config.validate().map_err(ChannelError::ConfigError)?;
 
-        // 4. Connect RPC client with retries
-        if let Err(e) = rpc_client.connect(5, 500).await {
-            let _ = self.bridge_manager.stop().await;
-            *self.pairing_state.write().await = PairingState::Idle;
-            return Err(ChannelError::Internal(format!("Failed to connect to bridge RPC: {}", e)));
+            // 1. Set pairing state to Initializing
+            *self.pairing_state.write().await = PairingState::Initializing;
+            tracing::info!("Starting WhatsApp channel...");
+
+            // 2. Start the bridge process
+            if let Err(e) = self.bridge_manager.start().await {
+                *self.pairing_state.write().await = PairingState::Idle;
+                return Err(ChannelError::Internal(format!("Failed to start bridge: {}", e)));
+            }
+
+            // 3. Create event channel and RPC client
+            let (event_tx, event_rx) = mpsc::channel(64);
+            let socket_path = self.bridge_manager.socket_path().clone();
+            let rpc_client = BridgeRpcClient::new(&socket_path, event_tx);
+
+            // 4. Connect RPC client with retries
+            if let Err(e) = rpc_client.connect(5, 500).await {
+                let _ = self.bridge_manager.stop().await;
+                *self.pairing_state.write().await = PairingState::Idle;
+                return Err(ChannelError::Internal(format!("Failed to connect to bridge RPC: {}", e)));
+            }
+
+            // 5. Tell the bridge to connect to WhatsApp
+            let connect_result: Result<serde_json::Value, _> = rpc_client
+                .call("bridge.connect", None)
+                .await;
+            if let Err(e) = connect_result {
+                rpc_client.disconnect().await;
+                let _ = self.bridge_manager.stop().await;
+                *self.pairing_state.write().await = PairingState::Idle;
+                return Err(ChannelError::Internal(format!("bridge.connect RPC failed: {}", e)));
+            }
+
+            // 6. Spawn event loop
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            let pairing_state = Arc::clone(&self.pairing_state);
+            let inbound_tx = self.channel_state.sender();
+            let channel_id = self.info.id.clone();
+
+            tokio::spawn(event_loop(
+                event_rx,
+                pairing_state,
+                inbound_tx,
+                channel_id,
+                shutdown_rx,
+            ));
+
+            self.rpc_client = Some(rpc_client);
+            self.shutdown_tx = Some(shutdown_tx);
+
+            Ok(())
         }
-
-        // 5. Tell the bridge to connect to WhatsApp
-        let connect_result: Result<serde_json::Value, _> = rpc_client
-            .call("bridge.connect", None)
-            .await;
-        if let Err(e) = connect_result {
-            rpc_client.disconnect().await;
-            let _ = self.bridge_manager.stop().await;
-            *self.pairing_state.write().await = PairingState::Idle;
-            return Err(ChannelError::Internal(format!("bridge.connect RPC failed: {}", e)));
-        }
-
-        // 6. Spawn event loop
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let pairing_state = Arc::clone(&self.pairing_state);
-        let inbound_tx = self.channel_state.sender();
-        let channel_id = self.info.id.clone();
-
-        tokio::spawn(event_loop(
-            event_rx,
-            pairing_state,
-            inbound_tx,
-            channel_id,
-            shutdown_rx,
-        ));
-
-        self.rpc_client = Some(rpc_client);
-        self.shutdown_tx = Some(shutdown_tx);
-
-        Ok(())
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
@@ -392,11 +406,14 @@ impl Channel for WhatsAppChannel {
             let _ = shutdown_tx.send(());
         }
 
-        // 2. Disconnect RPC client
-        if let Some(ref rpc_client) = self.rpc_client {
-            rpc_client.disconnect().await;
+        // 2. Disconnect RPC client (Unix only)
+        #[cfg(unix)]
+        {
+            if let Some(ref rpc_client) = self.rpc_client {
+                rpc_client.disconnect().await;
+            }
+            self.rpc_client = None;
         }
-        self.rpc_client = None;
 
         // 3. Stop bridge process
         self.bridge_manager.stop().await.map_err(|e| {
@@ -419,29 +436,40 @@ impl Channel for WhatsAppChannel {
         }
         drop(state);
 
-        // Get the RPC client
-        let rpc_client = self.rpc_client.as_ref().ok_or_else(|| {
-            ChannelError::Internal("RPC client not initialized".to_string())
-        })?;
+        #[cfg(not(unix))]
+        {
+            let _ = message;
+            return Err(ChannelError::Internal(
+                "WhatsApp bridge requires Unix domain sockets (not available on this platform)".to_string(),
+            ));
+        }
 
-        // Convert outbound message to bridge SendRequest
-        let send_request = message::outbound_to_send_request(&message);
-        let params = serde_json::to_value(&send_request).map_err(|e| {
-            ChannelError::SendFailed(format!("Failed to serialize send request: {}", e))
-        })?;
-
-        // Call bridge.send RPC
-        let response: bridge_protocol::SendResponse = rpc_client
-            .call("bridge.send", Some(params))
-            .await
-            .map_err(|e| {
-                ChannelError::SendFailed(format!("bridge.send RPC failed: {}", e))
+        #[cfg(unix)]
+        {
+            // Get the RPC client
+            let rpc_client = self.rpc_client.as_ref().ok_or_else(|| {
+                ChannelError::Internal("RPC client not initialized".to_string())
             })?;
 
-        Ok(SendResult {
-            message_id: MessageId::new(response.id),
-            timestamp: Utc::now(),
-        })
+            // Convert outbound message to bridge SendRequest
+            let send_request = message::outbound_to_send_request(&message);
+            let params = serde_json::to_value(&send_request).map_err(|e| {
+                ChannelError::SendFailed(format!("Failed to serialize send request: {}", e))
+            })?;
+
+            // Call bridge.send RPC
+            let response: bridge_protocol::SendResponse = rpc_client
+                .call("bridge.send", Some(params))
+                .await
+                .map_err(|e| {
+                    ChannelError::SendFailed(format!("bridge.send RPC failed: {}", e))
+                })?;
+
+            Ok(SendResult {
+                message_id: MessageId::new(response.id),
+                timestamp: Utc::now(),
+            })
+        }
     }
 
 }
