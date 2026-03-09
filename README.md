@@ -169,7 +169,7 @@ Plus: `McpResourceManager` (resource discovery), `McpPromptManager` (prompt temp
 
 OpenClaw routes messages based on session configuration and agent assignment.
 
-Aleph originally designed a 5-layer intent detection pipeline with per-language keyword rules. In practice, maintaining keyword dictionaries across Chinese, English, German, Japanese, Korean, and more turned out to be an enormous and brittle effort. The system was refactored into a **unified, LLM-forward pipeline** (`UnifiedIntentClassifier`) where the heavy lifting is done by AI:
+Aleph uses a **unified, LLM-forward pipeline** (`UnifiedIntentClassifier`) where the heavy lifting is done by AI:
 
 | Layer | Name | What It Does |
 |-------|------|-------------|
