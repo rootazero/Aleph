@@ -112,17 +112,13 @@ echo "  Config:  ~/.aleph/"
 echo ""
 echo "Run:  aleph"
 
-# ── Optional: system service ─────────────────────────────────────
+# ── System service (auto-start on boot) ──────────────────────────
 
-# Skip service prompt when running via pipe (stdin is not a terminal)
-if [ -t 0 ]; then
-    echo ""
-    read -p "Install as system service? [y/N] " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        if [ "$PLATFORM" = "darwin" ]; then
-            PLIST="$HOME/Library/LaunchAgents/com.aleph.server.plist"
-            cat > "$PLIST" << EOFPLIST
+install_service() {
+    if [ "$PLATFORM" = "darwin" ]; then
+        PLIST="$HOME/Library/LaunchAgents/com.aleph.server.plist"
+        mkdir -p "$(dirname "$PLIST")"
+        cat > "$PLIST" << EOFPLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -136,12 +132,16 @@ if [ -t 0 ]; then
 </dict>
 </plist>
 EOFPLIST
-            launchctl load "$PLIST"
-            echo "Service installed. Use: launchctl start com.aleph.server"
-        else
-            SERVICE_FILE="$HOME/.config/systemd/user/aleph.service"
-            mkdir -p "$(dirname "$SERVICE_FILE")"
-            cat > "$SERVICE_FILE" << EOFSVC
+        # Unload first if already loaded (ignore errors)
+        launchctl bootout "gui/$(id -u)/com.aleph.server" 2>/dev/null || true
+        launchctl bootstrap "gui/$(id -u)" "$PLIST"
+        echo "Service installed (auto-start on login)."
+        echo "  Status:  launchctl print gui/$(id -u)/com.aleph.server"
+        echo "  Logs:    ~/.aleph/server.log"
+    else
+        SERVICE_FILE="$HOME/.config/systemd/user/aleph.service"
+        mkdir -p "$(dirname "$SERVICE_FILE")"
+        cat > "$SERVICE_FILE" << EOFSVC
 [Unit]
 Description=Aleph AI Server
 After=network.target
@@ -152,10 +152,23 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 EOFSVC
-            systemctl --user daemon-reload
-            systemctl --user enable aleph
-            systemctl --user start aleph
-            echo "Service installed. Use: systemctl --user status aleph"
-        fi
+        systemctl --user daemon-reload
+        systemctl --user enable aleph
+        systemctl --user start aleph
+        echo "Service installed (auto-start on login)."
+        echo "  Status:  systemctl --user status aleph"
+        echo "  Logs:    journalctl --user -u aleph"
     fi
+}
+
+# Install service: always in pipe mode, prompt in interactive mode
+if [ -t 0 ]; then
+    echo ""
+    read -p "Install as system service (auto-start on boot)? [Y/n] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        install_service
+    fi
+else
+    install_service
 fi
