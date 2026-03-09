@@ -6,12 +6,14 @@
 
 pub mod detect;
 pub mod error;
+pub mod pipeline;
 pub mod policy;
 pub mod provider;
 pub mod types;
 
 pub use detect::{detect_by_extension, detect_by_magic, detect_from_path};
 pub use error::MediaError;
+pub use pipeline::MediaPipeline;
 pub use policy::MediaPolicy;
 pub use provider::MediaProvider;
 pub use types::{
