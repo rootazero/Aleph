@@ -66,6 +66,7 @@ mod init_unified;
 pub mod intent;
 pub mod logging;
 pub mod markdown;
+pub mod media;
 pub mod mcp;
 pub mod memory;
 pub mod metrics;
