@@ -1,0 +1,108 @@
+[plugin]
+id = "diagnostics"
+name = "Aleph Diagnostics"
+version = "0.1.0"
+description = "System health monitoring and performance diagnostics"
+kind = "nodejs"
+entry = "src/index.js"
+
+[permissions]
+shell = true
+filesystem = "read"
+network = true
+
+# --- Tools ---
+
+[[tools]]
+name = "system_health"
+description = "Report CPU load, memory usage, disk space, and system uptime"
+handler = "systemHealth"
+
+[tools.parameters]
+type = "object"
+required = []
+
+[tools.parameters.properties.format]
+type = "string"
+description = "Output format: summary, detailed, or json"
+default = "summary"
+
+[[tools]]
+name = "perf_profile"
+description = "Return a timing breakdown of recent operations from the ring buffer"
+handler = "perfProfile"
+
+[tools.parameters]
+type = "object"
+required = []
+
+[tools.parameters.properties.last_n]
+type = "number"
+description = "Number of most recent timing entries to return"
+default = 20
+
+[tools.parameters.properties.format]
+type = "string"
+description = "Output format: summary, detailed, or json"
+default = "summary"
+
+[[tools]]
+name = "trace_export"
+description = "Export collected traces as OpenTelemetry-compatible JSON spans"
+handler = "traceExport"
+
+[tools.parameters]
+type = "object"
+required = []
+
+[tools.parameters.properties.duration_secs]
+type = "number"
+description = "Export traces from the last N seconds"
+default = 300
+
+[tools.parameters.properties.service_filter]
+type = "string"
+description = "Filter traces by service name (optional)"
+
+[[tools]]
+name = "log_analyze"
+description = "Analyze recent log patterns, filtering by level and regex pattern"
+handler = "logAnalyze"
+
+[tools.parameters]
+type = "object"
+required = []
+
+[tools.parameters.properties.level]
+type = "string"
+description = "Filter by log level: debug, info, warn, error"
+
+[tools.parameters.properties.last_n]
+type = "number"
+description = "Number of recent log entries to analyze"
+default = 50
+
+[tools.parameters.properties.pattern]
+type = "string"
+description = "Regex pattern to filter log messages"
+
+# --- Hooks ---
+
+[[hooks]]
+event = "SessionStart"
+kind = "observer"
+handler = "onSessionStart"
+priority = "low"
+
+[[hooks]]
+event = "SessionEnd"
+kind = "observer"
+handler = "onSessionEnd"
+priority = "low"
+
+# --- Services ---
+
+[[services]]
+name = "metrics-collector"
+start_handler = "startCollector"
+stop_handler = "stopCollector"
