@@ -774,15 +774,50 @@ impl ExtensionManager {
 
     // ── Plugin Info ───────────────────────────────────────────────────────────
 
-    /// Get all loaded plugin info
+    /// Get all plugin info (legacy ComponentRegistry + V2 manifest discovery)
     pub async fn get_plugin_info(&self) -> Vec<PluginInfo> {
-        self.registry
+        let mut plugins: Vec<PluginInfo> = self.registry
             .read()
             .await
             .get_all_plugins()
             .into_iter()
             .map(|p| p.info())
-            .collect()
+            .collect();
+
+        // Also discover V2 plugins from ~/.aleph/plugins/ via manifest scanning
+        let existing_names: std::collections::HashSet<String> =
+            plugins.iter().map(|p| p.name.clone()).collect();
+
+        if let Ok(_plugins_dir) = crate::discovery::aleph_plugins_dir() {
+            if let Ok(scanner) = crate::discovery::DirectoryScanner::new(
+                &crate::discovery::DiscoveryConfig::default(),
+            ) {
+                for discovered in scanner.discover_plugins().unwrap_or_default() {
+                    if existing_names.contains(&discovered.name) {
+                        continue;
+                    }
+                    // Try to parse V2 manifest for richer info
+                    if let Ok(manifest) =
+                        crate::extension::manifest::parse_manifest_from_dir_sync(&discovered.path)
+                    {
+                        plugins.push(PluginInfo {
+                            name: manifest.id.clone(),
+                            version: manifest.version.clone(),
+                            description: manifest.description.clone(),
+                            enabled: true,
+                            path: discovered.path.display().to_string(),
+                            skills_count: 0,
+                            commands_count: 0,
+                            agents_count: 0,
+                            hooks_count: manifest.hooks_v2.as_ref().map_or(0, |h| h.len()),
+                            mcp_servers_count: 0,
+                        });
+                    }
+                }
+            }
+        }
+
+        plugins
     }
 
     /// Get a specific plugin by name

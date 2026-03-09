@@ -73,6 +73,11 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => return e.with_id(request.id),
     };
 
+    // Ensure plugins are discovered and loaded before listing
+    if let Err(e) = manager.ensure_loaded().await {
+        tracing::warn!("Failed to load extensions: {}", e);
+    }
+
     let plugins: Vec<PluginInfoJson> = manager
         .get_plugin_info()
         .await

@@ -1248,13 +1248,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     "search" | "memory_search" => serde_json::json!({
                         "query": args_str,
                     }),
-                    // Tools with no required args or profile-only
-                    "browser_screenshot" | "browser_snapshot" | "browser_tabs"
-                    | "browser_navigate" | "browser_profile" => {
+                    // Tabs: action is required, default to "list"
+                    "browser_tabs" => serde_json::json!({
+                        "action": if args_str.is_empty() { "list" } else { args_str },
+                    }),
+                    // Navigate: action is required, default to "refresh"
+                    "browser_navigate" => serde_json::json!({
+                        "action": if args_str.is_empty() { "refresh" } else { args_str },
+                    }),
+                    // Tools with no required args
+                    "browser_screenshot" | "browser_snapshot"
+                    | "browser_profile" => {
                         if args_str.is_empty() {
                             serde_json::json!({})
                         } else {
-                            serde_json::json!({ "action": args_str })
+                            serde_json::json!({ "input": args_str })
                         }
                     }
                     _ => serde_json::json!({
