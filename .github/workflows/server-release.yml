@@ -57,11 +57,14 @@ jobs:
             libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev \
             libx11-dev libxrandr-dev libxi-dev libxtst-dev \
             libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
-            libdrm-dev libgbm-dev libegl-dev clang libclang-dev
+            libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev
 
       # Panel WASM dist is pre-built and committed to git — no WASM build needed.
       - name: Build server
         run: cargo build --bin aleph --release --target ${{ matrix.target }}
+        env:
+          # Use baseline x86-64 when cross-compiling to avoid AVX-512 link errors (lance)
+          RUSTFLAGS: ${{ matrix.target == 'x86_64-apple-darwin' && '-C target-cpu=x86-64' || '' }}
 
       - name: Package
         shell: bash
