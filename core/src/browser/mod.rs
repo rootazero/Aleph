@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod discovery;
 pub mod error;
+pub mod network_policy;
 pub mod runtime;
 pub mod snapshot;
 pub mod types;
