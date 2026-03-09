@@ -56,6 +56,7 @@ pub mod mcp_prompt;
 pub mod desktop;
 pub mod pim;
 pub mod browser;
+pub mod browser_tools;
 pub mod config_read;
 pub mod config_update;
 pub mod profile_update;
