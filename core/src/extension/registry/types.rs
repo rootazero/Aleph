@@ -33,73 +33,11 @@ pub struct ToolRegistration {
     pub plugin_id: String,
 }
 
-/// Events that can trigger plugin hooks (for WASM/Node.js plugins).
-///
-/// This enum is used by the plugin registration API to specify which events
-/// a plugin hook should respond to. Uses **snake_case** serialization for
-/// JSON-RPC IPC with plugins.
-///
-/// # Difference from HookEvent
-///
-/// **`PluginHookEvent`** (this enum):
-/// - For WASM/Node.js plugin hooks registered via Plugin API
-/// - Uses snake_case serialization (`"before_tool_call"`, `"session_start"`)
-/// - Oriented toward plugin lifecycle and gateway events
-/// - Registered programmatically by plugins during load
-///
-/// **[`HookEvent`](crate::extension::types::HookEvent)**:
-/// - For shell command hooks configured in CLAUDE.md or config files
-/// - Uses PascalCase serialization (`"PreToolUse"`, `"SessionStart"`)
-/// - Oriented toward CLI/shell integration
-/// - Configured declaratively in config files
-///
-/// # Example (plugin registration via JSON-RPC)
-/// ```json
-/// {
-///   "hooks": [
-///     { "event": "before_tool_call", "handler": "onBeforeToolCall", "priority": 0 },
-///     { "event": "message_received", "handler": "onMessage", "priority": -10 }
-///   ]
-/// }
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PluginHookEvent {
-    /// Before agent starts processing
-    BeforeAgentStart,
-    /// After agent completes processing
-    AgentEnd,
-    /// Before a tool is called
-    BeforeToolCall,
-    /// After a tool call completes
-    AfterToolCall,
-    /// When tool result is being persisted
-    ToolResultPersist,
-    /// When a message is received from a channel
-    MessageReceived,
-    /// Before a message is sent to a channel
-    MessageSending,
-    /// After a message has been sent
-    MessageSent,
-    /// When a session starts
-    SessionStart,
-    /// When a session ends
-    SessionEnd,
-    /// Before session compaction
-    BeforeCompaction,
-    /// After session compaction
-    AfterCompaction,
-    /// When gateway starts
-    GatewayStart,
-    /// When gateway stops
-    GatewayStop,
-}
-
 /// Hook registration for plugins to intercept system events
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookRegistration {
     /// The event that triggers this hook
-    pub event: PluginHookEvent,
+    pub event: crate::extension::types::HookEvent,
     /// Execution priority (lower = earlier, default 0)
     pub priority: i32,
     /// Handler function name within the plugin
@@ -285,45 +223,71 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_hook_event_serialization() {
-        let event = PluginHookEvent::BeforeToolCall;
+    fn test_hook_event_serialization() {
+        use crate::extension::types::HookEvent;
+
+        let event = HookEvent::BeforeToolCall;
         let json = serde_json::to_string(&event).unwrap();
         assert_eq!(json, "\"before_tool_call\"");
 
-        let deserialized: PluginHookEvent = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized, PluginHookEvent::BeforeToolCall);
+        let deserialized: HookEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, HookEvent::BeforeToolCall);
     }
 
     #[test]
-    fn test_all_plugin_hook_events_serialize() {
+    fn test_all_hook_events_serialize() {
+        use crate::extension::types::HookEvent;
+
         let events = [
-            PluginHookEvent::BeforeAgentStart,
-            PluginHookEvent::AgentEnd,
-            PluginHookEvent::BeforeToolCall,
-            PluginHookEvent::AfterToolCall,
-            PluginHookEvent::ToolResultPersist,
-            PluginHookEvent::MessageReceived,
-            PluginHookEvent::MessageSending,
-            PluginHookEvent::MessageSent,
-            PluginHookEvent::SessionStart,
-            PluginHookEvent::SessionEnd,
-            PluginHookEvent::BeforeCompaction,
-            PluginHookEvent::AfterCompaction,
-            PluginHookEvent::GatewayStart,
-            PluginHookEvent::GatewayStop,
+            HookEvent::BeforeAgentStart,
+            HookEvent::AgentEnd,
+            HookEvent::BeforeToolCall,
+            HookEvent::AfterToolCall,
+            HookEvent::ToolResultPersist,
+            HookEvent::MessageReceived,
+            HookEvent::MessageSending,
+            HookEvent::MessageSent,
+            HookEvent::SessionStart,
+            HookEvent::SessionEnd,
+            HookEvent::BeforeCompaction,
+            HookEvent::AfterCompaction,
+            HookEvent::GatewayStart,
+            HookEvent::GatewayStop,
+            HookEvent::Notification,
+            HookEvent::PermissionRequest,
         ];
 
         for event in events {
             let json = serde_json::to_string(&event).unwrap();
-            let roundtrip: PluginHookEvent = serde_json::from_str(&json).unwrap();
+            let roundtrip: HookEvent = serde_json::from_str(&json).unwrap();
             assert_eq!(roundtrip, event);
         }
     }
 
     #[test]
+    fn test_hook_event_pascal_case_aliases() {
+        use crate::extension::types::HookEvent;
+
+        // Verify PascalCase aliases work for backward compat
+        let event: HookEvent = serde_json::from_str("\"PreToolUse\"").unwrap();
+        assert_eq!(event, HookEvent::BeforeToolCall);
+
+        let event: HookEvent = serde_json::from_str("\"PostToolUse\"").unwrap();
+        assert_eq!(event, HookEvent::AfterToolCall);
+
+        let event: HookEvent = serde_json::from_str("\"PreCompact\"").unwrap();
+        assert_eq!(event, HookEvent::BeforeCompaction);
+
+        let event: HookEvent = serde_json::from_str("\"SessionStart\"").unwrap();
+        assert_eq!(event, HookEvent::SessionStart);
+    }
+
+    #[test]
     fn test_hook_registration() {
+        use crate::extension::types::HookEvent;
+
         let hook = HookRegistration {
-            event: PluginHookEvent::MessageReceived,
+            event: HookEvent::MessageReceived,
             priority: 10,
             handler: "on_message".to_string(),
             name: Some("Message Logger".to_string()),
