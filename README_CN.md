@@ -211,22 +211,36 @@ Aleph 包含：
 - 通过 schemars 自动生成 JSON Schema
 - proptest 和 loom 并发测试套件
 
-## 快速开始
+## 安装
 
-### 前置条件
-
-- **Rust** 1.92+ — 通过 [rustup](https://rustup.rs/) 安装
-- **just** — `cargo install just`
-- 可选：`wasm-bindgen-cli` + `npm`（用于 WASM 面板构建）
-- 可选：Xcode + [XcodeGen](https://github.com/yonaskolb/XcodeGen)（用于 macOS 原生应用）
-
-### 启动
+### macOS / Linux
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash
+```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex
+```
+
+安装器自动检测平台和架构（x86_64 / ARM64），下载最新 release 二进制文件，安装到 PATH，并可选设置为系统服务自动启动。
+
+安装完成后运行：
+
+```bash
+aleph
+```
+
+### 从源码构建
+
+如果你更喜欢从源码构建：
+
+```bash
+# 前置条件：Rust 1.92+、just (cargo install just)
 git clone https://github.com/rootazero/Aleph.git
 cd Aleph
-
-# 启动服务
 cargo run --bin aleph
 ```
 
