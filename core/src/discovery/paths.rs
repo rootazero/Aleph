@@ -25,7 +25,9 @@ pub const PLUGINS_DIR: &str = "plugins";
 pub const ALEPH_CONFIG_FILE: &str = "aleph.jsonc";
 pub const ALEPH_CONFIG_FILE_ALT: &str = "aleph.json";
 pub const PLUGIN_STATE_FILE: &str = "plugins.json";
+/// Legacy Claude plugin manifest directory (used by LegacyAdapter)
 pub const PLUGIN_MANIFEST_DIR: &str = ".claude-plugin";
+/// Legacy Claude plugin manifest file (used by LegacyAdapter)
 pub const PLUGIN_MANIFEST_FILE: &str = "plugin.json";
 
 /// Skill/Command definition files
