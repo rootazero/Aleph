@@ -12,6 +12,11 @@ use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, Unif
 use crate::error::{AlephError, Result};
 use crate::generation::GenerationProviderRegistry;
 use crate::builtin_tools::{BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PimTool, ProfileUpdateTool, ScratchpadTool, SearchTool, SoulUpdateTool, WebFetchTool};
+use crate::builtin_tools::browser_tools::{
+    BrowserOpenTool, BrowserClickTool, BrowserTypeTool, BrowserScreenshotTool,
+    BrowserSnapshotTool, BrowserNavigateTool, BrowserTabsTool, BrowserSelectTool,
+    BrowserEvaluateTool, BrowserFillFormTool, BrowserProfileTool,
+};
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::builtin_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillListTool};
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
@@ -84,6 +89,18 @@ pub struct BuiltinToolRegistry {
     pub(crate) subagent_spawn_tool: Option<crate::builtin_tools::subagent_manage::SubagentSpawnTool>,
     pub(crate) subagent_steer_tool: Option<crate::builtin_tools::subagent_manage::SubagentSteerTool>,
     pub(crate) subagent_kill_tool: Option<crate::builtin_tools::subagent_manage::SubagentKillTool>,
+    /// Browser tools (always available, share a single ProfileManager)
+    pub(crate) browser_open_tool: BrowserOpenTool,
+    pub(crate) browser_click_tool: BrowserClickTool,
+    pub(crate) browser_type_tool: BrowserTypeTool,
+    pub(crate) browser_screenshot_tool: BrowserScreenshotTool,
+    pub(crate) browser_snapshot_tool: BrowserSnapshotTool,
+    pub(crate) browser_navigate_tool: BrowserNavigateTool,
+    pub(crate) browser_tabs_tool: BrowserTabsTool,
+    pub(crate) browser_select_tool: BrowserSelectTool,
+    pub(crate) browser_evaluate_tool: BrowserEvaluateTool,
+    pub(crate) browser_fill_form_tool: BrowserFillFormTool,
+    pub(crate) browser_profile_tool: BrowserProfileTool,
     /// Session context handle for agent management tools
     session_context_handle: Option<crate::builtin_tools::agent_manage::SessionContextHandle>,
     /// Tool policy handle for per-agent tool access control
@@ -139,6 +156,24 @@ impl BuiltinToolRegistry {
         let soul_update_tool = SoulUpdateTool::new(aleph_dir.join("soul.md"));
         let profile_update_tool = ProfileUpdateTool::new(aleph_dir.join("user_profile.md"));
         let scratchpad_tool = ScratchpadTool::new();
+
+        // Browser tools — always available, use ProfileManager from config or create default
+        let browser_profile_manager = config.browser_profile_manager.clone().unwrap_or_else(|| {
+            Arc::new(crate::browser::manager::ProfileManager::new(
+                crate::browser::profile::BrowserSystemConfig::default(),
+            ))
+        });
+        let browser_open_tool = BrowserOpenTool::new(Arc::clone(&browser_profile_manager));
+        let browser_click_tool = BrowserClickTool::new(Arc::clone(&browser_profile_manager));
+        let browser_type_tool = BrowserTypeTool::new(Arc::clone(&browser_profile_manager));
+        let browser_screenshot_tool = BrowserScreenshotTool::new(Arc::clone(&browser_profile_manager));
+        let browser_snapshot_tool = BrowserSnapshotTool::new(Arc::clone(&browser_profile_manager));
+        let browser_navigate_tool = BrowserNavigateTool::new(Arc::clone(&browser_profile_manager));
+        let browser_tabs_tool = BrowserTabsTool::new(Arc::clone(&browser_profile_manager));
+        let browser_select_tool = BrowserSelectTool::new(Arc::clone(&browser_profile_manager));
+        let browser_evaluate_tool = BrowserEvaluateTool::new(Arc::clone(&browser_profile_manager));
+        let browser_fill_form_tool = BrowserFillFormTool::new(Arc::clone(&browser_profile_manager));
+        let browser_profile_tool = BrowserProfileTool::new(browser_profile_manager);
 
         // Create config tools if handles are provided
         let config_read_tool = config.config.as_ref().map(|cfg| {
@@ -309,6 +344,27 @@ impl BuiltinToolRegistry {
                 ToolSource::Builtin,
             ),
         );
+
+        // Register browser tools metadata
+        for (name, desc) in [
+            ("browser_open", BrowserOpenTool::DESCRIPTION),
+            ("browser_click", BrowserClickTool::DESCRIPTION),
+            ("browser_type", BrowserTypeTool::DESCRIPTION),
+            ("browser_screenshot", BrowserScreenshotTool::DESCRIPTION),
+            ("browser_snapshot", BrowserSnapshotTool::DESCRIPTION),
+            ("browser_navigate", BrowserNavigateTool::DESCRIPTION),
+            ("browser_tabs", BrowserTabsTool::DESCRIPTION),
+            ("browser_select", BrowserSelectTool::DESCRIPTION),
+            ("browser_evaluate", BrowserEvaluateTool::DESCRIPTION),
+            ("browser_fill_form", BrowserFillFormTool::DESCRIPTION),
+            ("browser_profile", BrowserProfileTool::DESCRIPTION),
+        ] {
+            tools.insert(
+                name.to_string(),
+                UnifiedTool::new(&format!("builtin:{name}"), name, desc, ToolSource::Builtin),
+            );
+        }
+        info!("Registered browser tools (11 tools) in BuiltinToolRegistry");
 
         info!("Registered skill reading tools (read_skill, list_skills) in BuiltinToolRegistry");
 
@@ -610,6 +666,17 @@ impl BuiltinToolRegistry {
             subagent_spawn_tool,
             subagent_steer_tool,
             subagent_kill_tool,
+            browser_open_tool,
+            browser_click_tool,
+            browser_type_tool,
+            browser_screenshot_tool,
+            browser_snapshot_tool,
+            browser_navigate_tool,
+            browser_tabs_tool,
+            browser_select_tool,
+            browser_evaluate_tool,
+            browser_fill_form_tool,
+            browser_profile_tool,
             agent_create_tool,
             agent_switch_tool,
             agent_list_tool,
@@ -810,6 +877,19 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
+
+            // Browser tools
+            "browser_open" => Box::pin(async move { self.browser_open_tool.call_json(arguments).await }),
+            "browser_click" => Box::pin(async move { self.browser_click_tool.call_json(arguments).await }),
+            "browser_type" => Box::pin(async move { self.browser_type_tool.call_json(arguments).await }),
+            "browser_screenshot" => Box::pin(async move { self.browser_screenshot_tool.call_json(arguments).await }),
+            "browser_snapshot" => Box::pin(async move { self.browser_snapshot_tool.call_json(arguments).await }),
+            "browser_navigate" => Box::pin(async move { self.browser_navigate_tool.call_json(arguments).await }),
+            "browser_tabs" => Box::pin(async move { self.browser_tabs_tool.call_json(arguments).await }),
+            "browser_select" => Box::pin(async move { self.browser_select_tool.call_json(arguments).await }),
+            "browser_evaluate" => Box::pin(async move { self.browser_evaluate_tool.call_json(arguments).await }),
+            "browser_fill_form" => Box::pin(async move { self.browser_fill_form_tool.call_json(arguments).await }),
+            "browser_profile" => Box::pin(async move { self.browser_profile_tool.call_json(arguments).await }),
 
             // Agent management tools — snapshot session context into arguments
             // to avoid race conditions from concurrent reads of the shared handle.
