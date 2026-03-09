@@ -8,6 +8,7 @@
 //! - `routing`: Routing rules (RoutingRuleConfig)
 //! - `memory`: Memory/RAG settings (MemoryConfig)
 //! - `search`: Search capability settings (SearchConfigInternal, SearchConfig, PIIConfig)
+//! - `media`: Media pipeline settings (MediaConfig)
 //! - `smart_flow`: Intent detection and matching (SmartFlowConfig, SmartMatchingConfig)
 //! - `tools`: Native and MCP tools (ToolsConfig, UnifiedToolsConfig)
 //! - `skills`: Claude Agent Skills settings (SkillsConfig)
@@ -23,6 +24,7 @@ pub mod evolution;
 pub mod general;
 pub mod generation;
 pub mod group_chat;
+pub mod media;
 pub mod memory;
 pub mod orchestrator;
 pub mod policies;
@@ -48,6 +50,7 @@ pub use evolution::*;
 pub use general::*;
 pub use generation::*;
 pub use group_chat::*;
+pub use media::*;
 pub use memory::*;
 pub use orchestrator::*;
 pub use policies::*;
