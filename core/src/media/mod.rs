@@ -10,6 +10,7 @@ pub mod pipeline;
 pub mod policy;
 pub mod provider;
 pub mod types;
+pub mod processors;
 
 pub use detect::{detect_by_extension, detect_by_magic, detect_from_path};
 pub use error::MediaError;
@@ -20,3 +21,4 @@ pub use types::{
     AudioFormat, DocFormat, MediaChunk, MediaImageFormat, MediaInput, MediaOutput, MediaType,
     VideoFormat,
 };
+pub use processors::ImageMediaProvider;
