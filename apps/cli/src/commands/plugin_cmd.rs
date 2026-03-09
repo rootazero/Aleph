@@ -383,6 +383,164 @@ fn validate_plugin_dir(plugin_dir: &Path) -> CliResult<PluginValidation> {
 }
 
 // ---------------------------------------------------------------------------
+// `aleph plugin doctor`
+// ---------------------------------------------------------------------------
+
+/// A single diagnostic check result.
+#[derive(Debug)]
+pub struct DoctorCheck {
+    pub name: String,
+    pub description: String,
+    pub passed: bool,
+    pub required: bool,
+    pub message: String,
+}
+
+/// Run all plugin doctor checks.
+pub fn doctor(json_mode: bool) -> CliResult<()> {
+    let checks = run_doctor_checks();
+
+    if json_mode {
+        let json_checks: Vec<serde_json::Value> = checks
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "name": c.name,
+                    "description": c.description,
+                    "passed": c.passed,
+                    "required": c.required,
+                    "message": c.message,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json_checks).unwrap_or_default()
+        );
+    } else {
+        println!("Plugin Doctor\n");
+        for check in &checks {
+            let status = if check.passed {
+                "OK"
+            } else if check.required {
+                "FAIL"
+            } else {
+                "WARN"
+            };
+            let icon = if check.passed { "+" } else { "-" };
+            println!(
+                "  [{}] {} — {} ({})",
+                icon, check.name, check.description, status
+            );
+            if !check.passed {
+                println!("       {}", check.message);
+            }
+        }
+
+        let failed = checks.iter().filter(|c| !c.passed && c.required).count();
+        let warned = checks.iter().filter(|c| !c.passed && !c.required).count();
+        println!();
+        if failed == 0 {
+            println!("All required checks passed.");
+            if warned > 0 {
+                println!("{} optional check(s) need attention.", warned);
+            }
+        } else {
+            println!("{} required check(s) failed.", failed);
+        }
+    }
+
+    Ok(())
+}
+
+/// Run all diagnostic checks and return the results.
+pub fn run_doctor_checks() -> Vec<DoctorCheck> {
+    vec![
+        check_node_available(),
+        check_npm_available(),
+        check_wasm_target(),
+        check_plugin_dir_exists(),
+    ]
+}
+
+fn check_node_available() -> DoctorCheck {
+    let result = std::process::Command::new("node")
+        .arg("--version")
+        .output();
+    DoctorCheck {
+        name: "node".into(),
+        description: "Node.js runtime (for Node.js plugins)".into(),
+        passed: result.as_ref().map(|o| o.status.success()).unwrap_or(false),
+        required: false,
+        message: match result {
+            Ok(ref o) if o.status.success() => {
+                String::from_utf8_lossy(&o.stdout).trim().to_string()
+            }
+            _ => "Not found. Install Node.js for Node.js plugin support.".into(),
+        },
+    }
+}
+
+fn check_npm_available() -> DoctorCheck {
+    let result = std::process::Command::new("npm")
+        .arg("--version")
+        .output();
+    DoctorCheck {
+        name: "npm".into(),
+        description: "npm package manager".into(),
+        passed: result.as_ref().map(|o| o.status.success()).unwrap_or(false),
+        required: false,
+        message: match result {
+            Ok(ref o) if o.status.success() => {
+                format!("v{}", String::from_utf8_lossy(&o.stdout).trim())
+            }
+            _ => "Not found. Install npm for Node.js plugin development.".into(),
+        },
+    }
+}
+
+fn check_wasm_target() -> DoctorCheck {
+    let result = std::process::Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output();
+    let has_wasi = result
+        .as_ref()
+        .map(|o| {
+            let output = String::from_utf8_lossy(&o.stdout);
+            output.contains("wasm32-wasi") || output.contains("wasm32-wasip1")
+        })
+        .unwrap_or(false);
+    DoctorCheck {
+        name: "wasm-target".into(),
+        description: "WASM compilation target (for WASM plugins)".into(),
+        passed: has_wasi,
+        required: false,
+        message: if has_wasi {
+            "wasm32-wasi target installed".into()
+        } else {
+            "Not found. Run: rustup target add wasm32-wasip1".into()
+        },
+    }
+}
+
+fn check_plugin_dir_exists() -> DoctorCheck {
+    let home = dirs::home_dir();
+    let plugin_dir = home.as_ref().map(|h| h.join(".aleph/extensions"));
+    let exists = plugin_dir.as_ref().map(|p| p.exists()).unwrap_or(false);
+    DoctorCheck {
+        name: "plugin-dir".into(),
+        description: "Global plugin directory (~/.aleph/extensions/)".into(),
+        passed: exists,
+        required: false,
+        message: if exists {
+            format!("{} exists", plugin_dir.unwrap().display())
+        } else {
+            "~/.aleph/extensions/ does not exist. Will be created on first plugin install.".into()
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // `aleph plugin init` — Static template scaffold
 // ---------------------------------------------------------------------------
 
@@ -672,6 +830,19 @@ description = "duplicate"
 
         assert!(output.exists());
         assert!(output.metadata().unwrap().len() > 0);
+    }
+
+    #[test]
+    fn doctor_checks_run() {
+        let checks = run_doctor_checks();
+        assert!(!checks.is_empty());
+        // At minimum we should have 4 checks
+        assert!(checks.len() >= 4);
+        // Each check has a name and description
+        for check in &checks {
+            assert!(!check.name.is_empty());
+            assert!(!check.description.is_empty());
+        }
     }
 
     #[test]
