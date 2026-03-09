@@ -141,12 +141,6 @@ async fn then_dreaming_end(w: &mut AlephWorld, expected: String) {
     assert_eq!(mem.dreaming.window_end_local, expected);
 }
 
-// excluded_apps feature was removed — step kept as placeholder for BDD compatibility
-#[then(expr = "excluded_apps should contain {string}")]
-async fn then_excluded_apps_contain(_w: &mut AlephWorld, _expected: String) {
-    // No-op: excluded_apps was removed from MemoryConfig
-}
-
 // ═══ Then Steps - ShortcutsConfig ═══
 
 #[then(expr = "the summon shortcut should be {string}")]
