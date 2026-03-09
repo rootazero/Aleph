@@ -26,6 +26,8 @@ pub enum VisionAction {
     Understand,
     /// Extract text from an image via OCR.
     Ocr,
+    /// Extract structured data from charts/graphs in an image.
+    ChartExtract,
 }
 
 // =============================================================================
@@ -128,17 +130,19 @@ impl AlephTool for VisionTool {
 Actions:
 - understand: Describe an image or answer a visual question. Requires image_base64 and prompt.
 - ocr: Extract text from an image. Requires image_base64.
+- chart_extract: Extract structured data (labels, values, series) from charts and graphs. Requires image_base64, optionally prompt.
 
 Parameters:
-- action: "understand" or "ocr"
+- action: "understand", "ocr", or "chart_extract"
 - image_base64: Base64-encoded image data (no data-URI prefix)
 - format: Image format — "png" (default), "jpeg", or "webp"
-- prompt: Natural-language question about the image (required for "understand", ignored for "ocr")
+- prompt: Natural-language question about the image (required for "understand", optional for "chart_extract", ignored for "ocr")
 
 Examples:
 {"action":"understand","image_base64":"iVBORw0...","prompt":"What is shown in this image?"}
 {"action":"understand","image_base64":"iVBORw0...","format":"jpeg","prompt":"Read all text visible in this screenshot"}
-{"action":"ocr","image_base64":"iVBORw0..."}"#;
+{"action":"ocr","image_base64":"iVBORw0..."}
+{"action":"chart_extract","image_base64":"iVBORw0...","prompt":"Extract data from this bar chart"}"#;
 
     type Args = VisionArgs;
     type Output = VisionOutput;
@@ -148,6 +152,7 @@ Examples:
             r#"vision(action="understand", image_base64="...", prompt="What is this?") — describe an image"#.to_string(),
             r#"vision(action="understand", image_base64="...", prompt="Read all text") — read text using multimodal LLM"#.to_string(),
             r#"vision(action="ocr", image_base64="...") — extract text via OCR engine"#.to_string(),
+            r#"vision(action="chart_extract", image_base64="...", prompt="Extract data") — extract chart data"#.to_string(),
         ])
     }
 
@@ -183,6 +188,20 @@ Examples:
                 }
                 Err(e) => Ok(VisionOutput::err(format!("OCR failed: {e}"))),
             },
+            VisionAction::ChartExtract => {
+                let prompt = match args.prompt {
+                    Some(p) if !p.is_empty() => p,
+                    _ => "Extract all data, labels, and values from this chart. Return structured data.".to_string(),
+                };
+
+                match self.pipeline.understand_image(&image, &prompt).await {
+                    Ok(result) => {
+                        let data = serde_json::to_value(&result).unwrap_or_default();
+                        Ok(VisionOutput::ok_data("Chart data extracted", data))
+                    }
+                    Err(e) => Ok(VisionOutput::err(format!("Chart extraction failed: {e}"))),
+                }
+            }
         }
     }
 }
@@ -330,6 +349,28 @@ mod tests {
         assert!(output.message.unwrap().contains("failed"));
     }
 
+    #[tokio::test]
+    async fn test_chart_extract_success() {
+        let tool = make_tool();
+        let mut args = make_args(VisionAction::ChartExtract);
+        args.prompt = Some("Extract data from this bar chart".to_string());
+
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        assert!(output.success);
+        assert_eq!(output.message.as_deref(), Some("Chart data extracted"));
+    }
+
+    #[tokio::test]
+    async fn test_chart_extract_default_prompt() {
+        let tool = make_tool();
+        let args = make_args(VisionAction::ChartExtract);
+        // No prompt — should use default
+
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        assert!(output.success);
+        assert_eq!(output.message.as_deref(), Some("Chart data extracted"));
+    }
+
     #[test]
     fn test_vision_action_serde() {
         let action: VisionAction = serde_json::from_str(r#""understand""#).unwrap();
@@ -337,6 +378,9 @@ mod tests {
 
         let action: VisionAction = serde_json::from_str(r#""ocr""#).unwrap();
         assert!(matches!(action, VisionAction::Ocr));
+
+        let action: VisionAction = serde_json::from_str(r#""chart_extract""#).unwrap();
+        assert!(matches!(action, VisionAction::ChartExtract));
     }
 
     #[test]
