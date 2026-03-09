@@ -256,25 +256,73 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
 // ============================================================================
 
 /// Enable a plugin
+///
+/// Removes the `.disabled` marker file from the plugin directory,
+/// allowing the plugin to be discovered and loaded on next scan.
 pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
     let params: ToggleParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
-    // TODO: Implement plugin enable/disable in registry
+    let plugins_dir = crate::extension::default_plugins_dir();
+    let plugin_path = plugins_dir.join(&params.name);
+
+    if !plugin_path.exists() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Plugin not found: {}", params.name),
+        );
+    }
+
+    let disabled_marker = plugin_path.join(".disabled");
+    if disabled_marker.exists() {
+        if let Err(e) = std::fs::remove_file(&disabled_marker) {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to enable plugin: {}", e),
+            );
+        }
+    }
+
     tracing::info!(plugin = %params.name, "Plugin enabled");
     JsonRpcResponse::success(request.id, json!({ "ok": true }))
 }
 
 /// Disable a plugin
+///
+/// Creates a `.disabled` marker file in the plugin directory,
+/// preventing the plugin from being discovered and loaded on next scan.
 pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
     let params: ToggleParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
-    // TODO: Implement plugin enable/disable in registry
+    let plugins_dir = crate::extension::default_plugins_dir();
+    let plugin_path = plugins_dir.join(&params.name);
+
+    if !plugin_path.exists() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Plugin not found: {}", params.name),
+        );
+    }
+
+    let disabled_marker = plugin_path.join(".disabled");
+    if !disabled_marker.exists() {
+        if let Err(e) = std::fs::write(&disabled_marker, "") {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to disable plugin: {}", e),
+            );
+        }
+    }
+
     tracing::info!(plugin = %params.name, "Plugin disabled");
     JsonRpcResponse::success(request.id, json!({ "ok": true }))
 }
