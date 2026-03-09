@@ -144,10 +144,16 @@ enum Commands {
         action: MemoryAction,
     },
 
-    /// Plugin lifecycle management
+    /// Plugin lifecycle management (server-connected)
     Plugins {
         #[command(subcommand)]
         action: PluginsAction,
+    },
+
+    /// Plugin developer tools (local, no server needed)
+    Plugin {
+        #[command(subcommand)]
+        action: PluginDevAction,
     },
 
     /// Background service management
@@ -350,6 +356,38 @@ enum PluginsAction {
         /// JSON params (optional)
         params: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum PluginDevAction {
+    /// Scaffold a new plugin project
+    Init {
+        /// Plugin name
+        name: String,
+        /// Plugin type: nodejs, wasm, or static
+        #[arg(short = 't', long = "type", default_value = "nodejs")]
+        template: String,
+        /// Target directory (defaults to ./<name>)
+        #[arg(short, long)]
+        dir: Option<String>,
+    },
+    /// Validate a plugin directory
+    Validate {
+        /// Plugin directory (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: String,
+    },
+    /// Package a plugin for distribution
+    Pack {
+        /// Plugin directory (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: String,
+        /// Output file path
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Run plugin diagnostics
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -786,6 +824,27 @@ async fn main() -> CliResult<()> {
                     cli.json,
                 )
                 .await?;
+            }
+        },
+        Some(Commands::Plugin { action }) => {
+            use commands::plugin_cmd;
+            match action {
+                PluginDevAction::Init { name, template, dir } => {
+                    let tmpl: plugin_cmd::PluginTemplate = template.parse()
+                        .map_err(|e: String| error::CliError::Other(e))?;
+                    let dir_path = dir.map(std::path::PathBuf::from);
+                    plugin_cmd::init(&name, tmpl, dir_path.as_deref())?;
+                }
+                PluginDevAction::Validate { path } => {
+                    plugin_cmd::validate(std::path::Path::new(&path), cli.json)?;
+                }
+                PluginDevAction::Pack { path, output } => {
+                    let out = output.map(std::path::PathBuf::from);
+                    plugin_cmd::pack(std::path::Path::new(&path), out.as_deref())?;
+                }
+                PluginDevAction::Doctor => {
+                    plugin_cmd::doctor(cli.json)?;
+                }
             }
         },
         Some(Commands::Services { action }) => match action {
