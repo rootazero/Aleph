@@ -5,6 +5,7 @@
 //! - ShortcutsConfig: Keyboard shortcuts configuration
 //! - BehaviorConfig: Input/output behavior settings
 
+use crate::agent_loop::QueueMode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,14 @@ pub struct GeneralConfig {
     /// Preferred language override (e.g., 'en', 'zh-Hans'). If None, use system language.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// Session queue mode: how incoming messages are handled while agent is busy.
+    /// Options: "followup" (default), "steer", "collect"
+    #[serde(default)]
+    pub queue_mode: QueueMode,
+    /// Collection window in milliseconds for Collect queue mode.
+    /// Only used when queue_mode = "collect". Default: 3000ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collect_window_ms: Option<u64>,
 }
 
 // =============================================================================
