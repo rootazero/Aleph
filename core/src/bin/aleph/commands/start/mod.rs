@@ -275,6 +275,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let mut server = GatewayServer::with_config(addr, server_config);
 
     let session_manager = initialize_session_manager(args.daemon).await;
+
+    // Bootstrap default skills and plugins from GitHub on first run
+    alephcore::discovery::bootstrap_repositories(args.daemon);
+
     initialize_extension_manager(args.daemon).await;
 
     // Log desktop capability mode

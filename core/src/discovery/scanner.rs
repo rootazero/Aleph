@@ -214,6 +214,14 @@ impl DirectoryScanner {
     }
 
     /// Discover plugins (special handling for plugin structure)
+    ///
+    /// Supports multiple manifest formats:
+    /// - `aleph.plugin.toml` (V2 preferred)
+    /// - `aleph.plugin.json` (V1)
+    /// - `.claude-plugin/plugin.json` (legacy)
+    ///
+    /// Also scans one level deeper for monorepo layouts where each subdirectory
+    /// of a cloned repo is an individual plugin.
     pub fn discover_plugins(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
         let mut discovered = Vec::new();
 
@@ -238,16 +246,35 @@ impl DirectoryScanner {
                         }
                     }
 
-                    // Check for valid plugin structure (.claude-plugin/plugin.json)
-                    let manifest_path = path.join(PLUGIN_MANIFEST_DIR).join(PLUGIN_MANIFEST_FILE);
-                    if manifest_path.exists() {
+                    if has_plugin_manifest(&path) {
+                        // Direct plugin directory
                         discovered.push(DiscoveredPath::new(
                             path,
                             DiscoverySource::AlephGlobal,
                             10,
                         ));
                     } else {
-                        trace!("Skipping {:?}: no plugin manifest", path);
+                        // Check subdirectories (monorepo layout)
+                        if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                            for sub_entry in sub_entries.filter_map(|e| e.ok()) {
+                                let sub_path = sub_entry.path();
+                                if !sub_path.is_dir() {
+                                    continue;
+                                }
+                                if let Some(name) = sub_path.file_name().and_then(|n| n.to_str()) {
+                                    if name.starts_with('.') {
+                                        continue;
+                                    }
+                                }
+                                if has_plugin_manifest(&sub_path) {
+                                    discovered.push(DiscoveredPath::new(
+                                        sub_path,
+                                        DiscoverySource::AlephGlobal,
+                                        10,
+                                    ));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -259,6 +286,15 @@ impl DirectoryScanner {
         trace!("Discovered {} plugins", discovered.len());
         Ok(discovered)
     }
+}
+
+/// Check if a directory contains a valid plugin manifest.
+///
+/// Supports: `aleph.plugin.toml`, `aleph.plugin.json`, `.claude-plugin/plugin.json`
+fn has_plugin_manifest(path: &Path) -> bool {
+    path.join("aleph.plugin.toml").exists()
+        || path.join("aleph.plugin.json").exists()
+        || path.join(PLUGIN_MANIFEST_DIR).join(PLUGIN_MANIFEST_FILE).exists()
 }
 
 #[cfg(test)]
@@ -370,5 +406,59 @@ mod tests {
 
         // Should find both configs
         assert_eq!(configs.len(), 2);
+    }
+
+    #[test]
+    fn test_discover_plugins_toml_manifest() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create plugin with aleph.plugin.toml
+        let plugins_dir = root.join(".aleph/plugins/my-plugin");
+        std::fs::create_dir_all(&plugins_dir).unwrap();
+        std::fs::write(plugins_dir.join("aleph.plugin.toml"), "[plugin]\nid = \"my-plugin\"").unwrap();
+
+        let scanner = DirectoryScanner {
+            aleph_home: root.join(".aleph"),
+            claude_home: None,
+            git_root: None,
+            working_dir: root.to_path_buf(),
+            config: DiscoveryConfig::default(),
+        };
+
+        let plugins = scanner.discover_plugins().unwrap();
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].name, "my-plugin");
+    }
+
+    #[test]
+    fn test_discover_plugins_monorepo() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create monorepo structure: plugins/Aleph-plugins/{diagnostics,llm-task}
+        let mono_dir = root.join(".aleph/plugins/Aleph-plugins");
+        let diag = mono_dir.join("diagnostics");
+        let llm = mono_dir.join("llm-task");
+        std::fs::create_dir_all(&diag).unwrap();
+        std::fs::create_dir_all(&llm).unwrap();
+        std::fs::write(diag.join("aleph.plugin.toml"), "[plugin]\nid = \"diagnostics\"").unwrap();
+        std::fs::write(llm.join("aleph.plugin.toml"), "[plugin]\nid = \"llm-task\"").unwrap();
+        // Also create a non-plugin dir (README, etc) — should be skipped
+        std::fs::write(mono_dir.join("README.md"), "readme").unwrap();
+
+        let scanner = DirectoryScanner {
+            aleph_home: root.join(".aleph"),
+            claude_home: None,
+            git_root: None,
+            working_dir: root.to_path_buf(),
+            config: DiscoveryConfig::default(),
+        };
+
+        let plugins = scanner.discover_plugins().unwrap();
+        assert_eq!(plugins.len(), 2);
+        let names: Vec<&str> = plugins.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"diagnostics"));
+        assert!(names.contains(&"llm-task"));
     }
 }
