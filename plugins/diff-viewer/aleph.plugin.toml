@@ -1,0 +1,80 @@
+[plugin]
+id = "diff-viewer"
+name = "Diff Viewer"
+version = "0.1.0"
+description = "Code diff comparison and change analysis"
+kind = "wasm"
+entry = "target/wasm32-wasip1/release/diff_viewer.wasm"
+
+[capabilities]
+workspace = { allowed_prefixes = [""] }
+
+# --- Tools ---
+
+[[tools]]
+name = "diff_text"
+description = "Compare two text strings and produce a diff output"
+
+[tools.parameters]
+type = "object"
+required = ["old_text", "new_text"]
+
+[tools.parameters.properties.old_text]
+type = "string"
+description = "Original text content"
+
+[tools.parameters.properties.new_text]
+type = "string"
+description = "Modified text content"
+
+[tools.parameters.properties.context_lines]
+type = "number"
+description = "Number of context lines around changes"
+default = 3
+
+[tools.parameters.properties.format]
+type = "string"
+description = "Output format: unified, inline, or stats"
+default = "unified"
+
+[[tools]]
+name = "diff_files"
+description = "Compare two files by path"
+
+[tools.parameters]
+type = "object"
+required = ["file_a", "file_b"]
+
+[tools.parameters.properties.file_a]
+type = "string"
+description = "Path to the first (original) file"
+
+[tools.parameters.properties.file_b]
+type = "string"
+description = "Path to the second (modified) file"
+
+[tools.parameters.properties.context_lines]
+type = "number"
+description = "Number of context lines around changes"
+default = 3
+
+[tools.parameters.properties.format]
+type = "string"
+description = "Output format: unified, inline, or stats"
+default = "unified"
+
+[[tools]]
+name = "diff_summary"
+description = "Compute change statistics between two texts"
+
+[tools.parameters]
+type = "object"
+required = ["old_text", "new_text"]
+
+[tools.parameters.properties.old_text]
+type = "string"
+description = "Original text content"
+
+[tools.parameters.properties.new_text]
+type = "string"
+description = "Modified text content"
