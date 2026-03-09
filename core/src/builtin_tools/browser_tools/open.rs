@@ -92,6 +92,119 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_browser_open_blocks_ssrf_private_ip() {
+        let mut config = BrowserSystemConfig::default();
+        config.policy.block_private = true;
+        let manager = Arc::new(ProfileManager::new(config));
+        let tool = BrowserOpenTool::new(manager);
+
+        for url in &[
+            "http://10.0.0.1/secret",
+            "http://172.16.0.1/internal",
+            "http://192.168.1.1/router",
+            "http://[::1]/",
+        ] {
+            let result = tool
+                .call(BrowserOpenArgs {
+                    url: url.to_string(),
+                    profile: "default".into(),
+                })
+                .await
+                .unwrap();
+
+            assert!(!result.success, "Should block {}", url);
+            assert!(
+                result.message.as_ref().unwrap().contains("Blocked"),
+                "Should have Blocked message for {}",
+                url
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_browser_open_blocked_domain_list() {
+        use crate::browser::network_policy::SsrfConfig;
+
+        let mut config = BrowserSystemConfig::default();
+        config.policy = SsrfConfig {
+            block_private: false,
+            blocked_domains: vec!["*.evil.com".to_string(), "malware.org".to_string()],
+            allowed_domains: vec![],
+        };
+
+        let manager = Arc::new(ProfileManager::new(config));
+        let tool = BrowserOpenTool::new(manager);
+
+        // Should block evil.com subdomain
+        let result = tool
+            .call(BrowserOpenArgs {
+                url: "http://sub.evil.com/payload".into(),
+                profile: "default".into(),
+            })
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.message.as_ref().unwrap().contains("Blocked"));
+
+        // Should block malware.org
+        let result = tool
+            .call(BrowserOpenArgs {
+                url: "http://malware.org/payload".into(),
+                profile: "default".into(),
+            })
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.message.as_ref().unwrap().contains("Blocked"));
+
+        // Should allow normal domains
+        let result = tool
+            .call(BrowserOpenArgs {
+                url: "https://safe.com".into(),
+                profile: "default".into(),
+            })
+            .await
+            .unwrap();
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_browser_open_allowlist_mode() {
+        use crate::browser::network_policy::SsrfConfig;
+
+        let mut config = BrowserSystemConfig::default();
+        config.policy = SsrfConfig {
+            block_private: false,
+            blocked_domains: vec![],
+            allowed_domains: vec!["*.allowed.com".to_string()],
+        };
+
+        let manager = Arc::new(ProfileManager::new(config));
+        let tool = BrowserOpenTool::new(manager);
+
+        // Should allow allowed.com subdomain
+        let result = tool
+            .call(BrowserOpenArgs {
+                url: "http://app.allowed.com/page".into(),
+                profile: "default".into(),
+            })
+            .await
+            .unwrap();
+        assert!(result.success);
+
+        // Should block non-allowed domain
+        let result = tool
+            .call(BrowserOpenArgs {
+                url: "http://other.com/page".into(),
+                profile: "default".into(),
+            })
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.message.as_ref().unwrap().contains("Blocked"));
+    }
+
+    #[tokio::test]
     async fn test_browser_open_allows_public() {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));

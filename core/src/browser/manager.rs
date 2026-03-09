@@ -154,4 +154,39 @@ mod tests {
         let state = manager.get_state("default");
         assert_eq!(state, Some(ProfileState::Idle));
     }
+
+    #[test]
+    fn test_profile_state_transitions() {
+        let config = BrowserSystemConfig::default();
+        let manager = ProfileManager::new(config);
+
+        // Initially Idle
+        assert_eq!(manager.get_state("default"), Some(ProfileState::Idle));
+
+        // Can transition to Running
+        manager.set_state(
+            "default",
+            ProfileState::Running {
+                pid: 1234,
+                port: 18800,
+            },
+        );
+        assert_eq!(
+            manager.get_state("default"),
+            Some(ProfileState::Running {
+                pid: 1234,
+                port: 18800,
+            })
+        );
+
+        // Activity recording doesn't error
+        manager.record_activity("default");
+
+        // No idle profiles (just recorded activity)
+        assert!(manager.idle_profiles().is_empty());
+
+        // Back to Idle
+        manager.set_state("default", ProfileState::Idle);
+        assert_eq!(manager.get_state("default"), Some(ProfileState::Idle));
+    }
 }
