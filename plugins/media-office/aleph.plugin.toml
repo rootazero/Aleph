@@ -1,0 +1,102 @@
+[plugin]
+id = "media-office"
+name = "Media Office"
+version = "0.1.0"
+description = "Extract text, tables, and metadata from Office documents (DOCX, XLSX, PPTX)"
+kind = "nodejs"
+entry = "src/index.js"
+
+[permissions]
+filesystem = "read"
+
+# --------------------------------------------------------------------------
+# Tool: office_extract_text
+# --------------------------------------------------------------------------
+[[tools]]
+name = "office_extract_text"
+description = "Extract all text content from a DOCX, XLSX, or PPTX file"
+handler = "officeExtractText"
+
+[tools.parameters]
+type = "object"
+required = ["file_path"]
+
+[tools.parameters.properties.file_path]
+type = "string"
+description = "Absolute path to the Office document"
+
+[tools.parameters.properties.format]
+type = "string"
+description = "Output format: plain or markdown"
+default = "markdown"
+
+# --------------------------------------------------------------------------
+# Tool: office_extract_tables
+# --------------------------------------------------------------------------
+[[tools]]
+name = "office_extract_tables"
+description = "Extract tables from an XLSX or DOCX file"
+handler = "officeExtractTables"
+
+[tools.parameters]
+type = "object"
+required = ["file_path"]
+
+[tools.parameters.properties.file_path]
+type = "string"
+description = "Absolute path to the Office document"
+
+[tools.parameters.properties.sheet]
+type = "string"
+description = "Sheet name for XLSX files (defaults to first sheet)"
+
+[tools.parameters.properties.format]
+type = "string"
+description = "Output format: markdown, csv, or json"
+default = "markdown"
+
+# --------------------------------------------------------------------------
+# Tool: office_metadata
+# --------------------------------------------------------------------------
+[[tools]]
+name = "office_metadata"
+description = "Get document metadata (author, title, dates, page count)"
+handler = "officeMetadata"
+
+[tools.parameters]
+type = "object"
+required = ["file_path"]
+
+[tools.parameters.properties.file_path]
+type = "string"
+description = "Absolute path to the Office document"
+
+# --------------------------------------------------------------------------
+# Tool: office_convert
+# --------------------------------------------------------------------------
+[[tools]]
+name = "office_convert"
+description = "Convert between office formats (stub — not yet implemented)"
+handler = "officeConvert"
+
+[tools.parameters]
+type = "object"
+required = ["file_path", "output_format"]
+
+[tools.parameters.properties.file_path]
+type = "string"
+description = "Absolute path to the source Office document"
+
+[tools.parameters.properties.output_format]
+type = "string"
+description = "Target format (e.g. pdf, docx, xlsx)"
+
+# --------------------------------------------------------------------------
+# Hook: PostToolUse on document_extract
+# --------------------------------------------------------------------------
+[[hooks]]
+event = "PostToolUse"
+kind = "observer"
+handler = "onPostToolUse"
+priority = "normal"
+filter = "document_extract"
