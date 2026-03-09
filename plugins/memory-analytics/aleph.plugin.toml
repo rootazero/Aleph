@@ -1,0 +1,72 @@
+[plugin]
+id = "memory-analytics"
+name = "Memory Analytics"
+version = "0.1.0"
+description = "Memory usage analytics: fact distribution, timeline, health assessment"
+kind = "wasm"
+entry = "target/wasm32-wasip1/release/memory_analytics.wasm"
+
+[capabilities]
+workspace = { allowed_prefixes = [".aleph/"] }
+
+# --- Tools ---
+
+[[tools]]
+name = "memory_stats"
+description = "Get fact counts grouped by category and type, with optional decay scores"
+handler = "memory_stats"
+
+[tools.parameters]
+type = "object"
+required = []
+
+[tools.parameters.properties.workspace]
+type = "string"
+description = "Filter facts by workspace path"
+
+[tools.parameters.properties.include_decay]
+type = "boolean"
+description = "Include decay score statistics in the output"
+default = false
+
+[[tools]]
+name = "memory_timeline"
+description = "Show facts created per day or week over a time range"
+handler = "memory_timeline"
+
+[tools.parameters]
+type = "object"
+required = []
+
+[tools.parameters.properties.days]
+type = "number"
+description = "Number of days to look back"
+default = 30
+
+[tools.parameters.properties.granularity]
+type = "string"
+description = "Time bucket size: day or week"
+default = "day"
+
+[[tools]]
+name = "memory_health"
+description = "Assess memory health: stale fact ratio, average decay, compression efficiency"
+handler = "memory_health"
+
+[tools.parameters]
+type = "object"
+required = []
+
+[[tools]]
+name = "memory_report"
+description = "Generate a full analytics report combining stats, timeline, and health"
+handler = "memory_report"
+
+[tools.parameters]
+type = "object"
+required = []
+
+[tools.parameters.properties.format]
+type = "string"
+description = "Output format: markdown or json"
+default = "markdown"
