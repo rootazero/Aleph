@@ -4,11 +4,12 @@
 //!
 //! # Hook Events
 //!
-//! - `PreToolUse` - Before tool execution (can block or modify)
-//! - `PostToolUse` - After successful tool execution
-//! - `PostToolUseFailure` - After failed tool execution
+//! - `BeforeToolCall` / `AfterToolCall` - Tool execution lifecycle
+//! - `BeforeAgentStart` / `AgentEnd` - Agent lifecycle
 //! - `SessionStart` / `SessionEnd` - Session lifecycle
-//! - `ChatMessage` / `ChatParams` - LLM interaction (JS plugins)
+//! - `MessageReceived` / `MessageSending` / `MessageSent` - Message flow
+//! - `BeforeCompaction` / `AfterCompaction` - Context compaction
+//! - `GatewayStart` / `GatewayStop` - Gateway lifecycle
 //!
 //! # Usage
 //!
@@ -18,7 +19,7 @@
 //! let executor = HookExecutor::new(hooks);
 //!
 //! // Execute pre-tool hooks
-//! let result = executor.execute(HookEvent::PreToolUse, &context).await?;
+//! let result = executor.execute(HookEvent::BeforeToolCall, &context).await?;
 //! if result.blocked {
 //!     return Err("Tool blocked by hook");
 //! }
@@ -129,7 +130,7 @@ impl Default for ActionResult {
 /// Hook execution result (aggregated from all matching hooks)
 #[derive(Debug, Default)]
 pub struct HookResult {
-    /// Whether the action was blocked (for PreToolUse)
+    /// Whether the action was blocked (for BeforeToolCall)
     pub blocked: bool,
     /// Block reason (if blocked)
     pub block_reason: Option<String>,
@@ -849,7 +850,7 @@ mod tests {
         let executor = HookExecutor::new(vec![]);
         let context = HookContext::new("test");
 
-        let result = executor.execute(HookEvent::PreToolUse, &context).await.unwrap();
+        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
 
         assert_eq!(result.hooks_executed, 0);
         assert!(!result.blocked);
@@ -858,7 +859,7 @@ mod tests {
     #[tokio::test]
     async fn test_hook_executor_with_prompt() {
         let hooks = vec![HookConfig {
-            event: HookEvent::PreToolUse,
+            event: HookEvent::BeforeToolCall,
             kind: HookKind::default(),
             priority: HookPriority::default(),
             matcher: Some("Write".to_string()),
@@ -873,7 +874,7 @@ mod tests {
         let executor = HookExecutor::new(hooks);
         let context = HookContext::new("session").with_tool_name("Write");
 
-        let result = executor.execute(HookEvent::PreToolUse, &context).await.unwrap();
+        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
 
         assert_eq!(result.hooks_executed, 1);
         assert_eq!(result.messages.len(), 1);
@@ -883,7 +884,7 @@ mod tests {
     #[tokio::test]
     async fn test_hook_executor_pattern_mismatch() {
         let hooks = vec![HookConfig {
-            event: HookEvent::PreToolUse,
+            event: HookEvent::BeforeToolCall,
             kind: HookKind::default(),
             priority: HookPriority::default(),
             matcher: Some("Write".to_string()),
@@ -898,7 +899,7 @@ mod tests {
         let executor = HookExecutor::new(hooks);
         let context = HookContext::new("session").with_tool_name("Read");
 
-        let result = executor.execute(HookEvent::PreToolUse, &context).await.unwrap();
+        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
 
         // Pattern doesn't match, so no hooks executed
         assert_eq!(result.hooks_executed, 0);
@@ -907,7 +908,7 @@ mod tests {
     #[tokio::test]
     async fn test_hook_executor_regex_pattern() {
         let hooks = vec![HookConfig {
-            event: HookEvent::PreToolUse,
+            event: HookEvent::BeforeToolCall,
             kind: HookKind::default(),
             priority: HookPriority::default(),
             matcher: Some("Write|Edit".to_string()),
@@ -923,24 +924,24 @@ mod tests {
 
         // Test with Write
         let context = HookContext::new("session").with_tool_name("Write");
-        let result = executor.execute(HookEvent::PreToolUse, &context).await.unwrap();
+        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
         assert_eq!(result.hooks_executed, 1);
 
         // Test with Edit
         let context = HookContext::new("session").with_tool_name("Edit");
-        let result = executor.execute(HookEvent::PreToolUse, &context).await.unwrap();
+        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
         assert_eq!(result.hooks_executed, 1);
 
         // Test with Read (no match)
         let context = HookContext::new("session").with_tool_name("Read");
-        let result = executor.execute(HookEvent::PreToolUse, &context).await.unwrap();
+        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
         assert_eq!(result.hooks_executed, 0);
     }
 
     #[tokio::test]
     async fn test_hook_executor_with_agent() {
         let hooks = vec![HookConfig {
-            event: HookEvent::PostToolUse,
+            event: HookEvent::AfterToolCall,
             kind: HookKind::default(),
             priority: HookPriority::default(),
             matcher: None, // Matches all
@@ -955,7 +956,7 @@ mod tests {
         let executor = HookExecutor::new(hooks);
         let context = HookContext::new("session").with_tool_name("Write");
 
-        let result = executor.execute(HookEvent::PostToolUse, &context).await.unwrap();
+        let result = executor.execute(HookEvent::AfterToolCall, &context).await.unwrap();
 
         assert_eq!(result.hooks_executed, 1);
         assert_eq!(result.agents_to_invoke, vec!["review-agent"]);
@@ -964,7 +965,7 @@ mod tests {
     #[tokio::test]
     async fn test_hook_executor_command() {
         let hooks = vec![HookConfig {
-            event: HookEvent::PreToolUse,
+            event: HookEvent::BeforeToolCall,
             kind: HookKind::default(),
             priority: HookPriority::default(),
             matcher: None,
@@ -979,7 +980,7 @@ mod tests {
         let executor = HookExecutor::new(hooks);
         let context = HookContext::new("session");
 
-        let result = executor.execute(HookEvent::PreToolUse, &context).await.unwrap();
+        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
 
         assert_eq!(result.hooks_executed, 1);
         assert_eq!(result.action_results.len(), 1);

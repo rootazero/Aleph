@@ -12,10 +12,10 @@ use alephcore::extension::{
     },
     match_path, ChannelRegistration, CliRegistration, CommandRegistration, DiagnosticLevel,
     DirectCommandResult, ExtensionConfig, ExtensionError, ExtensionManager,
-    GatewayMethodRegistration, HookRegistration, HttpHandlerRegistration, HttpRouteRegistration,
-    PluginDiagnostic, PluginHookEvent, PluginKind, PluginLoader, PluginOrigin, PluginPermission,
-    PluginRecord, PluginRegistry, ProviderRegistration, ServiceInfo, ServiceRegistration,
-    ServiceResult, ServiceState, ToolRegistration,
+    GatewayMethodRegistration, HookEvent, HookRegistration, HttpHandlerRegistration,
+    HttpRouteRegistration, PluginDiagnostic, PluginKind, PluginLoader, PluginOrigin,
+    PluginPermission, PluginRecord, PluginRegistry, ProviderRegistration, ServiceInfo,
+    ServiceRegistration, ServiceResult, ServiceState, ToolRegistration,
 };
 
 // Lazy-initialized extension manager for runtime tests
@@ -42,22 +42,24 @@ fn create_test_plugin(id: &str) -> PluginRecord {
 }
 
 /// Parse hook event from string
-fn parse_hook_event(event: &str) -> PluginHookEvent {
+fn parse_hook_event(event: &str) -> HookEvent {
     match event {
-        "BeforeAgentStart" => PluginHookEvent::BeforeAgentStart,
-        "AgentEnd" => PluginHookEvent::AgentEnd,
-        "BeforeToolCall" => PluginHookEvent::BeforeToolCall,
-        "AfterToolCall" => PluginHookEvent::AfterToolCall,
-        "ToolResultPersist" => PluginHookEvent::ToolResultPersist,
-        "MessageReceived" => PluginHookEvent::MessageReceived,
-        "MessageSending" => PluginHookEvent::MessageSending,
-        "MessageSent" => PluginHookEvent::MessageSent,
-        "SessionStart" => PluginHookEvent::SessionStart,
-        "SessionEnd" => PluginHookEvent::SessionEnd,
-        "BeforeCompaction" => PluginHookEvent::BeforeCompaction,
-        "AfterCompaction" => PluginHookEvent::AfterCompaction,
-        "GatewayStart" => PluginHookEvent::GatewayStart,
-        "GatewayStop" => PluginHookEvent::GatewayStop,
+        "BeforeAgentStart" => HookEvent::BeforeAgentStart,
+        "AgentEnd" => HookEvent::AgentEnd,
+        "BeforeToolCall" => HookEvent::BeforeToolCall,
+        "AfterToolCall" => HookEvent::AfterToolCall,
+        "ToolResultPersist" => HookEvent::ToolResultPersist,
+        "MessageReceived" => HookEvent::MessageReceived,
+        "MessageSending" => HookEvent::MessageSending,
+        "MessageSent" => HookEvent::MessageSent,
+        "SessionStart" => HookEvent::SessionStart,
+        "SessionEnd" => HookEvent::SessionEnd,
+        "BeforeCompaction" => HookEvent::BeforeCompaction,
+        "AfterCompaction" => HookEvent::AfterCompaction,
+        "GatewayStart" => HookEvent::GatewayStart,
+        "GatewayStop" => HookEvent::GatewayStop,
+        "Notification" => HookEvent::Notification,
+        "PermissionRequest" => HookEvent::PermissionRequest,
         _ => panic!("Unknown hook event: {}", event),
     }
 }

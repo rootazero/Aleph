@@ -10,73 +10,81 @@ use std::path::PathBuf;
 // Hook Types
 // =============================================================================
 
-/// Hook event types for shell-based hooks (Claude Code compatible).
+/// Unified hook event types for both shell-based hooks and plugin hooks.
 ///
-/// This enum is used by the shell hook system where external commands are
-/// executed in response to events. It uses **PascalCase** serialization for
-/// compatibility with Claude Code's hook configuration format.
-///
-/// # Difference from PluginHookEvent
-///
-/// **`HookEvent`** (this enum):
-/// - For shell command hooks configured in CLAUDE.md or config files
-/// - Uses PascalCase serialization (`"PreToolUse"`, `"SessionStart"`)
-/// - Oriented toward CLI/shell integration
-///
-/// **[`PluginHookEvent`](crate::extension::registry::PluginHookEvent)**:
-/// - For WASM/Node.js plugin hooks registered via Plugin API
-/// - Uses snake_case serialization (`"before_tool_call"`, `"session_start"`)
-/// - Oriented toward plugin lifecycle and inter-process communication
+/// This enum is the single source of truth for all hook events in Aleph.
+/// It uses **snake_case** serialization for JSON-RPC IPC with plugins,
+/// with PascalCase aliases for backward compatibility with hooks.json files.
 ///
 /// # Example (hooks config in CLAUDE.md)
 /// ```json
 /// {
 ///   "hooks": {
 ///     "PreToolUse": [{ "command": "my-hook.sh" }],
-///     "SessionStart": [{ "command": "setup.sh" }]
+///     "before_tool_call": [{ "command": "my-hook.sh" }]
 ///   }
 /// }
 /// ```
+///
+/// # Example (plugin registration via JSON-RPC)
+/// ```json
+/// {
+///   "hooks": [
+///     { "event": "before_tool_call", "handler": "onBeforeToolCall", "priority": 0 }
+///   ]
+/// }
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "PascalCase")]
+#[serde(rename_all = "snake_case")]
 pub enum HookEvent {
-    /// Before a tool is used
-    PreToolUse,
-    /// After a tool completes successfully
-    PostToolUse,
-    /// After a tool fails
-    PostToolUseFailure,
+    /// Before agent starts processing
+    #[serde(alias = "BeforeAgentStart")]
+    BeforeAgentStart,
+    /// After agent completes processing
+    #[serde(alias = "AgentEnd")]
+    AgentEnd,
+    /// Before a tool is called
+    #[serde(alias = "PreToolUse", alias = "BeforeToolCall")]
+    BeforeToolCall,
+    /// After a tool call completes
+    #[serde(alias = "PostToolUse", alias = "AfterToolCall")]
+    AfterToolCall,
+    /// When tool result is being persisted
+    #[serde(alias = "ToolResultPersist")]
+    ToolResultPersist,
+    /// When a message is received from a channel
+    #[serde(alias = "MessageReceived")]
+    MessageReceived,
+    /// Before a message is sent to a channel
+    #[serde(alias = "MessageSending")]
+    MessageSending,
+    /// After a message has been sent
+    #[serde(alias = "MessageSent")]
+    MessageSent,
     /// When a session starts
+    #[serde(alias = "SessionStart")]
     SessionStart,
     /// When a session ends
+    #[serde(alias = "SessionEnd")]
     SessionEnd,
     /// Before session compaction
-    PreCompact,
-    /// When user submits a prompt
-    UserPromptSubmit,
-    /// When a permission is requested
-    PermissionRequest,
-    /// When a subagent starts
-    SubagentStart,
-    /// When a subagent stops
-    SubagentStop,
-    /// When processing stops
-    Stop,
+    #[serde(alias = "PreCompact", alias = "BeforeCompaction")]
+    BeforeCompaction,
+    /// After session compaction
+    #[serde(alias = "AfterCompaction")]
+    AfterCompaction,
+    /// When gateway starts
+    #[serde(alias = "GatewayStart")]
+    GatewayStart,
+    /// When gateway stops
+    #[serde(alias = "GatewayStop")]
+    GatewayStop,
     /// When a notification is sent
+    #[serde(alias = "Notification")]
     Notification,
-    /// During initial setup
-    Setup,
-    // Enhanced events (for JS plugins)
-    /// When a chat message is received
-    ChatMessage,
-    /// When chat parameters are configured
-    ChatParams,
-    /// When a chat response is generated
-    ChatResponse,
-    /// Before a command executes
-    CommandExecuteBefore,
-    /// After a command executes
-    CommandExecuteAfter,
+    /// When a permission is requested
+    #[serde(alias = "PermissionRequest")]
+    PermissionRequest,
 }
 
 /// Hook execution kind - determines how the hook is executed

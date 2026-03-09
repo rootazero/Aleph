@@ -17,7 +17,8 @@ use tracing::{error, info};
 
 use crate::extension::error::ExtensionError;
 use crate::extension::manifest::PluginManifest;
-use crate::extension::registry::{HookRegistration, PluginHookEvent, ToolRegistration};
+use crate::extension::registry::{HookRegistration, ToolRegistration};
+use crate::extension::types::HookEvent;
 
 /// Node.js runtime manager
 pub struct NodeJsRuntime {
@@ -228,14 +229,22 @@ pub fn tool_def_to_registration(def: &ToolDefinition, plugin_id: &str) -> ToolRe
 /// Convert IPC hook definition to HookRegistration
 pub fn hook_def_to_registration(def: &HookDefinition, plugin_id: &str) -> Option<HookRegistration> {
     let event = match def.event.as_str() {
-        "before_agent_start" => PluginHookEvent::BeforeAgentStart,
-        "agent_end" => PluginHookEvent::AgentEnd,
-        "before_tool_call" => PluginHookEvent::BeforeToolCall,
-        "after_tool_call" => PluginHookEvent::AfterToolCall,
-        "message_received" => PluginHookEvent::MessageReceived,
-        "message_sending" => PluginHookEvent::MessageSending,
-        "session_start" => PluginHookEvent::SessionStart,
-        "session_end" => PluginHookEvent::SessionEnd,
+        "before_agent_start" => HookEvent::BeforeAgentStart,
+        "agent_end" => HookEvent::AgentEnd,
+        "before_tool_call" => HookEvent::BeforeToolCall,
+        "after_tool_call" => HookEvent::AfterToolCall,
+        "tool_result_persist" => HookEvent::ToolResultPersist,
+        "message_received" => HookEvent::MessageReceived,
+        "message_sending" => HookEvent::MessageSending,
+        "message_sent" => HookEvent::MessageSent,
+        "session_start" => HookEvent::SessionStart,
+        "session_end" => HookEvent::SessionEnd,
+        "before_compaction" => HookEvent::BeforeCompaction,
+        "after_compaction" => HookEvent::AfterCompaction,
+        "gateway_start" => HookEvent::GatewayStart,
+        "gateway_stop" => HookEvent::GatewayStop,
+        "notification" => HookEvent::Notification,
+        "permission_request" => HookEvent::PermissionRequest,
         _ => return None,
     };
 
@@ -307,7 +316,7 @@ mod tests {
         let reg = hook_def_to_registration(&def, "test-plugin");
         assert!(reg.is_some());
         let reg = reg.unwrap();
-        assert_eq!(reg.event, PluginHookEvent::BeforeAgentStart);
+        assert_eq!(reg.event, HookEvent::BeforeAgentStart);
         assert_eq!(reg.priority, 10);
         assert_eq!(reg.handler, "onStart");
         assert_eq!(reg.plugin_id, "test-plugin");
@@ -328,14 +337,14 @@ mod tests {
     #[test]
     fn test_hook_def_to_registration_all_events() {
         let events = vec![
-            ("before_agent_start", PluginHookEvent::BeforeAgentStart),
-            ("agent_end", PluginHookEvent::AgentEnd),
-            ("before_tool_call", PluginHookEvent::BeforeToolCall),
-            ("after_tool_call", PluginHookEvent::AfterToolCall),
-            ("message_received", PluginHookEvent::MessageReceived),
-            ("message_sending", PluginHookEvent::MessageSending),
-            ("session_start", PluginHookEvent::SessionStart),
-            ("session_end", PluginHookEvent::SessionEnd),
+            ("before_agent_start", HookEvent::BeforeAgentStart),
+            ("agent_end", HookEvent::AgentEnd),
+            ("before_tool_call", HookEvent::BeforeToolCall),
+            ("after_tool_call", HookEvent::AfterToolCall),
+            ("message_received", HookEvent::MessageReceived),
+            ("message_sending", HookEvent::MessageSending),
+            ("session_start", HookEvent::SessionStart),
+            ("session_end", HookEvent::SessionEnd),
         ];
 
         for (event_str, expected_event) in events {

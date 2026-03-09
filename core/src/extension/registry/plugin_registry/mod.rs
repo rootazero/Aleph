@@ -10,9 +10,9 @@ use std::collections::HashMap;
 use super::types::{
     ChannelRegistration, CliRegistration, CommandRegistration, GatewayMethodRegistration,
     HookRegistration, HttpHandlerRegistration, HttpRouteRegistration, PluginDiagnostic,
-    PluginHookEvent, ProviderRegistration, ServiceRegistration, ToolRegistration,
+    ProviderRegistration, ServiceRegistration, ToolRegistration,
 };
-use crate::extension::types::{PluginRecord, PluginStatus};
+use crate::extension::types::{HookEvent, PluginRecord, PluginStatus};
 
 /// Central registry for all plugin registrations.
 ///
@@ -207,7 +207,7 @@ impl PluginRegistry {
     /// Get all hooks registered for a specific event.
     ///
     /// Returns hooks in priority order (lower priority = earlier in list).
-    pub fn get_hooks_for_event(&self, event: PluginHookEvent) -> Vec<&HookRegistration> {
+    pub fn get_hooks_for_event(&self, event: HookEvent) -> Vec<&HookRegistration> {
         self.hooks.iter().filter(|h| h.event == event).collect()
     }
 
