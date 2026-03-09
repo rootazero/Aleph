@@ -115,6 +115,9 @@ pub use loop_result::LoopResult;
 // Re-export traits
 pub use traits::{ActionExecutor, CompressedHistory, CompressorTrait, ThinkerTrait};
 
+// Re-export interrupt types
+pub use interrupt::{InterruptChannel, InterruptReceiver, InterruptSender, InterruptSignal};
+
 // Re-export main agent loop
 pub use agent_loop::{AgentLoop, RunContext};
 

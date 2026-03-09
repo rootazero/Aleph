@@ -13,6 +13,7 @@ use super::compaction_trigger::OptionalCompactionTrigger;
 use super::config::LoopConfig;
 use super::decision::{Action, ActionResult, Decision};
 use super::guards::{GuardViolation, LoopGuard};
+use super::interrupt;
 use super::loop_result::LoopResult;
 use super::overflow::OverflowDetector;
 use super::session_sync::SessionSync;
@@ -52,7 +53,6 @@ fn extract_affected_files(arguments: &serde_json::Value) -> Vec<String> {
 /// This struct encapsulates all the parameters needed to run an agent loop,
 /// providing better API ergonomics and making it easier to add new parameters
 /// without breaking existing code.
-#[derive(Clone)]
 pub struct RunContext {
     /// The user's request/query
     pub request: String,
@@ -66,6 +66,8 @@ pub struct RunContext {
     pub abort_signal: Option<watch::Receiver<bool>>,
     /// Optional history summary from previous conversations
     pub initial_history: Option<String>,
+    /// Optional interrupt receiver for soft steering (new user messages)
+    pub interrupt_rx: Option<interrupt::InterruptReceiver>,
 }
 
 impl RunContext {
@@ -83,6 +85,7 @@ impl RunContext {
             identity,
             abort_signal: None,
             initial_history: None,
+            interrupt_rx: None,
         }
     }
 
@@ -95,6 +98,12 @@ impl RunContext {
     /// Set the initial history
     pub fn with_initial_history(mut self, history: impl Into<String>) -> Self {
         self.initial_history = Some(history.into());
+        self
+    }
+
+    /// Set the interrupt receiver for soft steering
+    pub fn with_interrupt_rx(mut self, rx: interrupt::InterruptReceiver) -> Self {
+        self.interrupt_rx = Some(rx);
         self
     }
 }
@@ -352,7 +361,11 @@ where
             identity,
             abort_signal,
             initial_history,
+            interrupt_rx,
         } = run_context;
+
+        // Extract interrupt receiver as mutable local (similar to abort_signal)
+        let mut interrupt_rx = interrupt_rx;
 
         // Generate session ID
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -850,6 +863,25 @@ where
                     };
                 }
             };
+
+            // ===== Interrupt Check (before execution) =====
+            // Check for steering interrupt before executing the action.
+            // Unlike abort (which terminates the loop), interrupt redirects
+            // by cancelling the current action and injecting new user input.
+            if let Some(ref mut irx) = interrupt_rx {
+                if let Some(interrupt::InterruptSignal::NewMessage { content }) = irx.try_recv() {
+                    tracing::info!(
+                        subsystem = "agent_loop",
+                        event = "interrupt_received",
+                        session_id = %state.session_id,
+                        step = state.step_count,
+                        "steering interrupt received, cancelling pending action"
+                    );
+                    state.record_interrupted_action(&action, &thinking, &content);
+                    callback.on_action_cancelled(&action, "interrupted by new user input").await;
+                    continue; // Back to top of loop — will re-think with new context
+                }
+            }
 
             // ===== Execute =====
             callback.on_action_start(&action).await;
