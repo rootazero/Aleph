@@ -242,11 +242,15 @@ pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManife
         }
     }
 
-    // 4. Check for legacy .claude-plugin/plugin.json
+    // 4. Check for legacy .claude-plugin/plugin.json (via LegacyAdapter)
     let claude_manifest_path = dir.join(CLAUDE_PLUGIN_MANIFEST);
     if claude_manifest_path.exists() {
-        let manifest = parse_legacy_claude_manifest(&claude_manifest_path).await?;
-        return Ok(manifest.with_root_dir(dir.to_path_buf()));
+        let content = tokio::fs::read_to_string(&claude_manifest_path).await?;
+        let legacy: LegacyPluginManifest = serde_json::from_str(&content)
+            .map_err(|e| ExtensionError::invalid_manifest(&claude_manifest_path, format!("JSON parse error: {}", e)))?;
+        let manifest = legacy_adapter::adapt_legacy_manifest(&legacy, dir)
+            .map_err(|e| ExtensionError::invalid_manifest(&claude_manifest_path, e))?;
+        return Ok(manifest);
     }
 
     // No valid manifest found
@@ -296,12 +300,15 @@ pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifes
         }
     }
 
-    // 4. Check for legacy .claude-plugin/plugin.json
+    // 4. Check for legacy .claude-plugin/plugin.json (via LegacyAdapter)
     let claude_manifest_path = dir.join(CLAUDE_PLUGIN_MANIFEST);
     if claude_manifest_path.exists() {
         let content = std::fs::read_to_string(&claude_manifest_path)?;
-        let manifest = parse_legacy_claude_manifest_content(&content, &claude_manifest_path)?;
-        return Ok(manifest.with_root_dir(dir.to_path_buf()));
+        let legacy: LegacyPluginManifest = serde_json::from_str(&content)
+            .map_err(|e| ExtensionError::invalid_manifest(&claude_manifest_path, format!("JSON parse error: {}", e)))?;
+        let manifest = legacy_adapter::adapt_legacy_manifest(&legacy, dir)
+            .map_err(|e| ExtensionError::invalid_manifest(&claude_manifest_path, e))?;
+        return Ok(manifest);
     }
 
     Err(ExtensionError::invalid_manifest(
@@ -313,49 +320,7 @@ pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifes
     ))
 }
 
-// =============================================================================
-// Legacy Claude Plugin Format
-// =============================================================================
-
-/// Legacy Claude plugin manifest structure
-// Deserialized from .claude-plugin/plugin.json external format
-#[derive(Debug, serde::Deserialize)]
-#[allow(dead_code)]
-struct LegacyClaudeManifest {
-    name: String,
-    #[serde(default)]
-    version: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-}
-
-/// Parse legacy .claude-plugin/plugin.json format
-async fn parse_legacy_claude_manifest(path: &Path) -> ExtensionResult<PluginManifest> {
-    let content = tokio::fs::read_to_string(path).await?;
-    parse_legacy_claude_manifest_content(&content, path)
-}
-
-/// Parse legacy Claude manifest content
-fn parse_legacy_claude_manifest_content(
-    content: &str,
-    path: &Path,
-) -> ExtensionResult<PluginManifest> {
-    let legacy: LegacyClaudeManifest = serde_json::from_str(content)
-        .map_err(|e| ExtensionError::invalid_manifest(path, format!("JSON parse error: {}", e)))?;
-
-    // Convert legacy format to PluginManifest
-    // Legacy plugins are treated as static content plugins
-    let id = sanitize_plugin_id(&legacy.name);
-
-    validate_plugin_id(&id).map_err(|reason| ExtensionError::invalid_plugin_name(&id, reason))?;
-
-    Ok(PluginManifest::new(
-        id,
-        legacy.name,
-        crate::extension::types::PluginKind::Static,
-        ".".into(),
-    ))
-}
+// Legacy Claude plugin format is handled by legacy_adapter module.
 
 // =============================================================================
 // Re-export frontmatter parsing
