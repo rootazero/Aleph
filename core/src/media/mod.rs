@@ -21,4 +21,4 @@ pub use types::{
     AudioFormat, DocFormat, MediaChunk, MediaImageFormat, MediaInput, MediaOutput, MediaType,
     VideoFormat,
 };
-pub use processors::ImageMediaProvider;
+pub use processors::{AudioStubProvider, ImageMediaProvider, TextDocumentProvider};
