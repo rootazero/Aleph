@@ -170,6 +170,14 @@ impl DiscoveryManager {
         self.scanner.discover_component("plugins")
     }
 
+    /// Discover all installed plugins (with monorepo support)
+    ///
+    /// Scans `~/.aleph/plugins/` for plugin manifests, including
+    /// one-level-deep monorepo layouts (e.g., cloned plugin repos).
+    pub fn discover_plugins(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
+        self.scanner.discover_plugins()
+    }
+
     /// Get the git root directory if available
     pub fn git_root(&self) -> Option<&Path> {
         self.scanner.git_root()
