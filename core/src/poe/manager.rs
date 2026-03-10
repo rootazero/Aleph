@@ -28,7 +28,9 @@ use crate::poe::crystallization::ExperienceRecorder;
 use crate::poe::event_bus::PoeEventBus;
 use crate::poe::events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind};
 use crate::poe::taboo::buffer::{TabooBuffer, TaggedVerdict};
-use crate::poe::types::{PoeOutcome, PoeTask, Verdict, WorkerOutput, WorkerState};
+use crate::poe::types::{PoeOutcome, PoeTask, SuccessManifest, ValidationRule, Verdict, WorkerOutput, WorkerState};
+use crate::poe::decomposition::detector::{DecompositionAdvice, DecompositionDetector};
+use crate::poe::decomposition::generator::SubManifestGenerator;
 use crate::poe::validation::CompositeValidator;
 use crate::poe::worker::{StateSnapshot, Worker};
 
@@ -646,6 +648,13 @@ impl<W: Worker> PoeManager<W> {
             WorkerState::Completed { .. } => {
                 // Worker completed but validation failed - this is expected
             }
+            WorkerState::NeedsDecomposition { reason, sub_objectives } => {
+                feedback.push_str(&format!(
+                    "\nWorker requests decomposition: {} (sub-objectives: {})\n",
+                    reason,
+                    sub_objectives.join(", ")
+                ));
+            }
         }
 
         feedback
@@ -677,13 +686,258 @@ impl<W: Worker> PoeManager<W> {
 }
 
 // ============================================================================
+// E-stage Decomposition Trigger
+// ============================================================================
+
+/// Check if decomposition is warranted based on evaluation results.
+///
+/// Triggers when:
+/// - distance_score hasn't improved over 2+ attempts (budget shows stagnation)
+/// - Some hard constraints pass while others consistently fail (mixed pattern)
+///   indicating the task covers distinct concerns that could be separated
+///
+/// Returns sub-objective descriptions if decomposition should happen, None otherwise.
+fn should_decompose_on_evaluation(
+    budget: &PoeBudget,
+    verdict: &Verdict,
+    _manifest: &SuccessManifest,
+) -> Option<Vec<String>> {
+    use std::collections::HashSet;
+
+    // Condition 1: Stagnation — need at least 3 scores to have 2 consecutive
+    // non-improving pairs at the tail of entropy_history
+    let history = &budget.entropy_history;
+    if history.len() < 3 {
+        return None;
+    }
+
+    // Count consecutive stagnant pairs from the end.
+    // A pair (a, b) is stagnant if b >= a (no improvement).
+    let stagnant_count = history
+        .windows(2)
+        .rev()
+        .take_while(|w| w[1] >= w[0])
+        .count();
+
+    if stagnant_count < 2 {
+        return None;
+    }
+
+    // Condition 2: Mixed pass/fail pattern in hard constraints
+    let has_pass = verdict.hard_results.iter().any(|r| r.passed);
+    let has_fail = verdict.hard_results.iter().any(|r| !r.passed);
+
+    if !has_pass || !has_fail {
+        return None;
+    }
+
+    // Both conditions met — generate sub-objectives grouped by directory
+    let mut sub_objectives = Vec::new();
+
+    // One sub-objective for passing constraints
+    sub_objectives.push("Maintain existing passing constraints".to_string());
+
+    // Group failing constraints by directory
+    let mut fail_dirs = HashSet::new();
+    for result in &verdict.hard_results {
+        if !result.passed {
+            let dir = extract_rule_directory(&result.rule);
+            fail_dirs.insert(dir);
+        }
+    }
+
+    let mut sorted_dirs: Vec<String> = fail_dirs.into_iter().collect();
+    sorted_dirs.sort();
+
+    for dir in sorted_dirs {
+        sub_objectives.push(format!("Fix failing constraints in {}", dir));
+    }
+
+    Some(sub_objectives)
+}
+
+/// Extract the parent directory from a validation rule's path, or a fallback label.
+fn extract_rule_directory(rule: &ValidationRule) -> String {
+    use std::path::Path;
+
+    let path_str = match rule {
+        ValidationRule::FileExists { path } => Some(path.to_string_lossy().to_string()),
+        ValidationRule::FileNotExists { path } => Some(path.to_string_lossy().to_string()),
+        ValidationRule::FileContains { path, .. } => Some(path.to_string_lossy().to_string()),
+        ValidationRule::FileNotContains { path, .. } => Some(path.to_string_lossy().to_string()),
+        ValidationRule::DirStructureMatch { root, .. } => Some(root.to_string_lossy().to_string()),
+        ValidationRule::JsonSchemaValid { path, .. } => Some(path.to_string_lossy().to_string()),
+        ValidationRule::CommandPasses { .. }
+        | ValidationRule::CommandOutputContains { .. }
+        | ValidationRule::SemanticCheck { .. } => None,
+    };
+
+    match path_str {
+        Some(p) => {
+            let parent = Path::new(&p)
+                .parent()
+                .map(|pp| pp.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if parent.is_empty() { ".".to_string() } else { parent }
+        }
+        None => "commands".to_string(),
+    }
+}
+
+// ============================================================================
+// Recursive Execution (Phase 2)
+// ============================================================================
+
+impl<W: Worker + Clone> PoeManager<W> {
+    /// Execute a POE task with recursive sub-task decomposition.
+    ///
+    /// This method adds P-stage decomposition detection before execution:
+    /// 1. If `depth >= config.max_depth`, falls back to regular `execute()`
+    /// 2. Runs `DecompositionDetector::analyze()` on the task's manifest
+    /// 3. If decomposition is advised, generates sub-manifests and executes
+    ///    each recursively, aggregating results
+    /// 4. Otherwise, delegates to regular `execute()`
+    pub fn execute_recursive(
+        &self,
+        task: PoeTask,
+        depth: u8,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PoeOutcome>> + Send + '_>> {
+        Box::pin(async move {
+            // Enforce max depth — fall back to flat execution
+            if depth >= self.config.max_depth {
+                tracing::info!(
+                    subsystem = "poe",
+                    event = "max_depth_reached",
+                    task_id = %task.manifest.task_id,
+                    depth = depth,
+                    max_depth = self.config.max_depth,
+                    "Recursion depth limit reached, falling back to flat execution"
+                );
+                return self.execute(task).await;
+            }
+
+            // P-stage: analyze whether decomposition is needed
+            let advice = DecompositionDetector::analyze(&task.manifest);
+
+            match advice {
+                DecompositionAdvice::Decompose { sub_objectives, reason } => {
+                    tracing::info!(
+                        subsystem = "poe",
+                        event = "p_stage_decomposition",
+                        task_id = %task.manifest.task_id,
+                        depth = depth,
+                        sub_count = sub_objectives.len(),
+                        reason = %reason,
+                        "P-stage decomposition triggered"
+                    );
+
+                    // Generate sub-manifests using simple (non-LLM) path
+                    let sub_manifests = SubManifestGenerator::generate_simple(
+                        &task.manifest,
+                        &sub_objectives,
+                    );
+
+                    // Execute each sub-task recursively
+                    let mut outcomes = Vec::with_capacity(sub_manifests.len());
+                    for sub_manifest in sub_manifests {
+                        let sub_task = PoeTask::new(
+                            sub_manifest.clone(),
+                            format!("{}: {}", task.instruction, sub_manifest.objective),
+                        );
+                        let outcome = self.execute_recursive(sub_task, depth + 1).await?;
+
+                        // Early exit on failure
+                        if !outcome.is_success() {
+                            tracing::info!(
+                                subsystem = "poe",
+                                event = "sub_task_failed",
+                                task_id = %sub_manifest.task_id,
+                                "Sub-task failed, propagating failure"
+                            );
+                            return Ok(outcome);
+                        }
+
+                        outcomes.push(outcome);
+                    }
+
+                    // Aggregate all successful sub-outcomes
+                    Ok(Self::aggregate_sub_outcomes(outcomes))
+                }
+
+                DecompositionAdvice::Proceed => {
+                    // No decomposition needed — run as flat execution
+                    self.execute(task).await
+                }
+            }
+        })
+    }
+
+    /// Aggregate multiple successful sub-task outcomes into a single outcome.
+    ///
+    /// All outcomes are expected to be `Success`; the aggregated result
+    /// uses the worst distance score and concatenates worker summaries.
+    fn aggregate_sub_outcomes(outcomes: Vec<PoeOutcome>) -> PoeOutcome {
+        if outcomes.is_empty() {
+            return PoeOutcome::success(
+                Verdict::success("No sub-tasks to aggregate"),
+                "empty aggregation",
+            );
+        }
+
+        let mut worst_distance = 0.0_f32;
+        let mut summaries = Vec::new();
+        let mut all_passed = true;
+
+        for outcome in &outcomes {
+            match outcome {
+                PoeOutcome::Success { verdict, worker_summary } => {
+                    if verdict.distance_score > worst_distance {
+                        worst_distance = verdict.distance_score;
+                    }
+                    if !verdict.passed {
+                        all_passed = false;
+                    }
+                    if !worker_summary.is_empty() {
+                        summaries.push(worker_summary.clone());
+                    }
+                }
+                // Non-success outcomes should have been caught earlier,
+                // but handle gracefully
+                _ => {
+                    all_passed = false;
+                }
+            }
+        }
+
+        let combined_summary = summaries.join("; ");
+
+        if all_passed {
+            PoeOutcome::success(
+                Verdict::success(format!(
+                    "All {} sub-tasks completed successfully",
+                    outcomes.len()
+                ))
+                .with_distance_score(worst_distance),
+                combined_summary,
+            )
+        } else {
+            PoeOutcome::success(
+                Verdict::failure("Some sub-tasks did not pass validation")
+                    .with_distance_score(worst_distance),
+                combined_summary,
+            )
+        }
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::poe::types::{SuccessManifest, ValidationRule};
+    use crate::poe::types::{SuccessManifest, ValidationRule, RuleResult};
     use crate::poe::worker::MockWorker;
     use crate::providers::MockProvider;
     use std::path::PathBuf;
@@ -993,5 +1247,293 @@ mod tests {
 
         let config = PoeConfig::default().with_max_depth(5);
         assert_eq!(config.max_depth, 5);
+    }
+
+    // ========================================================================
+    // E-stage decomposition trigger tests
+    // ========================================================================
+
+    /// Helper: build a budget with a given entropy history.
+    fn budget_with_history(scores: &[f32]) -> PoeBudget {
+        let mut budget = PoeBudget::new(10, 100_000);
+        for &s in scores {
+            budget.record_attempt(100, s);
+        }
+        budget
+    }
+
+    /// Helper: build a verdict with specified pass/fail hard results.
+    fn verdict_with_hard_results(results: Vec<RuleResult>) -> Verdict {
+        let passed = results.iter().all(|r| r.passed);
+        let fail_count = results.iter().filter(|r| !r.passed).count();
+        let total = results.len();
+        let distance = if total == 0 { 0.0 } else { fail_count as f32 / total as f32 };
+        Verdict {
+            passed,
+            distance_score: distance,
+            reason: "test verdict".to_string(),
+            suggestion: None,
+            hard_results: results,
+            soft_results: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_decompose_on_evaluation_triggers_mixed_pattern() {
+        // Stagnation: 3 scores [0.6, 0.6, 0.7] — last 2 pairs are non-improving
+        let budget = budget_with_history(&[0.6, 0.6, 0.7]);
+
+        // Mixed: 1 pass + 2 fails in different directories
+        let results = vec![
+            RuleResult::pass(ValidationRule::FileExists {
+                path: PathBuf::from("src/lib.rs"),
+            }),
+            RuleResult::fail(
+                ValidationRule::FileExists {
+                    path: PathBuf::from("tests/integration.rs"),
+                },
+                "file not found",
+            ),
+            RuleResult::fail(
+                ValidationRule::FileExists {
+                    path: PathBuf::from("config/app.toml"),
+                },
+                "file not found",
+            ),
+        ];
+        let verdict = verdict_with_hard_results(results);
+        let manifest = SuccessManifest::new("t1", "Test task");
+
+        let result = should_decompose_on_evaluation(&budget, &verdict, &manifest);
+        assert!(result.is_some(), "Should trigger decomposition on stagnation + mixed pattern");
+
+        let subs = result.unwrap();
+        // Should have: 1 for passing + 2 for the two failing directories
+        assert_eq!(subs.len(), 3);
+        assert_eq!(subs[0], "Maintain existing passing constraints");
+        assert!(subs.iter().any(|s| s.contains("config")));
+        assert!(subs.iter().any(|s| s.contains("tests")));
+    }
+
+    #[test]
+    fn test_decompose_on_evaluation_no_trigger_uniform_failure() {
+        // Stagnation present
+        let budget = budget_with_history(&[0.8, 0.8, 0.8]);
+
+        // All constraints fail — no mixed pattern
+        let results = vec![
+            RuleResult::fail(
+                ValidationRule::FileExists {
+                    path: PathBuf::from("src/a.rs"),
+                },
+                "not found",
+            ),
+            RuleResult::fail(
+                ValidationRule::FileExists {
+                    path: PathBuf::from("src/b.rs"),
+                },
+                "not found",
+            ),
+        ];
+        let verdict = verdict_with_hard_results(results);
+        let manifest = SuccessManifest::new("t1", "Test task");
+
+        let result = should_decompose_on_evaluation(&budget, &verdict, &manifest);
+        assert!(
+            result.is_none(),
+            "Should NOT trigger when all constraints fail uniformly"
+        );
+    }
+
+    #[test]
+    fn test_decompose_on_evaluation_min_attempts() {
+        // Only 1 attempt — not enough for stagnation detection
+        let budget = budget_with_history(&[0.5]);
+
+        let results = vec![
+            RuleResult::pass(ValidationRule::FileExists {
+                path: PathBuf::from("src/lib.rs"),
+            }),
+            RuleResult::fail(
+                ValidationRule::FileExists {
+                    path: PathBuf::from("tests/test.rs"),
+                },
+                "not found",
+            ),
+        ];
+        let verdict = verdict_with_hard_results(results.clone());
+        let manifest = SuccessManifest::new("t1", "Test task");
+
+        assert!(
+            should_decompose_on_evaluation(&budget, &verdict, &manifest).is_none(),
+            "Should NOT trigger with only 1 attempt"
+        );
+
+        // 2 attempts — still not enough (only 1 stagnant pair, need 2)
+        let budget2 = budget_with_history(&[0.5, 0.5]);
+        let verdict2 = verdict_with_hard_results(results);
+
+        assert!(
+            should_decompose_on_evaluation(&budget2, &verdict2, &manifest).is_none(),
+            "Should NOT trigger with only 2 attempts (1 stagnant pair, need 2)"
+        );
+
+        // 3 attempts with stagnation — NOW it should trigger
+        let budget3 = budget_with_history(&[0.5, 0.5, 0.5]);
+        let results3 = vec![
+            RuleResult::pass(ValidationRule::FileExists {
+                path: PathBuf::from("src/lib.rs"),
+            }),
+            RuleResult::fail(
+                ValidationRule::FileExists {
+                    path: PathBuf::from("tests/test.rs"),
+                },
+                "not found",
+            ),
+        ];
+        let verdict3 = verdict_with_hard_results(results3);
+
+        assert!(
+            should_decompose_on_evaluation(&budget3, &verdict3, &manifest).is_some(),
+            "Should trigger with 3 stagnant attempts + mixed pattern"
+        );
+    }
+
+    // ====================================================================
+    // Recursive execution tests
+    // ====================================================================
+
+    fn create_recursive_test_manager(
+        mock_worker: MockWorker,
+        config: PoeConfig,
+    ) -> PoeManager<MockWorker> {
+        let provider = Arc::new(MockProvider::new(""));
+        let validator = CompositeValidator::new(provider);
+        PoeManager::new(mock_worker, validator, config)
+    }
+
+    #[tokio::test]
+    async fn test_execute_recursive_simple_task_runs_normally() {
+        // A simple task (no decomposition triggers) should run through regular execute
+        let worker = MockWorker::new();
+        let manager = create_recursive_test_manager(worker, PoeConfig::default());
+
+        let manifest = SuccessManifest::new("simple-task", "Create a file");
+        let task = PoeTask::new(manifest, "Create a single file");
+
+        let outcome = manager.execute_recursive(task, 0).await.unwrap();
+
+        assert!(outcome.is_success(), "Simple task should succeed: {:?}", outcome);
+    }
+
+    #[tokio::test]
+    async fn test_execute_recursive_p_stage_decomposition() {
+        // A task with many constraints across directories triggers P-stage decomposition
+        let worker = MockWorker::new();
+        let manager = create_recursive_test_manager(worker, PoeConfig::default());
+
+        // Build a manifest with >5 constraints spanning 3+ directories
+        let mut manifest = SuccessManifest::new("complex-task", "Handle multiple directories");
+        for i in 0..3 {
+            manifest.hard_constraints.push(ValidationRule::FileExists {
+                path: PathBuf::from(format!("src/api/file{}.rs", i)),
+            });
+        }
+        for i in 0..3 {
+            manifest.hard_constraints.push(ValidationRule::FileExists {
+                path: PathBuf::from(format!("tests/unit/file{}.rs", i)),
+            });
+        }
+        for i in 0..3 {
+            manifest.hard_constraints.push(ValidationRule::FileExists {
+                path: PathBuf::from(format!("config/file{}.toml", i)),
+            });
+        }
+        // 9 constraints across 3 directories -> should decompose
+
+        let task = PoeTask::new(manifest, "Handle all the files");
+        let outcome = manager.execute_recursive(task, 0).await.unwrap();
+
+        // The decomposed sub-tasks have no hard constraints (generate_simple),
+        // so each sub-task should succeed individually, and the aggregate should succeed.
+        assert!(outcome.is_success(), "Decomposed task should succeed: {:?}", outcome);
+    }
+
+    #[tokio::test]
+    async fn test_execute_recursive_max_depth_enforced() {
+        // When depth >= max_depth, falls back to regular execute without decomposition
+        let worker = MockWorker::new();
+        let config = PoeConfig::default().with_max_depth(2);
+        let manager = create_recursive_test_manager(worker, config);
+
+        // A simple manifest at max depth — should just execute normally
+        let manifest = SuccessManifest::new("deep-task", "At max depth");
+        let task = PoeTask::new(manifest, "Execute at max depth");
+
+        let outcome = manager.execute_recursive(task, 2).await.unwrap();
+
+        // Should succeed via regular execute (no hard constraints that fail)
+        assert!(outcome.is_success(), "Max depth task should succeed: {:?}", outcome);
+    }
+
+    #[tokio::test]
+    async fn test_execute_recursive_sub_results_aggregate() {
+        // Multiple sub-tasks all succeed -> aggregated Success
+        let outcomes = vec![
+            PoeOutcome::success(
+                Verdict::success("Sub-1 ok").with_distance_score(0.1),
+                "summary-1",
+            ),
+            PoeOutcome::success(
+                Verdict::success("Sub-2 ok").with_distance_score(0.2),
+                "summary-2",
+            ),
+            PoeOutcome::success(
+                Verdict::success("Sub-3 ok").with_distance_score(0.05),
+                "summary-3",
+            ),
+        ];
+
+        let aggregated = PoeManager::<MockWorker>::aggregate_sub_outcomes(outcomes);
+
+        match &aggregated {
+            PoeOutcome::Success { verdict, worker_summary } => {
+                assert!(verdict.passed);
+                // Worst distance should be 0.2
+                assert!(
+                    (verdict.distance_score - 0.2).abs() < f32::EPSILON,
+                    "Expected worst distance 0.2, got {}",
+                    verdict.distance_score
+                );
+                assert!(worker_summary.contains("summary-1"));
+                assert!(worker_summary.contains("summary-2"));
+                assert!(worker_summary.contains("summary-3"));
+            }
+            _ => panic!("Expected Success, got {:?}", aggregated),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_recursive_sub_failure_propagates() {
+        // If any sub-task fails, the failure propagates immediately
+        let failing_worker = MockWorker::failing();
+        let config = PoeConfig::default();
+        let manager = create_recursive_test_manager(failing_worker, config);
+
+        // Build a compound objective that triggers decomposition via "and then"
+        let manifest = SuccessManifest::new(
+            "compound-fail",
+            "Create the auth module and then test the login flow",
+        );
+        let task = PoeTask::new(manifest, "Do compound work");
+        let outcome = manager.execute_recursive(task, 0).await.unwrap();
+
+        // The decomposed sub-tasks should fail because the worker fails,
+        // and that failure should propagate
+        assert!(
+            !outcome.is_success(),
+            "Should propagate sub-task failure: {:?}",
+            outcome
+        );
     }
 }
