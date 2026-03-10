@@ -249,6 +249,38 @@ impl ExtensionManager {
             }
         }
 
+        // Discover and register plugins from ~/.aleph/plugins/
+        {
+            let scanner = &self.discovery;
+            if let Ok(discovered) = scanner.discover_plugins() {
+                let mut registry = self.plugin_registry.write().await;
+                for dp in discovered {
+                    // Skip if already registered
+                    if registry.get_plugin(&dp.name).is_some() {
+                        continue;
+                    }
+                    match crate::extension::manifest::parse_manifest_from_dir_sync(&dp.path) {
+                        Ok(manifest) => {
+                            let mut record = PluginRecord::new(
+                                manifest.id.clone(),
+                                manifest.name.clone(),
+                                manifest.kind.clone(),
+                                PluginOrigin::Global,
+                            );
+                            record.version = manifest.version.clone();
+                            record.description = manifest.description.clone();
+                            record.root_dir = dp.path.clone();
+                            record.hook_count = manifest.hooks_v2.as_ref().map_or(0, |h| h.len());
+                            registry.register_plugin(record);
+                        }
+                        Err(e) => {
+                            tracing::debug!("Skipping plugin at {:?}: {}", dp.path, e);
+                        }
+                    }
+                }
+            }
+        }
+
         // Initialize SkillSystem with discovered skill directories
         let skill_dirs: Vec<PathBuf> = self.discovery.discover_skill_dirs()
             .unwrap_or_default()
