@@ -66,6 +66,10 @@ pub struct SuccessManifest {
     /// Optional snapshot path for rollback on failure
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollback_snapshot: Option<PathBuf>,
+
+    /// Risk assessment for this task (computed by BlastRadius scanner)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blast_radius: Option<BlastRadius>,
 }
 
 impl SuccessManifest {
@@ -78,6 +82,7 @@ impl SuccessManifest {
             soft_metrics: Vec::new(),
             max_attempts: default_max_attempts(),
             rollback_snapshot: None,
+            blast_radius: None,
         }
     }
 
@@ -102,6 +107,12 @@ impl SuccessManifest {
     /// Set the rollback snapshot path.
     pub fn with_rollback_snapshot(mut self, path: PathBuf) -> Self {
         self.rollback_snapshot = Some(path);
+        self
+    }
+
+    /// Set the blast radius risk assessment.
+    pub fn with_blast_radius(mut self, blast_radius: BlastRadius) -> Self {
+        self.blast_radius = Some(blast_radius);
         self
     }
 }
@@ -278,6 +289,82 @@ impl ModelTier {
             ModelTier::CloudFast => "cloud-fast",
             ModelTier::CloudSmart => "cloud-smart",
             ModelTier::CloudDeep => "cloud-deep",
+        }
+    }
+}
+
+// ============================================================================
+// Blast Radius (Risk Assessment)
+// ============================================================================
+
+/// Risk level classification for task operations.
+///
+/// Ordered from lowest to highest risk. Used by TrustEvaluator
+/// to make auto-approval decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum RiskLevel {
+    /// Negligible risk (e.g., modify README)
+    Negligible,
+    /// Low risk (e.g., add test cases)
+    Low,
+    /// Medium risk (e.g., refactor non-core module)
+    Medium,
+    /// High risk (e.g., modify auth middleware, DB migration)
+    High,
+    /// Critical risk (e.g., wipe data directory, modify system environment)
+    Critical,
+}
+
+impl RiskLevel {
+    /// Returns a human-readable name.
+    pub fn name(&self) -> &'static str {
+        match self {
+            RiskLevel::Negligible => "negligible",
+            RiskLevel::Low => "low",
+            RiskLevel::Medium => "medium",
+            RiskLevel::High => "high",
+            RiskLevel::Critical => "critical",
+        }
+    }
+}
+
+/// Multi-dimensional risk assessment for a task.
+///
+/// Embedded in `SuccessManifest` to flow risk information through
+/// the entire POE pipeline (ManifestBuilder → TrustEvaluator → UI).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlastRadius {
+    /// Impact scope (0.0-1.0): file count, module depth, user coverage
+    pub scope: f32,
+
+    /// Destructiveness (0.0-1.0): data deletion, prod config changes
+    pub destructiveness: f32,
+
+    /// Reversibility (0.0-1.0): 1.0 = fully reversible, 0.0 = irreversible
+    pub reversibility: f32,
+
+    /// Computed risk level
+    pub level: RiskLevel,
+
+    /// Human-readable reasoning for UI display
+    pub reasoning: String,
+}
+
+impl BlastRadius {
+    /// Create a new BlastRadius with clamped values.
+    pub fn new(
+        scope: f32,
+        destructiveness: f32,
+        reversibility: f32,
+        level: RiskLevel,
+        reasoning: impl Into<String>,
+    ) -> Self {
+        Self {
+            scope: scope.clamp(0.0, 1.0),
+            destructiveness: destructiveness.clamp(0.0, 1.0),
+            reversibility: reversibility.clamp(0.0, 1.0),
+            level,
+            reasoning: reasoning.into(),
         }
     }
 }
@@ -952,6 +1039,43 @@ mod tests {
 
         assert_eq!(metric.weight, 1.0);
         assert_eq!(metric.threshold, 0.0);
+    }
+
+    #[test]
+    fn test_risk_level_ordering() {
+        assert!(RiskLevel::Negligible < RiskLevel::Low);
+        assert!(RiskLevel::Low < RiskLevel::Medium);
+        assert!(RiskLevel::Medium < RiskLevel::High);
+        assert!(RiskLevel::High < RiskLevel::Critical);
+    }
+
+    #[test]
+    fn test_blast_radius_default_is_none_in_manifest() {
+        let manifest = SuccessManifest::new("t1", "test objective");
+        assert!(manifest.blast_radius.is_none());
+    }
+
+    #[test]
+    fn test_blast_radius_builder() {
+        let br = BlastRadius::new(0.3, 0.7, 0.9, RiskLevel::Medium, "test reason");
+        assert_eq!(br.level, RiskLevel::Medium);
+        assert!((br.scope - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_blast_radius_clamping() {
+        let br = BlastRadius::new(1.5, -0.1, 2.0, RiskLevel::High, "clamped");
+        assert!((br.scope - 1.0).abs() < f32::EPSILON);
+        assert!((br.destructiveness - 0.0).abs() < f32::EPSILON);
+        assert!((br.reversibility - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_manifest_with_blast_radius() {
+        let manifest = SuccessManifest::new("t1", "test")
+            .with_blast_radius(BlastRadius::new(0.5, 0.5, 0.5, RiskLevel::Medium, "r"));
+        assert!(manifest.blast_radius.is_some());
+        assert_eq!(manifest.blast_radius.unwrap().level, RiskLevel::Medium);
     }
 
     #[test]
