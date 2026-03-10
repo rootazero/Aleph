@@ -129,6 +129,13 @@ impl ToolRegistry {
             .await;
     }
 
+    /// Register plugin tools from manifests (Flat Namespace Mode)
+    pub async fn register_plugin_tools(&self, tools: &[(String, String, String)]) {
+        self.registrar
+            .register_plugin_tools(tools, &self.conflict_resolver)
+            .await;
+    }
+
     /// Register custom commands from config rules
     pub async fn register_custom_commands(&self, rules: &[RoutingRuleConfig]) {
         self.registrar.register_custom_commands(rules).await;

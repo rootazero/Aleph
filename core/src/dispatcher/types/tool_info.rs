@@ -29,6 +29,8 @@ pub enum ToolSourceType {
     Skill,
     /// User-defined custom command
     Custom,
+    /// Plugin tool from manifest
+    Plugin,
 }
 
 impl From<&ToolSource> for ToolSourceType {
@@ -39,6 +41,7 @@ impl From<&ToolSource> for ToolSourceType {
             ToolSource::Mcp { .. } => ToolSourceType::Mcp,
             ToolSource::Skill { .. } => ToolSourceType::Skill,
             ToolSource::Custom { .. } => ToolSourceType::Custom,
+            ToolSource::Plugin { .. } => ToolSourceType::Plugin,
         }
     }
 }
@@ -53,6 +56,7 @@ impl ToolSourceType {
             ToolSourceType::Mcp => "bolt.fill",
             ToolSourceType::Skill => "lightbulb.fill",
             ToolSourceType::Custom => "command",
+            ToolSourceType::Plugin => "puzzlepiece.extension",
         }
     }
 
@@ -63,6 +67,7 @@ impl ToolSourceType {
             ToolSourceType::Mcp => "MCP",
             ToolSourceType::Skill => "Skill",
             ToolSourceType::Custom => "Custom",
+            ToolSourceType::Plugin => "Plugin",
         }
     }
 }
@@ -123,6 +128,9 @@ impl From<&UnifiedTool> for UnifiedToolInfo {
             ToolSource::Skill { id } => (ToolSourceType::Skill, Some(id.clone())),
             ToolSource::Custom { rule_index } => {
                 (ToolSourceType::Custom, Some(rule_index.to_string()))
+            }
+            ToolSource::Plugin { plugin_id } => {
+                (ToolSourceType::Plugin, Some(plugin_id.clone()))
             }
         };
 

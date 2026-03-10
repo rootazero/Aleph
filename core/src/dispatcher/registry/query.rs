@@ -58,15 +58,17 @@ impl ToolQuery {
                 ToolSource::Builtin => 0,
                 ToolSource::Native => 1,
                 ToolSource::Mcp { .. } => 2,
-                ToolSource::Skill { .. } => 3,
-                ToolSource::Custom { .. } => 4,
+                ToolSource::Plugin { .. } => 3,
+                ToolSource::Skill { .. } => 4,
+                ToolSource::Custom { .. } => 5,
             };
             let priority_b = match &b.source {
                 ToolSource::Builtin => 0,
                 ToolSource::Native => 1,
                 ToolSource::Mcp { .. } => 2,
-                ToolSource::Skill { .. } => 3,
-                ToolSource::Custom { .. } => 4,
+                ToolSource::Plugin { .. } => 3,
+                ToolSource::Skill { .. } => 4,
+                ToolSource::Custom { .. } => 5,
             };
             priority_a
                 .cmp(&priority_b)
@@ -204,20 +206,22 @@ impl ToolQuery {
 
         // Sort by source priority, then sort_order, then name
         result.sort_by(|a, b| {
-            // Sort order: Builtin > Native > Custom > MCP > Skill
+            // Sort order: Builtin > Native > Custom > MCP > Plugin > Skill
             let priority_a = match &a.source {
                 ToolSource::Builtin => 0,
                 ToolSource::Native => 1,
                 ToolSource::Custom { .. } => 2,
                 ToolSource::Mcp { .. } => 3,
-                ToolSource::Skill { .. } => 4,
+                ToolSource::Plugin { .. } => 4,
+                ToolSource::Skill { .. } => 5,
             };
             let priority_b = match &b.source {
                 ToolSource::Builtin => 0,
                 ToolSource::Native => 1,
                 ToolSource::Custom { .. } => 2,
                 ToolSource::Mcp { .. } => 3,
-                ToolSource::Skill { .. } => 4,
+                ToolSource::Plugin { .. } => 4,
+                ToolSource::Skill { .. } => 5,
             };
 
             priority_a

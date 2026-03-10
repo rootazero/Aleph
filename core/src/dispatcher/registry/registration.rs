@@ -301,6 +301,52 @@ impl ToolRegistrar {
     }
 
 
+    /// Register plugin tools from plugin manifests (Flat Namespace Mode)
+    ///
+    /// In flat namespace mode, plugin tools are registered as root-level commands
+    /// with automatic conflict resolution. Users can invoke them directly
+    /// via `/{tool_name}` without a prefix.
+    ///
+    /// # Arguments
+    ///
+    /// * `tools` - List of (plugin_id, tool_name, tool_description) tuples
+    /// * `conflict_resolver` - Conflict resolver for handling name conflicts
+    ///
+    /// # Conflict Resolution
+    ///
+    /// Plugin tools have priority between Skill (lowest) and MCP.
+    ///
+    /// Priority: Builtin > Native > Custom > MCP > Plugin > Skill
+    pub async fn register_plugin_tools(
+        &self,
+        tools: &[(String, String, String)],
+        conflict_resolver: &ConflictResolver,
+    ) {
+        for (plugin_id, tool_name, tool_desc) in tools {
+            let id = format!("plugin:{}:{}", plugin_id, tool_name);
+
+            let tool = UnifiedTool::new(
+                &id,
+                tool_name,
+                tool_desc,
+                ToolSource::Plugin {
+                    plugin_id: plugin_id.clone(),
+                },
+            )
+            .with_display_name(tool_name)
+            .with_icon("puzzlepiece.extension")
+            .with_usage(format!("/{} [input]", tool_name))
+            .with_routing_regex(format!(r"^/{}\s*", regex::escape(tool_name)))
+            .with_routing_strip_prefix(true);
+
+            conflict_resolver
+                .register_with_conflict_resolution(tool)
+                .await;
+        }
+
+        debug!("Registered {} plugin tools (flat namespace)", tools.len());
+    }
+
     /// Register custom commands from config rules
     ///
     /// Only rules with ^/ prefix patterns are registered as tools.

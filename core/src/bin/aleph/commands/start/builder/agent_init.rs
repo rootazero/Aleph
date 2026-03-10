@@ -451,6 +451,40 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         println!("  Dispatch registry: {} skills registered", skill_infos.len());
                     }
                 }
+
+                // Register plugin tools from discovered manifests
+                {
+                    // Ensure plugins are discovered and registered
+                    if let Err(e) = ext_manager.ensure_loaded().await {
+                        tracing::warn!("Failed to load extensions for plugin tools: {}", e);
+                    }
+
+                    let registry = ext_manager.get_plugin_registry().await;
+                    let plugin_tools: Vec<(String, String, String)> = registry
+                        .list_plugins()
+                        .into_iter()
+                        .filter(|p| p.status.is_active())
+                        .flat_map(|plugin| {
+                            match alephcore::extension::manifest::parse_manifest_from_dir_sync(&plugin.root_dir) {
+                                Ok(manifest) => manifest.tools_v2.unwrap_or_default().into_iter().map(|t| {
+                                    (
+                                        plugin.id.clone(),
+                                        t.name.clone(),
+                                        t.description.unwrap_or_default(),
+                                    )
+                                }).collect::<Vec<_>>(),
+                                Err(_) => Vec::new(),
+                            }
+                        })
+                        .collect();
+
+                    if !plugin_tools.is_empty() {
+                        dispatch_registry.register_plugin_tools(&plugin_tools).await;
+                        if !daemon {
+                            println!("  Dispatch registry: {} plugin tools registered", plugin_tools.len());
+                        }
+                    }
+                }
             }
         }
 

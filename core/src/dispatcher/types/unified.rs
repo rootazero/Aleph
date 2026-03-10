@@ -600,6 +600,7 @@ impl UnifiedTool {
             ToolSource::Mcp { server } => format!("mcp:{}:{}", server, def.name),
             ToolSource::Skill { id } => format!("skill:{}", id),
             ToolSource::Custom { .. } => format!("custom:{}", def.name),
+            ToolSource::Plugin { plugin_id } => format!("plugin:{}:{}", plugin_id, def.name),
         };
 
         let mut tool = Self::new(&id, &def.name, &def.description, source)
@@ -700,6 +701,7 @@ impl UnifiedTool {
             ToolSource::Mcp { server } => format!(" [MCP:{}]", server),
             ToolSource::Skill { id } => format!(" [Skill:{}]", id),
             ToolSource::Custom { .. } => " [Custom]".to_string(),
+            ToolSource::Plugin { plugin_id } => format!(" [Plugin:{}]", plugin_id),
         };
 
         let params = match &self.parameters_schema {
