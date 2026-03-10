@@ -149,6 +149,8 @@ pub use manager::{MetaCognitionCallback, PoeConfig, PoeManager, ValidationCallba
 pub use types::{
     // Success criteria
     SuccessManifest, SoftMetric, ValidationRule,
+    // Risk assessment
+    BlastRadius, RiskLevel,
     // Evaluation targets and tiers
     JudgeTarget, ModelTier,
     // Evaluation results

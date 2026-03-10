@@ -378,6 +378,11 @@ Generate a Success Manifest for this task.",
                 .rollback_snapshot
                 .clone()
                 .or_else(|| current.rollback_snapshot.clone()),
+            // Override's blast_radius takes precedence if set
+            blast_radius: override_manifest
+                .blast_radius
+                .clone()
+                .or_else(|| current.blast_radius.clone()),
         }
     }
 }
