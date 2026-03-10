@@ -77,6 +77,19 @@ impl MockWorker {
     }
 }
 
+impl Clone for MockWorker {
+    fn clone(&self) -> Self {
+        Self {
+            should_succeed: self.should_succeed,
+            tokens_per_call: self.tokens_per_call,
+            workspace: self.workspace.clone(),
+            execution_count: std::sync::atomic::AtomicU32::new(
+                self.execution_count.load(std::sync::atomic::Ordering::SeqCst),
+            ),
+        }
+    }
+}
+
 impl Default for MockWorker {
     fn default() -> Self {
         Self::new()
