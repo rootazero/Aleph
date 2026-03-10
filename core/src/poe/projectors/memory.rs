@@ -111,6 +111,10 @@ impl MemoryProjector {
                     debug!(task_id = %task_id, "MemoryProjector: skipping StrategySwitch");
                     Ok(false)
                 }
+                PoeOutcomeKind::DecompositionRequired => {
+                    debug!(task_id = %task_id, "MemoryProjector: skipping DecompositionRequired");
+                    Ok(false)
+                }
             },
             _ => Ok(false),
         }

@@ -27,6 +27,7 @@ impl PoeTaskStatus {
                 PoeOutcome::Success { .. } => "success",
                 PoeOutcome::StrategySwitch { .. } => "strategy_switch",
                 PoeOutcome::BudgetExhausted { .. } => "budget_exhausted",
+                PoeOutcome::DecompositionRequired { .. } => "decomposition_required",
             },
             PoeTaskStatus::Cancelled => "cancelled",
         }

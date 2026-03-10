@@ -325,6 +325,8 @@ proptest! {
                 .prop_map(|(r, s)| PoeOutcome::StrategySwitch { reason: r, suggestion: s }),
             (0u8..=255u8, "[a-zA-Z0-9 ]{1,20}")
                 .prop_map(|(a, e)| PoeOutcome::BudgetExhausted { attempts: a, last_error: e }),
+            "[a-zA-Z0-9 ]{1,20}"
+                .prop_map(|r| PoeOutcome::DecompositionRequired { sub_manifests: vec![], reason: r }),
         ]
     ) {
         let json_str = serde_json::to_string(&variant).unwrap();

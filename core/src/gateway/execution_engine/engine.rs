@@ -1667,6 +1667,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     attempts, last_error
                 ))
             }
+            PoeOutcome::DecompositionRequired { sub_manifests, reason } => {
+                Ok(format!(
+                    "📋 POE 需要将任务分解为 {} 个子任务: {}",
+                    sub_manifests.len(), reason
+                ))
+            }
         }
     }
 
