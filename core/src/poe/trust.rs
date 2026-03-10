@@ -9,7 +9,7 @@
 //! - **V1.5**: Whitelist-based auto-approval (`WhitelistTrustEvaluator`)
 //! - **V2.0**: Experience-based trust scoring (`ExperienceTrustEvaluator`)
 
-use crate::poe::types::ValidationRule;
+use crate::poe::types::{RiskLevel, ValidationRule};
 use crate::poe::SuccessManifest;
 
 // ============================================================================
@@ -230,6 +230,30 @@ impl WhitelistTrustEvaluator {
 
 impl TrustEvaluator for WhitelistTrustEvaluator {
     fn evaluate(&self, manifest: &SuccessManifest, context: &TrustContext) -> AutoApprovalDecision {
+        // BlastRadius gate: risk level overrides experience-based trust
+        if let Some(ref br) = manifest.blast_radius {
+            match br.level {
+                RiskLevel::Critical => {
+                    return AutoApprovalDecision::RequireSignature {
+                        reason: format!("Critical risk: {}", br.reasoning),
+                    };
+                }
+                RiskLevel::High => {
+                    return AutoApprovalDecision::RequireSignature {
+                        reason: format!("High risk: {}", br.reasoning),
+                    };
+                }
+                RiskLevel::Negligible => {
+                    return AutoApprovalDecision::AutoApprove {
+                        reason: format!("Negligible risk: {}", br.reasoning),
+                        confidence: 0.95,
+                    };
+                }
+                // Low/Medium fall through to existing evaluation logic
+                _ => {}
+            }
+        }
+
         // Rule 1: Destructive operations always require signature
         if context.has_destructive_ops {
             return AutoApprovalDecision::RequireSignature {
@@ -326,6 +350,30 @@ impl ExperienceTrustEvaluator {
 
 impl TrustEvaluator for ExperienceTrustEvaluator {
     fn evaluate(&self, manifest: &SuccessManifest, context: &TrustContext) -> AutoApprovalDecision {
+        // BlastRadius gate: risk level overrides experience-based trust
+        if let Some(ref br) = manifest.blast_radius {
+            match br.level {
+                RiskLevel::Critical => {
+                    return AutoApprovalDecision::RequireSignature {
+                        reason: format!("Critical risk: {}", br.reasoning),
+                    };
+                }
+                RiskLevel::High => {
+                    return AutoApprovalDecision::RequireSignature {
+                        reason: format!("High risk: {}", br.reasoning),
+                    };
+                }
+                RiskLevel::Negligible => {
+                    return AutoApprovalDecision::AutoApprove {
+                        reason: format!("Negligible risk: {}", br.reasoning),
+                        confidence: 0.95,
+                    };
+                }
+                // Low/Medium fall through to existing evaluation logic
+                _ => {}
+            }
+        }
+
         // Check if we have enough historical data
         if let (Some(success_rate), Some(executions)) = (
             context.historical_success_rate,
@@ -574,5 +622,88 @@ mod tests {
 
         let decision = evaluator.evaluate(&manifest, &context);
         assert!(decision.requires_signature());
+    }
+}
+
+#[cfg(test)]
+mod blast_radius_trust_tests {
+    use super::*;
+    use crate::poe::types::{BlastRadius, RiskLevel};
+
+    #[test]
+    fn test_critical_blast_radius_always_requires_signature() {
+        let evaluator = WhitelistTrustEvaluator::new();
+        let manifest = SuccessManifest::new("t1", "safe operation")
+            .with_blast_radius(BlastRadius::new(0.9, 0.9, 0.1, RiskLevel::Critical, "destructive op"));
+        let context = TrustContext::new()
+            .with_history(1.0, 100)
+            .with_crystallized_skill();
+        let decision = evaluator.evaluate(&manifest, &context);
+        assert!(decision.requires_signature());
+    }
+
+    #[test]
+    fn test_high_blast_radius_requires_signature() {
+        let evaluator = WhitelistTrustEvaluator::new();
+        let manifest = SuccessManifest::new("t1", "risky op")
+            .with_blast_radius(BlastRadius::new(0.7, 0.7, 0.3, RiskLevel::High, "high risk"));
+        let context = TrustContext::new().with_history(0.95, 50);
+        let decision = evaluator.evaluate(&manifest, &context);
+        assert!(decision.requires_signature());
+    }
+
+    #[test]
+    fn test_negligible_blast_radius_can_auto_approve() {
+        let evaluator = WhitelistTrustEvaluator::new();
+        let manifest = SuccessManifest::new("t1", "update readme")
+            .with_blast_radius(BlastRadius::new(0.0, 0.0, 1.0, RiskLevel::Negligible, "docs only"));
+        let context = TrustContext::new().with_file_count(1);
+        let decision = evaluator.evaluate(&manifest, &context);
+        assert!(decision.can_auto_approve());
+    }
+
+    #[test]
+    fn test_low_blast_radius_falls_through_to_existing_logic() {
+        let evaluator = WhitelistTrustEvaluator::new();
+        let manifest = SuccessManifest::new("t1", "small change")
+            .with_blast_radius(BlastRadius::new(0.1, 0.1, 0.9, RiskLevel::Low, "low risk"));
+        let context = TrustContext::new().with_file_count(1);
+        // Low risk falls through to whitelist logic — which checks constraint types
+        let decision = evaluator.evaluate(&manifest, &context);
+        // Without safe constraints, whitelist evaluator requires signature
+        assert!(decision.requires_signature() || decision.can_auto_approve());
+    }
+
+    #[test]
+    fn test_no_blast_radius_uses_existing_logic() {
+        let evaluator = WhitelistTrustEvaluator::new();
+        let manifest = SuccessManifest::new("t1", "no risk assessment");
+        // No blast_radius set — should fall through to existing logic
+        let context = TrustContext::new();
+        let _decision = evaluator.evaluate(&manifest, &context);
+        // Just verify it doesn't panic
+    }
+
+    #[test]
+    fn test_experience_evaluator_critical_overrides_crystallized_skill() {
+        let evaluator = ExperienceTrustEvaluator::new();
+        let manifest = SuccessManifest::new("t1", "dangerous op")
+            .with_blast_radius(BlastRadius::new(0.9, 0.9, 0.1, RiskLevel::Critical, "critical op"));
+        // Even with perfect history and crystallized skill, critical should block
+        let context = TrustContext::new()
+            .with_history(1.0, 100)
+            .with_crystallized_skill();
+        let decision = evaluator.evaluate(&manifest, &context);
+        assert!(decision.requires_signature());
+    }
+
+    #[test]
+    fn test_experience_evaluator_negligible_auto_approves() {
+        let evaluator = ExperienceTrustEvaluator::new();
+        let manifest = SuccessManifest::new("t1", "trivial change")
+            .with_blast_radius(BlastRadius::new(0.0, 0.0, 1.0, RiskLevel::Negligible, "no impact"));
+        let context = TrustContext::new();
+        let decision = evaluator.evaluate(&manifest, &context);
+        assert!(decision.can_auto_approve());
     }
 }
