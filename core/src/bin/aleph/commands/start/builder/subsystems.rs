@@ -33,7 +33,7 @@ pub(in crate::commands::start) async fn register_poe_handlers(
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     daemon: bool,
 ) {
-    use alephcore::gateway::create_claude_provider_from_env;
+    use alephcore::gateway::{create_claude_provider_from_env, create_openai_provider_from_env};
     use alephcore::gateway::handlers::poe::{
         handle_run as handle_poe_run, handle_status as handle_poe_status,
         handle_cancel as handle_poe_cancel, handle_list as handle_poe_list,
@@ -45,7 +45,11 @@ pub(in crate::commands::start) async fn register_poe_handlers(
         PoeRunManager, PoeContractService, WorkerFactory, ValidatorFactory,
     };
 
-    if let Ok(poe_provider) = create_claude_provider_from_env() {
+    // Try Anthropic first, then fall back to OpenAI-compatible provider
+    let poe_provider_result = create_claude_provider_from_env()
+        .or_else(|_| create_openai_provider_from_env());
+
+    if let Ok(poe_provider) = poe_provider_result {
         let poe_provider_arc: Arc<dyn alephcore::providers::AiProvider> = poe_provider;
         let manifest_builder = Arc::new(ManifestBuilder::new(poe_provider_arc.clone()));
 
