@@ -30,6 +30,8 @@ pub enum PoeOutcomeKind {
     StrategySwitch,
     /// Token/attempt budget exhausted without success.
     BudgetExhausted,
+    /// Task needs decomposition into sub-tasks (Phase 2).
+    DecompositionRequired,
 }
 
 impl PoeOutcomeKind {
@@ -43,6 +45,7 @@ impl PoeOutcomeKind {
             PoeOutcomeKind::Success => 1.0,
             PoeOutcomeKind::StrategySwitch => 0.3,
             PoeOutcomeKind::BudgetExhausted => 0.0,
+            PoeOutcomeKind::DecompositionRequired => 0.5,
         }
     }
 }

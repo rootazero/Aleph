@@ -230,4 +230,12 @@ pub trait Worker: Send + Sync {
     /// Returns an error if restoration fails (e.g., files have been deleted
     /// that can't be recreated, or permissions issues).
     async fn restore(&self, snapshot: &StateSnapshot) -> Result<()>;
+
+    /// Whether this worker supports workspace isolation (Phase 3: parallel execution).
+    ///
+    /// When true, the PoeManager can clone this worker's workspace for
+    /// speculative parallel execution.
+    fn supports_isolation(&self) -> bool {
+        false
+    }
 }

@@ -202,6 +202,10 @@ impl ChannelCrystallizer {
             PoeOutcome::BudgetExhausted { .. } => {
                 (ExecutionStatus::Failed, Some(0.0))
             }
+            PoeOutcome::DecompositionRequired { .. } => {
+                // Decomposition is not a failure — it's a signal to split; treat as partial
+                (ExecutionStatus::PartialSuccess, Some(0.5))
+            }
         };
 
         // Calculate output length from artifacts
@@ -489,6 +493,10 @@ impl ExperienceCrystallizer {
             PoeOutcome::BudgetExhausted { .. } => {
                 // Complete failure
                 (ExecutionStatus::Failed, Some(0.0))
+            }
+            PoeOutcome::DecompositionRequired { .. } => {
+                // Decomposition is not a failure — it's a signal to split; treat as partial
+                (ExecutionStatus::PartialSuccess, Some(0.5))
             }
         };
 

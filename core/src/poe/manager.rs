@@ -27,6 +27,7 @@ use crate::poe::budget::PoeBudget;
 use crate::poe::crystallization::ExperienceRecorder;
 use crate::poe::event_bus::PoeEventBus;
 use crate::poe::events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind};
+use crate::poe::taboo::buffer::{TabooBuffer, TaggedVerdict};
 use crate::poe::types::{PoeOutcome, PoeTask, Verdict, WorkerOutput, WorkerState};
 use crate::poe::validation::CompositeValidator;
 use crate::poe::worker::{StateSnapshot, Worker};
@@ -68,6 +69,10 @@ pub struct PoeConfig {
     /// Maximum tokens that can be consumed across all attempts.
     /// Default: 100,000
     pub max_tokens: u32,
+
+    /// Maximum recursion depth for nested POE tasks (Phase 2).
+    /// Default: 3
+    pub max_depth: u8,
 }
 
 impl Default for PoeConfig {
@@ -75,6 +80,7 @@ impl Default for PoeConfig {
         Self {
             stuck_window: 3,
             max_tokens: 100_000,
+            max_depth: 3,
         }
     }
 }
@@ -85,6 +91,7 @@ impl PoeConfig {
         Self {
             stuck_window,
             max_tokens,
+            max_depth: 3,
         }
     }
 
@@ -97,6 +104,12 @@ impl PoeConfig {
     /// Set the maximum tokens.
     pub fn with_max_tokens(mut self, tokens: u32) -> Self {
         self.max_tokens = tokens;
+        self
+    }
+
+    /// Set the maximum recursion depth.
+    pub fn with_max_depth(mut self, depth: u8) -> Self {
+        self.max_depth = depth;
         self
     }
 }
@@ -174,6 +187,8 @@ pub struct PoeManager<W: Worker> {
     event_seq: AtomicU32,
     /// Optional workspace path for snapshot capture/restore
     workspace: Option<std::path::PathBuf>,
+    /// Taboo buffer for detecting repetitive failure patterns
+    taboo_buffer: std::sync::Mutex<TabooBuffer>,
 }
 
 impl<W: Worker> PoeManager<W> {
@@ -195,6 +210,7 @@ impl<W: Worker> PoeManager<W> {
             event_bus: None,
             event_seq: AtomicU32::new(0),
             workspace: None,
+            taboo_buffer: std::sync::Mutex::new(TabooBuffer::new(3)),
         }
     }
 
@@ -346,10 +362,19 @@ impl<W: Worker> PoeManager<W> {
 
         // Main P->O->E loop
         while !budget.exhausted() {
-            // Build instruction with retry feedback if this is a retry
-            let instruction = match &previous_failure {
-                Some(feedback) => self.build_retry_prompt(&task, feedback),
-                None => task.instruction.clone(),
+            // Check for micro-taboo warning
+            let taboo_warning = self.taboo_buffer
+                .lock()
+                .ok()
+                .and_then(|buf| buf.check_micro_taboo());
+
+            // Build instruction with retry feedback and taboo warning
+            let instruction = match (&previous_failure, &taboo_warning) {
+                (Some(feedback), Some(taboo)) => {
+                    format!("{}\n\n## Previous Failure\n{}\n\n## {}", task.instruction, feedback, taboo)
+                }
+                (Some(feedback), None) => self.build_retry_prompt(&task, feedback),
+                _ => task.instruction.clone(),
             };
 
             // Operation: Execute via worker
@@ -393,6 +418,11 @@ impl<W: Worker> PoeManager<W> {
 
             // Check for success
             if verdict.passed {
+                // Clear taboo buffer on success
+                if let Ok(mut buf) = self.taboo_buffer.lock() {
+                    buf.clear();
+                }
+
                 let worker_summary = match &output.final_state {
                     crate::poe::types::WorkerState::Completed { summary } => summary.clone(),
                     _ => String::new(),
@@ -417,6 +447,18 @@ impl<W: Worker> PoeManager<W> {
                     &task.manifest.objective,
                     &verdict.reason,
                 );
+            }
+
+            // Record failure in taboo buffer for micro-taboo detection
+            {
+                let tagged = TaggedVerdict {
+                    verdict: verdict.clone(),
+                    semantic_tag: Self::extract_failure_tag(&verdict),
+                    failure_reason: verdict.reason.clone(),
+                };
+                if let Ok(mut buf) = self.taboo_buffer.lock() {
+                    buf.record(tagged);
+                }
             }
 
             // Check for stuck (no progress over window)
@@ -607,6 +649,30 @@ impl<W: Worker> PoeManager<W> {
         }
 
         feedback
+    }
+
+    /// Extract a semantic failure tag from a verdict for taboo tracking.
+    ///
+    /// Uses heuristics on the failure reason to categorize the error.
+    fn extract_failure_tag(verdict: &Verdict) -> String {
+        let reason = verdict.reason.to_lowercase();
+        if reason.contains("permission") || reason.contains("access denied") {
+            "PermissionDenied".to_string()
+        } else if reason.contains("not found") || reason.contains("no such file") {
+            "FileNotFound".to_string()
+        } else if reason.contains("compile") || reason.contains("syntax") || reason.contains("cannot find") {
+            "CompilationError".to_string()
+        } else if reason.contains("timeout") || reason.contains("timed out") {
+            "Timeout".to_string()
+        } else if reason.contains("dependency") || reason.contains("import") || reason.contains("module") {
+            "DependencyMismatch".to_string()
+        } else if reason.contains("schema") || reason.contains("validation") {
+            "SchemaValidation".to_string()
+        } else {
+            // Use a hash-like tag from first 50 chars
+            let tag: String = reason.chars().take(50).collect();
+            tag.replace(' ', "_")
+        }
     }
 }
 
@@ -897,5 +963,35 @@ mod tests {
         for (i, e) in events.iter().enumerate() {
             assert_eq!(e.seq as usize, i, "Event seq should be {}, got {}", i, e.seq);
         }
+    }
+
+    #[test]
+    fn test_extract_failure_tag_permission() {
+        let verdict = Verdict::failure("Permission denied: cannot write to /etc/hosts");
+        let tag = PoeManager::<MockWorker>::extract_failure_tag(&verdict);
+        assert_eq!(tag, "PermissionDenied");
+    }
+
+    #[test]
+    fn test_extract_failure_tag_compilation() {
+        let verdict = Verdict::failure("Compilation error: cannot find type AuthToken");
+        let tag = PoeManager::<MockWorker>::extract_failure_tag(&verdict);
+        assert_eq!(tag, "CompilationError");
+    }
+
+    #[test]
+    fn test_extract_failure_tag_fallback() {
+        let verdict = Verdict::failure("Something completely unexpected happened");
+        let tag = PoeManager::<MockWorker>::extract_failure_tag(&verdict);
+        assert!(tag.contains("something"));
+    }
+
+    #[test]
+    fn test_poe_config_max_depth() {
+        let config = PoeConfig::default();
+        assert_eq!(config.max_depth, 3);
+
+        let config = PoeConfig::default().with_max_depth(5);
+        assert_eq!(config.max_depth, 5);
     }
 }

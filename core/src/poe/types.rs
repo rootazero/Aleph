@@ -9,6 +9,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 // ============================================================================
@@ -682,6 +683,10 @@ pub struct PoeTask {
 
     /// Natural language instruction for the worker
     pub instruction: String,
+
+    /// Arbitrary metadata for future extensions (e.g., Phase 3 federation routing)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, String>,
 }
 
 impl PoeTask {
@@ -690,6 +695,7 @@ impl PoeTask {
         Self {
             manifest,
             instruction: instruction.into(),
+            metadata: HashMap::new(),
         }
     }
 }
@@ -719,6 +725,14 @@ pub enum PoeOutcome {
         attempts: u8,
         /// Error from the last attempt
         last_error: String,
+    },
+
+    /// Decomposition required — task needs to be split into sub-tasks (Phase 2)
+    DecompositionRequired {
+        /// Sub-task manifests to execute independently
+        sub_manifests: Vec<SuccessManifest>,
+        /// Reason for decomposition
+        reason: String,
     },
 }
 
@@ -1076,6 +1090,32 @@ mod tests {
             .with_blast_radius(BlastRadius::new(0.5, 0.5, 0.5, RiskLevel::Medium, "r"));
         assert!(manifest.blast_radius.is_some());
         assert_eq!(manifest.blast_radius.unwrap().level, RiskLevel::Medium);
+    }
+
+    #[test]
+    fn test_decomposition_required_variant() {
+        let sub = SuccessManifest::new("sub-1", "subtask");
+        let outcome = PoeOutcome::DecompositionRequired {
+            sub_manifests: vec![sub],
+            reason: "task too complex".into(),
+        };
+        match outcome {
+            PoeOutcome::DecompositionRequired { sub_manifests, reason } => {
+                assert_eq!(sub_manifests.len(), 1);
+                assert_eq!(reason, "task too complex");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_poe_task_metadata() {
+        let mut task = PoeTask::new(
+            SuccessManifest::new("t1", "test"),
+            "do something",
+        );
+        task.metadata.insert("required_capability".into(), "rust_expert".into());
+        assert_eq!(task.metadata.get("required_capability").unwrap(), "rust_expert");
     }
 
     #[test]
