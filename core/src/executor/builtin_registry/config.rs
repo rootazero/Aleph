@@ -49,4 +49,6 @@ pub struct BuiltinToolConfig {
     pub browser_profile_manager: Option<Arc<crate::browser::manager::ProfileManager>>,
     /// Media pipeline for media_understand tool
     pub media_pipeline: Option<Arc<crate::media::MediaPipeline>>,
+    /// Extension manager for plugin tool execution
+    pub extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
 }

@@ -63,14 +63,23 @@ impl NodeProcess {
     ) -> Result<Self, ExtensionError> {
         info!("Starting Node.js plugin host for: {}", plugin_id);
 
-        // Check if node binary exists before attempting to spawn
-        let node_path_buf = PathBuf::from(node_path);
-        if !node_path_buf.exists() {
-            return Err(ExtensionError::Runtime(format!(
-                "Node.js binary not found at: {}",
-                node_path
-            )));
-        }
+        // Resolve node binary path (supports both absolute paths and PATH lookup)
+        let node_path_buf = {
+            let p = PathBuf::from(node_path);
+            if p.exists() {
+                p
+            } else {
+                // Try resolving via PATH (e.g., fnm/nvm managed node)
+                which::which(node_path).map_err(|_| {
+                    ExtensionError::Runtime(format!(
+                        "Node.js binary not found at: {} (also not in PATH)",
+                        node_path
+                    ))
+                })?
+            }
+        };
+        let node_path = node_path_buf.to_string_lossy().to_string();
+        let node_path = node_path.as_str();
 
         // Resolve host script path (write to temp file if embedded)
         let (script_path, temp_script_path) = match host_script {

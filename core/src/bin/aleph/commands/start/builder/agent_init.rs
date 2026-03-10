@@ -158,6 +158,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             None
         };
 
+        // Get extension manager for plugin tool execution
+        let extension_manager = {
+            use alephcore::gateway::handlers::plugins::get_extension_manager;
+            get_extension_manager().ok().map(|em| Arc::clone(em))
+        };
+
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
             memory_db: Some(memory_db.clone()),
@@ -169,14 +175,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             tool_policy: Some(alephcore::builtin_tools::agent_manage::new_tool_policy_handle()),
             agent_manager: Some(agent_manager.clone()),
             sub_agent_dispatcher,
+            extension_manager: extension_manager.clone(),
             ..Default::default()
         };
-        let tool_registry = BuiltinToolRegistry::with_config(tool_config);
-        let tool_registry = Arc::new(tool_registry);
+        let mut tool_registry = BuiltinToolRegistry::with_config(tool_config);
 
         use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
         use alephcore::dispatcher::{UnifiedTool, ToolSource};
-        let tools: Vec<UnifiedTool> = BUILTIN_TOOL_DEFINITIONS
+        let mut tools: Vec<UnifiedTool> = BUILTIN_TOOL_DEFINITIONS
             .iter()
             .map(|def| UnifiedTool::new(
                 format!("builtin:{}", def.name),
@@ -185,6 +191,51 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 ToolSource::Builtin,
             ))
             .collect();
+
+        // Add plugin tools to both LLM tool list and BuiltinToolRegistry
+        {
+            use alephcore::gateway::handlers::plugins::get_extension_manager;
+            if let Ok(ext_manager) = get_extension_manager() {
+                if let Err(e) = ext_manager.ensure_loaded().await {
+                    tracing::warn!("Failed to load extensions for plugin tools: {}", e);
+                }
+                let registry = ext_manager.get_plugin_registry().await;
+                for plugin in registry.list_plugins() {
+                    if !plugin.status.is_active() {
+                        continue;
+                    }
+                    if let Ok(manifest) = alephcore::extension::manifest::parse_manifest_from_dir_sync(&plugin.root_dir) {
+                        for t in manifest.tools_v2.unwrap_or_default() {
+                            let mut tool = UnifiedTool::new(
+                                format!("plugin:{}:{}", plugin.id, t.name),
+                                &t.name,
+                                t.description.as_deref().unwrap_or(""),
+                                ToolSource::Plugin { plugin_id: plugin.id.clone() },
+                            );
+                            if let Some(params) = t.parameters {
+                                tool = tool.with_parameters_schema(params);
+                            }
+                            // Register in BuiltinToolRegistry for execution routing
+                            tool_registry.register_tool(tool.clone());
+                            tools.push(tool);
+                        }
+                    }
+                }
+            }
+        }
+
+        {
+            let plugin_tool_count = tools.iter().filter(|t| matches!(t.source, ToolSource::Plugin { .. })).count();
+            let builtin_tool_count = tools.iter().filter(|t| matches!(t.source, ToolSource::Builtin)).count();
+            tracing::info!(
+                builtin = builtin_tool_count,
+                plugin = plugin_tool_count,
+                total = tools.len(),
+                "LLM tool list assembled"
+            );
+        }
+
+        let tool_registry = Arc::new(tool_registry);
 
         // Build task router from config
         let task_router: Option<Arc<dyn alephcore::routing::TaskRouter>> = if app_config.task_routing.enabled {
