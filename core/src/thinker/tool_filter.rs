@@ -49,7 +49,7 @@ pub struct ToolFilterConfig {
 impl Default for ToolFilterConfig {
     fn default() -> Self {
         Self {
-            max_tools: 20,
+            max_tools: 128,
             always_include: vec!["complete".to_string(), "ask_user".to_string()],
             category_tools: Self::default_category_tools(),
             dynamic_filtering: true,

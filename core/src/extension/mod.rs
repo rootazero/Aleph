@@ -473,10 +473,43 @@ impl ExtensionManager {
         handler: &str,
         args: serde_json::Value,
     ) -> ExtensionResult<serde_json::Value> {
+        // Auto-load plugin if not already loaded (lazy initialization)
+        {
+            let loader = self.plugin_loader.read().await;
+            if !loader.is_loaded(plugin_id) {
+                drop(loader);
+                self.ensure_plugin_loaded(plugin_id).await?;
+            }
+        }
+
         self.plugin_loader
             .write()
             .await
             .call_tool(plugin_id, handler, args)
+    }
+
+    /// Ensure a plugin is loaded into the runtime.
+    ///
+    /// Parses the plugin manifest from its root directory (found via PluginRegistry)
+    /// and loads it into the appropriate runtime (Node.js or WASM).
+    async fn ensure_plugin_loaded(&self, plugin_id: &str) -> ExtensionResult<()> {
+        let registry = self.plugin_registry.read().await;
+        let record = registry.get_plugin(plugin_id).ok_or_else(|| {
+            ExtensionError::PluginNotFound(plugin_id.to_string())
+        })?;
+        let root_dir = record.root_dir.clone();
+        drop(registry);
+
+        let manifest = manifest::parse_manifest_from_dir_sync(&root_dir)?;
+
+        let mut loader = self.plugin_loader.write().await;
+        if loader.is_loaded(plugin_id) {
+            return Ok(()); // another task loaded it while we waited
+        }
+        let mut registry = self.plugin_registry.write().await;
+        loader.load_plugin(&manifest, &mut registry)?;
+        tracing::info!(plugin_id = plugin_id, "Auto-loaded plugin for tool execution");
+        Ok(())
     }
 
     /// Execute a hook handler on a runtime plugin.

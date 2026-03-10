@@ -108,6 +108,8 @@ pub struct BuiltinToolRegistry {
     /// Event bus for lifecycle event emission (held for future use; tools get their own clones)
     #[allow(dead_code)]
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
+    /// Extension manager for plugin tool execution
+    extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
     /// Tool metadata for lookup
     tools: HashMap<String, UnifiedTool>,
 }
@@ -684,8 +686,14 @@ impl BuiltinToolRegistry {
             session_context_handle,
             tool_policy_handle,
             event_bus: config.event_bus.clone(),
+            extension_manager: config.extension_manager.clone(),
             tools,
         }
+    }
+
+    /// Register an additional tool (e.g., plugin tools discovered at runtime)
+    pub fn register_tool(&mut self, tool: UnifiedTool) {
+        self.tools.insert(tool.name.clone(), tool);
     }
 
     /// Check if an operation is permitted
@@ -938,6 +946,24 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
 
             _ => {
+                // Check if this is a plugin tool
+                if let Some(unified) = self.tools.get(tool_name) {
+                    if let ToolSource::Plugin { ref plugin_id } = unified.source {
+                        let plugin_id = plugin_id.clone();
+                        // plugin-host.js registers tool handlers as "tool_{name}"
+                        let handler = format!("tool_{}", tool_name);
+                        let ext_mgr = self.extension_manager.clone();
+                        return Box::pin(async move {
+                            let ext_mgr = ext_mgr.ok_or_else(|| {
+                                AlephError::tool("Plugin tool execution unavailable: extension manager not configured")
+                            })?;
+                            info!(plugin = %plugin_id, tool = %handler, "Executing plugin tool");
+                            ext_mgr.call_plugin_tool(&plugin_id, &handler, arguments)
+                                .await
+                                .map_err(|e| AlephError::tool(format!("Plugin tool '{}' failed: {}", handler, e)))
+                        });
+                    }
+                }
                 let tool = tool_name.to_string();
                 error!(tool = %tool, "Unknown tool requested");
                 Box::pin(async move {
