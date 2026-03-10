@@ -135,25 +135,15 @@ impl StaticSafetyScanner {
                 self.scan_file_path(path)
             }
 
-            ValidationRule::FileContains { path, pattern }
-            | ValidationRule::FileNotContains { path, pattern } => {
-                let path_result = self.scan_file_path(path);
-                let pattern_result = self.scan_command(pattern);
-                if path_result.severity() >= pattern_result.severity() {
-                    path_result
-                } else {
-                    pattern_result
-                }
+            ValidationRule::FileContains { path, .. }
+            | ValidationRule::FileNotContains { path, .. } => {
+                // pattern is a grep/regex pattern, NOT a command — only scan the path
+                self.scan_file_path(path)
             }
 
-            ValidationRule::DirStructureMatch { root, expected } => {
-                let path_result = self.scan_file_path(root);
-                let expected_result = self.scan_command(expected);
-                if path_result.severity() >= expected_result.severity() {
-                    path_result
-                } else {
-                    expected_result
-                }
+            ValidationRule::DirStructureMatch { root, .. } => {
+                // expected is a structure description, NOT a command — only scan root path
+                self.scan_file_path(root)
             }
 
             ValidationRule::JsonSchemaValid { path, .. } => {
@@ -355,8 +345,15 @@ impl StaticSafetyScanner {
 
         // Check if target is root
         // Split by whitespace and look for / or /* as a standalone argument
+        // Normalize paths to catch bypass attempts like /./  //  /.. etc.
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        parts.iter().any(|&p| p == "/" || p == "/*")
+        parts.iter().any(|&p| {
+            let normalized = Path::new(p);
+            p == "/" || p == "/*"
+            || p == "/." || p == "/./"
+            || p == "//"
+            || (normalized.has_root() && normalized.components().count() == 1)
+        })
     }
 
     /// Match fork bomb patterns.
@@ -382,6 +379,10 @@ impl StaticSafetyScanner {
             "of=/dev/nvme",
             "of=/dev/hd",
             "of=/dev/vd",
+            "of=/dev/disk",   // macOS /dev/disk0, /dev/disk1
+            "of=/dev/rdisk",  // macOS raw disk
+            "of=/dev/mmcblk", // eMMC
+            "of=/dev/loop",   // loop devices
         ];
         block_device_prefixes.iter().any(|prefix| lower.contains(prefix))
     }
@@ -432,7 +433,9 @@ impl StaticSafetyScanner {
         }
         let methods = ["-x post", "-x put", "-x delete", "-x patch",
                        "--request post", "--request put", "--request delete", "--request patch",
-                       "-d ", "--data", "--data-raw", "--data-binary"];
+                       "-d ", "--data", "--data-raw", "--data-binary",
+                       "--method=post", "--method=put", "--method=delete", "--method=patch",
+                       "--method post", "--method put", "--method delete", "--method patch"];
         methods.iter().any(|m| lower.contains(m))
     }
 
@@ -694,5 +697,44 @@ mod tests {
             ".env access should be MandatorySignature, got: {:?}",
             result
         );
+    }
+
+    #[test]
+    fn test_tier0_rm_rf_root_normalized() {
+        let scanner = StaticSafetyScanner;
+        let manifest = SuccessManifest::new("t", "test")
+            .with_hard_constraint(ValidationRule::CommandPasses {
+                cmd: "rm".into(),
+                args: vec!["-rf".into(), "/./".into()],
+                timeout_ms: 30_000,
+            });
+        let result = scanner.scan(&manifest);
+        assert!(matches!(result, ScanResult::HardReject { .. }));
+    }
+
+    #[test]
+    fn test_tier0_dd_macos_disk() {
+        let scanner = StaticSafetyScanner;
+        let manifest = SuccessManifest::new("t", "test")
+            .with_hard_constraint(ValidationRule::CommandPasses {
+                cmd: "dd".into(),
+                args: vec!["if=/dev/zero".into(), "of=/dev/disk0".into()],
+                timeout_ms: 30_000,
+            });
+        let result = scanner.scan(&manifest);
+        assert!(matches!(result, ScanResult::HardReject { .. }));
+    }
+
+    #[test]
+    fn test_file_contains_drop_table_pattern_is_not_dangerous() {
+        let scanner = StaticSafetyScanner;
+        let manifest = SuccessManifest::new("t", "verify migration")
+            .with_hard_constraint(ValidationRule::FileContains {
+                path: std::path::PathBuf::from("migrations/001.sql"),
+                pattern: "DROP TABLE".into(),
+            });
+        let result = scanner.scan(&manifest);
+        // This is a READ-ONLY check, not executing DROP TABLE
+        assert!(!matches!(result, ScanResult::MandatorySignature { .. }));
     }
 }
