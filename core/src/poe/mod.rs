@@ -103,6 +103,7 @@
 //! }
 //! ```
 
+pub mod blast_radius;
 pub mod budget;
 pub mod contract;
 pub mod contract_store;
@@ -245,3 +246,6 @@ pub use events::{PoeEvent, PoeEventEnvelope, PoeOutcomeKind, EventTier};
 pub use projectors::memory::{MemoryFactWriter, MemoryProjector, NoOpMemoryFactWriter};
 pub use projectors::runner::{ProjectorHandler, ProjectorRunner};
 pub use projectors::trust::TrustProjector;
+
+// Blast radius assessment (System 1)
+pub use blast_radius::static_scanner::{ScanResult, StaticSafetyScanner};
