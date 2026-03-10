@@ -235,6 +235,10 @@ impl UnifiedIntentClassifier {
                 (id, DirectToolSource::Mcp)
             }
             ToolSourceType::Custom => (cmd.command_name.clone(), DirectToolSource::Custom),
+            ToolSourceType::Plugin => {
+                let id = cmd.command_name.clone();
+                (id, DirectToolSource::Mcp) // Plugin tools route similarly to MCP tools
+            }
         };
 
         IntentResult::DirectTool {

@@ -21,23 +21,26 @@ use serde::{Deserialize, Serialize};
 /// and the lower priority tool is renamed with a suffix.
 ///
 /// Priority order (highest to lowest):
-/// 1. Builtin (5) - System commands like /search, /webfetch
-/// 2. Native (4) - System capabilities implementations
-/// 3. Custom (3) - User-defined rules from config.toml
-/// 4. Mcp (2) - External MCP server tools
-/// 5. Skill (1) - Claude Agent skills
+/// 1. Builtin (6) - System commands like /search, /webfetch
+/// 2. Native (5) - System capabilities implementations
+/// 3. Custom (4) - User-defined rules from config.toml
+/// 4. Mcp (3) - External MCP server tools
+/// 5. Plugin (2) - Plugin tools from manifests
+/// 6. Skill (1) - Claude Agent skills
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ToolPriority {
     /// Lowest priority - Claude Agent skills
     Skill = 1,
+    /// Plugin tools from manifests
+    Plugin = 2,
     /// External MCP server tools
-    Mcp = 2,
+    Mcp = 3,
     /// User-defined custom rules
-    Custom = 3,
+    Custom = 4,
     /// System native capabilities
-    Native = 4,
+    Native = 5,
     /// Highest priority - System builtin commands
-    Builtin = 5,
+    Builtin = 6,
 }
 
 // =============================================================================
@@ -122,6 +125,13 @@ pub enum ToolSource {
         /// Index in the rules array for reference
         rule_index: usize,
     },
+
+    /// Plugin tool from ~/.aleph/plugins/
+    /// These are tools declared in plugin manifests (aleph.plugin.toml).
+    Plugin {
+        /// Plugin identifier (e.g., "diagnostics")
+        plugin_id: String,
+    },
 }
 
 impl ToolSource {
@@ -133,6 +143,7 @@ impl ToolSource {
             ToolSource::Mcp { .. } => "MCP",
             ToolSource::Skill { .. } => "Skill",
             ToolSource::Custom { .. } => "Custom",
+            ToolSource::Plugin { .. } => "Plugin",
         }
     }
 
@@ -144,6 +155,7 @@ impl ToolSource {
             ToolSource::Mcp { .. } => "bolt.fill",
             ToolSource::Skill { .. } => "lightbulb.fill",
             ToolSource::Custom { .. } => "command",
+            ToolSource::Plugin { .. } => "puzzlepiece.extension",
         }
     }
 
@@ -157,6 +169,7 @@ impl ToolSource {
             ToolSource::Native => ToolPriority::Native,
             ToolSource::Custom { .. } => ToolPriority::Custom,
             ToolSource::Mcp { .. } => ToolPriority::Mcp,
+            ToolSource::Plugin { .. } => ToolPriority::Plugin,
             ToolSource::Skill { .. } => ToolPriority::Skill,
         }
     }
@@ -171,6 +184,7 @@ impl ToolSource {
             ToolSource::Native => "native",
             ToolSource::Custom { .. } => "custom",
             ToolSource::Mcp { .. } => "mcp",
+            ToolSource::Plugin { .. } => "plugin",
             ToolSource::Skill { .. } => "skill",
         }
     }
@@ -188,6 +202,11 @@ impl ToolSource {
     /// Check if this source is a skill
     pub fn is_skill(&self) -> bool {
         matches!(self, ToolSource::Skill { .. })
+    }
+
+    /// Check if this source is a plugin tool
+    pub fn is_plugin(&self) -> bool {
+        matches!(self, ToolSource::Plugin { .. })
     }
 }
 

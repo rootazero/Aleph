@@ -127,6 +127,7 @@ impl ConflictResolver {
                 ToolSource::Mcp { server } => format!("mcp:{}:{}", server, new_name),
                 ToolSource::Skill { id } => format!("skill:{}", id), // Keep skill ID
                 ToolSource::Custom { rule_index } => format!("custom:{}:{}", rule_index, new_name),
+                ToolSource::Plugin { plugin_id } => format!("plugin:{}:{}", plugin_id, new_name),
             };
 
             debug!(
@@ -193,6 +194,7 @@ impl ConflictResolver {
                             ToolSource::Mcp { server } => format!("mcp:{}:{}", server, new_name),
                             ToolSource::Skill { id } => format!("skill:{}", id),
                             ToolSource::Custom { rule_index } => format!("custom:{}:{}", rule_index, new_name),
+                            ToolSource::Plugin { plugin_id } => format!("plugin:{}:{}", plugin_id, new_name),
                         };
 
                         debug!(
@@ -227,6 +229,9 @@ impl ConflictResolver {
                         ToolSource::Skill { id } => format!("skill:{}", id),
                         ToolSource::Custom { rule_index } => {
                             format!("custom:{}:{}", rule_index, new_name)
+                        }
+                        ToolSource::Plugin { plugin_id } => {
+                            format!("plugin:{}:{}", plugin_id, new_name)
                         }
                     };
 

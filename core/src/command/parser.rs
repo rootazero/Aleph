@@ -131,6 +131,10 @@ fn tool_to_command_context(tool: &UnifiedTool) -> CommandContext {
             provider: None, // Provider is resolved at routing time
             pattern: tool.routing_regex.clone().unwrap_or_default(),
         },
+        ToolSource::Plugin { plugin_id } => CommandContext::Mcp {
+            server_name: format!("plugin:{}", plugin_id),
+            tool_name: Some(tool.name.clone()),
+        },
     }
 }
 

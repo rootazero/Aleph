@@ -4,7 +4,6 @@
 //!
 //! ## Components
 //!
-//! - [`ComponentRegistry`] - Manages loaded extension components (skills, commands, agents, plugins)
 //! - [`PluginRegistry`] - Central storage for all plugin registrations
 //! - Registration types - 9 types for plugin API registration
 //!
@@ -33,10 +32,8 @@
 //! - [`PluginDiagnostic`] - Health reporting for plugins
 //! - [`DiagnosticLevel`] - Severity levels (warn, error)
 
-mod component_registry;
 mod plugin_registry;
 mod types;
 
-pub use component_registry::*;
 pub use plugin_registry::*;
 pub use types::*;

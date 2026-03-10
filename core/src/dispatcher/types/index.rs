@@ -108,6 +108,8 @@ pub enum ToolIndexCategory {
     Skill,
     /// User-defined custom commands
     Custom,
+    /// Plugin tools
+    Plugin,
 }
 
 impl ToolIndexCategory {
@@ -119,6 +121,7 @@ impl ToolIndexCategory {
             ToolIndexCategory::Mcp => "MCP",
             ToolIndexCategory::Skill => "Skill",
             ToolIndexCategory::Custom => "Custom",
+            ToolIndexCategory::Plugin => "Plugin",
         }
     }
 }
@@ -137,6 +140,7 @@ impl From<&ToolSource> for ToolIndexCategory {
             ToolSource::Mcp { .. } => ToolIndexCategory::Mcp,
             ToolSource::Skill { .. } => ToolIndexCategory::Skill,
             ToolSource::Custom { .. } => ToolIndexCategory::Custom,
+            ToolSource::Plugin { .. } => ToolIndexCategory::Plugin,
         }
     }
 }
@@ -161,6 +165,8 @@ pub struct ToolIndex {
     pub skill: Vec<ToolIndexEntry>,
     /// Custom tools
     pub custom: Vec<ToolIndexEntry>,
+    /// Plugin tools
+    pub plugin: Vec<ToolIndexEntry>,
 }
 
 impl ToolIndex {
@@ -177,12 +183,13 @@ impl ToolIndex {
             ToolIndexCategory::Mcp => self.mcp.push(entry),
             ToolIndexCategory::Skill => self.skill.push(entry),
             ToolIndexCategory::Custom => self.custom.push(entry),
+            ToolIndexCategory::Plugin => self.plugin.push(entry),
         }
     }
 
     /// Get total tool count
     pub fn total_count(&self) -> usize {
-        self.core.len() + self.builtin.len() + self.mcp.len() + self.skill.len() + self.custom.len()
+        self.core.len() + self.builtin.len() + self.mcp.len() + self.skill.len() + self.custom.len() + self.plugin.len()
     }
 
     /// Generate markdown prompt for LLM
@@ -232,6 +239,15 @@ impl ToolIndex {
         if !self.skill.is_empty() {
             lines.push("### Skills (use get_tool_schema for details)".to_string());
             for entry in &self.skill {
+                lines.push(entry.to_prompt_line());
+            }
+            lines.push(String::new());
+        }
+
+        // Plugin tools
+        if !self.plugin.is_empty() {
+            lines.push("### Plugins (use get_tool_schema for details)".to_string());
+            for entry in &self.plugin {
                 lines.push(entry.to_prompt_line());
             }
             lines.push(String::new());

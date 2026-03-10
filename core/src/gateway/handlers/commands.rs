@@ -54,6 +54,7 @@ fn source_type_to_string(st: ToolSourceType) -> String {
         ToolSourceType::Mcp => "mcp".to_string(),
         ToolSourceType::Skill => "skill".to_string(),
         ToolSourceType::Custom => "custom".to_string(),
+        ToolSourceType::Plugin => "plugin".to_string(),
     }
 }
 
