@@ -106,6 +106,7 @@
 pub mod blast_radius;
 pub mod budget;
 pub mod contract;
+pub mod decomposition;
 pub mod contract_store;
 pub mod crystallization;
 pub mod handler_types;
@@ -118,6 +119,7 @@ pub mod prompt_context;
 pub mod projectors;
 pub mod prompt_layer;
 pub mod services;
+pub mod memory_decay;
 pub mod taboo;
 pub mod trust;
 pub mod types;
@@ -252,6 +254,14 @@ pub use projectors::trust::TrustProjector;
 pub use blast_radius::assessor::{AssessmentResult, BlastRadiusAssessor};
 pub use blast_radius::semantic_analyzer::SemanticRiskAnalyzer;
 pub use blast_radius::static_scanner::{ScanResult, StaticSafetyScanner};
+
+// Memory decay
+pub use memory_decay::decay::{DecayCalculator, DecayConfig};
+pub use memory_decay::reuse_tracker::{InMemoryReuseTracker, ReuseRecord};
+
+// Task decomposition (recursive POE)
+pub use decomposition::detector::{DecompositionAdvice, DecompositionDetector};
+pub use decomposition::generator::SubManifestGenerator;
 
 // Taboo crystallization (micro + macro)
 pub use taboo::buffer::{TabooBuffer, TaggedVerdict};
