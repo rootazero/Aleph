@@ -103,6 +103,7 @@
 //! }
 //! ```
 
+pub mod execution_env;
 pub mod blast_radius;
 pub mod budget;
 pub mod contract;
@@ -165,7 +166,13 @@ pub use types::{
     PoeTask, PoeOutcome,
     // Experience types (for future crystallization)
     Experience, TaskPattern, SolutionPath, ExperienceOutcome,
+    // Validator role (Phase 3 foundation)
+    ValidatorRole,
 };
+
+// Execution environment (Phase 3 foundation)
+pub use execution_env::host::HostEnvironment;
+pub use execution_env::{CommandOutput, ExecutionEnvironment};
 
 // Validation
 pub use validation::{CompositeValidator, HardValidator, SemanticValidator};
@@ -257,6 +264,7 @@ pub use blast_radius::static_scanner::{ScanResult, StaticSafetyScanner};
 
 // Memory decay
 pub use memory_decay::decay::{DecayCalculator, DecayConfig};
+pub use memory_decay::filtered_store::DecayFilteredStore;
 pub use memory_decay::reuse_tracker::{InMemoryReuseTracker, ReuseRecord};
 
 // Task decomposition (recursive POE)

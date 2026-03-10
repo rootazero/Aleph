@@ -295,6 +295,23 @@ impl ModelTier {
 }
 
 // ============================================================================
+// Validator Role
+// ============================================================================
+
+/// Role of a validator in the evaluation pipeline.
+///
+/// Phase 1: NormalCritic (default behavior)
+/// Phase 3: AdversarialCritic ("find everything wrong" prompt modification)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ValidatorRole {
+    /// Standard validation — check if criteria are met.
+    #[default]
+    NormalCritic,
+    /// Adversarial validation — actively seek flaws and edge cases.
+    AdversarialCritic,
+}
+
+// ============================================================================
 // Blast Radius (Risk Assessment)
 // ============================================================================
 
@@ -592,6 +609,14 @@ pub enum WorkerState {
     NeedsInput {
         /// Question for the user
         question: String,
+    },
+
+    /// Worker detected task is too complex and needs decomposition
+    NeedsDecomposition {
+        /// Suggested sub-objectives for decomposition
+        sub_objectives: Vec<String>,
+        /// Reason why decomposition is needed
+        reason: String,
     },
 }
 
@@ -1106,6 +1131,25 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn test_validator_role_default() {
+        let role = ValidatorRole::default();
+        assert_eq!(role, ValidatorRole::NormalCritic);
+    }
+
+    #[test]
+    fn test_validator_role_serialization() {
+        let role = ValidatorRole::AdversarialCritic;
+        let json = serde_json::to_string(&role).unwrap();
+        let parsed: ValidatorRole = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, ValidatorRole::AdversarialCritic);
+
+        let role2 = ValidatorRole::NormalCritic;
+        let json2 = serde_json::to_string(&role2).unwrap();
+        let parsed2: ValidatorRole = serde_json::from_str(&json2).unwrap();
+        assert_eq!(parsed2, ValidatorRole::NormalCritic);
     }
 
     #[test]
