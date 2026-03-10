@@ -17,7 +17,7 @@
 //!    - Determines if soft metric thresholds are met
 
 use crate::error::Result;
-use crate::poe::types::{RuleResult, SoftRuleResult, SuccessManifest, Verdict, WorkerOutput};
+use crate::poe::types::{RuleResult, SoftRuleResult, SuccessManifest, ValidatorRole, Verdict, WorkerOutput};
 use crate::poe::validation::{HardValidator, SemanticValidator};
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
@@ -35,6 +35,8 @@ pub struct CompositeValidator {
     hard_validator: HardValidator,
     /// Validator for LLM-based semantic checks
     semantic_validator: SemanticValidator,
+    /// Role of this validator (Phase 3: adversarial critic mode)
+    role: ValidatorRole,
 }
 
 impl CompositeValidator {
@@ -45,7 +47,19 @@ impl CompositeValidator {
         Self {
             hard_validator: HardValidator::new(),
             semantic_validator: SemanticValidator::new(provider),
+            role: ValidatorRole::default(),
         }
+    }
+
+    /// Set the validator role (Phase 3: adversarial critic mode).
+    pub fn with_role(mut self, role: ValidatorRole) -> Self {
+        self.role = role;
+        self
+    }
+
+    /// Get the current validator role.
+    pub fn role(&self) -> ValidatorRole {
+        self.role
     }
 
     /// Validate worker output against the success manifest.
@@ -613,6 +627,17 @@ mod tests {
         let suggestion = validator.suggest_soft_fix(&results);
 
         assert!(suggestion.contains("Add more documentation"));
+    }
+
+    #[test]
+    fn test_composite_validator_with_role() {
+        use crate::poe::types::ValidatorRole;
+
+        let validator = create_test_validator("");
+        assert_eq!(validator.role(), ValidatorRole::NormalCritic);
+
+        let validator = validator.with_role(ValidatorRole::AdversarialCritic);
+        assert_eq!(validator.role(), ValidatorRole::AdversarialCritic);
     }
 
     #[test]
