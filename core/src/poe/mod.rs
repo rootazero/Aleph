@@ -247,5 +247,7 @@ pub use projectors::memory::{MemoryFactWriter, MemoryProjector, NoOpMemoryFactWr
 pub use projectors::runner::{ProjectorHandler, ProjectorRunner};
 pub use projectors::trust::TrustProjector;
 
-// Blast radius assessment (System 1)
+// Blast radius assessment
+pub use blast_radius::assessor::{AssessmentResult, BlastRadiusAssessor};
+pub use blast_radius::semantic_analyzer::SemanticRiskAnalyzer;
 pub use blast_radius::static_scanner::{ScanResult, StaticSafetyScanner};
