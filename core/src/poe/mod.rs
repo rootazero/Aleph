@@ -118,6 +118,7 @@ pub mod prompt_context;
 pub mod projectors;
 pub mod prompt_layer;
 pub mod services;
+pub mod taboo;
 pub mod trust;
 pub mod types;
 pub mod validation;
@@ -251,3 +252,7 @@ pub use projectors::trust::TrustProjector;
 pub use blast_radius::assessor::{AssessmentResult, BlastRadiusAssessor};
 pub use blast_radius::semantic_analyzer::SemanticRiskAnalyzer;
 pub use blast_radius::static_scanner::{ScanResult, StaticSafetyScanner};
+
+// Taboo crystallization (micro + macro)
+pub use taboo::buffer::{TabooBuffer, TaggedVerdict};
+pub use taboo::anti_pattern::{AntiPattern, InMemoryAntiPatternStore};
