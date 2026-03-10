@@ -427,11 +427,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             dispatch_registry.register_custom_commands(&app_config.rules).await;
         }
 
-        // Register skills from ExtensionManager (if initialized)
+        // Register skills and plugin tools from ExtensionManager (if initialized)
         {
             use alephcore::gateway::handlers::plugins::get_extension_manager;
             use alephcore::domain::Entity;
             if let Ok(ext_manager) = get_extension_manager() {
+                // Ensure extensions are discovered and loaded (skills + plugins)
+                if let Err(e) = ext_manager.ensure_loaded().await {
+                    tracing::warn!("Failed to load extensions: {}", e);
+                }
+
                 {
                     let skill_manifests = ext_manager.skill_system().list_skills().await;
                     let skill_infos: Vec<alephcore::skills::SkillInfo> = skill_manifests
@@ -454,11 +459,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
                 // Register plugin tools from discovered manifests
                 {
-                    // Ensure plugins are discovered and registered
-                    if let Err(e) = ext_manager.ensure_loaded().await {
-                        tracing::warn!("Failed to load extensions for plugin tools: {}", e);
-                    }
-
                     let registry = ext_manager.get_plugin_registry().await;
                     let plugin_tools: Vec<(String, String, String)> = registry
                         .list_plugins()
