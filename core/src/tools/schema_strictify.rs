@@ -56,7 +56,11 @@ pub fn migrate_to_draft_2020_12(schema: &mut Value) {
 /// Recursively transform a JSON Schema for strict mode compatibility.
 ///
 /// - Sets `additionalProperties: false` on all object types
-/// - Makes all properties required
+/// - Makes all properties required (originally optional ones become nullable)
+///
+/// Strict mode (OpenAI, Bedrock) requires every property to appear in `required`.
+/// For fields that were NOT originally required, we make them nullable by wrapping
+/// their `type` in an array: `"type": "string"` → `"type": ["string", "null"]`.
 pub fn strictify_schema(schema: &mut Value) {
     let Some(obj) = schema.as_object_mut() else {
         return;
@@ -64,8 +68,27 @@ pub fn strictify_schema(schema: &mut Value) {
 
     if obj.get("type").and_then(|v| v.as_str()) == Some("object") {
         obj.insert("additionalProperties".into(), Value::Bool(false));
-        if let Some(properties) = obj.get("properties").cloned() {
-            if let Some(props) = properties.as_object() {
+
+        // Collect originally required keys
+        let originally_required: std::collections::HashSet<String> = obj
+            .get("required")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Make originally-optional properties nullable
+        if let Some(properties) = obj.get_mut("properties") {
+            if let Some(props) = properties.as_object_mut() {
+                for (key, prop_schema) in props.iter_mut() {
+                    if !originally_required.contains(key) {
+                        make_nullable(prop_schema);
+                    }
+                }
+                // Set required to ALL property keys
                 let all_keys: Vec<Value> =
                     props.keys().map(|k| Value::String(k.clone())).collect();
                 obj.insert("required".into(), Value::Array(all_keys));
@@ -86,6 +109,37 @@ pub fn strictify_schema(schema: &mut Value) {
                     strictify_schema(item);
                 }
             }
+        }
+    }
+}
+
+/// Make a property schema nullable by wrapping its type.
+///
+/// - `"type": "string"` → `"type": ["string", "null"]`
+/// - `"type": ["string", "integer"]` → `"type": ["string", "integer", "null"]`
+/// - No `type` field → adds `"type": ["null"]` (preserves other constraints)
+fn make_nullable(schema: &mut Value) {
+    let Some(obj) = schema.as_object_mut() else {
+        return;
+    };
+
+    match obj.get("type").cloned() {
+        Some(Value::String(t)) => {
+            if t != "null" {
+                obj.insert(
+                    "type".into(),
+                    Value::Array(vec![Value::String(t), Value::String("null".into())]),
+                );
+            }
+        }
+        Some(Value::Array(mut arr)) => {
+            if !arr.iter().any(|v| v.as_str() == Some("null")) {
+                arr.push(Value::String("null".into()));
+                obj.insert("type".into(), Value::Array(arr));
+            }
+        }
+        _ => {
+            // No type field — could be a $ref or anyOf; leave as-is
         }
     }
 }
@@ -128,12 +182,22 @@ mod tests {
         assert_eq!(required.len(), 2);
         assert!(required.contains(&json!("name")));
         assert!(required.contains(&json!("age")));
+        // No original required → both become nullable
+        assert_eq!(
+            schema["properties"]["name"]["type"],
+            json!(["string", "null"])
+        );
+        assert_eq!(
+            schema["properties"]["age"]["type"],
+            json!(["integer", "null"])
+        );
     }
 
     #[test]
     fn test_strictify_recurses_into_nested_objects() {
         let mut schema = json!({
             "type": "object",
+            "required": ["address"],
             "properties": {
                 "address": {
                     "type": "object",
@@ -149,6 +213,11 @@ mod tests {
 
         // Top level
         assert_eq!(schema["additionalProperties"], json!(false));
+        // address was originally required → stays non-nullable
+        assert_eq!(
+            schema["properties"]["address"]["type"],
+            json!("object")
+        );
 
         // Nested object
         let address = &schema["properties"]["address"];
@@ -240,5 +309,55 @@ mod tests {
 
         assert_eq!(schema["additionalProperties"], json!(false));
         assert_eq!(schema["required"], json!([]));
+    }
+
+    #[test]
+    fn test_strictify_makes_optional_fields_nullable() {
+        let mut schema = json!({
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": { "type": "string" },
+                "limit": { "type": "integer" },
+                "verbose": { "type": "boolean" }
+            }
+        });
+
+        strictify_schema(&mut schema);
+
+        // All three in required now
+        let required = schema["required"].as_array().unwrap();
+        assert_eq!(required.len(), 3);
+
+        // query was originally required → stays non-nullable
+        assert_eq!(schema["properties"]["query"]["type"], json!("string"));
+
+        // limit and verbose were optional → become nullable
+        assert_eq!(
+            schema["properties"]["limit"]["type"],
+            json!(["integer", "null"])
+        );
+        assert_eq!(
+            schema["properties"]["verbose"]["type"],
+            json!(["boolean", "null"])
+        );
+    }
+
+    #[test]
+    fn test_strictify_preserves_already_nullable() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": ["string", "null"] }
+            }
+        });
+
+        strictify_schema(&mut schema);
+
+        // Already nullable → no double-null
+        assert_eq!(
+            schema["properties"]["name"]["type"],
+            json!(["string", "null"])
+        );
     }
 }
