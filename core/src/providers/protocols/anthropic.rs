@@ -228,6 +228,8 @@ impl ProtocolAdapter for AnthropicProtocol {
                     if let Some(obj) = schema.as_object_mut() {
                         obj.entry("type").or_insert_with(|| serde_json::json!("object"));
                     }
+                    // Migrate schemars draft-07 schemas to draft 2020-12
+                    crate::tools::schema_strictify::migrate_to_draft_2020_12(&mut schema);
                     AnthropicTool {
                         name: td.name.clone(),
                         description: td.description.clone(),

@@ -374,25 +374,29 @@ impl ModelRoutingConfigToml {
     /// - `reasoning` → `reasoning_model`
     /// - `quick_tasks` → `fast_model`
     pub fn to_agent_loop_config(&self) -> AgentLoopModelRoutingConfig {
-        // Default model names from agent_loop::config
-        let default_model_name = "claude-sonnet-4-20250514".to_string();
-        let default_fast_model = "claude-3-5-haiku-20241022".to_string();
+        // Resolve default_model first — all other roles inherit from it if unset.
+        // This ensures every model role uses the user's configured model,
+        // never a hardcoded model name.
+        let resolved_default = self
+            .default_model
+            .clone()
+            .or_else(|| self.code_generation.clone())
+            .unwrap_or_else(|| AgentLoopModelRoutingConfig::default().default_model);
 
         AgentLoopModelRoutingConfig {
-            default_model: self
-                .default_model
-                .clone()
-                .or_else(|| self.code_generation.clone())
-                .unwrap_or_else(|| default_model_name.clone()),
+            default_model: resolved_default.clone(),
             vision_model: self
                 .image_analysis
                 .clone()
-                .unwrap_or_else(|| default_model_name.clone()),
+                .unwrap_or_else(|| resolved_default.clone()),
             reasoning_model: self
                 .reasoning
                 .clone()
-                .unwrap_or_else(|| default_model_name.clone()),
-            fast_model: self.quick_tasks.clone().unwrap_or(default_fast_model),
+                .unwrap_or_else(|| resolved_default.clone()),
+            fast_model: self
+                .quick_tasks
+                .clone()
+                .unwrap_or_else(|| resolved_default.clone()),
             auto_route: self.enable_pipelines,
         }
     }

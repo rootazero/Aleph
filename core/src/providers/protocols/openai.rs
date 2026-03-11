@@ -302,6 +302,9 @@ impl ProtocolAdapter for OpenAiProtocol {
                     if let Some(obj) = params.as_object_mut() {
                         obj.entry("type").or_insert_with(|| json!("object"));
                     }
+                    // Migrate schemars draft-07 schemas to draft 2020-12 for
+                    // Bedrock and other strict backends.
+                    crate::tools::schema_strictify::migrate_to_draft_2020_12(&mut params);
                     OpenAiTool {
                         tool_type: "function".into(),
                         function: OpenAiFunction {
