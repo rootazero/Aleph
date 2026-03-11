@@ -41,6 +41,7 @@ pub mod dreaming;
 pub mod experience;
 pub mod experience_store;
 pub mod pattern_extractor;
+pub mod pattern_model;
 
 use crate::sync_primitives::Arc;
 use std::time::Instant;
