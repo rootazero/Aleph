@@ -8,6 +8,51 @@
 
 use serde_json::Value;
 
+/// Migrate a schemars-generated JSON Schema (draft-07) to draft 2020-12 format.
+///
+/// Transformations:
+/// - Removes `$schema` field
+/// - Renames `definitions` to `$defs`
+/// - Updates `$ref` paths from `#/definitions/` to `#/$defs/`
+pub fn migrate_to_draft_2020_12(schema: &mut Value) {
+    let Some(obj) = schema.as_object_mut() else {
+        return;
+    };
+
+    // Remove $schema field
+    obj.remove("$schema");
+
+    // Rename "definitions" to "$defs"
+    if let Some(defs) = obj.remove("definitions") {
+        obj.insert("$defs".into(), defs);
+    }
+
+    // Update $ref paths
+    if let Some(ref_val) = obj.get_mut("$ref") {
+        if let Some(s) = ref_val.as_str() {
+            if s.contains("#/definitions/") {
+                *ref_val = Value::String(s.replace("#/definitions/", "#/$defs/"));
+            }
+        }
+    }
+
+    // Recurse into all nested schemas
+    let keys: Vec<String> = obj.keys().cloned().collect();
+    for key in keys {
+        if let Some(v) = obj.get_mut(&key) {
+            match v {
+                Value::Object(_) => migrate_to_draft_2020_12(v),
+                Value::Array(arr) => {
+                    for item in arr {
+                        migrate_to_draft_2020_12(item);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Recursively transform a JSON Schema for strict mode compatibility.
 ///
 /// - Sets `additionalProperties: false` on all object types
@@ -145,6 +190,43 @@ mod tests {
         let inner = &schema["allOf"][0];
         assert_eq!(inner["additionalProperties"], json!(false));
         assert!(inner["required"].as_array().unwrap().contains(&json!("x")));
+    }
+
+    #[test]
+    fn test_migrate_removes_schema_and_renames_definitions() {
+        let mut schema = json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "definitions": {
+                "MyEnum": { "type": "string", "enum": ["a", "b"] }
+            },
+            "properties": {
+                "kind": { "$ref": "#/definitions/MyEnum" }
+            }
+        });
+
+        super::migrate_to_draft_2020_12(&mut schema);
+
+        assert!(schema.get("$schema").is_none());
+        assert!(schema.get("definitions").is_none());
+        assert!(schema.get("$defs").is_some());
+        assert_eq!(
+            schema["properties"]["kind"]["$ref"],
+            json!("#/$defs/MyEnum")
+        );
+    }
+
+    #[test]
+    fn test_migrate_noop_for_simple_schema() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" }
+            }
+        });
+        let original = schema.clone();
+        super::migrate_to_draft_2020_12(&mut schema);
+        assert_eq!(schema, original);
     }
 
     #[test]

@@ -443,7 +443,7 @@ fn default_reasoning_model() -> String {
 }
 
 fn default_fast_model() -> String {
-    "claude-3-5-haiku-20241022".to_string()
+    default_model()
 }
 
 fn default_meta_cognition_cache_size() -> usize {

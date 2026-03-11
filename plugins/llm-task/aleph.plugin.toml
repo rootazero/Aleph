@@ -95,8 +95,6 @@ required = ["steps"]
 type = "array"
 description = "Array of step objects with prompt and optional model"
 
-[[tools.parameters.properties.steps.items.properties]]
-
 [tools.parameters.properties.steps.items]
 type = "object"
 required = ["prompt"]

@@ -530,9 +530,38 @@ impl<P: ProviderRegistry> Thinker<P> {
             .iter()
             .partition(|tc| virtual_tools::is_virtual_tool(&tc.name));
 
+        // [PROBE] Tool Calling 2.0 — LLM response analysis
+        let total = response.tool_calls.len();
+        let real_count = real_calls.len();
+        let virtual_count = virtual_calls.len();
+        let tool_names: Vec<&str> = response.tool_calls.iter().map(|tc| tc.name.as_str()).collect();
+        tracing::info!(
+            target: "tool_calling_2_0",
+            total_tool_calls = total,
+            real_tool_calls = real_count,
+            virtual_tool_calls = virtual_count,
+            ?tool_names,
+            parallel = real_count > 1,
+            "[TC2.0] LLM returned {} tool call(s): {:?}",
+            total,
+            tool_names,
+        );
+
         // Phase 2: Terminal defense — virtual tools take absolute priority
         if !virtual_calls.is_empty() {
             let terminal = Self::pick_terminal(&virtual_calls);
+            let ignored_real: Vec<&str> = real_calls.iter().map(|tc| tc.name.as_str()).collect();
+            if !ignored_real.is_empty() {
+                tracing::warn!(
+                    target: "tool_calling_2_0",
+                    terminal_action = terminal.name.as_str(),
+                    ?ignored_real,
+                    "[TC2.0] Terminal defense: {} suppressed {} real tool(s): {:?}",
+                    terminal.name,
+                    ignored_real.len(),
+                    ignored_real,
+                );
+            }
             let decision = self.map_virtual_tool_to_decision(terminal);
             return Ok(Thinking {
                 reasoning,
@@ -570,19 +599,32 @@ impl<P: ProviderRegistry> Thinker<P> {
                 let mut def =
                     ToolDefinition::new(&t.name, &t.description, params, ToolCategory::Builtin);
                 // Apply strict mode: strictify the schema
-                def.strict = true;
-                crate::tools::schema_strictify::strictify_schema(&mut def.parameters);
+                // TODO(tc2.0): Re-enable once strictify_schema is JSON Schema draft 2020-12 compliant
+                // def.strict = true;
+                // crate::tools::schema_strictify::strictify_schema(&mut def.parameters);
                 def
             })
             .collect();
 
-        // Virtual tools: always strict
-        let mut virtuals = virtual_tools::virtual_tool_definitions();
-        for v in &mut virtuals {
-            v.strict = true;
-            crate::tools::schema_strictify::strictify_schema(&mut v.parameters);
-        }
+        // Virtual tools
+        // TODO(tc2.0): Re-enable strict mode once strictify_schema is JSON Schema draft 2020-12 compliant
+        let virtuals = virtual_tools::virtual_tool_definitions();
         tool_defs.extend(virtuals);
+
+        // [PROBE] Tool Calling 2.0 — strict mode stats
+        let strict_count = tool_defs.iter().filter(|d| d.strict).count();
+        let non_strict_count = tool_defs.iter().filter(|d| !d.strict).count();
+        tracing::info!(
+            target: "tool_calling_2_0",
+            total = tool_defs.len(),
+            strict = strict_count,
+            non_strict = non_strict_count,
+            "[TC2.0] Prepared {} tool defs ({} strict, {} non-strict)",
+            tool_defs.len(),
+            strict_count,
+            non_strict_count,
+        );
+
         tool_defs
     }
 

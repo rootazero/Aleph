@@ -942,6 +942,20 @@ where
             let started_at = chrono::Utc::now().timestamp_millis();
 
             // ===== Parallel Tool Execution via JoinSet =====
+            // [PROBE] Log execution mode
+            if let Action::ToolCalls { calls: ref reqs } = &action {
+                let tool_names: Vec<&str> = reqs.iter().map(|r| r.tool_name.as_str()).collect();
+                tracing::info!(
+                    target: "tool_calling_2_0",
+                    count = reqs.len(),
+                    mode = if reqs.len() > 1 { "parallel" } else { "sequential" },
+                    ?tool_names,
+                    "[TC2.0] Executing {} tool(s) in {} mode: {:?}",
+                    reqs.len(),
+                    if reqs.len() > 1 { "PARALLEL" } else { "sequential" },
+                    tool_names,
+                );
+            }
             let result = match &action {
                 Action::ToolCalls { calls: ref requests } if requests.len() > 1 => {
                     // N>1: parallel execution via JoinSet
@@ -991,6 +1005,33 @@ where
 
             let duration_ms = start_time.elapsed().as_millis() as u64;
             let completed_at = chrono::Utc::now().timestamp_millis();
+
+            // [PROBE] Tool Calling 2.0 — execution results
+            if let (Action::ToolCalls { calls: ref reqs }, ActionResult::ToolResults { ref results }) = (&action, &result) {
+                let succeeded = results.iter().filter(|r| r.is_success()).count();
+                let failed = results.iter().filter(|r| r.is_error()).count();
+                let per_tool: Vec<String> = results.iter().map(|r| {
+                    match &r.result {
+                        super::decision::SingleToolResult::Success { duration_ms: d, .. } =>
+                            format!("{}:ok({}ms)", r.tool_name, d),
+                        super::decision::SingleToolResult::Error { error, .. } =>
+                            format!("{}:err({})", r.tool_name, &error[..error.len().min(50)]),
+                    }
+                }).collect();
+                tracing::info!(
+                    target: "tool_calling_2_0",
+                    total = reqs.len(),
+                    succeeded,
+                    failed,
+                    wall_clock_ms = duration_ms,
+                    ?per_tool,
+                    "[TC2.0] Batch done: {}/{} ok, wall={}ms | {}",
+                    succeeded,
+                    reqs.len(),
+                    duration_ms,
+                    per_tool.join(", "),
+                );
+            }
 
             callback.on_action_done(&action, &result).await;
 
