@@ -18,6 +18,13 @@ use super::detector::SolidificationDetector;
 use super::tracker::EvolutionTracker;
 use super::types::{SolidificationConfig, SolidificationSuggestion};
 
+use super::validation::tiered_validator::{TieredValidator, ValidationVerdict};
+use super::validation::risk_profiler::SkillRiskProfiler;
+use super::differential::EfficiencyDiff;
+use crate::poe::crystallization::pattern_model::PatternSequence;
+use crate::poe::crystallization::synthesis_backend::PatternSynthesisBackend;
+use crate::poe::crystallization::experience_store::InMemoryExperienceStore;
+
 /// Pipeline status indicating the current state of the compiler
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PipelineStatus {
@@ -305,6 +312,98 @@ impl SolidificationPipeline {
     }
 }
 
+// ============================================================================
+// Beta Evolution Pipeline
+// ============================================================================
+
+/// Result of a beta evolution pipeline evaluation.
+#[derive(Debug)]
+pub enum BetaEvalResult {
+    /// Pattern passed validation and is more efficient than baseline.
+    Passed {
+        verdict: ValidationVerdict,
+        diff: EfficiencyDiff,
+    },
+    /// Pattern rejected because it is not more efficient.
+    Rejected { reason: String },
+    /// Pattern failed validation checks.
+    ValidationFailed { verdict: ValidationVerdict },
+}
+
+/// Beta evolution pipeline that combines differential testing with tiered validation.
+///
+/// Evaluates candidate patterns by:
+/// 1. Computing efficiency diff against baseline
+/// 2. Profiling risk level
+/// 3. Running tiered validation (L1/L2/human review)
+pub struct EvolutionPipelineBeta {
+    validator: TieredValidator,
+}
+
+impl EvolutionPipelineBeta {
+    /// Create a new beta evolution pipeline.
+    pub fn new(backend: Arc<dyn PatternSynthesisBackend>) -> Self {
+        Self {
+            validator: TieredValidator::new(backend),
+        }
+    }
+
+    /// Evaluate a candidate pattern against a baseline.
+    ///
+    /// Returns `Passed` if the pattern is more efficient and passes validation,
+    /// `Rejected` if it is not more efficient, or `ValidationFailed` if it
+    /// fails structural/semantic checks.
+    pub async fn evaluate_candidate(
+        &self,
+        pattern_id: &str,
+        pattern: &PatternSequence,
+        baseline_steps: f32,
+        baseline_tokens: f32,
+    ) -> BetaEvalResult {
+        // 1. Compute efficiency diff
+        let skill_steps = pattern.estimated_total_cost();
+        let skill_tokens = skill_steps * 100.0; // rough token estimate
+        let tolerance = 0.1;
+
+        let diff = EfficiencyDiff::compute(
+            skill_steps,
+            skill_tokens,
+            baseline_steps,
+            baseline_tokens,
+            tolerance,
+        );
+
+        if !diff.is_more_efficient {
+            return BetaEvalResult::Rejected {
+                reason: format!(
+                    "Pattern not more efficient: skill_steps={:.1}, baseline_steps={:.1}",
+                    skill_steps, baseline_steps
+                ),
+            };
+        }
+
+        // 2. Profile risk
+        let risk = SkillRiskProfiler::profile(pattern);
+
+        // 3. Validate with tiered validator (placeholder in-memory store)
+        let store = InMemoryExperienceStore::new();
+        let verdict = match self.validator.validate(pattern, pattern_id, &risk, &store).await {
+            Ok(v) => v,
+            Err(e) => {
+                return BetaEvalResult::Rejected {
+                    reason: format!("Validation error: {}", e),
+                };
+            }
+        };
+
+        if verdict.passed {
+            BetaEvalResult::Passed { verdict, diff }
+        } else {
+            BetaEvalResult::ValidationFailed { verdict }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,5 +546,107 @@ mod tests {
         assert!(status.enabled);
         assert_eq!(status.candidates_ready, 0);
         assert!(status.last_run.is_some());
+    }
+
+    // ========================================================================
+    // Beta pipeline tests
+    // ========================================================================
+
+    mod beta_pipeline {
+        use super::*;
+        use async_trait::async_trait;
+        use crate::poe::crystallization::experience_store::PoeExperience;
+        use crate::poe::crystallization::pattern_model::{
+            ParameterMapping, PatternStep, ToolCallTemplate, ToolCategory,
+        };
+        use crate::poe::crystallization::synthesis_backend::{
+            PatternSynthesisBackend, PatternSynthesisRequest, PatternSuggestion,
+        };
+
+        struct StubSynthesisBackend;
+
+        #[async_trait]
+        impl PatternSynthesisBackend for StubSynthesisBackend {
+            async fn synthesize_pattern(
+                &self,
+                _request: PatternSynthesisRequest,
+            ) -> anyhow::Result<PatternSuggestion> {
+                Ok(PatternSuggestion {
+                    description: "stub".to_string(),
+                    steps: vec![],
+                    parameter_mapping: ParameterMapping::default(),
+                    pattern_hash: "stub".to_string(),
+                    confidence: 0.95,
+                })
+            }
+
+            async fn evaluate_confidence(
+                &self,
+                _pattern_hash: &str,
+                _occurrences: &[PoeExperience],
+            ) -> anyhow::Result<f32> {
+                Ok(0.95)
+            }
+        }
+
+        fn make_action(name: &str, category: ToolCategory) -> PatternStep {
+            PatternStep::Action {
+                tool_call: ToolCallTemplate {
+                    tool_name: name.to_string(),
+                    category,
+                },
+                params: ParameterMapping::default(),
+            }
+        }
+
+        #[tokio::test]
+        async fn test_full_beta_pipeline_rejects_empty_pattern() {
+            let backend = Arc::new(StubSynthesisBackend);
+            let pipeline = EvolutionPipelineBeta::new(backend);
+
+            // Empty pattern has cost 0, baseline is 5 steps → efficient but fails L1
+            let pattern = PatternSequence {
+                description: "empty".to_string(),
+                steps: vec![],
+                expected_outputs: vec![],
+            };
+
+            let result = pipeline
+                .evaluate_candidate("test", &pattern, 5.0, 500.0)
+                .await;
+
+            assert!(
+                matches!(result, BetaEvalResult::ValidationFailed { .. }),
+                "Expected ValidationFailed for empty pattern, got {:?}",
+                result
+            );
+        }
+
+        #[tokio::test]
+        async fn test_full_beta_pipeline_rejects_inefficient() {
+            let backend = Arc::new(StubSynthesisBackend);
+            let pipeline = EvolutionPipelineBeta::new(backend);
+
+            // 10-step pattern (cost 10.0) vs baseline of 2 steps → not efficient
+            let steps: Vec<PatternStep> = (0..10)
+                .map(|i| make_action(&format!("tool_{}", i), ToolCategory::ReadOnly))
+                .collect();
+
+            let pattern = PatternSequence {
+                description: "expensive pattern".to_string(),
+                steps,
+                expected_outputs: vec![],
+            };
+
+            let result = pipeline
+                .evaluate_candidate("test", &pattern, 2.0, 200.0)
+                .await;
+
+            assert!(
+                matches!(result, BetaEvalResult::Rejected { .. }),
+                "Expected Rejected for inefficient pattern, got {:?}",
+                result
+            );
+        }
     }
 }
