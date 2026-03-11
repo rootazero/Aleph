@@ -11,6 +11,11 @@ pub enum SkillLifecycleState {
         promoted_at: i64,
         shadow_duration_days: u32,
     },
+    Observation {
+        entered_at: i64,
+        reason: ObservationReason,
+        previous_vitality: f32,
+    },
     Demoted {
         reason: String,
         demoted_at: i64,
@@ -93,6 +98,14 @@ impl DemotionTriggers {
     }
 }
 
+/// Reason a skill entered the observation period.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ObservationReason {
+    VitalityWarning,
+    EntropyIncreasing,
+    UserFeedback,
+}
+
 /// Origin information for an evolved skill.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SkillOrigin {
@@ -169,5 +182,29 @@ mod tests {
     fn demotion_low_success_rate() {
         let triggers = DemotionTriggers::default();
         assert!(triggers.should_demote(1, 0.4));
+    }
+
+    #[test]
+    fn observation_state_serialization() {
+        let state = SkillLifecycleState::Observation {
+            entered_at: 1000,
+            reason: ObservationReason::VitalityWarning,
+            previous_vitality: 0.28,
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let back: SkillLifecycleState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, back);
+    }
+
+    #[test]
+    fn observation_reason_variants() {
+        assert_ne!(
+            ObservationReason::VitalityWarning,
+            ObservationReason::EntropyIncreasing,
+        );
+        assert_ne!(
+            ObservationReason::EntropyIncreasing,
+            ObservationReason::UserFeedback,
+        );
     }
 }
