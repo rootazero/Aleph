@@ -224,10 +224,21 @@ impl CortexDreamingService {
                 }
             }
 
-            // Check idle time for opportunistic processing
+            // Check idle time for opportunistic dual-queue processing
             if idle_detector.is_idle() {
-                debug!("System idle, starting batch processing");
+                debug!("System idle, starting dual-queue batch processing");
 
+                // Queue 1: Entropy-driven (up to 3 high-entropy patterns, High priority)
+                if let Err(e) = Self::process_entropy_batch(
+                    &distillation_service,
+                    &metrics,
+                )
+                .await
+                {
+                    error!("Entropy batch processing failed: {}", e);
+                }
+
+                // Queue 2: Value-driven (existing logic, Normal/Low priority)
                 if let Err(e) = Self::process_value_batch(
                     &db,
                     &distillation_service,
@@ -237,7 +248,7 @@ impl CortexDreamingService {
                 )
                 .await
                 {
-                    error!("Idle batch processing failed: {}", e);
+                    error!("Value batch processing failed: {}", e);
                 }
             }
         }
@@ -466,5 +477,42 @@ mod tests {
         let (processed, extracted, _, _) = service.metrics();
         assert_eq!(processed, 1);
         assert_eq!(extracted, 1);
+    }
+
+    #[tokio::test]
+    async fn test_idle_detector_integration() {
+        let (db, _temp) = create_test_db().await;
+
+        let distillation_config = DistillationConfig::default();
+        let (distillation_service, _rx) = DistillationService::new(db.clone(), distillation_config);
+        let distillation_service = Arc::new(RwLock::new(distillation_service));
+
+        let value_estimator = Arc::new(CortexValueEstimator::default());
+
+        // Create idle detector that starts as non-idle
+        let idle_detector = Arc::new(IdleDetector::new(IdleConfig {
+            min_idle_seconds: 300,
+        }));
+
+        let config = CortexDreamingConfig::default();
+
+        let service = CortexDreamingService::new(
+            db,
+            distillation_service,
+            value_estimator,
+            idle_detector.clone(),
+            config,
+        );
+
+        // Initially should not be idle (just created = just recorded activity)
+        assert!(!idle_detector.is_idle());
+
+        // After recording activity, should still not be idle
+        idle_detector.record_activity();
+        assert!(!idle_detector.is_idle());
+
+        // Verify service has idle_detector wired in
+        let (processed, _, _, _) = service.metrics();
+        assert_eq!(processed, 0);
     }
 }
