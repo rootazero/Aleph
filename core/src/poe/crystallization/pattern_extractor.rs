@@ -6,6 +6,8 @@
 use crate::error::{AlephError, Result};
 use crate::utils::json_extract::extract_json_robust;
 use super::experience::{EnvironmentContext, Experience, ParameterMapping};
+use super::synthesis_backend::{PatternSynthesisBackend, PatternSynthesisRequest, ToolSequenceTrace};
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -47,15 +49,33 @@ impl Default for PatternExtractorConfig {
 /// Pattern extractor service
 pub struct PatternExtractor {
     config: PatternExtractorConfig,
+    backend: Option<Arc<dyn PatternSynthesisBackend>>,
 }
 
 impl PatternExtractor {
-    /// Create a new pattern extractor
+    /// Create a new pattern extractor (no backend — uses stub LLM logic)
     pub fn new(config: PatternExtractorConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            backend: None,
+        }
     }
 
-    /// Extract pattern from an experience
+    /// Create a pattern extractor with an LLM synthesis backend
+    pub fn with_backend(
+        config: PatternExtractorConfig,
+        backend: Arc<dyn PatternSynthesisBackend>,
+    ) -> Self {
+        Self {
+            config,
+            backend: Some(backend),
+        }
+    }
+
+    /// Extract pattern from an experience.
+    ///
+    /// When a `PatternSynthesisBackend` is available, delegates synthesis to it.
+    /// Otherwise falls back to the legacy stub LLM path.
     pub async fn extract_pattern(
         &self,
         experience: &Experience,
@@ -63,6 +83,27 @@ impl PatternExtractor {
     ) -> Result<ExtractedPattern> {
         info!("Extracting pattern from experience: {}", experience.id);
 
+        // Fast path: delegate to backend when available
+        if let Some(ref backend) = self.backend {
+            let request = self.build_synthesis_request(experience);
+            let suggestion = backend
+                .synthesize_pattern(request)
+                .await
+                .map_err(|e| AlephError::Other {
+                    message: format!("Backend synthesis failed: {}", e),
+                    suggestion: Some("Check backend configuration".to_string()),
+                })?;
+
+            return Ok(ExtractedPattern {
+                description: suggestion.description,
+                parameter_mapping: ParameterMapping {
+                    variables: std::collections::HashMap::new(),
+                },
+                pattern_hash: suggestion.pattern_hash,
+            });
+        }
+
+        // Legacy stub path
         let model = if use_realtime_model {
             &self.config.realtime_model
         } else {
@@ -86,6 +127,23 @@ impl PatternExtractor {
             parameter_mapping: extracted.parameter_mapping,
             pattern_hash,
         })
+    }
+
+    /// Build a `PatternSynthesisRequest` from an `Experience`.
+    fn build_synthesis_request(&self, experience: &Experience) -> PatternSynthesisRequest {
+        let trace = ToolSequenceTrace {
+            tool_sequence_json: experience.tool_sequence_json.clone(),
+            satisfaction: experience.success_score as f32,
+            duration_ms: experience.latency_ms.unwrap_or(0) as u64,
+            attempts: 1,
+        };
+
+        PatternSynthesisRequest {
+            objective: experience.user_intent.clone(),
+            tool_sequences: vec![trace],
+            env_context: experience.environment_context_json.clone(),
+            existing_patterns: vec![],
+        }
     }
 
     /// Build the extraction prompt
@@ -256,6 +314,12 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use crate::poe::crystallization::experience::{EnvironmentContext, ExperienceBuilder};
+    use crate::poe::crystallization::synthesis_backend::{
+        PatternSuggestion, PatternSynthesisBackend, PatternSynthesisRequest,
+    };
+    use crate::poe::crystallization::experience_store::PoeExperience;
+    use crate::poe::crystallization::pattern_model;
+    use async_trait::async_trait;
 
     #[test]
     fn test_extract_json_from_markdown() {
@@ -348,5 +412,79 @@ mod tests {
         assert!(prompt.contains("/test/dir"));
         assert!(prompt.contains("macos"));
         assert!(prompt.contains("JSON format"));
+    }
+
+    // -- Stub backend for testing ------------------------------------------------
+
+    struct StubBackend {
+        description: String,
+    }
+
+    #[async_trait]
+    impl PatternSynthesisBackend for StubBackend {
+        async fn synthesize_pattern(
+            &self,
+            _request: PatternSynthesisRequest,
+        ) -> anyhow::Result<PatternSuggestion> {
+            Ok(PatternSuggestion {
+                description: self.description.clone(),
+                steps: vec![],
+                parameter_mapping: pattern_model::ParameterMapping::default(),
+                pattern_hash: "stub-hash-42".to_string(),
+                confidence: 0.95,
+            })
+        }
+
+        async fn evaluate_confidence(
+            &self,
+            _pattern_hash: &str,
+            _occurrences: &[PoeExperience],
+        ) -> anyhow::Result<f32> {
+            Ok(0.9)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extract_with_backend() {
+        let backend = Arc::new(StubBackend {
+            description: "Compile and test Rust project".to_string(),
+        });
+
+        let extractor = PatternExtractor::with_backend(
+            PatternExtractorConfig::default(),
+            backend,
+        );
+
+        let experience = ExperienceBuilder::new(
+            "exp-1".to_string(),
+            "Build the project".to_string(),
+            r#"["cargo build", "cargo test"]"#.to_string(),
+        )
+        .build();
+
+        let result = extractor.extract_pattern(&experience, true).await;
+        assert!(result.is_ok());
+
+        let pattern = result.unwrap();
+        assert_eq!(pattern.description, "Compile and test Rust project");
+        assert_eq!(pattern.pattern_hash, "stub-hash-42");
+    }
+
+    #[test]
+    fn test_build_synthesis_request() {
+        let extractor = PatternExtractor::new(PatternExtractorConfig::default());
+
+        let experience = ExperienceBuilder::new(
+            "exp-2".to_string(),
+            "Search logs for errors".to_string(),
+            r#"["grep -r error"]"#.to_string(),
+        )
+        .latency_ms(3000)
+        .build();
+
+        let request = extractor.build_synthesis_request(&experience);
+        assert_eq!(request.objective, "Search logs for errors");
+        assert_eq!(request.tool_sequences.len(), 1);
+        assert_eq!(request.tool_sequences[0].duration_ms, 3000);
     }
 }
