@@ -5,6 +5,7 @@
 
 use crate::error::Result;
 use super::distillation::{DistillationPriority, DistillationService};
+use super::idle_detector::IdleDetector;
 use super::experience::{DistillationMode, DistillationTask};
 use crate::memory::store::MemoryBackend;
 use crate::memory::value_estimator::cortex::CortexValueEstimator;
@@ -95,6 +96,7 @@ pub struct CortexDreamingService {
     db: MemoryBackend,
     distillation_service: Arc<RwLock<DistillationService>>,
     value_estimator: Arc<CortexValueEstimator>,
+    idle_detector: Arc<IdleDetector>,
     config: CortexDreamingConfig,
     metrics: Arc<DreamingMetrics>,
     running: Arc<AtomicBool>,
@@ -107,12 +109,14 @@ impl CortexDreamingService {
         db: MemoryBackend,
         distillation_service: Arc<RwLock<DistillationService>>,
         value_estimator: Arc<CortexValueEstimator>,
+        idle_detector: Arc<IdleDetector>,
         config: CortexDreamingConfig,
     ) -> Self {
         Self {
             db,
             distillation_service,
             value_estimator,
+            idle_detector,
             config,
             metrics: Arc::new(DreamingMetrics::default()),
             running: Arc::new(AtomicBool::new(false)),
@@ -133,6 +137,7 @@ impl CortexDreamingService {
         let db = self.db.clone();
         let distillation_service = self.distillation_service.clone();
         let value_estimator = self.value_estimator.clone();
+        let idle_detector = self.idle_detector.clone();
         let config = self.config.clone();
         let metrics = self.metrics.clone();
         let running = self.running.clone();
@@ -142,6 +147,7 @@ impl CortexDreamingService {
                 db,
                 distillation_service,
                 value_estimator,
+                idle_detector,
                 config,
                 metrics,
                 running,
@@ -180,6 +186,7 @@ impl CortexDreamingService {
         db: MemoryBackend,
         distillation_service: Arc<RwLock<DistillationService>>,
         value_estimator: Arc<CortexValueEstimator>,
+        idle_detector: Arc<IdleDetector>,
         config: CortexDreamingConfig,
         metrics: Arc<DreamingMetrics>,
         running: Arc<AtomicBool>,
@@ -217,9 +224,8 @@ impl CortexDreamingService {
             }
 
             // Check idle time for opportunistic processing
-            let idle_secs = Self::get_idle_seconds();
-            if idle_secs >= config.min_idle_seconds {
-                debug!("System idle for {}s, starting batch processing", idle_secs);
+            if idle_detector.is_idle() {
+                debug!("System idle, starting batch processing");
 
                 if let Err(e) = Self::process_batch(
                     &db,
@@ -324,21 +330,12 @@ impl CortexDreamingService {
         Ok(())
     }
 
-    /// Get system idle time in seconds
-    /// TODO: Integrate with actual activity tracking
-    fn get_idle_seconds() -> u64 {
-        // Placeholder implementation
-        // In real implementation, this would check:
-        // - Last user interaction timestamp
-        // - Last agent loop execution
-        // - System activity indicators
-        0
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::idle_detector::{IdleConfig, IdleDetector};
     use crate::poe::crystallization::distillation::DistillationConfig;
     use tempfile::TempDir;
 
@@ -357,12 +354,14 @@ mod tests {
         let distillation_service = Arc::new(RwLock::new(distillation_service));
 
         let value_estimator = Arc::new(CortexValueEstimator::default());
+        let idle_detector = Arc::new(IdleDetector::new(IdleConfig::default()));
         let config = CortexDreamingConfig::default();
 
         let mut service = CortexDreamingService::new(
             db,
             distillation_service,
             value_estimator,
+            idle_detector,
             config,
         );
 
@@ -384,12 +383,14 @@ mod tests {
         let distillation_service = Arc::new(RwLock::new(distillation_service));
 
         let value_estimator = Arc::new(CortexValueEstimator::default());
+        let idle_detector = Arc::new(IdleDetector::new(IdleConfig::default()));
         let config = CortexDreamingConfig::default();
 
         let service = CortexDreamingService::new(
             db,
             distillation_service,
             value_estimator,
+            idle_detector,
             config,
         );
 
