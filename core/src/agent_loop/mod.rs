@@ -79,6 +79,7 @@ mod traits;
 mod agent_loop;
 
 pub mod callback_cli;
+pub mod minimal;
 
 #[cfg(test)]
 mod proptest_decision;
