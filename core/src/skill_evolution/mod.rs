@@ -57,6 +57,7 @@ pub mod types;
 pub mod validation;
 pub mod vitality;
 pub mod desolidification;
+pub mod graveyard;
 
 pub use approval::{ApprovalConfig, ApprovalManager, ApprovalRequest, ApprovalStatus};
 pub use collaborative_pipeline::{
