@@ -36,10 +36,12 @@
 
 // Submodules migrated from Cortex
 pub mod clustering;
+pub mod cognitive_entropy;
 pub mod distillation;
 pub mod dreaming;
 pub mod experience;
 pub mod experience_store;
+pub mod idle_detector;
 pub mod pattern_extractor;
 pub mod pattern_model;
 pub mod synthesis_backend;
