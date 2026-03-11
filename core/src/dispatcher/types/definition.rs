@@ -41,6 +41,12 @@ pub struct ToolDefinition {
     /// Injected into system prompt when tool is available
     #[serde(skip_serializing_if = "Option::is_none")]
     pub llm_context: Option<String>,
+
+    /// Whether this tool's schema is strict-mode compatible.
+    /// When true, the schema will be strictified (additionalProperties: false,
+    /// all properties required) and the strict flag sent to providers that support it.
+    #[serde(default)]
+    pub strict: bool,
 }
 
 impl ToolDefinition {
@@ -59,6 +65,7 @@ impl ToolDefinition {
             requires_confirmation: false,
             category,
             llm_context: None,
+            strict: false,
         }
     }
 
@@ -71,6 +78,12 @@ impl ToolDefinition {
     /// Set LLM context (examples, usage notes)
     pub fn with_llm_context(mut self, context: String) -> Self {
         self.llm_context = Some(context);
+        self
+    }
+
+    /// Set strict mode flag
+    pub fn with_strict(mut self, strict: bool) -> Self {
+        self.strict = strict;
         self
     }
 
@@ -95,14 +108,18 @@ impl ToolDefinition {
 
     /// Convert to OpenAI function calling format
     pub fn to_openai_function(&self) -> Value {
-        serde_json::json!({
+        let mut func = serde_json::json!({
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": self.description,
                 "parameters": self.parameters
             }
-        })
+        });
+        if self.strict {
+            func["function"]["strict"] = serde_json::json!(true);
+        }
+        func
     }
 
     /// Convert to Anthropic tool format

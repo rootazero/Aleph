@@ -110,6 +110,18 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
         None
     }
 
+    /// Whether this tool's schema is strict-mode compatible.
+    ///
+    /// When true, the tool's JSON Schema will be transformed for strict mode
+    /// (additionalProperties: false, all properties required) and the strict
+    /// flag will be sent to providers that support it (e.g., OpenAI).
+    ///
+    /// Default is true. Override to false for tools with dynamic schemas
+    /// that cannot satisfy strict mode constraints.
+    fn strict_schema(&self) -> bool {
+        true
+    }
+
     /// Get tool definition with auto-generated JSON Schema.
     ///
     /// The default implementation generates the schema from `Self::Args`
@@ -120,7 +132,8 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
         let parameters = serde_json::to_value(&schema).unwrap_or_default();
 
         let mut def = ToolDefinition::new(Self::NAME, Self::DESCRIPTION, parameters, self.category())
-            .with_confirmation(self.requires_confirmation());
+            .with_confirmation(self.requires_confirmation())
+            .with_strict(self.strict_schema());
 
         // Inject examples as llm_context if available
         if let Some(examples) = self.examples() {
