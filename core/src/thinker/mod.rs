@@ -567,11 +567,22 @@ impl<P: ProviderRegistry> Thinker<P> {
             .map(|t| {
                 let params = serde_json::from_str(&t.parameters_schema)
                     .unwrap_or_else(|_| serde_json::json!({"type": "object", "properties": {}}));
-                ToolDefinition::new(&t.name, &t.description, params, ToolCategory::Builtin)
+                let mut def =
+                    ToolDefinition::new(&t.name, &t.description, params, ToolCategory::Builtin);
+                // Apply strict mode: strictify the schema
+                def.strict = true;
+                crate::tools::schema_strictify::strictify_schema(&mut def.parameters);
+                def
             })
             .collect();
 
-        tool_defs.extend(virtual_tools::virtual_tool_definitions());
+        // Virtual tools: always strict
+        let mut virtuals = virtual_tools::virtual_tool_definitions();
+        for v in &mut virtuals {
+            v.strict = true;
+            crate::tools::schema_strictify::strictify_schema(&mut v.parameters);
+        }
+        tool_defs.extend(virtuals);
         tool_defs
     }
 
