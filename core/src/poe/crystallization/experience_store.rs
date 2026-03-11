@@ -96,6 +96,14 @@ pub trait ExperienceStore: Send + Sync {
 
     /// Count total experiences.
     async fn count(&self) -> Result<usize, AlephError>;
+
+    /// Delete an experience by ID.
+    ///
+    /// Returns `true` if an experience was removed, `false` if not found.
+    async fn delete(&self, experience_id: &str) -> Result<bool, AlephError>;
+
+    /// Retrieve experiences matching any of the given IDs.
+    async fn get_by_ids(&self, ids: &[String]) -> Result<Vec<PoeExperience>, AlephError>;
 }
 
 // ============================================================================
@@ -192,6 +200,22 @@ impl ExperienceStore for InMemoryExperienceStore {
     async fn count(&self) -> Result<usize, AlephError> {
         let entries = self.entries.read().await;
         Ok(entries.len())
+    }
+
+    async fn delete(&self, experience_id: &str) -> Result<bool, AlephError> {
+        let mut entries = self.entries.write().await;
+        let before = entries.len();
+        entries.retain(|(exp, _)| exp.id != experience_id);
+        Ok(entries.len() < before)
+    }
+
+    async fn get_by_ids(&self, ids: &[String]) -> Result<Vec<PoeExperience>, AlephError> {
+        let entries = self.entries.read().await;
+        Ok(entries
+            .iter()
+            .filter(|(exp, _)| ids.contains(&exp.id))
+            .map(|(exp, _)| exp.clone())
+            .collect())
     }
 }
 
@@ -331,5 +355,51 @@ mod tests {
     #[test]
     fn test_cosine_similarity_empty() {
         assert_eq!(cosine_similarity(&[], &[]), 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_experience() {
+        let store = InMemoryExperienceStore::new();
+
+        store.insert(make_experience("1", "p1", 0.9), &[1.0, 0.0]).await.unwrap();
+        store.insert(make_experience("2", "p1", 0.8), &[0.0, 1.0]).await.unwrap();
+        assert_eq!(store.count().await.unwrap(), 2);
+
+        // Delete existing
+        let removed = store.delete("1").await.unwrap();
+        assert!(removed);
+        assert_eq!(store.count().await.unwrap(), 1);
+
+        // Delete non-existent
+        let removed = store.delete("999").await.unwrap();
+        assert!(!removed);
+        assert_eq!(store.count().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_by_ids() {
+        let store = InMemoryExperienceStore::new();
+
+        store.insert(make_experience("a", "p1", 0.9), &[1.0]).await.unwrap();
+        store.insert(make_experience("b", "p1", 0.8), &[0.5]).await.unwrap();
+        store.insert(make_experience("c", "p2", 0.7), &[0.0]).await.unwrap();
+
+        let results = store
+            .get_by_ids(&["a".into(), "c".into()])
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+
+        let ids: Vec<&str> = results.iter().map(|e| e.id.as_str()).collect();
+        assert!(ids.contains(&"a"));
+        assert!(ids.contains(&"c"));
+
+        // Empty ids list
+        let results = store.get_by_ids(&[]).await.unwrap();
+        assert!(results.is_empty());
+
+        // Non-existent ids
+        let results = store.get_by_ids(&["zzz".into()]).await.unwrap();
+        assert!(results.is_empty());
     }
 }
