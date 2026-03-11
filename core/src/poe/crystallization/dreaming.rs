@@ -4,6 +4,7 @@
 //! experiences and extract reusable patterns.
 
 use crate::error::Result;
+use super::cognitive_entropy::{CognitiveEntropyTracker, EntropyTrend};
 use super::distillation::{DistillationPriority, DistillationService};
 use super::idle_detector::IdleDetector;
 use super::experience::{DistillationMode, DistillationTask};
@@ -330,6 +331,64 @@ impl CortexDreamingService {
         Ok(())
     }
 
+    /// Process high-entropy patterns that need urgent distillation.
+    ///
+    /// Queries CognitiveEntropyTracker for patterns with `Increasing` trend,
+    /// taking up to 3 candidates and enqueuing them with `High` priority.
+    async fn process_entropy_batch(
+        distillation_service: &Arc<RwLock<DistillationService>>,
+        metrics: &DreamingMetrics,
+    ) -> Result<()> {
+        info!("Starting entropy-driven batch processing");
+
+        // TODO: In full integration, query ExperienceStore for recent execution data.
+        // For now, construct execution map from available data.
+        let executions: std::collections::HashMap<String, Vec<(f32, f32)>> =
+            std::collections::HashMap::new();
+
+        if executions.is_empty() {
+            debug!("No execution data for entropy analysis");
+            return Ok(());
+        }
+
+        let entropy_threshold = 0.3;
+        let reports = CognitiveEntropyTracker::analyze(&executions, entropy_threshold);
+
+        // Take up to 3 high-entropy (Increasing trend) patterns
+        let high_entropy: Vec<_> = reports
+            .into_iter()
+            .filter(|r| r.entropy_trend == EntropyTrend::Increasing)
+            .take(3)
+            .collect();
+
+        if high_entropy.is_empty() {
+            debug!("No high-entropy patterns found");
+            return Ok(());
+        }
+
+        info!("Found {} high-entropy patterns for distillation", high_entropy.len());
+
+        let service = distillation_service.read().await;
+        for report in high_entropy {
+            let task = DistillationTask {
+                trace_id: report.pattern_id.clone(),
+                mode: DistillationMode::Batch,
+            };
+
+            match service.enqueue_task(task, DistillationPriority::High).await {
+                Ok(_) => {
+                    metrics.increment_processed();
+                    debug!("Enqueued entropy-driven distillation for: {}", report.pattern_id);
+                }
+                Err(e) => {
+                    metrics.increment_errors();
+                    error!("Failed to enqueue entropy distillation: {}", e);
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
