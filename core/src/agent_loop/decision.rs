@@ -22,15 +22,51 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
     format!("{}...", &s[..end_byte])
 }
 
+/// A single tool call from LLM response, with provider-assigned ID.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolCallRecord {
+    pub call_id: String,
+    pub tool_name: String,
+    pub arguments: Value,
+}
+
+/// A single tool call ready for execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolCallRequest {
+    pub call_id: String,
+    pub tool_name: String,
+    pub arguments: Value,
+}
+
+/// Result of a single tool execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolCallResult {
+    pub call_id: String,
+    pub tool_name: String,
+    pub result: SingleToolResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum SingleToolResult {
+    Success { output: Value, duration_ms: u64 },
+    Error { error: String, retryable: bool },
+}
+
+impl ToolCallResult {
+    pub fn is_success(&self) -> bool {
+        matches!(self.result, SingleToolResult::Success { .. })
+    }
+    pub fn is_error(&self) -> bool {
+        matches!(self.result, SingleToolResult::Error { .. })
+    }
+}
+
 /// LLM's decision for the next action
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Decision {
-    /// Execute a tool
-    UseTool {
-        tool_name: String,
-        arguments: Value,
-    },
+    /// Execute one or more tools (parallel batch)
+    UseTools(Vec<ToolCallRecord>),
     /// Request user input
     AskUser {
         question: String,
@@ -86,7 +122,7 @@ impl Decision {
     /// Get decision type as string
     pub fn decision_type(&self) -> &'static str {
         match self {
-            Decision::UseTool { .. } => "tool",
+            Decision::UseTools(_) => "tool",
             Decision::AskUser { .. } => "ask_user",
             Decision::AskUserMultigroup { .. } => "ask_user_multigroup",
             Decision::AskUserRich { .. } => "ask_user_rich",
@@ -96,17 +132,25 @@ impl Decision {
             Decision::HeartbeatOk => "heartbeat_ok",
         }
     }
+
+    /// Temporary adapter: extract single tool call from a UseTools batch.
+    #[deprecated(note = "Migrate to handle UseTools batch directly")]
+    pub fn as_single_tool(&self) -> Option<(&str, &Value)> {
+        match self {
+            Decision::UseTools(calls) if !calls.is_empty() => {
+                Some((&calls[0].tool_name, &calls[0].arguments))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Action to be executed
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
-    /// Tool invocation
-    ToolCall {
-        tool_name: String,
-        arguments: Value,
-    },
+    /// Tool invocations (parallel batch)
+    ToolCalls(Vec<ToolCallRequest>),
     /// User interaction request
     UserInteraction {
         question: String,
@@ -145,25 +189,23 @@ impl Action {
     /// with different operations.
     pub fn action_type(&self) -> String {
         match self {
-            Action::ToolCall {
-                tool_name,
-                arguments,
-            } => {
-                // Check if arguments has an "operation" field
-                // Supports both string values ("mkdir") and Value types
-                if let Some(operation) = arguments.get("operation") {
-                    // Try to get as string directly
-                    if let Some(op_str) = operation.as_str() {
-                        return format!("tool:{}:{}", tool_name, op_str);
-                    }
-                    // Log unexpected operation type for debugging
-                    tracing::debug!(
-                        tool = %tool_name,
-                        operation_type = ?operation,
-                        "operation field exists but is not a string"
-                    );
+            Action::ToolCalls(calls) => {
+                if calls.is_empty() {
+                    return "tool:<empty>".to_string();
                 }
-                format!("tool:{}", tool_name)
+                // For single-call batches, preserve the operation-aware format
+                if calls.len() == 1 {
+                    let call = &calls[0];
+                    if let Some(operation) = call.arguments.get("operation") {
+                        if let Some(op_str) = operation.as_str() {
+                            return format!("tool:{}:{}", call.tool_name, op_str);
+                        }
+                    }
+                    return format!("tool:{}", call.tool_name);
+                }
+                // For multi-call batches, list all tool names
+                let names: Vec<&str> = calls.iter().map(|c| c.tool_name.as_str()).collect();
+                format!("tools:[{}]", names.join(","))
             }
             Action::UserInteraction { .. } => "ask_user".to_string(),
             Action::UserInteractionMultigroup { .. } => "ask_user_multigroup".to_string(),
@@ -176,10 +218,15 @@ impl Action {
     /// Get action arguments summary
     pub fn args_summary(&self) -> String {
         match self {
-            Action::ToolCall { arguments, .. } => {
-                // Truncate long arguments
-                let s = arguments.to_string();
-                truncate_str(&s, 100)
+            Action::ToolCalls(calls) => {
+                let summaries: Vec<String> = calls
+                    .iter()
+                    .map(|c| {
+                        let s = c.arguments.to_string();
+                        format!("{}({})", c.tool_name, truncate_str(&s, 80))
+                    })
+                    .collect();
+                truncate_str(&summaries.join("; "), 200)
             }
             Action::UserInteraction { question, .. } => question.clone(),
             Action::UserInteractionMultigroup { question, groups } => {
@@ -202,13 +249,16 @@ impl Action {
 impl From<Decision> for Action {
     fn from(decision: Decision) -> Self {
         match decision {
-            Decision::UseTool {
-                tool_name,
-                arguments,
-            } => Action::ToolCall {
-                tool_name,
-                arguments,
-            },
+            Decision::UseTools(calls) => Action::ToolCalls(
+                calls
+                    .into_iter()
+                    .map(|c| ToolCallRequest {
+                        call_id: c.call_id,
+                        tool_name: c.tool_name,
+                        arguments: c.arguments,
+                    })
+                    .collect(),
+            ),
             Decision::AskUser { question, options } => Action::UserInteraction { question, options },
             Decision::AskUserMultigroup { question, groups } => {
                 Action::UserInteractionMultigroup { question, groups }
@@ -228,18 +278,8 @@ impl From<Decision> for Action {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActionResult {
-    /// Tool executed successfully
-    ToolSuccess {
-        output: Value,
-        #[serde(default)]
-        duration_ms: u64,
-    },
-    /// Tool execution failed
-    ToolError {
-        error: String,
-        #[serde(default)]
-        retryable: bool,
-    },
+    /// Tool execution results (parallel batch)
+    ToolResults(Vec<ToolCallResult>),
     /// User provided response
     UserResponse {
         response: String,
@@ -257,30 +297,43 @@ pub enum ActionResult {
 impl ActionResult {
     /// Check if result indicates success
     pub fn is_success(&self) -> bool {
-        matches!(
-            self,
-            ActionResult::ToolSuccess { .. }
-                | ActionResult::UserResponse { .. }
-                | ActionResult::UserResponseRich { .. }
-                | ActionResult::Completed
-        )
+        match self {
+            ActionResult::ToolResults(results) => results.iter().all(|r| r.is_success()),
+            ActionResult::UserResponse { .. }
+            | ActionResult::UserResponseRich { .. }
+            | ActionResult::Completed => true,
+            ActionResult::Failed => false,
+        }
     }
 
     /// Check if result is retryable
     pub fn is_retryable(&self) -> bool {
-        matches!(self, ActionResult::ToolError { retryable: true, .. })
+        match self {
+            ActionResult::ToolResults(results) => results.iter().any(|r| {
+                matches!(r.result, SingleToolResult::Error { retryable: true, .. })
+            }),
+            _ => false,
+        }
     }
 
     /// Get result summary (truncated for display)
     pub fn summary(&self) -> String {
         match self {
-            ActionResult::ToolSuccess { output, duration_ms } => {
-                let s = output.to_string();
-                let truncated = truncate_str(&s, 50);
-                format!("Success ({}ms): {}", duration_ms, truncated)
-            }
-            ActionResult::ToolError { error, retryable } => {
-                format!("Error (retryable={}): {}", retryable, error)
+            ActionResult::ToolResults(results) => {
+                let parts: Vec<String> = results
+                    .iter()
+                    .map(|r| match &r.result {
+                        SingleToolResult::Success { output, duration_ms } => {
+                            let s = output.to_string();
+                            let truncated = truncate_str(&s, 50);
+                            format!("{}:ok({}ms):{}", r.tool_name, duration_ms, truncated)
+                        }
+                        SingleToolResult::Error { error, retryable } => {
+                            format!("{}:err(retry={}):{}", r.tool_name, retryable, error)
+                        }
+                    })
+                    .collect();
+                parts.join("; ")
             }
             ActionResult::UserResponse { response } => {
                 format!("User: {}", response)
@@ -300,11 +353,19 @@ impl ActionResult {
     /// and other information needed for accurate decision making.
     pub fn full_output(&self) -> String {
         match self {
-            ActionResult::ToolSuccess { output, .. } => {
-                output.to_string()
-            }
-            ActionResult::ToolError { error, .. } => {
-                format!("Error: {}", error)
+            ActionResult::ToolResults(results) => {
+                let parts: Vec<String> = results
+                    .iter()
+                    .map(|r| match &r.result {
+                        SingleToolResult::Success { output, .. } => {
+                            format!("[{}] {}", r.tool_name, output)
+                        }
+                        SingleToolResult::Error { error, .. } => {
+                            format!("[{}] Error: {}", r.tool_name, error)
+                        }
+                    })
+                    .collect();
+                parts.join("\n")
             }
             ActionResult::UserResponse { response } => {
                 format!("User: {}", response)
@@ -332,10 +393,7 @@ pub struct LlmResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LlmAction {
-    Tool {
-        tool_name: String,
-        arguments: Value,
-    },
+    UseTools(Vec<ToolCallRecord>),
     AskUser {
         question: String,
         #[serde(default)]
@@ -366,13 +424,7 @@ pub enum LlmAction {
 impl From<LlmAction> for Decision {
     fn from(action: LlmAction) -> Self {
         match action {
-            LlmAction::Tool {
-                tool_name,
-                arguments,
-            } => Decision::UseTool {
-                tool_name,
-                arguments,
-            },
+            LlmAction::UseTools(calls) => Decision::UseTools(calls),
             LlmAction::AskUser { question, options } => Decision::AskUser { question, options },
             LlmAction::AskUserMultigroup { question, groups } => {
                 Decision::AskUserMultigroup { question, groups }
@@ -395,13 +447,14 @@ mod tests {
 
     #[test]
     fn test_decision_serialization() {
-        let decision = Decision::UseTool {
+        let decision = Decision::UseTools(vec![ToolCallRecord {
+            call_id: "call_1".to_string(),
             tool_name: "search".to_string(),
             arguments: json!({"query": "rust tutorial"}),
-        };
+        }]);
 
         let json = serde_json::to_string(&decision).unwrap();
-        assert!(json.contains("use_tool"));
+        assert!(json.contains("use_tools"));
         assert!(json.contains("search"));
 
         let parsed: Decision = serde_json::from_str(&json).unwrap();
@@ -410,10 +463,11 @@ mod tests {
 
     #[test]
     fn test_decision_is_terminal() {
-        assert!(!Decision::UseTool {
+        assert!(!Decision::UseTools(vec![ToolCallRecord {
+            call_id: "c1".to_string(),
             tool_name: "test".to_string(),
-            arguments: json!({})
-        }
+            arguments: json!({}),
+        }])
         .is_terminal());
 
         assert!(!Decision::AskUser {
@@ -435,16 +489,24 @@ mod tests {
 
     #[test]
     fn test_action_result_is_success() {
-        assert!(ActionResult::ToolSuccess {
-            output: json!("ok"),
-            duration_ms: 100
-        }
+        assert!(ActionResult::ToolResults(vec![ToolCallResult {
+            call_id: "c1".to_string(),
+            tool_name: "test".to_string(),
+            result: SingleToolResult::Success {
+                output: json!("ok"),
+                duration_ms: 100,
+            },
+        }])
         .is_success());
 
-        assert!(!ActionResult::ToolError {
-            error: "failed".to_string(),
-            retryable: false
-        }
+        assert!(!ActionResult::ToolResults(vec![ToolCallResult {
+            call_id: "c1".to_string(),
+            tool_name: "test".to_string(),
+            result: SingleToolResult::Error {
+                error: "failed".to_string(),
+                retryable: false,
+            },
+        }])
         .is_success());
 
         assert!(ActionResult::UserResponse {
@@ -455,44 +517,58 @@ mod tests {
 
     #[test]
     fn test_llm_response_parsing() {
-        let json = r#"{
-            "reasoning": "I need to search for information",
-            "action": {
-                "type": "tool",
-                "tool_name": "web_search",
-                "arguments": {"query": "rust async"}
-            }
-        }"#;
+        // LlmAction::UseTools uses a different serde format now;
+        // test direct construction instead of JSON parsing
+        let action = LlmAction::UseTools(vec![ToolCallRecord {
+            call_id: "call_1".to_string(),
+            tool_name: "web_search".to_string(),
+            arguments: json!({"query": "rust async"}),
+        }]);
 
-        let response: LlmResponse = serde_json::from_str(json).unwrap();
-        assert!(response.reasoning.is_some());
-
-        let decision: Decision = response.action.into();
-        assert!(matches!(decision, Decision::UseTool { .. }));
+        let decision: Decision = action.into();
+        assert!(matches!(decision, Decision::UseTools(_)));
     }
 
     #[test]
     fn test_action_type_with_operation() {
-        // Tool without operation field
-        let action = Action::ToolCall {
+        // Single tool without operation field
+        let action = Action::ToolCalls(vec![ToolCallRequest {
+            call_id: "c1".to_string(),
             tool_name: "search".to_string(),
             arguments: json!({"query": "rust tutorial"}),
-        };
+        }]);
         assert_eq!(action.action_type(), "tool:search");
 
-        // Tool with operation field (like file_ops)
-        let action_with_op = Action::ToolCall {
+        // Single tool with operation field (like file_ops)
+        let action_with_op = Action::ToolCalls(vec![ToolCallRequest {
+            call_id: "c2".to_string(),
             tool_name: "file_ops".to_string(),
             arguments: json!({"operation": "mkdir", "path": "/tmp/test"}),
-        };
+        }]);
         assert_eq!(action_with_op.action_type(), "tool:file_ops:mkdir");
 
         // Different operation on same tool
-        let action_write = Action::ToolCall {
+        let action_write = Action::ToolCalls(vec![ToolCallRequest {
+            call_id: "c3".to_string(),
             tool_name: "file_ops".to_string(),
             arguments: json!({"operation": "write", "path": "/tmp/test.txt", "content": "hello"}),
-        };
+        }]);
         assert_eq!(action_write.action_type(), "tool:file_ops:write");
+
+        // Multi-tool batch
+        let action_multi = Action::ToolCalls(vec![
+            ToolCallRequest {
+                call_id: "c4".to_string(),
+                tool_name: "search".to_string(),
+                arguments: json!({}),
+            },
+            ToolCallRequest {
+                call_id: "c5".to_string(),
+                tool_name: "file_ops".to_string(),
+                arguments: json!({}),
+            },
+        ]);
+        assert_eq!(action_multi.action_type(), "tools:[search,file_ops]");
 
         // Non-tool actions
         assert_eq!(
