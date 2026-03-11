@@ -209,7 +209,7 @@ impl CortexDreamingService {
                     info!("Starting scheduled batch processing");
                     last_scheduled_day = current_day;
 
-                    if let Err(e) = Self::process_batch(
+                    if let Err(e) = Self::process_value_batch(
                         &db,
                         &distillation_service,
                         &value_estimator,
@@ -227,7 +227,7 @@ impl CortexDreamingService {
             if idle_detector.is_idle() {
                 debug!("System idle, starting batch processing");
 
-                if let Err(e) = Self::process_batch(
+                if let Err(e) = Self::process_value_batch(
                     &db,
                     &distillation_service,
                     &value_estimator,
@@ -245,7 +245,7 @@ impl CortexDreamingService {
     }
 
     /// Process a batch of candidate experiences
-    async fn process_batch(
+    async fn process_value_batch(
         _db: &crate::memory::store::lance::LanceMemoryBackend,
         distillation_service: &Arc<RwLock<DistillationService>>,
         value_estimator: &CortexValueEstimator,
