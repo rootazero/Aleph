@@ -26,6 +26,8 @@ pub struct LoopState {
     pub step_count: usize,
     /// Cumulative token usage
     pub total_tokens: usize,
+    /// Cumulative tool call count (across all steps)
+    pub total_tool_calls: usize,
     /// Session start time
     pub started_at: Instant,
     /// Compressed history summary (updated by ContextCompressor)
@@ -51,6 +53,7 @@ impl LoopState {
             steps: Vec::new(),
             step_count: 0,
             total_tokens: 0,
+            total_tool_calls: 0,
             started_at: Instant::now(),
             history_summary: String::new(),
             compressed_until_step: 0,
@@ -107,11 +110,11 @@ impl LoopState {
     pub fn tools_used(&self) -> Vec<String> {
         self.steps
             .iter()
-            .filter_map(|s| {
-                if let super::decision::Action::ToolCall { tool_name, .. } = &s.action {
-                    Some(tool_name.clone())
+            .flat_map(|s| {
+                if let super::decision::Action::ToolCalls(calls) = &s.action {
+                    calls.iter().map(|c| c.tool_name.clone()).collect::<Vec<_>>()
                 } else {
-                    None
+                    Vec::new()
                 }
             })
             .collect()
@@ -151,10 +154,14 @@ impl LoopState {
             observation_summary: String::new(),
             thinking: thinking.clone(),
             action: action.clone(),
-            result: ActionResult::ToolError {
-                error: format!("Interrupted: user sent new message: {}", new_input),
-                retryable: false,
-            },
+            result: ActionResult::ToolResults(vec![super::decision::ToolCallResult {
+                call_id: "interrupted".to_string(),
+                tool_name: "interrupted".to_string(),
+                result: super::decision::SingleToolResult::Error {
+                    error: format!("Interrupted: user sent new message: {}", new_input),
+                    retryable: false,
+                },
+            }]),
             tokens_used: 0,
             duration_ms: 0,
         };
@@ -198,9 +205,6 @@ pub struct Thinking {
     /// Token usage from this thinking step (populated from provider response)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens_used: Option<usize>,
-    /// Native tool call ID from provider (for tool result passback)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
 }
 
 /// Request context containing attachments and environment info from UI layer
@@ -312,9 +316,6 @@ pub struct StepSummary {
     pub result_output: String,
     /// Whether action succeeded
     pub success: bool,
-    /// Native tool call ID (for tool result passback in subsequent LLM calls)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
 }
 
 impl From<&LoopStep> for StepSummary {
@@ -331,7 +332,6 @@ impl From<&LoopStep> for StepSummary {
             result_summary: step.result.summary(),
             result_output: step.result.full_output(),
             success: step.result.is_success(),
-            tool_call_id: step.thinking.tool_call_id.clone(),
         }
     }
 }
@@ -388,7 +388,6 @@ mod tests {
                     },
                     structured: None,
                     tokens_used: None,
-                    tool_call_id: None,
                 },
                 action: Action::Completion {
                     summary: "done".to_string(),
@@ -422,7 +421,6 @@ mod tests {
                     },
                     structured: None,
                     tokens_used: None,
-                    tool_call_id: None,
                 },
                 action: Action::Completion {
                     summary: "done".to_string(),
