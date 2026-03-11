@@ -56,6 +56,7 @@ pub mod tracker;
 pub mod types;
 pub mod validation;
 pub mod vitality;
+pub mod desolidification;
 
 pub use approval::{ApprovalConfig, ApprovalManager, ApprovalRequest, ApprovalStatus};
 pub use collaborative_pipeline::{
