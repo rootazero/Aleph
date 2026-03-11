@@ -26,6 +26,7 @@ const MAX_ENTRIES: usize = 100;
 pub struct SkillGraveyard {
     entries: Vec<GraveyardEntry>,
     storage_path: PathBuf,
+    skip_persist: bool,
 }
 
 impl SkillGraveyard {
@@ -46,14 +47,16 @@ impl SkillGraveyard {
         Ok(Self {
             entries,
             storage_path,
+            skip_persist: false,
         })
     }
 
-    /// Create an in-memory graveyard (for testing).
+    /// Create an in-memory graveyard (for testing). Skips filesystem persistence.
     pub fn in_memory() -> Self {
         Self {
             entries: Vec::new(),
-            storage_path: PathBuf::from("/dev/null"),
+            storage_path: PathBuf::new(),
+            skip_persist: true,
         }
     }
 
@@ -99,6 +102,9 @@ impl SkillGraveyard {
     }
 
     async fn persist(&self) -> anyhow::Result<()> {
+        if self.skip_persist {
+            return Ok(());
+        }
         if let Some(parent) = self.storage_path.parent() {
             fs::create_dir_all(parent).await?;
         }
