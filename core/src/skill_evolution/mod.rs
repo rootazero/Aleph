@@ -51,6 +51,7 @@ pub mod tool_generator;
 pub mod tool_testing;
 pub mod tracker;
 pub mod types;
+pub mod validation;
 
 pub use approval::{ApprovalConfig, ApprovalManager, ApprovalRequest, ApprovalStatus};
 pub use collaborative_pipeline::{
