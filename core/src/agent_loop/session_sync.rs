@@ -135,22 +135,21 @@ impl SessionSync {
 
             // Convert action to part
             match &step.action {
-                Action::ToolCall {
-                    tool_name,
-                    arguments,
-                } => {
-                    let (status, output, error) = Self::action_result_to_status(&step.result);
+                Action::ToolCalls { calls: ref requests } => {
+                    if let Some(req) = requests.first() {
+                        let (status, output, error) = Self::action_result_to_status(&step.result);
 
-                    parts.push(SessionPart::ToolCall(ToolCallPart {
-                        id: format!("call_{}", step.step_id),
-                        tool_name: tool_name.clone(),
-                        input: arguments.clone(),
-                        status,
-                        output,
-                        error,
-                        started_at: now,
-                        completed_at: Some(now + (step.duration_ms as i64 / 1000)),
-                    }));
+                        parts.push(SessionPart::ToolCall(ToolCallPart {
+                            id: req.call_id.clone(),
+                            tool_name: req.tool_name.clone(),
+                            input: req.arguments.clone(),
+                            status,
+                            output,
+                            error,
+                            started_at: now,
+                            completed_at: Some(now + (step.duration_ms as i64 / 1000)),
+                        }));
+                    }
                 }
                 Action::Completion { summary } => {
                     parts.push(SessionPart::AiResponse(AiResponsePart {
@@ -194,12 +193,19 @@ impl SessionSync {
         result: &ActionResult,
     ) -> (ToolCallStatus, Option<String>, Option<String>) {
         match result {
-            ActionResult::ToolSuccess { output, .. } => {
-                (ToolCallStatus::Completed, Some(output.to_string()), None)
-            }
-            ActionResult::ToolError { error, .. } => {
-                // Both retryable and non-retryable errors map to Failed
-                (ToolCallStatus::Failed, None, Some(error.clone()))
+            ActionResult::ToolResults { ref results } => {
+                if let Some(r) = results.first() {
+                    match &r.result {
+                        crate::agent_loop::decision::SingleToolResult::Success { output, .. } => {
+                            (ToolCallStatus::Completed, Some(output.to_string()), None)
+                        }
+                        crate::agent_loop::decision::SingleToolResult::Error { error, .. } => {
+                            (ToolCallStatus::Failed, None, Some(error.clone()))
+                        }
+                    }
+                } else {
+                    (ToolCallStatus::Completed, None, None)
+                }
             }
             ActionResult::UserResponse { response } => {
                 (ToolCallStatus::Completed, Some(response.clone()), None)
@@ -328,22 +334,22 @@ mod tests {
             observation_summary: String::new(),
             thinking: Thinking {
                 reasoning: Some("I need to search for files".to_string()),
-                decision: Decision::UseTool {
+                decision: Decision::UseTools { calls: vec![crate::agent_loop::decision::ToolCallRecord {
+                    call_id: String::new(),
                     tool_name: "search".to_string(),
                     arguments: json!({"query": "*.rs"}),
-                },
+                    }]},
                 structured: None,
                 tokens_used: None,
-                tool_call_id: None,
+
             },
-            action: Action::ToolCall {
+            action: Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
                 tool_name: "search".to_string(),
-                arguments: json!({"query": "*.rs"}),
-            },
-            result: ActionResult::ToolSuccess {
-                output: json!(["file1.rs", "file2.rs"]),
-                duration_ms: 100,
-            },
+                arguments: json!({"query": "*.rs"}) }]},
+            result: ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+                call_id: String::new(), tool_name: String::new(),
+                result: crate::agent_loop::decision::SingleToolResult::Success { output: json!(["file1.rs", "file2.rs"]), duration_ms: 100 },
+                }]},
             tokens_used: 500,
             duration_ms: 100,
         }];
@@ -380,29 +386,29 @@ mod tests {
     fn test_action_result_to_status_mapping() {
         // ToolSuccess -> Completed
         let (status, output, error) =
-            SessionSync::action_result_to_status(&ActionResult::ToolSuccess {
-                output: json!("result"),
-                duration_ms: 50,
-            });
+            SessionSync::action_result_to_status(&ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+                call_id: String::new(), tool_name: String::new(),
+                result: crate::agent_loop::decision::SingleToolResult::Success { output: json!("result"), duration_ms: 50 },
+                }]});
         assert_eq!(status, ToolCallStatus::Completed);
         assert!(output.is_some());
         assert!(error.is_none());
 
         // ToolError (retryable) -> Failed
         let (status, output, error) =
-            SessionSync::action_result_to_status(&ActionResult::ToolError {
-                error: "timeout".to_string(),
-                retryable: true,
-            });
+            SessionSync::action_result_to_status(&ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+                call_id: String::new(), tool_name: String::new(),
+                result: crate::agent_loop::decision::SingleToolResult::Error { error: "timeout".to_string(), retryable: true },
+                }]});
         assert_eq!(status, ToolCallStatus::Failed);
         assert!(output.is_none());
         assert_eq!(error, Some("timeout".to_string()));
 
         // ToolError (non-retryable) -> Failed
-        let (status, _, _) = SessionSync::action_result_to_status(&ActionResult::ToolError {
-            error: "not found".to_string(),
-            retryable: false,
-        });
+        let (status, _, _) = SessionSync::action_result_to_status(&ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+            call_id: String::new(), tool_name: String::new(),
+            result: crate::agent_loop::decision::SingleToolResult::Error { error: "not found".to_string(), retryable: false },
+            }]});
         assert_eq!(status, ToolCallStatus::Failed);
 
         // Completed -> Completed
@@ -499,7 +505,7 @@ mod tests {
                     },
                     structured: None,
                     tokens_used: None,
-                    tool_call_id: None,
+
                 },
                 action: Action::Completion {
                     summary: format!("Step {} done", i),

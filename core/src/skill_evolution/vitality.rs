@@ -5,6 +5,7 @@
 //! promotion, observation, demotion, and retirement transitions.
 
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 /// Components that make up a vitality score.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,7 +86,7 @@ impl VitalityScore {
         let value =
             (success_rate * frequency_score * maintenance_cost_inverse * user_mul).clamp(0.0, 1.0);
 
-        Self {
+        let score = Self {
             value,
             components: VitalityComponents {
                 success_rate,
@@ -93,7 +94,20 @@ impl VitalityScore {
                 maintenance_cost_inverse,
                 user_feedback_multiplier: user_mul,
             },
-        }
+        };
+
+        info!(
+            target: "aleph::evolution::probe",
+            probe = "vitality_computed",
+            vitality = score.value,
+            success_rate = score.components.success_rate,
+            frequency = score.components.frequency_score,
+            cost_inverse = score.components.maintenance_cost_inverse,
+            feedback_mul = score.components.user_feedback_multiplier,
+            "Vitality score computed"
+        );
+
+        score
     }
 }
 

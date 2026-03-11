@@ -188,7 +188,7 @@ mod tests {
                 },
                 structured: None,
                 tokens_used: None,
-                tool_call_id: None,
+
             })
         }
 
@@ -202,10 +202,10 @@ mod tests {
     #[async_trait::async_trait]
     impl ActionExecutor for MockExecutor {
         async fn execute(&self, _action: &Action, _identity: &IdentityContext) -> ActionResult {
-            ActionResult::ToolSuccess {
-                output: json!("mock output"),
-                duration_ms: 0,
-            }
+            ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+                call_id: String::new(), tool_name: String::new(),
+                result: crate::agent_loop::decision::SingleToolResult::Success { output: json!("mock output"), duration_ms: 0 },
+                }]}
         }
     }
 

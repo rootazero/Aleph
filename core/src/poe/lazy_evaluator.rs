@@ -277,29 +277,38 @@ impl LazyPoeEvaluator {
         }
 
         match result {
-            // Retryable tool error: suggest a retry (advisory — no budget consumed)
-            ActionResult::ToolError { retryable: true, error } => {
-                let tool_name = extract_tool_name(action);
-                StepDirective::ContinueWithHint {
-                    hint: format!(
-                        "[POE-Lazy] Tool '{}' failed with retryable error: {}. \
-                         Please retry with adjusted parameters.",
-                        tool_name,
-                        truncate(error, 100),
-                    ),
-                }
-            }
-
-            // Tool succeeded but output is empty: hint to investigate
-            ActionResult::ToolSuccess { output, .. } => {
-                if is_empty_output(output) {
-                    let tool_name = extract_tool_name(action);
-                    StepDirective::ContinueWithHint {
-                        hint: format!(
-                            "[POE-Lazy] Tool '{}' returned empty output. \
-                             Consider verifying the result or trying alternative parameters.",
-                            tool_name,
-                        ),
+            ActionResult::ToolResults { ref results } => {
+                if let Some(r) = results.first() {
+                    match &r.result {
+                        // Retryable tool error: suggest a retry (advisory — no budget consumed)
+                        crate::agent_loop::decision::SingleToolResult::Error { retryable: true, error } => {
+                            let tool_name = extract_tool_name(action);
+                            StepDirective::ContinueWithHint {
+                                hint: format!(
+                                    "[POE-Lazy] Tool '{}' failed with retryable error: {}. \
+                                     Please retry with adjusted parameters.",
+                                    tool_name,
+                                    truncate(error, 100),
+                                ),
+                            }
+                        }
+                        // Tool succeeded but output is empty: hint to investigate
+                        crate::agent_loop::decision::SingleToolResult::Success { output, .. } => {
+                            if is_empty_output(output) {
+                                let tool_name = extract_tool_name(action);
+                                StepDirective::ContinueWithHint {
+                                    hint: format!(
+                                        "[POE-Lazy] Tool '{}' returned empty output. \
+                                         Consider verifying the result or trying alternative parameters.",
+                                        tool_name,
+                                    ),
+                                }
+                            } else {
+                                StepDirective::Continue
+                            }
+                        }
+                        // Non-retryable error: no intervention
+                        _ => StepDirective::Continue,
                     }
                 } else {
                     StepDirective::Continue
@@ -541,7 +550,9 @@ fn extract_keywords(text: &str) -> HashSet<String> {
 /// Extract the tool name from an action, if it is a tool call.
 fn extract_tool_name(action: &Action) -> &str {
     match action {
-        Action::ToolCall { tool_name, .. } => tool_name.as_str(),
+        Action::ToolCalls { calls: ref requests } => {
+            requests.first().map(|r| r.tool_name.as_str()).unwrap_or("unknown")
+        }
         _ => "unknown",
     }
 }
@@ -721,10 +732,9 @@ mod tests {
 
     #[test]
     fn extract_tool_name_from_tool_call() {
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
             tool_name: "web_search".to_string(),
-            arguments: json!({}),
-        };
+            arguments: json!({}) }]};
         assert_eq!(extract_tool_name(&action), "web_search");
     }
 
@@ -794,14 +804,13 @@ mod tests {
     #[tokio::test]
     async fn evaluator_inactive_returns_continue() {
         let eval = LazyPoeEvaluator::new("test query");
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
             tool_name: "search".to_string(),
-            arguments: json!({}),
-        };
-        let result = ActionResult::ToolError {
-            error: "not found".to_string(),
-            retryable: true,
-        };
+            arguments: json!({}) }]};
+        let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+            call_id: String::new(), tool_name: String::new(),
+            result: crate::agent_loop::decision::SingleToolResult::Error { error: "not found".to_string(), retryable: true },
+            }]};
 
         let directive = eval.evaluate_step(&action, &result).await;
         assert!(matches!(directive, StepDirective::Continue));
@@ -812,14 +821,13 @@ mod tests {
         let eval = LazyPoeEvaluator::new("test query");
         eval.activate().await;
 
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
             tool_name: "web_search".to_string(),
-            arguments: json!({"query": "rust tutorial"}),
-        };
-        let result = ActionResult::ToolError {
-            error: "timeout".to_string(),
-            retryable: true,
-        };
+            arguments: json!({"query": "rust tutorial"}) }]};
+        let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+            call_id: String::new(), tool_name: String::new(),
+            result: crate::agent_loop::decision::SingleToolResult::Error { error: "timeout".to_string(), retryable: true },
+            }]};
 
         let directive = eval.evaluate_step(&action, &result).await;
         match directive {
@@ -836,14 +844,13 @@ mod tests {
         let eval = LazyPoeEvaluator::new("test query");
         eval.activate().await;
 
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
             tool_name: "file_read".to_string(),
-            arguments: json!({"path": "/tmp/test.txt"}),
-        };
-        let result = ActionResult::ToolSuccess {
-            output: json!(""),
-            duration_ms: 10,
-        };
+            arguments: json!({"path": "/tmp/test.txt"}) }]};
+        let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+            call_id: String::new(), tool_name: String::new(),
+            result: crate::agent_loop::decision::SingleToolResult::Success { output: json!(""), duration_ms: 10 },
+            }]};
 
         let directive = eval.evaluate_step(&action, &result).await;
         match directive {
@@ -860,14 +867,13 @@ mod tests {
         let eval = LazyPoeEvaluator::new("test query");
         eval.activate().await;
 
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
             tool_name: "search".to_string(),
-            arguments: json!({}),
-        };
-        let result = ActionResult::ToolSuccess {
-            output: json!({"results": ["item1", "item2"]}),
-            duration_ms: 50,
-        };
+            arguments: json!({}) }]};
+        let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+            call_id: String::new(), tool_name: String::new(),
+            result: crate::agent_loop::decision::SingleToolResult::Success { output: json!({"results": ["item1", "item2"]}), duration_ms: 50 },
+            }]};
 
         let directive = eval.evaluate_step(&action, &result).await;
         assert!(matches!(directive, StepDirective::Continue));
@@ -878,14 +884,13 @@ mod tests {
         let eval = LazyPoeEvaluator::new("test query");
         eval.activate().await;
 
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
             tool_name: "search".to_string(),
-            arguments: json!({}),
-        };
-        let result = ActionResult::ToolError {
-            error: "fail".to_string(),
-            retryable: true,
-        };
+            arguments: json!({}) }]};
+        let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+            call_id: String::new(), tool_name: String::new(),
+            result: crate::agent_loop::decision::SingleToolResult::Error { error: "fail".to_string(), retryable: true },
+            }]};
 
         // Step hints are advisory — they never exhaust the retry budget
         let d1 = eval.evaluate_step(&action, &result).await;
@@ -963,14 +968,13 @@ mod tests {
         assert!(eval.is_active().await);
 
         // 3. Tool executes with good result
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
             tool_name: "web_search".to_string(),
-            arguments: json!({"query": "bitcoin price"}),
-        };
-        let result = ActionResult::ToolSuccess {
-            output: json!({"price": "67000", "source": "coinbase"}),
-            duration_ms: 500,
-        };
+            arguments: json!({"query": "bitcoin price"}) }]};
+        let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+            call_id: String::new(), tool_name: String::new(),
+            result: crate::agent_loop::decision::SingleToolResult::Success { output: json!({"price": "67000", "source": "coinbase"}), duration_ms: 500 },
+            }]};
         eval.record_tool_result("web_search", true).await;
 
         // 4. Step evaluation — should continue (good result)
@@ -1008,17 +1012,16 @@ mod tests {
         let eval = LazyPoeEvaluator::new("search for data");
         eval.activate().await;
 
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
             tool_name: "search".to_string(),
-            arguments: json!({}),
-        };
+            arguments: json!({}) }]};
 
         // Multiple tool errors at step level — should always hint, never exhaust budget
         for _ in 0..5 {
-            let result = ActionResult::ToolError {
-                error: "timeout".to_string(),
-                retryable: true,
-            };
+            let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+                call_id: String::new(), tool_name: String::new(),
+                result: crate::agent_loop::decision::SingleToolResult::Error { error: "timeout".to_string(), retryable: true },
+                }]};
             let directive = eval.evaluate_step(&action, &result).await;
             assert!(matches!(directive, StepDirective::ContinueWithHint { .. }));
         }

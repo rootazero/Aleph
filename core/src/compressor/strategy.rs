@@ -275,22 +275,23 @@ mod tests {
                 },
                 structured: None,
                 tokens_used: None,
-                tool_call_id: None,
+
             },
-            action: Action::ToolCall {
+            action: Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest {
+                call_id: String::new(),
                 tool_name: action_type.to_string(),
                 arguments,
-            },
+            }]},
             result: if success {
-                ActionResult::ToolSuccess {
-                    output: json!({"result": "ok"}),
-                    duration_ms: 100,
-                }
+                ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+                    call_id: String::new(), tool_name: String::new(),
+                    result: crate::agent_loop::decision::SingleToolResult::Success { output: json!({"result": "ok"}), duration_ms: 100 },
+                    }]}
             } else {
-                ActionResult::ToolError {
-                    error: "Failed".to_string(),
-                    retryable: false,
-                }
+                ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+                    call_id: String::new(), tool_name: String::new(),
+                    result: crate::agent_loop::decision::SingleToolResult::Error { error: "Failed".to_string(), retryable: false },
+                    }]}
             },
             tokens_used: 100,
             duration_ms: 100,

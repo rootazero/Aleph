@@ -4,6 +4,7 @@
 //! risk-gated human review to validate evolved patterns before deployment.
 
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use crate::poe::crystallization::experience_store::ExperienceStore;
 use crate::poe::crystallization::pattern_model::PatternSequence;
@@ -82,6 +83,15 @@ impl TieredValidator {
         // Generate test set from store
         let test_set = self.test_set_gen.generate(pattern_id, store).await?;
 
+        info!(
+            target: "aleph::evolution::probe",
+            probe = "validation_started",
+            pattern_id = pattern_id,
+            risk_level = ?risk.level,
+            test_samples = test_set.samples.len(),
+            "Tiered validation started"
+        );
+
         // L1: Structural lint (all patterns)
         let lint = self.linter.validate(pattern, &test_set);
         if !lint.passed {
@@ -133,13 +143,25 @@ impl TieredValidator {
         // Currently L3 is structurally reached but no actual sandbox execution
         // occurs. The SandboxExecutor infrastructure (ShadowFs + RestrictedToolset)
         // is ready; this needs pipeline integration to pass skill steps through it.
-        Ok(ValidationVerdict {
+        let verdict = ValidationVerdict {
             passed: true,
             level_reached: ValidationLevel::L3Sandbox,
             l1_errors: vec![],
             l2_details: Some(replay.details),
             requires_human_review: false,
-        })
+        };
+
+        info!(
+            target: "aleph::evolution::probe",
+            probe = "validation_completed",
+            pattern_id = pattern_id,
+            passed = verdict.passed,
+            level_reached = ?verdict.level_reached,
+            requires_human_review = verdict.requires_human_review,
+            "Tiered validation completed"
+        );
+
+        Ok(verdict)
     }
 }
 

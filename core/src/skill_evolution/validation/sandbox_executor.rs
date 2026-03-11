@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use super::restricted_tools::{RestrictedToolset, SandboxViolation};
 use super::shadow_fs::ShadowFs;
@@ -94,13 +95,26 @@ impl SandboxExecutor {
         let modified = self.shadow_fs.modified_files().await.unwrap_or_default();
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        SandboxResult {
+        let result = SandboxResult {
             success: violations.is_empty(),
             modified_files: modified,
             violations,
             duration_ms,
             error: None,
-        }
+        };
+
+        info!(
+            target: "aleph::evolution::probe",
+            probe = "sandbox_validation_completed",
+            success = result.success,
+            tool_calls_checked = tool_calls.len(),
+            violations = result.violations.len(),
+            modified_files = result.modified_files.len(),
+            duration_ms = result.duration_ms,
+            "L3 sandbox validation completed"
+        );
+
+        result
     }
 
     /// Get reference to the shadow filesystem.

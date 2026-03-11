@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use tokio::fs;
+use tracing::info;
 
 use super::lifecycle::{
     EvolvedSkillMetadata, LifecycleTransition, ShadowState, SkillLifecycleState, SkillOrigin,
@@ -66,6 +67,15 @@ impl ShadowDeployer {
         let meta_json = serde_json::to_string_pretty(&meta)?;
         fs::write(&meta_path, meta_json).await?;
 
+        info!(
+            target: "aleph::evolution::probe",
+            probe = "skill_deployed_shadow",
+            skill_id = skill_id,
+            pattern_id = pattern_id,
+            path = %skill_path.display(),
+            "Skill deployed to shadow directory"
+        );
+
         Ok(ShadowDeployment {
             skill_path,
             meta_path,
@@ -92,6 +102,13 @@ impl ShadowDeployer {
         let meta_json = serde_json::to_string_pretty(&meta)?;
         fs::write(&meta_path, meta_json).await?;
 
+        info!(
+            target: "aleph::evolution::probe",
+            probe = "skill_promoted",
+            skill_id = skill_id,
+            "Skill PROMOTED from shadow to official"
+        );
+
         Ok(LifecycleTransition::Promoted)
     }
 
@@ -99,10 +116,12 @@ impl ShadowDeployer {
     pub async fn demote(&self, skill_id: &str, reason: &str) -> Result<LifecycleTransition> {
         let skill_dir = self.evolved_dir.join(skill_id);
 
-        tracing::info!(
+        info!(
+            target: "aleph::evolution::probe",
+            probe = "skill_demoted",
             skill_id = skill_id,
             reason = reason,
-            "Demoting skill from shadow deployment"
+            "Skill DEMOTED from shadow deployment"
         );
 
         fs::remove_dir_all(&skill_dir).await?;

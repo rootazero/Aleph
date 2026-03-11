@@ -10,7 +10,7 @@ use proptest::prelude::*;
 use serde_json::{json, Value};
 
 use super::answer::UserAnswer;
-use super::decision::{Action, ActionResult, Decision, QuestionGroup};
+use super::decision::{Action, ActionResult, Decision, QuestionGroup, ToolCallRecord, ToolCallRequest, ToolCallResult, SingleToolResult};
 use super::question::{ChoiceOption, QuestionKind, TextValidation};
 
 // ============================================================================
@@ -113,12 +113,13 @@ fn arb_question_group() -> impl Strategy<Value = QuestionGroup> {
 /// Generate an arbitrary Decision
 fn arb_decision() -> impl Strategy<Value = Decision> {
     prop_oneof![
-        // UseTool
+        // UseTools
         ("[a-z_]{1,15}", arb_json_value()).prop_map(|(tool_name, arguments)| {
-            Decision::UseTool {
+            Decision::UseTools { calls: vec![ToolCallRecord {
+                call_id: "proptest".to_string(),
                 tool_name,
                 arguments,
-            }
+            }]}
         }),
         // AskUser
         (
@@ -180,16 +181,21 @@ fn arb_user_answer() -> impl Strategy<Value = UserAnswer> {
 /// Generate an arbitrary ActionResult
 fn arb_action_result() -> impl Strategy<Value = ActionResult> {
     prop_oneof![
-        // ToolSuccess
+        // ToolResults (Success)
         (arb_json_value(), any::<u64>()).prop_map(|(output, duration_ms)| {
-            ActionResult::ToolSuccess {
-                output,
-                duration_ms,
-            }
+            ActionResult::ToolResults { results: vec![ToolCallResult {
+                call_id: "proptest".to_string(),
+                tool_name: "proptest_tool".to_string(),
+                result: SingleToolResult::Success { output, duration_ms },
+            }]}
         }),
-        // ToolError
+        // ToolResults (Error)
         ("[a-zA-Z ]{1,30}", any::<bool>()).prop_map(|(error, retryable)| {
-            ActionResult::ToolError { error, retryable }
+            ActionResult::ToolResults { results: vec![ToolCallResult {
+                call_id: "proptest".to_string(),
+                tool_name: "proptest_tool".to_string(),
+                result: SingleToolResult::Error { error, retryable },
+            }]}
         }),
         // UserResponse
         "[a-zA-Z ]{1,30}".prop_map(|response| ActionResult::UserResponse { response }),
@@ -206,11 +212,12 @@ fn arb_action_result() -> impl Strategy<Value = ActionResult> {
 /// Generate an arbitrary Action
 fn arb_action() -> impl Strategy<Value = Action> {
     prop_oneof![
-        // ToolCall
-        ("[a-z_]{1,15}", arb_json_value()).prop_map(|(tool_name, arguments)| Action::ToolCall {
+        // ToolCalls
+        ("[a-z_]{1,15}", arb_json_value()).prop_map(|(tool_name, arguments)| Action::ToolCalls { calls: vec![ToolCallRequest {
+            call_id: "proptest".to_string(),
             tool_name,
             arguments,
-        }),
+        }]}),
         // UserInteraction
         (
             "[a-zA-Z ?]{1,30}",
@@ -285,7 +292,7 @@ proptest! {
             | Decision::HeartbeatOk => {
                 prop_assert!(is_terminal, "Expected terminal for {:?}", decision);
             }
-            Decision::UseTool { .. }
+            Decision::UseTools { .. }
             | Decision::AskUser { .. }
             | Decision::AskUserMultigroup { .. }
             | Decision::AskUserRich { .. } => {
@@ -301,13 +308,16 @@ proptest! {
     fn action_result_success_classification(result in arb_action_result()) {
         let is_success = result.is_success();
         match &result {
-            ActionResult::ToolSuccess { .. }
-            | ActionResult::UserResponse { .. }
+            ActionResult::ToolResults { ref results } => {
+                let all_success = results.iter().all(|r| r.is_success());
+                prop_assert_eq!(is_success, all_success, "ToolResults success mismatch for {:?}", result);
+            }
+            ActionResult::UserResponse { .. }
             | ActionResult::UserResponseRich { .. }
             | ActionResult::Completed => {
                 prop_assert!(is_success, "Expected success for {:?}", result);
             }
-            ActionResult::ToolError { .. } | ActionResult::Failed => {
+            ActionResult::Failed => {
                 prop_assert!(!is_success, "Expected not success for {:?}", result);
             }
         }
@@ -319,7 +329,7 @@ proptest! {
     fn action_result_retryable_classification(result in arb_action_result()) {
         let is_retryable = result.is_retryable();
         match &result {
-            ActionResult::ToolError { retryable: true, .. } => {
+            ActionResult::ToolResults { ref results } if results.iter().any(|r| matches!(&r.result, SingleToolResult::Error { retryable: true, .. })) => {
                 prop_assert!(is_retryable, "Expected retryable for {:?}", result);
             }
             _ => {
@@ -333,13 +343,16 @@ proptest! {
     fn decision_to_action_conversion(decision in arb_decision()) {
         let action: Action = decision.clone().into();
         match &decision {
-            Decision::UseTool { tool_name, arguments } => {
+            Decision::UseTools { calls: ref records } => {
                 match &action {
-                    Action::ToolCall { tool_name: tn, arguments: args } => {
-                        prop_assert_eq!(tn, tool_name);
-                        prop_assert_eq!(args, arguments);
+                    Action::ToolCalls { calls: ref requests } => {
+                        prop_assert_eq!(requests.len(), records.len());
+                        for (req, rec) in requests.iter().zip(records.iter()) {
+                            prop_assert_eq!(&req.tool_name, &rec.tool_name);
+                            prop_assert_eq!(&req.arguments, &rec.arguments);
+                        }
                     }
-                    _ => prop_assert!(false, "UseTool should convert to ToolCall"),
+                    _ => prop_assert!(false, "UseTools should convert to ToolCalls"),
                 }
             }
             Decision::AskUser { question, options } => {
@@ -403,7 +416,7 @@ proptest! {
             Action::Completion { .. } | Action::Failure { .. } => {
                 prop_assert!(is_terminal, "Expected terminal for {:?}", action);
             }
-            Action::ToolCall { .. }
+            Action::ToolCalls { .. }
             | Action::UserInteraction { .. }
             | Action::UserInteractionMultigroup { .. }
             | Action::UserInteractionRich { .. } => {
