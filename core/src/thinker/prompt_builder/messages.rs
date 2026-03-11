@@ -4,6 +4,7 @@
 //! and helper functions for formatting.
 
 use crate::agent_loop::{LoopState, Observation, StepSummary, ToolInfo};
+use crate::agent_loop::decision::{SingleToolResult, ToolCallResult};
 use crate::core::MediaAttachment;
 
 use super::PromptBuilder;
@@ -60,6 +61,33 @@ impl Message {
             content: format!("[{}]\n{}", tool_name, result),
             tool_call_id: Some(tool_call_id.to_string()),
         }
+    }
+
+    /// Build tool result messages for a batch of results.
+    /// Each result gets its own Message with the corresponding call_id.
+    pub fn native_tool_results(results: &[ToolCallResult]) -> Vec<Self> {
+        results
+            .iter()
+            .map(|r| {
+                let content = match &r.result {
+                    SingleToolResult::Success { output, .. } => {
+                        format!(
+                            "[{}]\n{}",
+                            r.tool_name,
+                            serde_json::to_string(output).unwrap_or_default()
+                        )
+                    }
+                    SingleToolResult::Error { error, .. } => {
+                        format!("[{}]\nError: {}", r.tool_name, error)
+                    }
+                };
+                Self {
+                    role: MessageRole::Tool,
+                    content,
+                    tool_call_id: Some(r.call_id.clone()),
+                }
+            })
+            .collect()
     }
 }
 
@@ -159,6 +187,9 @@ impl PromptBuilder {
             if step.action_type == "ask_user" {
                 // User's response to a question - use User role
                 messages.push(Message::user(step.result_output.clone()));
+            } else if !step.tool_results.is_empty() {
+                // Batch tool results: one Message per ToolCallResult
+                messages.extend(Message::native_tool_results(&step.tool_results));
             } else if let Some(ref call_id) = step.tool_call_id {
                 // Native tool result with ID reference for LLM context
                 messages.push(Message::native_tool_result(

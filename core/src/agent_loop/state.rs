@@ -320,16 +320,29 @@ pub struct StepSummary {
     /// Whether action succeeded
     pub success: bool,
     /// Tool call ID (from ToolCallRequest, for native tool result references)
+    /// For single-tool steps; for batch steps use `tool_results` instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Batch tool results (populated when step executed multiple tools in parallel)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_results: Vec<super::decision::ToolCallResult>,
 }
 
 impl From<&LoopStep> for StepSummary {
     fn from(step: &LoopStep) -> Self {
-        // Extract call_id from the first ToolCallRequest if action is ToolCalls
-        let tool_call_id = match &step.action {
-            Action::ToolCalls { calls: ref requests } => requests.first().map(|r| r.call_id.clone()),
-            _ => None,
+        // Extract call_id and batch results from the step
+        let (tool_call_id, tool_results) = match (&step.action, &step.result) {
+            // Batch tool results: carry all individual results for multi-message feedback
+            (Action::ToolCalls { calls: ref requests }, ActionResult::ToolResults { results })
+                if requests.len() > 1 =>
+            {
+                (None, results.clone())
+            }
+            // Single tool call: use tool_call_id for backward-compatible single message
+            (Action::ToolCalls { calls: ref requests }, _) => {
+                (requests.first().map(|r| r.call_id.clone()), Vec::new())
+            }
+            _ => (None, Vec::new()),
         };
         Self {
             step_id: step.step_id,
@@ -344,6 +357,7 @@ impl From<&LoopStep> for StepSummary {
             result_output: step.result.full_output(),
             success: step.result.is_success(),
             tool_call_id,
+            tool_results,
         }
     }
 }
