@@ -3,6 +3,7 @@
 //! Replaces the 3-trait tool hierarchy (AlephTool + AlephToolDyn + CapabilityStrategy)
 //! with a single `MinimalTool` trait and a flat `MinimalToolRegistry`.
 
+pub mod adapters;
 mod loop_core;
 mod prompt_builder;
 mod safety;
