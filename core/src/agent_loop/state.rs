@@ -111,7 +111,7 @@ impl LoopState {
         self.steps
             .iter()
             .flat_map(|s| {
-                if let super::decision::Action::ToolCalls(calls) = &s.action {
+                if let super::decision::Action::ToolCalls { calls } = &s.action {
                     calls.iter().map(|c| c.tool_name.clone()).collect::<Vec<_>>()
                 } else {
                     Vec::new()
@@ -154,14 +154,14 @@ impl LoopState {
             observation_summary: String::new(),
             thinking: thinking.clone(),
             action: action.clone(),
-            result: ActionResult::ToolResults(vec![super::decision::ToolCallResult {
+            result: ActionResult::ToolResults { results: vec![super::decision::ToolCallResult {
                 call_id: "interrupted".to_string(),
                 tool_name: "interrupted".to_string(),
                 result: super::decision::SingleToolResult::Error {
                     error: format!("Interrupted: user sent new message: {}", new_input),
                     retryable: false,
                 },
-            }]),
+            }]},
             tokens_used: 0,
             duration_ms: 0,
         };
@@ -316,10 +316,18 @@ pub struct StepSummary {
     pub result_output: String,
     /// Whether action succeeded
     pub success: bool,
+    /// Tool call ID (from ToolCallRequest, for native tool result references)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 impl From<&LoopStep> for StepSummary {
     fn from(step: &LoopStep) -> Self {
+        // Extract call_id from the first ToolCallRequest if action is ToolCalls
+        let tool_call_id = match &step.action {
+            Action::ToolCalls { calls: ref requests } => requests.first().map(|r| r.call_id.clone()),
+            _ => None,
+        };
         Self {
             step_id: step.step_id,
             reasoning: step
@@ -332,6 +340,7 @@ impl From<&LoopStep> for StepSummary {
             result_summary: step.result.summary(),
             result_output: step.result.full_output(),
             success: step.result.is_success(),
+            tool_call_id,
         }
     }
 }

@@ -74,6 +74,16 @@ impl TabooBuffer {
 
     /// Record a tagged verdict, maintaining window size.
     pub fn record(&mut self, tagged_verdict: TaggedVerdict) {
+        tracing::info!(
+            subsystem = "poe",
+            probe = "phase2",
+            feature = "taboo_buffer",
+            tag = %tagged_verdict.semantic_tag,
+            buffer_len = self.window.len() + 1,
+            threshold = self.repetition_threshold,
+            "🏷️ TABOO buffer record: tag=[{}] buffer_size={}/{}",
+            tagged_verdict.semantic_tag, self.window.len() + 1, self.window_size,
+        );
         self.window.push_back(tagged_verdict);
         while self.window.len() > self.window_size {
             self.window.pop_front();

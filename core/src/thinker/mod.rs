@@ -463,10 +463,11 @@ impl<P: ProviderRegistry> Thinker<P> {
                     .unwrap_or("Unknown failure")
                     .to_string(),
             },
-            _ => Decision::UseTool {
+            _ => Decision::UseTools { calls: vec![crate::agent_loop::decision::ToolCallRecord {
+                call_id: tc.id.clone(),
                 tool_name: tc.name.clone(),
                 arguments: tc.arguments.clone(),
-            },
+            }]},
         }
     }
 
@@ -498,7 +499,6 @@ impl<P: ProviderRegistry> Thinker<P> {
                 decision,
                 structured: None,
                 tokens_used,
-                tool_call_id: Some(tc.id.clone()),
             })
         } else if let Some(ref text) = response.text {
             // Fallback: no tool calls, try DecisionParser on text
@@ -1073,7 +1073,7 @@ mod tests {
         let thinking = result.unwrap();
         assert!(matches!(
             thinking.decision,
-            crate::agent_loop::Decision::UseTool { .. }
+            crate::agent_loop::Decision::UseTools { .. }
         ));
     }
 
@@ -1162,14 +1162,11 @@ mod tests {
 
         let decision = thinker.map_native_tool_call_to_decision(&tc);
         match decision {
-            crate::agent_loop::Decision::UseTool {
-                tool_name,
-                arguments,
-            } => {
-                assert_eq!(tool_name, "web_search");
-                assert_eq!(arguments["query"], "rust async");
+            crate::agent_loop::Decision::UseTools { calls: ref records } => {
+                assert_eq!(records[0].tool_name, "web_search");
+                assert_eq!(records[0].arguments["query"], "rust async");
             }
-            other => panic!("Expected UseTool, got {:?}", other),
+            other => panic!("Expected UseTools, got {:?}", other),
         }
     }
 
@@ -1198,11 +1195,12 @@ mod tests {
         let thinking = thinker.build_thinking_from_native_response(response).unwrap();
         assert_eq!(thinking.reasoning.as_deref(), Some("I need to list files"));
         assert_eq!(thinking.tokens_used, Some(150));
-        assert_eq!(thinking.tool_call_id.as_deref(), Some("call_5"));
-        assert!(matches!(
-            thinking.decision,
-            crate::agent_loop::Decision::UseTool { .. }
-        ));
+        // tool_call_id is now embedded in UseTools records
+        if let crate::agent_loop::Decision::UseTools { calls: ref records } = thinking.decision {
+            assert_eq!(records[0].call_id, "call_5");
+        } else {
+            panic!("Expected UseTools decision");
+        }
     }
 
     #[test]

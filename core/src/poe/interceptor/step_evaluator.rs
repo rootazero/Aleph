@@ -91,12 +91,11 @@ mod tests {
                 },
                 structured: None,
                 tokens_used: None,
-                tool_call_id: None,
+
             },
-            action: Action::ToolCall {
+            action: Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
                 tool_name: "test".into(),
-                arguments: serde_json::Value::Null,
-            },
+                arguments: serde_json::Value::Null }]},
             result: ActionResult::Completed,
             tokens_used: 0,
             duration_ms: 0,

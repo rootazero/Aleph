@@ -185,7 +185,7 @@ mod tests {
                 },
                 structured: None,
                 tokens_used: None,
-                tool_call_id: None,
+
             },
             action: Action::Completion {
                 summary: "done".into(),

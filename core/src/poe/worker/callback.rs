@@ -112,45 +112,54 @@ impl LoopCallback for PoeLoopCallback {
 
     async fn on_action_done(&self, action: &Action, result: &ActionResult) {
         // Track file artifacts from write/edit tool calls
-        if let Action::ToolCall {
-            tool_name,
-            arguments,
-        } = action
-        {
-            // Check if this is a file operation tool
-            let is_file_op = matches!(
-                tool_name.to_lowercase().as_str(),
-                "write_file" | "edit_file" | "write" | "edit" | "create_file"
-                    | "file_ops" | "delete_file" | "remove_file"
-            );
+        if let Action::ToolCalls { calls: ref requests } = action {
+            if let Some(req) = requests.first() {
+                let tool_name = &req.tool_name;
+                let arguments = &req.arguments;
 
-            if is_file_op {
-                if let Some(path) = Self::extract_file_path(arguments) {
-                    // Determine change type
-                    let change_type = Self::change_type_from_tool(tool_name, arguments);
+                // Check if this is a file operation tool
+                let is_file_op = matches!(
+                    tool_name.to_lowercase().as_str(),
+                    "write_file" | "edit_file" | "write" | "edit" | "create_file"
+                        | "file_ops" | "delete_file" | "remove_file"
+                );
 
-                    // Compute content hash if available
-                    let content_hash = if let ActionResult::ToolSuccess { output, .. } = result {
-                        // Try to get content from result or arguments
-                        let content = arguments
-                            .get("content")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if !content.is_empty() {
-                            Self::compute_hash(content)
+                if is_file_op {
+                    if let Some(path) = Self::extract_file_path(arguments) {
+                        // Determine change type
+                        let change_type = Self::change_type_from_tool(tool_name, arguments);
+
+                        // Compute content hash if available
+                        let content_hash = if let ActionResult::ToolResults { ref results } = result {
+                            if let Some(r) = results.first() {
+                                if let crate::agent_loop::decision::SingleToolResult::Success { output, .. } = &r.result {
+                                    // Try to get content from result or arguments
+                                    let content = arguments
+                                        .get("content")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    if !content.is_empty() {
+                                        Self::compute_hash(content)
+                                    } else {
+                                        // Hash the output as fallback
+                                        Self::compute_hash(&output.to_string())
+                                    }
+                                } else {
+                                    "unknown".to_string()
+                                }
+                            } else {
+                                "unknown".to_string()
+                            }
                         } else {
-                            // Hash the output as fallback
-                            Self::compute_hash(&output.to_string())
-                        }
-                    } else {
-                        "unknown".to_string()
-                    };
+                            "unknown".to_string()
+                        };
 
-                    // Create artifact
-                    let artifact = Artifact::new(path, change_type, content_hash);
+                        // Create artifact
+                        let artifact = Artifact::new(path, change_type, content_hash);
 
-                    // Add to artifacts list
-                    self.artifacts.write().await.push(artifact);
+                        // Add to artifacts list
+                        self.artifacts.write().await.push(artifact);
+                    }
                 }
             }
         }

@@ -26,10 +26,16 @@ mod integration_tests {
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
             match action {
-                Action::ToolCall { tool_name, .. } => ActionResult::ToolSuccess {
-                    output: json!(format!("Executed {}", tool_name)),
-                    duration_ms: 10,
-                },
+                Action::ToolCalls { calls: ref requests } => {
+                    let tn = requests.first().map(|r| r.tool_name.as_str()).unwrap_or("unknown");
+                    ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+                        call_id: String::new(), tool_name: tn.to_string(),
+                        result: crate::agent_loop::decision::SingleToolResult::Success {
+                            output: json!(format!("Executed {}", tn)),
+                            duration_ms: 10,
+                        },
+                    }]}
+                }
                 _ => ActionResult::Failed,
             }
         }
@@ -41,12 +47,11 @@ mod integration_tests {
         let baseline = Arc::new(BaselineExecutor);
         let atomic_executor = AtomicActionExecutor::new(baseline.clone(), temp_dir.path().to_path_buf());
 
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest {
+            call_id: String::new(),
             tool_name: "bash".to_string(),
-            arguments: json!({
-                "cmd": "git status"
-            }),
-        };
+            arguments: json!({"cmd": "git status"}),
+        }]};
 
         let identity = IdentityContext::owner("test-session".to_string(), "test-channel".to_string());
 
@@ -129,12 +134,11 @@ mod integration_tests {
         let baseline = Arc::new(BaselineExecutor);
         let atomic_executor = AtomicActionExecutor::new(baseline, temp_dir.path().to_path_buf());
 
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest {
+            call_id: String::new(),
             tool_name: "unknown_tool".to_string(),
-            arguments: json!({
-                "some_arg": "value"
-            }),
-        };
+            arguments: json!({"some_arg": "value"}),
+        }]};
 
         let identity = IdentityContext::owner("test-session".to_string(), "test-channel".to_string());
         let result = atomic_executor.execute(&action, &identity).await;

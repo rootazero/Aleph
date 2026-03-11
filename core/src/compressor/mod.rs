@@ -243,16 +243,15 @@ mod tests {
                 },
                 structured: None,
                 tokens_used: None,
-                tool_call_id: None,
+
             },
-            action: Action::ToolCall {
+            action: Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
                 tool_name: format!("tool_{}", id),
-                arguments: json!({}),
-            },
-            result: ActionResult::ToolSuccess {
-                output: json!({"result": "ok"}),
-                duration_ms: 100,
-            },
+                arguments: json!({}) }]},
+            result: ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+                call_id: String::new(), tool_name: String::new(),
+                result: crate::agent_loop::decision::SingleToolResult::Success { output: json!({"result": "ok"}), duration_ms: 100 },
+                }]},
             tokens_used: 100,
             duration_ms: 100,
         }

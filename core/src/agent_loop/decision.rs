@@ -66,7 +66,7 @@ impl ToolCallResult {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Decision {
     /// Execute one or more tools (parallel batch)
-    UseTools(Vec<ToolCallRecord>),
+    UseTools { calls: Vec<ToolCallRecord> },
     /// Request user input
     AskUser {
         question: String,
@@ -122,7 +122,7 @@ impl Decision {
     /// Get decision type as string
     pub fn decision_type(&self) -> &'static str {
         match self {
-            Decision::UseTools(_) => "tool",
+            Decision::UseTools { .. } => "tool",
             Decision::AskUser { .. } => "ask_user",
             Decision::AskUserMultigroup { .. } => "ask_user_multigroup",
             Decision::AskUserRich { .. } => "ask_user_rich",
@@ -137,7 +137,7 @@ impl Decision {
     #[deprecated(note = "Migrate to handle UseTools batch directly")]
     pub fn as_single_tool(&self) -> Option<(&str, &Value)> {
         match self {
-            Decision::UseTools(calls) if !calls.is_empty() => {
+            Decision::UseTools { calls } if !calls.is_empty() => {
                 Some((&calls[0].tool_name, &calls[0].arguments))
             }
             _ => None,
@@ -150,7 +150,7 @@ impl Decision {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
     /// Tool invocations (parallel batch)
-    ToolCalls(Vec<ToolCallRequest>),
+    ToolCalls { calls: Vec<ToolCallRequest> },
     /// User interaction request
     UserInteraction {
         question: String,
@@ -189,7 +189,7 @@ impl Action {
     /// with different operations.
     pub fn action_type(&self) -> String {
         match self {
-            Action::ToolCalls(calls) => {
+            Action::ToolCalls { calls } => {
                 if calls.is_empty() {
                     return "tool:<empty>".to_string();
                 }
@@ -218,7 +218,7 @@ impl Action {
     /// Get action arguments summary
     pub fn args_summary(&self) -> String {
         match self {
-            Action::ToolCalls(calls) => {
+            Action::ToolCalls { calls } => {
                 let summaries: Vec<String> = calls
                     .iter()
                     .map(|c| {
@@ -249,8 +249,8 @@ impl Action {
 impl From<Decision> for Action {
     fn from(decision: Decision) -> Self {
         match decision {
-            Decision::UseTools(calls) => Action::ToolCalls(
-                calls
+            Decision::UseTools { calls } => Action::ToolCalls {
+                calls: calls
                     .into_iter()
                     .map(|c| ToolCallRequest {
                         call_id: c.call_id,
@@ -258,7 +258,7 @@ impl From<Decision> for Action {
                         arguments: c.arguments,
                     })
                     .collect(),
-            ),
+            },
             Decision::AskUser { question, options } => Action::UserInteraction { question, options },
             Decision::AskUserMultigroup { question, groups } => {
                 Action::UserInteractionMultigroup { question, groups }
@@ -279,7 +279,7 @@ impl From<Decision> for Action {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActionResult {
     /// Tool execution results (parallel batch)
-    ToolResults(Vec<ToolCallResult>),
+    ToolResults { results: Vec<ToolCallResult> },
     /// User provided response
     UserResponse {
         response: String,
@@ -298,7 +298,7 @@ impl ActionResult {
     /// Check if result indicates success
     pub fn is_success(&self) -> bool {
         match self {
-            ActionResult::ToolResults(results) => results.iter().all(|r| r.is_success()),
+            ActionResult::ToolResults { results } => results.iter().all(|r| r.is_success()),
             ActionResult::UserResponse { .. }
             | ActionResult::UserResponseRich { .. }
             | ActionResult::Completed => true,
@@ -309,7 +309,7 @@ impl ActionResult {
     /// Check if result is retryable
     pub fn is_retryable(&self) -> bool {
         match self {
-            ActionResult::ToolResults(results) => results.iter().any(|r| {
+            ActionResult::ToolResults { results } => results.iter().any(|r| {
                 matches!(r.result, SingleToolResult::Error { retryable: true, .. })
             }),
             _ => false,
@@ -319,7 +319,7 @@ impl ActionResult {
     /// Get result summary (truncated for display)
     pub fn summary(&self) -> String {
         match self {
-            ActionResult::ToolResults(results) => {
+            ActionResult::ToolResults { results } => {
                 let parts: Vec<String> = results
                     .iter()
                     .map(|r| match &r.result {
@@ -353,7 +353,7 @@ impl ActionResult {
     /// and other information needed for accurate decision making.
     pub fn full_output(&self) -> String {
         match self {
-            ActionResult::ToolResults(results) => {
+            ActionResult::ToolResults { results } => {
                 let parts: Vec<String> = results
                     .iter()
                     .map(|r| match &r.result {
@@ -377,6 +377,38 @@ impl ActionResult {
             ActionResult::Failed => "Failed".to_string(),
         }
     }
+
+    /// Extract the first tool result's output (convenience for sequential single-tool code)
+    pub fn first_tool_output(&self) -> Option<&Value> {
+        match self {
+            ActionResult::ToolResults { results } => results.first().and_then(|r| match &r.result {
+                SingleToolResult::Success { output, .. } => Some(output),
+                _ => None,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Extract the first tool result's error string (convenience for sequential single-tool code)
+    pub fn first_tool_error(&self) -> Option<&str> {
+        match self {
+            ActionResult::ToolResults { results } => results.first().and_then(|r| match &r.result {
+                SingleToolResult::Error { error, .. } => Some(error.as_str()),
+                _ => None,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Check if the first tool result is a non-retryable error
+    pub fn is_non_retryable_error(&self) -> bool {
+        match self {
+            ActionResult::ToolResults { results } => results.first().map_or(false, |r| {
+                matches!(&r.result, SingleToolResult::Error { retryable: false, .. })
+            }),
+            _ => false,
+        }
+    }
 }
 
 /// Parsed LLM response containing thinking and decision
@@ -393,7 +425,7 @@ pub struct LlmResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LlmAction {
-    UseTools(Vec<ToolCallRecord>),
+    UseTools { calls: Vec<ToolCallRecord> },
     AskUser {
         question: String,
         #[serde(default)]
@@ -424,7 +456,7 @@ pub enum LlmAction {
 impl From<LlmAction> for Decision {
     fn from(action: LlmAction) -> Self {
         match action {
-            LlmAction::UseTools(calls) => Decision::UseTools(calls),
+            LlmAction::UseTools { calls } => Decision::UseTools { calls },
             LlmAction::AskUser { question, options } => Decision::AskUser { question, options },
             LlmAction::AskUserMultigroup { question, groups } => {
                 Decision::AskUserMultigroup { question, groups }
@@ -447,11 +479,11 @@ mod tests {
 
     #[test]
     fn test_decision_serialization() {
-        let decision = Decision::UseTools(vec![ToolCallRecord {
+        let decision = Decision::UseTools { calls: vec![ToolCallRecord {
             call_id: "call_1".to_string(),
             tool_name: "search".to_string(),
             arguments: json!({"query": "rust tutorial"}),
-        }]);
+        }]};
 
         let json = serde_json::to_string(&decision).unwrap();
         assert!(json.contains("use_tools"));
@@ -463,11 +495,11 @@ mod tests {
 
     #[test]
     fn test_decision_is_terminal() {
-        assert!(!Decision::UseTools(vec![ToolCallRecord {
+        assert!(!Decision::UseTools { calls: vec![ToolCallRecord {
             call_id: "c1".to_string(),
             tool_name: "test".to_string(),
             arguments: json!({}),
-        }])
+        }]}
         .is_terminal());
 
         assert!(!Decision::AskUser {
@@ -489,24 +521,24 @@ mod tests {
 
     #[test]
     fn test_action_result_is_success() {
-        assert!(ActionResult::ToolResults(vec![ToolCallResult {
+        assert!(ActionResult::ToolResults { results: vec![ToolCallResult {
             call_id: "c1".to_string(),
             tool_name: "test".to_string(),
             result: SingleToolResult::Success {
                 output: json!("ok"),
                 duration_ms: 100,
             },
-        }])
+        }]}
         .is_success());
 
-        assert!(!ActionResult::ToolResults(vec![ToolCallResult {
+        assert!(!ActionResult::ToolResults { results: vec![ToolCallResult {
             call_id: "c1".to_string(),
             tool_name: "test".to_string(),
             result: SingleToolResult::Error {
                 error: "failed".to_string(),
                 retryable: false,
             },
-        }])
+        }]}
         .is_success());
 
         assert!(ActionResult::UserResponse {
@@ -519,44 +551,44 @@ mod tests {
     fn test_llm_response_parsing() {
         // LlmAction::UseTools uses a different serde format now;
         // test direct construction instead of JSON parsing
-        let action = LlmAction::UseTools(vec![ToolCallRecord {
+        let action = LlmAction::UseTools { calls: vec![ToolCallRecord {
             call_id: "call_1".to_string(),
             tool_name: "web_search".to_string(),
             arguments: json!({"query": "rust async"}),
-        }]);
+        }]};
 
         let decision: Decision = action.into();
-        assert!(matches!(decision, Decision::UseTools(_)));
+        assert!(matches!(decision, Decision::UseTools { .. }));
     }
 
     #[test]
     fn test_action_type_with_operation() {
         // Single tool without operation field
-        let action = Action::ToolCalls(vec![ToolCallRequest {
+        let action = Action::ToolCalls { calls: vec![ToolCallRequest {
             call_id: "c1".to_string(),
             tool_name: "search".to_string(),
             arguments: json!({"query": "rust tutorial"}),
-        }]);
+        }]};
         assert_eq!(action.action_type(), "tool:search");
 
         // Single tool with operation field (like file_ops)
-        let action_with_op = Action::ToolCalls(vec![ToolCallRequest {
+        let action_with_op = Action::ToolCalls { calls: vec![ToolCallRequest {
             call_id: "c2".to_string(),
             tool_name: "file_ops".to_string(),
             arguments: json!({"operation": "mkdir", "path": "/tmp/test"}),
-        }]);
+        }]};
         assert_eq!(action_with_op.action_type(), "tool:file_ops:mkdir");
 
         // Different operation on same tool
-        let action_write = Action::ToolCalls(vec![ToolCallRequest {
+        let action_write = Action::ToolCalls { calls: vec![ToolCallRequest {
             call_id: "c3".to_string(),
             tool_name: "file_ops".to_string(),
             arguments: json!({"operation": "write", "path": "/tmp/test.txt", "content": "hello"}),
-        }]);
+        }]};
         assert_eq!(action_write.action_type(), "tool:file_ops:write");
 
         // Multi-tool batch
-        let action_multi = Action::ToolCalls(vec![
+        let action_multi = Action::ToolCalls { calls: vec![
             ToolCallRequest {
                 call_id: "c4".to_string(),
                 tool_name: "search".to_string(),
@@ -567,7 +599,7 @@ mod tests {
                 tool_name: "file_ops".to_string(),
                 arguments: json!({}),
             },
-        ]);
+        ]};
         assert_eq!(action_multi.action_type(), "tools:[search,file_ops]");
 
         // Non-tool actions

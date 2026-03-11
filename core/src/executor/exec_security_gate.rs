@@ -245,30 +245,35 @@ impl ExecSecurityGate {
         }
     }
 
-    /// Post-execution masking: redact secrets from ToolSuccess output.
+    /// Post-execution masking: redact secrets from ToolResults output.
     ///
     /// Applies SecretMasker to stdout and stderr string fields in the output Value.
-    /// Non-ToolSuccess variants are passed through unchanged.
+    /// Non-Success results and non-ToolResults variants are passed through unchanged.
     pub fn post_execute(&self, result: crate::agent_loop::ActionResult) -> crate::agent_loop::ActionResult {
         match result {
-            crate::agent_loop::ActionResult::ToolSuccess { mut output, duration_ms } => {
-                // Mask stdout field if present
-                if let Some(stdout) = output.get("stdout").and_then(|v| v.as_str()) {
-                    let masked = self.masker.mask(stdout);
-                    output["stdout"] = serde_json::Value::String(masked);
-                }
-                // Mask stderr field if present
-                if let Some(stderr) = output.get("stderr").and_then(|v| v.as_str()) {
-                    let masked = self.masker.mask(stderr);
-                    output["stderr"] = serde_json::Value::String(masked);
-                }
-                // Mask plain string output if not an object
-                if output.is_string() {
-                    let s = output.as_str().unwrap().to_string();
-                    let masked = self.masker.mask(&s);
-                    output = serde_json::Value::String(masked);
-                }
-                crate::agent_loop::ActionResult::ToolSuccess { output, duration_ms }
+            crate::agent_loop::ActionResult::ToolResults { results } => {
+                let masked_results: Vec<_> = results.into_iter().map(|mut r| {
+                    if let crate::agent_loop::decision::SingleToolResult::Success { ref mut output, .. } = r.result {
+                        // Mask stdout field if present
+                        if let Some(stdout) = output.get("stdout").and_then(|v| v.as_str()) {
+                            let masked = self.masker.mask(stdout);
+                            output["stdout"] = serde_json::Value::String(masked);
+                        }
+                        // Mask stderr field if present
+                        if let Some(stderr) = output.get("stderr").and_then(|v| v.as_str()) {
+                            let masked = self.masker.mask(stderr);
+                            output["stderr"] = serde_json::Value::String(masked);
+                        }
+                        // Mask plain string output if not an object
+                        if output.is_string() {
+                            let s = output.as_str().unwrap().to_string();
+                            let masked = self.masker.mask(&s);
+                            *output = serde_json::Value::String(masked);
+                        }
+                    }
+                    r
+                }).collect();
+                crate::agent_loop::ActionResult::ToolResults { results: masked_results }
             }
             other => other,
         }
@@ -435,19 +440,29 @@ mod tests {
             "exit_code": 0,
         });
 
-        let result = crate::agent_loop::ActionResult::ToolSuccess {
-            output: raw_output,
-            duration_ms: 100,
-        };
+        let result = crate::agent_loop::ActionResult::ToolResults { results: vec![
+            crate::agent_loop::decision::ToolCallResult {
+                call_id: "test".to_string(),
+                tool_name: "bash".to_string(),
+                result: crate::agent_loop::decision::SingleToolResult::Success {
+                    output: raw_output,
+                    duration_ms: 100,
+                },
+            },
+        ]};
 
         let masked = gate.post_execute(result);
 
-        if let crate::agent_loop::ActionResult::ToolSuccess { output, .. } = masked {
-            let stdout = output["stdout"].as_str().unwrap();
-            // The secret should be redacted somehow (not present in full form)
-            assert!(!stdout.contains("abcdefghijklmno"), "API key should be redacted");
+        if let crate::agent_loop::ActionResult::ToolResults { ref results } = masked {
+            if let crate::agent_loop::decision::SingleToolResult::Success { ref output, .. } = results[0].result {
+                let stdout = output["stdout"].as_str().unwrap();
+                // The secret should be redacted somehow (not present in full form)
+                assert!(!stdout.contains("abcdefghijklmno"), "API key should be redacted");
+            } else {
+                panic!("Expected Success");
+            }
         } else {
-            panic!("Expected ToolSuccess");
+            panic!("Expected ToolResults");
         }
     }
 
@@ -456,13 +471,23 @@ mod tests {
         let manager = Arc::new(ExecApprovalManager::new());
         let gate = ExecSecurityGate::new(manager, None);
 
-        let result = crate::agent_loop::ActionResult::ToolError {
-            error: "execution failed".to_string(),
-            retryable: false,
-        };
+        let result = crate::agent_loop::ActionResult::ToolResults { results: vec![
+            crate::agent_loop::decision::ToolCallResult {
+                call_id: "test".to_string(),
+                tool_name: "bash".to_string(),
+                result: crate::agent_loop::decision::SingleToolResult::Error {
+                    error: "execution failed".to_string(),
+                    retryable: false,
+                },
+            },
+        ]};
 
         let masked = gate.post_execute(result);
-        assert!(matches!(masked, crate::agent_loop::ActionResult::ToolError { .. }));
+        if let crate::agent_loop::ActionResult::ToolResults { ref results } = masked {
+            assert!(matches!(results[0].result, crate::agent_loop::decision::SingleToolResult::Error { .. }));
+        } else {
+            panic!("Expected ToolResults");
+        }
     }
 
     #[test]
@@ -478,17 +503,27 @@ mod tests {
 
         let original_stdout = raw_output["stdout"].as_str().unwrap().to_string();
 
-        let result = crate::agent_loop::ActionResult::ToolSuccess {
-            output: raw_output,
-            duration_ms: 50,
-        };
+        let result = crate::agent_loop::ActionResult::ToolResults { results: vec![
+            crate::agent_loop::decision::ToolCallResult {
+                call_id: "test".to_string(),
+                tool_name: "bash".to_string(),
+                result: crate::agent_loop::decision::SingleToolResult::Success {
+                    output: raw_output,
+                    duration_ms: 50,
+                },
+            },
+        ]};
 
         let masked = gate.post_execute(result);
 
-        if let crate::agent_loop::ActionResult::ToolSuccess { output, .. } = masked {
-            assert_eq!(output["stdout"].as_str().unwrap(), original_stdout);
+        if let crate::agent_loop::ActionResult::ToolResults { ref results } = masked {
+            if let crate::agent_loop::decision::SingleToolResult::Success { ref output, .. } = results[0].result {
+                assert_eq!(output["stdout"].as_str().unwrap(), original_stdout);
+            } else {
+                panic!("Expected Success");
+            }
         } else {
-            panic!("Expected ToolSuccess");
+            panic!("Expected ToolResults");
         }
     }
 }

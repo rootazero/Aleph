@@ -54,7 +54,18 @@ impl<S: ExperienceStore> DecayFilteredStore<S> {
         let tracker = self.reuse_tracker.read().await;
         let now_ms = chrono::Utc::now().timestamp_millis();
 
+        tracing::info!(
+            subsystem = "poe",
+            probe = "phase2",
+            feature = "memory_decay",
+            raw_count = raw_results.len(),
+            limit = limit,
+            "🧠 DECAY search: fetched {} raw candidates for limit={}",
+            raw_results.len(), limit,
+        );
+
         let mut weighted: Vec<(PoeExperience, f64, f32)> = Vec::new();
+        let mut archived_count = 0_usize;
 
         for (experience, similarity) in raw_results {
             // Performance factor from reuse history
@@ -82,8 +93,32 @@ impl<S: ExperienceStore> DecayFilteredStore<S> {
 
             // Filter archived experiences
             if DecayCalculator::should_archive(effective_weight, &self.decay_config) {
+                tracing::info!(
+                    subsystem = "poe",
+                    probe = "phase2",
+                    feature = "memory_decay",
+                    experience_id = %experience.id,
+                    effective_weight = effective_weight,
+                    performance = performance,
+                    time_factor = time,
+                    age_days = age_days,
+                    "🧠 DECAY archived experience '{}' (weight={:.4} perf={:.2} time={:.4} age={:.0}d)",
+                    experience.id, effective_weight, performance, time, age_days,
+                );
+                archived_count += 1;
                 continue;
             }
+
+            tracing::debug!(
+                subsystem = "poe",
+                probe = "phase2",
+                feature = "memory_decay",
+                experience_id = %experience.id,
+                effective_weight = effective_weight,
+                similarity = similarity,
+                "🧠 DECAY kept experience '{}' (weight={:.4} sim={:.4})",
+                experience.id, effective_weight, similarity,
+            );
 
             weighted.push((experience, similarity, effective_weight));
         }
@@ -98,6 +133,17 @@ impl<S: ExperienceStore> DecayFilteredStore<S> {
         });
 
         weighted.truncate(limit);
+
+        tracing::info!(
+            subsystem = "poe",
+            probe = "phase2",
+            feature = "memory_decay",
+            final_count = weighted.len(),
+            archived_count = archived_count,
+            "🧠 DECAY search complete: {} results returned, {} archived/filtered",
+            weighted.len(), archived_count,
+        );
+
         Ok(weighted)
     }
 }

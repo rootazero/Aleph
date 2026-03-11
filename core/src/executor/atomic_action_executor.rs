@@ -52,19 +52,22 @@ impl<E: ActionExecutor> AtomicActionExecutor<E> {
     /// Try to convert Action to AtomicAction for routing
     fn try_convert_to_atomic(&self, action: &Action) -> Option<String> {
         match action {
-            Action::ToolCall { tool_name, arguments } => {
+            Action::ToolCalls { calls: ref requests } => {
+                let req = requests.first()?;
+                let tool_name = &req.tool_name;
+                let arguments = &req.arguments;
                 // Build a query string from tool_name and arguments
                 // This is a simple heuristic - can be improved
-                let query = if let Some(cmd) = arguments.get("cmd").and_then(|v| v.as_str()) {
+                let query = if let Some(cmd) = arguments.get("cmd").and_then(|v: &Value| v.as_str()) {
                     // bash tool
                     cmd.to_string()
-                } else if let Some(command) = arguments.get("command").and_then(|v| v.as_str()) {
+                } else if let Some(command) = arguments.get("command").and_then(|v: &Value| v.as_str()) {
                     // Alternative bash format
                     command.to_string()
                 } else if tool_name == "file_ops" {
                     // file_ops tool - build query from operation and path
-                    let operation = arguments.get("operation").and_then(|v| v.as_str()).unwrap_or("");
-                    let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    let operation = arguments.get("operation").and_then(|v: &Value| v.as_str()).unwrap_or("");
+                    let path = arguments.get("path").and_then(|v: &Value| v.as_str()).unwrap_or("");
                     format!("{} {}", operation, path)
                 } else {
                     // Generic query
@@ -105,10 +108,16 @@ impl<E: ActionExecutor> AtomicActionExecutor<E> {
                             );
 
                             Some((
-                                ActionResult::ToolSuccess {
-                                    output: Value::String(result.message),
-                                    duration_ms,
-                                },
+                                ActionResult::ToolResults { results: vec![
+                                    crate::agent_loop::decision::ToolCallResult {
+                                        call_id: String::new(),
+                                        tool_name: "atomic".to_string(),
+                                        result: crate::agent_loop::decision::SingleToolResult::Success {
+                                            output: Value::String(result.message),
+                                            duration_ms,
+                                        },
+                                    },
+                                ]},
                                 routing_result.layer,
                             ))
                         }
@@ -178,10 +187,10 @@ mod tests {
     #[async_trait]
     impl ActionExecutor for MockExecutor {
         async fn execute(&self, _action: &Action, _identity: &IdentityContext) -> ActionResult {
-            ActionResult::ToolSuccess {
-                output: json!("mock result"),
-                duration_ms: 100,
-            }
+            ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+                call_id: String::new(), tool_name: String::new(),
+                result: crate::agent_loop::decision::SingleToolResult::Success { output: json!("mock result"), duration_ms: 100 },
+                }]}
         }
     }
 
@@ -191,12 +200,11 @@ mod tests {
         let mock_executor = Arc::new(MockExecutor);
         let executor = AtomicActionExecutor::new(mock_executor, temp_dir.path().to_path_buf());
 
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest {
+            call_id: String::new(),
             tool_name: "bash".to_string(),
-            arguments: json!({
-                "cmd": "git status"
-            }),
-        };
+            arguments: json!({"cmd": "git status"}),
+        }]};
 
         let identity = IdentityContext::owner("test-session".to_string(), "test-channel".to_string());
         let result = executor.execute(&action, &identity).await;
@@ -211,10 +219,9 @@ mod tests {
         let mock_executor = Arc::new(MockExecutor);
         let executor = AtomicActionExecutor::new(mock_executor, temp_dir.path().to_path_buf());
 
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
             tool_name: "unknown_tool".to_string(),
-            arguments: json!({}),
-        };
+            arguments: json!({}) }]};
 
         let identity = IdentityContext::owner("test-session".to_string(), "test-channel".to_string());
         let result = executor.execute(&action, &identity).await;
@@ -230,12 +237,11 @@ mod tests {
         let mut executor = AtomicActionExecutor::new(mock_executor, temp_dir.path().to_path_buf());
         executor.set_enabled(false);
 
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest {
+            call_id: String::new(),
             tool_name: "bash".to_string(),
-            arguments: json!({
-                "cmd": "git status"
-            }),
-        };
+            arguments: json!({"cmd": "git status"}),
+        }]};
 
         let identity = IdentityContext::owner("test-session".to_string(), "test-channel".to_string());
         let result = executor.execute(&action, &identity).await;

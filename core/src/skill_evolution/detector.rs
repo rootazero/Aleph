@@ -4,9 +4,9 @@
 
 use crate::sync_primitives::Arc;
 
-
 use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
+use tracing::info;
 
 use super::tracker::EvolutionTracker;
 use super::types::{SkillMetrics, SolidificationConfig, SolidificationSuggestion};
@@ -59,7 +59,31 @@ impl SolidificationDetector {
 
     /// Detect all candidates ready for solidification
     pub fn detect_candidates(&self) -> Result<Vec<SkillMetrics>> {
-        self.tracker.get_solidification_candidates(&self.config)
+        let candidates = self.tracker.get_solidification_candidates(&self.config)?;
+
+        info!(
+            target: "aleph::evolution::probe",
+            probe = "solidification_candidates_detected",
+            count = candidates.len(),
+            min_success = self.config.min_success_count,
+            min_rate = self.config.min_success_rate,
+            "Solidification detection sweep complete"
+        );
+
+        for c in &candidates {
+            info!(
+                target: "aleph::evolution::probe",
+                probe = "solidification_candidate",
+                skill_id = %c.skill_id,
+                total_executions = c.total_executions,
+                successful = c.successful_executions,
+                success_rate = c.success_rate(),
+                avg_duration_ms = c.avg_duration_ms,
+                "Solidification candidate identified"
+            );
+        }
+
+        Ok(candidates)
     }
 
     /// Generate a solidification suggestion for a candidate

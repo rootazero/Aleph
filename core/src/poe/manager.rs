@@ -370,6 +370,18 @@ impl<W: Worker> PoeManager<W> {
                 .ok()
                 .and_then(|buf| buf.check_micro_taboo());
 
+            if let Some(ref warning) = taboo_warning {
+                tracing::info!(
+                    subsystem = "poe",
+                    probe = "phase2",
+                    feature = "taboo_micro",
+                    task_id = %task.manifest.task_id,
+                    attempt = budget.current_attempt + 1,
+                    warning_preview = &warning[..warning.len().min(120)],
+                    "🔴 TABOO micro-taboo triggered — same failure repeated"
+                );
+            }
+
             // Build instruction with retry feedback and taboo warning
             let instruction = match (&previous_failure, &taboo_warning) {
                 (Some(feedback), Some(taboo)) => {
@@ -397,6 +409,24 @@ impl<W: Worker> PoeManager<W> {
 
             // Record attempt in budget
             budget.record_attempt(output.tokens_consumed, verdict.distance_score);
+
+            // Probe: entropy tracking per attempt
+            tracing::info!(
+                subsystem = "poe",
+                probe = "phase2",
+                feature = "entropy",
+                task_id = %task.manifest.task_id,
+                attempt = budget.current_attempt,
+                distance_score = verdict.distance_score,
+                budget_status = ?budget.status(),
+                entropy_trend = budget.entropy_trend(budget.entropy_history.len()),
+                remaining_attempts = budget.remaining_attempts(),
+                "📊 ENTROPY attempt={} distance={:.3} status={:?} trend={:.4}",
+                budget.current_attempt,
+                verdict.distance_score,
+                budget.status(),
+                budget.entropy_trend(budget.entropy_history.len()),
+            );
 
             // Emit validation event via callback
             if let Some(callback) = &self.validation_callback {
@@ -444,6 +474,14 @@ impl<W: Worker> PoeManager<W> {
 
             // Trigger meta-cognition on validation failure
             if let Some(ref mc) = self.meta_cognition {
+                tracing::info!(
+                    subsystem = "poe",
+                    probe = "phase2",
+                    feature = "meta_cognition",
+                    task_id = %task.manifest.task_id,
+                    attempt = budget.current_attempt,
+                    "🧠 META_COGNITION triggered on validation failure",
+                );
                 mc.on_validation_failure(
                     &task.manifest.task_id,
                     &task.manifest.objective,
@@ -463,8 +501,36 @@ impl<W: Worker> PoeManager<W> {
                 }
             }
 
+            // Probe: record taboo tag for visibility
+            {
+                let tag = Self::extract_failure_tag(&verdict);
+                tracing::info!(
+                    subsystem = "poe",
+                    probe = "phase2",
+                    feature = "taboo_tag",
+                    task_id = %task.manifest.task_id,
+                    attempt = budget.current_attempt,
+                    semantic_tag = %tag,
+                    "🏷️ TABOO failure tagged as [{}]",
+                    tag,
+                );
+            }
+
             // Check for stuck (no progress over window)
             if budget.is_stuck(self.config.stuck_window) {
+                tracing::info!(
+                    subsystem = "poe",
+                    probe = "phase2",
+                    feature = "stuck_detection",
+                    task_id = %task.manifest.task_id,
+                    attempt = budget.current_attempt,
+                    stuck_window = self.config.stuck_window,
+                    best_score = budget.best_score().unwrap_or(1.0),
+                    entropy_history = ?budget.entropy_history,
+                    "🛑 STUCK detected — no progress over {} attempts, triggering StrategySwitch",
+                    self.config.stuck_window,
+                );
+
                 let suggestion = verdict
                     .suggestion
                     .clone()
@@ -708,6 +774,14 @@ fn should_decompose_on_evaluation(
     // non-improving pairs at the tail of entropy_history
     let history = &budget.entropy_history;
     if history.len() < 3 {
+        tracing::debug!(
+            subsystem = "poe",
+            probe = "phase2",
+            feature = "decomposition_e_stage",
+            history_len = history.len(),
+            "🔍 E-DECOMP skipped: insufficient history ({} < 3)",
+            history.len(),
+        );
         return None;
     }
 
@@ -720,6 +794,14 @@ fn should_decompose_on_evaluation(
         .count();
 
     if stagnant_count < 2 {
+        tracing::debug!(
+            subsystem = "poe",
+            probe = "phase2",
+            feature = "decomposition_e_stage",
+            stagnant_count = stagnant_count,
+            "🔍 E-DECOMP skipped: insufficient stagnation ({} < 2)",
+            stagnant_count,
+        );
         return None;
     }
 
@@ -728,8 +810,28 @@ fn should_decompose_on_evaluation(
     let has_fail = verdict.hard_results.iter().any(|r| !r.passed);
 
     if !has_pass || !has_fail {
+        tracing::debug!(
+            subsystem = "poe",
+            probe = "phase2",
+            feature = "decomposition_e_stage",
+            has_pass = has_pass,
+            has_fail = has_fail,
+            stagnant_count = stagnant_count,
+            "🔍 E-DECOMP skipped: no mixed pass/fail pattern (pass={} fail={})",
+            has_pass, has_fail,
+        );
         return None;
     }
+
+    tracing::info!(
+        subsystem = "poe",
+        probe = "phase2",
+        feature = "decomposition_e_stage",
+        stagnant_count = stagnant_count,
+        entropy_history = ?history,
+        "🔍 E-DECOMP TRIGGERED: stagnation({}) + mixed pass/fail → decomposing",
+        stagnant_count,
+    );
 
     // Both conditions met — generate sub-objectives grouped by directory
     let mut sub_objectives = Vec::new();
@@ -818,6 +920,18 @@ impl<W: Worker + Clone> PoeManager<W> {
 
             // P-stage: analyze whether decomposition is needed
             let advice = DecompositionDetector::analyze(&task.manifest);
+
+            tracing::info!(
+                subsystem = "poe",
+                probe = "phase2",
+                feature = "decomposition_p_stage",
+                task_id = %task.manifest.task_id,
+                depth = depth,
+                should_decompose = advice.should_decompose(),
+                hard_constraints = task.manifest.hard_constraints.len(),
+                "🔍 DECOMPOSITION P-stage analysis: should_decompose={}",
+                advice.should_decompose(),
+            );
 
             match advice {
                 DecompositionAdvice::Decompose { sub_objectives, reason } => {

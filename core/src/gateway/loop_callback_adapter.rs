@@ -181,93 +181,117 @@ impl<E: EventEmitter + Send + Sync + 'static> LoopCallback for EventEmittingCall
     /// Called when action execution starts
     async fn on_action_start(&self, action: &Action) {
         // Activate lazy POE evaluator on first tool call
-        if let Action::ToolCall { .. } = action {
+        if let Action::ToolCalls { .. } = action {
             if !self.lazy_poe.is_active().await {
                 self.lazy_poe.activate().await;
             }
         }
 
-        if let Action::ToolCall {
-            tool_name,
-            arguments,
-        } = action
-        {
-            let tool_id = self.generate_tool_id(tool_name);
+        if let Action::ToolCalls { calls: ref requests } = action {
+            if let Some(req) = requests.first() {
+                let tool_name = &req.tool_name;
+                let arguments = &req.arguments;
+                let tool_id = self.generate_tool_id(tool_name);
 
-            // Store mapping and start time
-            {
-                let mut map = self.tool_id_map.lock().await;
-                map.insert(tool_name.clone(), tool_id.clone());
-            }
-            {
-                let mut times = self.tool_start_times.lock().await;
-                times.insert(tool_id.clone(), Instant::now());
-            }
+                // Store mapping and start time
+                {
+                    let mut map = self.tool_id_map.lock().await;
+                    map.insert(tool_name.clone(), tool_id.clone());
+                }
+                {
+                    let mut times = self.tool_start_times.lock().await;
+                    times.insert(tool_id.clone(), Instant::now());
+                }
 
-            let _ = self
-                .emitter
-                .emit(StreamEvent::ToolStart {
-                    run_id: self.run_id.clone(),
-                    seq: self.next_seq(),
-                    tool_name: tool_name.clone(),
-                    tool_id,
-                    params: arguments.clone(),
-                })
-                .await;
+                let _ = self
+                    .emitter
+                    .emit(StreamEvent::ToolStart {
+                        run_id: self.run_id.clone(),
+                        seq: self.next_seq(),
+                        tool_name: tool_name.clone(),
+                        tool_id,
+                        params: arguments.clone(),
+                    })
+                    .await;
+            }
         }
     }
 
     /// Called when action execution completes
     async fn on_action_done(&self, action: &Action, result: &ActionResult) {
-        if let Action::ToolCall { tool_name, .. } = action {
-            // Get tool ID and duration
-            let tool_id = {
-                let map = self.tool_id_map.lock().await;
-                map.get(tool_name).cloned().unwrap_or_default()
-            };
+        if let Action::ToolCalls { calls: ref requests } = action {
+            if let Some(req) = requests.first() {
+                let tool_name = &req.tool_name;
 
-            let duration_ms = {
-                let times = self.tool_start_times.lock().await;
-                times
-                    .get(&tool_id)
-                    .map(|start| start.elapsed().as_millis() as u64)
-                    .unwrap_or(0)
-            };
+                // Get tool ID and duration
+                let tool_id = {
+                    let map = self.tool_id_map.lock().await;
+                    map.get(tool_name).cloned().unwrap_or_default()
+                };
 
-            // Convert ActionResult to ToolResult
-            let tool_result = match result {
-                ActionResult::ToolSuccess { output, .. } => ToolResult::success(output.to_string()),
-                ActionResult::ToolError { error, .. } => ToolResult::error(error),
-                ActionResult::UserResponse { response } => ToolResult::success(response),
-                ActionResult::UserResponseRich { response } => ToolResult::success(response.to_llm_feedback()),
-                ActionResult::Completed => ToolResult::success("Completed"),
-                ActionResult::Failed => ToolResult::error("Failed"),
-            };
+                let duration_ms = {
+                    let times = self.tool_start_times.lock().await;
+                    times
+                        .get(&tool_id)
+                        .map(|start| start.elapsed().as_millis() as u64)
+                        .unwrap_or(0)
+                };
 
-            let _ = self
-                .emitter
-                .emit(StreamEvent::ToolEnd {
-                    run_id: self.run_id.clone(),
-                    seq: self.next_seq(),
-                    tool_id,
-                    result: tool_result,
-                    duration_ms,
-                })
-                .await;
+                // Convert ActionResult to ToolResult
+                let tool_result = match result {
+                    ActionResult::ToolResults { ref results } => {
+                        if let Some(r) = results.first() {
+                            match &r.result {
+                                crate::agent_loop::decision::SingleToolResult::Success { output, .. } => {
+                                    ToolResult::success(output.to_string())
+                                }
+                                crate::agent_loop::decision::SingleToolResult::Error { error, .. } => {
+                                    ToolResult::error(error)
+                                }
+                            }
+                        } else {
+                            ToolResult::success("No results")
+                        }
+                    }
+                    ActionResult::UserResponse { response } => ToolResult::success(response),
+                    ActionResult::UserResponseRich { response } => ToolResult::success(response.to_llm_feedback()),
+                    ActionResult::Completed => ToolResult::success("Completed"),
+                    ActionResult::Failed => ToolResult::error("Failed"),
+                };
 
-            // Record tool result for lazy POE evaluator
-            // Consistent with lazy_evaluator::is_empty_output
-            let result_non_empty = match result {
-                ActionResult::ToolSuccess { output, .. } => match output {
-                    serde_json::Value::Null => false,
-                    serde_json::Value::String(s) => !s.trim().is_empty(),
-                    serde_json::Value::Array(arr) => !arr.is_empty(),
-                    serde_json::Value::Object(obj) => !obj.is_empty(),
-                    _ => true,
-                },
-                _ => false,
-            };
-            self.lazy_poe.record_tool_result(tool_name, result_non_empty).await;
+                let _ = self
+                    .emitter
+                    .emit(StreamEvent::ToolEnd {
+                        run_id: self.run_id.clone(),
+                        seq: self.next_seq(),
+                        tool_id,
+                        result: tool_result,
+                        duration_ms,
+                    })
+                    .await;
+
+                // Record tool result for lazy POE evaluator
+                let result_non_empty = match result {
+                    ActionResult::ToolResults { ref results } => {
+                        if let Some(r) = results.first() {
+                            match &r.result {
+                                crate::agent_loop::decision::SingleToolResult::Success { output, .. } => match output {
+                                    serde_json::Value::Null => false,
+                                    serde_json::Value::String(s) => !s.trim().is_empty(),
+                                    serde_json::Value::Array(arr) => !arr.is_empty(),
+                                    serde_json::Value::Object(obj) => !obj.is_empty(),
+                                    _ => true,
+                                },
+                                _ => false,
+                            }
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                };
+                self.lazy_poe.record_tool_result(tool_name, result_non_empty).await;
+            }
         }
     }
 
@@ -530,17 +554,16 @@ mod tests {
         let emitter = Arc::new(CollectingEventEmitter::new());
         let callback = EventEmittingCallback::new(emitter.clone(), "test-run".to_string());
 
-        let action = Action::ToolCall {
+        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
             tool_name: "search".to_string(),
-            arguments: json!({"query": "test"}),
-        };
+            arguments: json!({"query": "test"}) }]};
 
         callback.on_action_start(&action).await;
 
-        let result = ActionResult::ToolSuccess {
-            output: json!({"results": []}),
-            duration_ms: 100,
-        };
+        let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+            call_id: String::new(), tool_name: String::new(),
+            result: crate::agent_loop::decision::SingleToolResult::Success { output: json!({"results": []}), duration_ms: 100 },
+            }]};
         callback.on_action_done(&action, &result).await;
 
         let events = emitter.events().await;

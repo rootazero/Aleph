@@ -163,6 +163,16 @@ impl EvolutionTracker {
 
         debug!(skill_id = %execution.skill_id, status = %status_str, "Logged execution");
 
+        info!(
+            target: "aleph::evolution::probe",
+            probe = "execution_logged",
+            skill_id = %execution.skill_id,
+            status = status_str,
+            duration_ms = execution.duration_ms,
+            satisfaction = execution.satisfaction,
+            "Skill execution recorded"
+        );
+
         // Update metrics
         drop(conn);
         self.update_metrics(&execution.skill_id)?;

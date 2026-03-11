@@ -5,6 +5,7 @@
 //! Layer 3: User Feedback — amplifier on human negative signals.
 
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 // ============================================================================
 // Circuit Breaker (Layer 1)
@@ -62,6 +63,14 @@ impl CircuitBreaker {
             .count() as u32;
 
         if consecutive_fails >= self.config.consecutive_failure_limit {
+            info!(
+                target: "aleph::evolution::probe",
+                probe = "circuit_breaker_tripped",
+                trigger = "consecutive_failures",
+                consecutive_fails = consecutive_fails,
+                limit = self.config.consecutive_failure_limit,
+                "Circuit breaker TRIPPED — consecutive failures"
+            );
             return CircuitBreakerVerdict::Tripped {
                 reason: format!(
                     "{} consecutive failures (limit: {})",
@@ -80,6 +89,14 @@ impl CircuitBreaker {
         let rate = success_count / window.len() as f32;
 
         if rate < self.config.success_rate_floor {
+            info!(
+                target: "aleph::evolution::probe",
+                probe = "circuit_breaker_tripped",
+                trigger = "low_success_rate",
+                success_rate = rate,
+                floor = self.config.success_rate_floor,
+                "Circuit breaker TRIPPED — low success rate"
+            );
             return CircuitBreakerVerdict::Tripped {
                 reason: format!(
                     "success rate {:.0}% below floor {:.0}%",
@@ -135,7 +152,21 @@ pub fn compute_entropy_penalty(
         }
     }
 
-    penalty.min(0.5) // cap total penalty
+    let result = penalty.min(0.5); // cap total penalty
+
+    if result > 0.0 {
+        info!(
+            target: "aleph::evolution::probe",
+            probe = "entropy_canary_penalty",
+            penalty = result,
+            entropy_increasing = entropy_increasing,
+            duration_baseline_ms = duration_baseline_ms,
+            duration_current_ms = duration_current_ms,
+            "Entropy canary applied vitality penalty"
+        );
+    }
+
+    result
 }
 
 // ============================================================================
@@ -160,10 +191,21 @@ pub struct UserFeedbackEvent {
 
 /// Apply a feedback event to a user_feedback_multiplier.
 pub fn apply_feedback(current_multiplier: f32, feedback: &FeedbackType) -> f32 {
-    match feedback {
+    let new_mul = match feedback {
         FeedbackType::Negative | FeedbackType::ManualEdit => (current_multiplier * 0.7).max(0.1),
         FeedbackType::Positive => (current_multiplier * 1.1).min(1.0),
-    }
+    };
+
+    info!(
+        target: "aleph::evolution::probe",
+        probe = "user_feedback_applied",
+        feedback_type = ?feedback,
+        previous_multiplier = current_multiplier,
+        new_multiplier = new_mul,
+        "User feedback applied to vitality multiplier"
+    );
+
+    new_mul
 }
 
 #[cfg(test)]

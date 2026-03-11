@@ -96,6 +96,18 @@ impl CompositeValidator {
         manifest: &SuccessManifest,
         _output: &WorkerOutput,
     ) -> Result<Verdict> {
+        tracing::info!(
+            subsystem = "poe",
+            probe = "phase2",
+            feature = "validator_role",
+            task_id = %manifest.task_id,
+            role = ?self.role,
+            hard_count = manifest.hard_constraints.len(),
+            soft_count = manifest.soft_metrics.len(),
+            "⚖️ VALIDATE role={:?} hard={} soft={}",
+            self.role, manifest.hard_constraints.len(), manifest.soft_metrics.len(),
+        );
+
         // ========== Phase 1: Hard Validation ==========
         // Run all hard constraints first - fast fail if any fail
         let hard_results = self
@@ -109,6 +121,17 @@ impl CompositeValidator {
             hard_results.iter().filter(|r| !r.passed).collect();
 
         if !hard_failures.is_empty() {
+            tracing::info!(
+                subsystem = "poe",
+                probe = "phase2",
+                feature = "validation",
+                task_id = %manifest.task_id,
+                hard_passed = hard_results.len() - hard_failures.len(),
+                hard_failed = hard_failures.len(),
+                "⚖️ VALIDATE hard fast-fail: {}/{} passed",
+                hard_results.len() - hard_failures.len(), hard_results.len(),
+            );
+
             // Fast fail: return immediately with hard failure verdict
             let reason = self.summarize_hard_failures(&hard_failures);
             let suggestion = self.suggest_hard_fix(&hard_failures);
@@ -135,6 +158,19 @@ impl CompositeValidator {
 
         // Determine overall pass/fail
         let passed = all_above_threshold;
+
+        tracing::info!(
+            subsystem = "poe",
+            probe = "phase2",
+            feature = "validation",
+            task_id = %manifest.task_id,
+            weighted_score = weighted_score,
+            distance_score = distance_score,
+            all_above_threshold = all_above_threshold,
+            passed = passed,
+            "⚖️ VALIDATE result: passed={} score={:.3} distance={:.3}",
+            passed, weighted_score, distance_score,
+        );
 
         if passed {
             // Success verdict

@@ -4,6 +4,7 @@
 //! and merging them based on vitality comparison.
 
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 /// Decision on how to handle a duplicate skill pair.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -69,11 +70,30 @@ pub fn check_consolidation(
         .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let Some((existing_id, _similarity, existing_vitality)) = best_match else {
+        info!(
+            target: "aleph::evolution::probe",
+            probe = "consolidation_verdict",
+            candidate_id = %candidate.skill_id,
+            verdict = "unique",
+            matches_above_threshold = 0,
+            "Consolidation: no similar skill found — unique"
+        );
         return ConsolidationVerdict::Unique;
     };
 
     // If existing has higher vitality → reject candidate
     if *existing_vitality >= candidate.vitality {
+        info!(
+            target: "aleph::evolution::probe",
+            probe = "consolidation_verdict",
+            candidate_id = %candidate.skill_id,
+            existing_id = %existing_id,
+            verdict = "duplicate",
+            candidate_vitality = candidate.vitality,
+            existing_vitality = *existing_vitality,
+            similarity = _similarity,
+            "Consolidation: duplicate rejected — existing has higher vitality"
+        );
         return ConsolidationVerdict::Duplicate {
             existing_skill_id: existing_id.clone(),
         };
@@ -87,6 +107,19 @@ pub fn check_consolidation(
     } else {
         MergeType::Absorb
     };
+
+    info!(
+        target: "aleph::evolution::probe",
+        probe = "consolidation_verdict",
+        candidate_id = %candidate.skill_id,
+        existing_id = %existing_id,
+        verdict = "merge",
+        merge_type = ?merge_type,
+        candidate_vitality = candidate.vitality,
+        existing_vitality = *existing_vitality,
+        similarity = _similarity,
+        "Consolidation: merge triggered"
+    );
 
     ConsolidationVerdict::Merge {
         winner_id: candidate.skill_id.clone(),

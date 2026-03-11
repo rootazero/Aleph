@@ -5,6 +5,7 @@
 use serde_json::Value;
 
 use crate::agent_loop::{Decision, LlmResponse, Thinking, ThinkingParser};
+use crate::agent_loop::decision::ToolCallRecord;
 use crate::error::{AlephError, Result};
 
 /// Parser for LLM decision responses
@@ -47,7 +48,6 @@ impl DecisionParser {
                 decision,
                 structured: None,
                 tokens_used: None,
-                tool_call_id: None,
             });
         }
 
@@ -73,23 +73,32 @@ impl DecisionParser {
             }
         };
 
-        // Parse JSON
-        let llm_response: LlmResponse = serde_json::from_str(&json_str).map_err(|e| {
-            // Log the extracted JSON for debugging
-            let json_preview: String = json_str.chars().take(300).collect();
-            tracing::warn!(
-                error = %e,
-                json_preview = %json_preview,
-                "Failed to parse extracted JSON as LlmResponse"
-            );
-            AlephError::Other {
-                message: format!("Failed to parse LLM response JSON: {}", e),
-                suggestion: Some(format!(
-                    "Extracted JSON is malformed. Expected format: {{\"reasoning\": \"...\", \"action\": {{\"type\": \"tool|complete|fail|ask_user\", ...}}}}. Got: {}",
-                    json_preview
-                )),
+        // Parse JSON — try native serde first, fall back to manual parser
+        let llm_response: LlmResponse = match serde_json::from_str(&json_str) {
+            Ok(resp) => resp,
+            Err(_e) => {
+                // Serde failed (e.g., old "type":"tool" format or non-standard variants).
+                // Try manual JSON object parser which handles legacy action types
+                // like "type":"tool" (now "use_tools" in the native serde format).
+                if let Some(thinking) = self.try_parse_alternative_format(&json_str) {
+                    return Ok(thinking);
+                }
+                // If manual parser also fails, return the original serde error
+                let json_preview: String = json_str.chars().take(300).collect();
+                tracing::warn!(
+                    error = %_e,
+                    json_preview = %json_preview,
+                    "Failed to parse extracted JSON as LlmResponse"
+                );
+                return Err(AlephError::Other {
+                    message: format!("Failed to parse LLM response JSON: {}", _e),
+                    suggestion: Some(format!(
+                        "Extracted JSON is malformed. Expected format: {{\"reasoning\": \"...\", \"action\": {{\"type\": \"tool|complete|fail|ask_user\", ...}}}}. Got: {}",
+                        json_preview
+                    )),
+                });
             }
-        })?;
+        };
 
         // Convert to Thinking
         let decision: Decision = llm_response.action.into();
@@ -102,7 +111,6 @@ impl DecisionParser {
             decision,
             structured,
             tokens_used: None,
-            tool_call_id: None,
         })
     }
 
@@ -162,7 +170,6 @@ impl DecisionParser {
                 },
                 structured,
                 tokens_used: None,
-                tool_call_id: None,
             })
         }
     }
@@ -210,10 +217,14 @@ impl DecisionParser {
                     .cloned()
                     .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-                Decision::UseTool {
+                Decision::UseTools { calls: vec![ToolCallRecord {
+                    call_id: format!("synth_{}", std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos()),
                     tool_name,
                     arguments,
-                }
+                }]}
             }
             "ask_user" | "ask" | "question" | "clarify" => {
                 let question = action_obj
@@ -262,7 +273,7 @@ impl DecisionParser {
         };
 
         let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
-        Some(Thinking { reasoning, decision, structured, tokens_used: None, tool_call_id: None })
+        Some(Thinking { reasoning, decision, structured, tokens_used: None,  })
     }
 
     /// Extract JSON from response (handles markdown code blocks)
@@ -559,7 +570,6 @@ impl DecisionParser {
             decision: Decision::Complete { summary },
             structured,
             tokens_used: None,
-            tool_call_id: None,
         })
     }
 
@@ -591,13 +601,16 @@ impl DecisionParser {
                 let structured = reasoning.as_ref().map(|r| ThinkingParser::parse(r));
                 return Some(Thinking {
                     reasoning,
-                    decision: Decision::UseTool {
+                    decision: Decision::UseTools { calls: vec![ToolCallRecord {
+                        call_id: format!("synth_{}", std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_nanos()),
                         tool_name: tool_name.to_string(),
                         arguments: Value::Object(serde_json::Map::new()),
-                    },
+                    }]},
                     structured,
                     tokens_used: None,
-                    tool_call_id: None,
                 });
             }
         }
@@ -646,7 +659,6 @@ impl DecisionParser {
             decision: Decision::Complete { summary },
             structured,
             tokens_used: None,
-            tool_call_id: None,
         })
     }
 
@@ -696,21 +708,26 @@ impl DecisionParser {
     /// Validate a decision
     pub fn validate(&self, decision: &Decision) -> Result<()> {
         match decision {
-            Decision::UseTool {
-                tool_name,
-                arguments,
-            } => {
-                if tool_name.is_empty() {
+            Decision::UseTools { calls: ref records } => {
+                if records.is_empty() {
                     return Err(AlephError::Other {
-                        message: "Tool name cannot be empty".to_string(),
-                        suggestion: Some("Provide a valid tool name".to_string()),
+                        message: "Tool call batch cannot be empty".to_string(),
+                        suggestion: Some("Provide at least one tool call".to_string()),
                     });
                 }
-                if !arguments.is_object() {
-                    return Err(AlephError::Other {
-                        message: "Tool arguments must be an object".to_string(),
-                        suggestion: Some("Provide arguments as a JSON object".to_string()),
-                    });
+                for record in records {
+                    if record.tool_name.is_empty() {
+                        return Err(AlephError::Other {
+                            message: "Tool name cannot be empty".to_string(),
+                            suggestion: Some("Provide a valid tool name".to_string()),
+                        });
+                    }
+                    if !record.arguments.is_object() {
+                        return Err(AlephError::Other {
+                            message: "Tool arguments must be an object".to_string(),
+                            suggestion: Some("Provide arguments as a JSON object".to_string()),
+                        });
+                    }
                 }
                 Ok(())
             }
@@ -792,7 +809,7 @@ mod tests {
 
         let thinking = parser.parse(response).unwrap();
         assert!(thinking.reasoning.is_some());
-        assert!(matches!(thinking.decision, Decision::UseTool { .. }));
+        assert!(matches!(thinking.decision, Decision::UseTools { .. }));
     }
 
     #[test]
@@ -874,17 +891,19 @@ Hope that helps!"#;
         let parser = DecisionParser::new();
 
         // Valid decision
-        let valid = Decision::UseTool {
+        let valid = Decision::UseTools { calls: vec![ToolCallRecord {
+            call_id: "test".to_string(),
             tool_name: "search".to_string(),
             arguments: serde_json::json!({"query": "test"}),
-        };
+        }]};
         assert!(parser.validate(&valid).is_ok());
 
         // Invalid: empty tool name
-        let invalid = Decision::UseTool {
+        let invalid = Decision::UseTools { calls: vec![ToolCallRecord {
+            call_id: "test".to_string(),
             tool_name: "".to_string(),
             arguments: serde_json::json!({}),
-        };
+        }]};
         assert!(parser.validate(&invalid).is_err());
 
         // Invalid: empty question
@@ -922,11 +941,12 @@ Hope that helps!"#;
 
         let thinking = parser.parse_with_fallback(response).unwrap();
         assert!(thinking.reasoning.as_deref() == Some("I should write the file now"));
-        if let Decision::UseTool { tool_name, arguments } = thinking.decision {
-            assert_eq!(tool_name, "file_ops");
-            assert_eq!(arguments["operation"], "write");
+        if let Decision::UseTools { calls: ref records } = thinking.decision {
+            let record = &records[0];
+            assert_eq!(record.tool_name, "file_ops");
+            assert_eq!(record.arguments["operation"], "write");
         } else {
-            panic!("Expected UseTool decision");
+            panic!("Expected UseTools decision");
         }
     }
 
@@ -1020,9 +1040,9 @@ Now I need to write these to a file:
 {"reasoning": "I will write the triples to a file", "action": {"type": "tool", "tool_name": "file_ops", "arguments": {"operation": "write", "path": "triples.json"}}}"#;
 
         let thinking = parser.parse(response).unwrap();
-        assert!(matches!(thinking.decision, Decision::UseTool { .. }));
-        if let Decision::UseTool { tool_name, .. } = thinking.decision {
-            assert_eq!(tool_name, "file_ops");
+        assert!(matches!(thinking.decision, Decision::UseTools { .. }));
+        if let Decision::UseTools { calls: ref records } = thinking.decision {
+            assert_eq!(records[0].tool_name, "file_ops");
         }
     }
 

@@ -62,7 +62,49 @@ impl BlastRadiusAssessor {
     /// System 1 only assessment. Returns `NeedsLlm` for indeterminate cases.
     pub fn assess_sync(&self, manifest: &SuccessManifest) -> AssessmentResult {
         let scan = self.scanner.scan(manifest);
-        Self::map_scan_result(scan)
+        let result = Self::map_scan_result(scan);
+
+        match &result {
+            AssessmentResult::Rejected { reason } => {
+                tracing::info!(
+                    subsystem = "poe",
+                    probe = "phase2",
+                    feature = "blast_radius",
+                    task_id = %manifest.task_id,
+                    outcome = "rejected",
+                    reason = %reason,
+                    "💥 BLAST_RADIUS System1 → REJECTED: {}",
+                    reason,
+                );
+            }
+            AssessmentResult::Assessed(br) => {
+                tracing::info!(
+                    subsystem = "poe",
+                    probe = "phase2",
+                    feature = "blast_radius",
+                    task_id = %manifest.task_id,
+                    outcome = "assessed",
+                    risk_level = ?br.level,
+                    scope = br.scope,
+                    destructiveness = br.destructiveness,
+                    reversibility = br.reversibility,
+                    "💥 BLAST_RADIUS System1 → {:?} (scope={:.2} destruct={:.2} revers={:.2})",
+                    br.level, br.scope, br.destructiveness, br.reversibility,
+                );
+            }
+            AssessmentResult::NeedsLlm => {
+                tracing::info!(
+                    subsystem = "poe",
+                    probe = "phase2",
+                    feature = "blast_radius",
+                    task_id = %manifest.task_id,
+                    outcome = "needs_llm",
+                    "💥 BLAST_RADIUS System1 → Indeterminate, needs System2 (LLM)",
+                );
+            }
+        }
+
+        result
     }
 
     /// Full hybrid assessment: System 1 first, then System 2 for gray zones.
@@ -75,8 +117,26 @@ impl BlastRadiusAssessor {
 
         match scan {
             ScanResult::Indeterminate => {
+                tracing::info!(
+                    subsystem = "poe",
+                    probe = "phase2",
+                    feature = "blast_radius",
+                    task_id = %manifest.task_id,
+                    "💥 BLAST_RADIUS System1→Indeterminate, invoking System2 (LLM) analysis",
+                );
                 // System 2: LLM analysis
                 let system2 = SemanticRiskAnalyzer::analyze(manifest, provider).await;
+                tracing::info!(
+                    subsystem = "poe",
+                    probe = "phase2",
+                    feature = "blast_radius",
+                    task_id = %manifest.task_id,
+                    risk_level = ?system2.level,
+                    scope = system2.scope,
+                    destructiveness = system2.destructiveness,
+                    "💥 BLAST_RADIUS System2 result → {:?} (scope={:.2} destruct={:.2})",
+                    system2.level, system2.scope, system2.destructiveness,
+                );
                 AssessmentResult::Assessed(system2)
             }
             other => Self::map_scan_result(other),

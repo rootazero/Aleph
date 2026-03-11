@@ -738,102 +738,122 @@ where
                     guard.record_action("ask_user_rich");
                     continue;
                 }
-                Decision::UseTool {
-                    tool_name,
-                    arguments,
-                } => {
-                    // Record tool call for doom loop detection BEFORE checking
-                    guard.record_tool_call(tool_name, arguments);
+                Decision::UseTools { calls: ref records } => {
+                    // For now, take first record for sequential compatibility
+                    // (Parallel execution comes in Batch D)
+                    if let Some(record) = records.first() {
+                        let tool_name = &record.tool_name;
+                        let arguments = &record.arguments;
+                        let call_id = &record.call_id;
 
-                    // Check for doom loop (exact same tool + arguments repeated)
-                    if let Some(violation @ GuardViolation::DoomLoop { .. }) = guard.check(&state)
-                    {
-                        // Extract fields from the violation for callback use
-                        let (doom_tool, repeat_count) = match &violation {
-                            GuardViolation::DoomLoop { tool_name: t, repeat_count: r, .. } => (t.clone(), *r),
-                            _ => unreachable!(),
-                        };
+                        // Record tool call for doom loop detection BEFORE checking
+                        guard.record_tool_call(tool_name, arguments);
 
-                        // Ask user if they want to continue
-                        let should_continue = callback
-                            .on_doom_loop_detected(&doom_tool, arguments, repeat_count)
-                            .await;
-
-                        if should_continue {
-                            // User wants to continue - reset detection and proceed
-                            guard.reset_doom_loop_detection();
-                        } else {
-                            // User doesn't want to continue - trigger guard
-                            let final_violation = GuardViolation::DoomLoop {
-                                tool_name: doom_tool,
-                                repeat_count,
-                                arguments_preview: serde_json::to_string(arguments)
-                                    .unwrap_or_default()
-                                    .chars()
-                                    .take(100)
-                                    .collect(),
+                        // Check for doom loop (exact same tool + arguments repeated)
+                        if let Some(violation @ GuardViolation::DoomLoop { .. }) = guard.check(&state)
+                        {
+                            // Extract fields from the violation for callback use
+                            let (doom_tool, repeat_count) = match &violation {
+                                GuardViolation::DoomLoop { tool_name: t, repeat_count: r, .. } => (t.clone(), *r),
+                                _ => unreachable!(),
                             };
-                            callback.on_guard_triggered(&final_violation).await;
-                            // ===== COMPACTION TRIGGER: Session End (Doom Loop) =====
-                            self.compaction_trigger
-                                .emit_loop_stop(StopReason::DoomLoopDetected)
+
+                            // Ask user if they want to continue
+                            let should_continue = callback
+                                .on_doom_loop_detected(&doom_tool, arguments, repeat_count)
                                 .await;
-                            tracing::info!(
-                                subsystem = "agent_loop",
-                                event = "session_completed",
-                                session_id = %state.session_id,
-                                result = "doom_loop",
-                                steps = state.step_count,
-                                "agent loop session ended"
-                            );
-                            return LoopResult::GuardTriggered(final_violation);
+
+                            if should_continue {
+                                // User wants to continue - reset detection and proceed
+                                guard.reset_doom_loop_detection();
+                            } else {
+                                // User doesn't want to continue - trigger guard
+                                let final_violation = GuardViolation::DoomLoop {
+                                    tool_name: doom_tool,
+                                    repeat_count,
+                                    arguments_preview: serde_json::to_string(arguments)
+                                        .unwrap_or_default()
+                                        .chars()
+                                        .take(100)
+                                        .collect(),
+                                };
+                                callback.on_guard_triggered(&final_violation).await;
+                                // ===== COMPACTION TRIGGER: Session End (Doom Loop) =====
+                                self.compaction_trigger
+                                    .emit_loop_stop(StopReason::DoomLoopDetected)
+                                    .await;
+                                tracing::info!(
+                                    subsystem = "agent_loop",
+                                    event = "session_completed",
+                                    session_id = %state.session_id,
+                                    result = "doom_loop",
+                                    steps = state.step_count,
+                                    "agent loop session ended"
+                                );
+                                return LoopResult::GuardTriggered(final_violation);
+                            }
                         }
-                    }
 
-                    // ===== SWARM EVENT: Decision Made =====
-                    // Publish decision event to swarm coordinator (shadow mode)
-                    if let Some(ref swarm) = self.swarm_coordinator {
-                        let affected_files = extract_affected_files(arguments);
-                        swarm
-                            .publish_event(AgentLoopEvent::DecisionMade {
-                                agent_id: state.session_id.clone(),
-                                decision: format!("Using {} to accomplish task", tool_name),
-                                affected_files,
-                            })
-                            .await;
-                    }
-
-                    // Check if confirmation required
-                    if guard.requires_confirmation(tool_name) {
-                        let confirmed = callback
-                            .on_confirmation_required(tool_name, arguments)
-                            .await;
-                        if !confirmed {
-                            // User cancelled, record and continue
-                            let step = LoopStep {
-                                step_id: state.step_count,
-                                observation_summary: String::new(),
-                                thinking: thinking.clone(),
-                                action: Action::ToolCall {
-                                    tool_name: tool_name.clone(),
-                                    arguments: arguments.clone(),
-                                },
-                                result: ActionResult::ToolError {
-                                    error: "User cancelled".to_string(),
-                                    retryable: false,
-                                },
-                                tokens_used: 0,
-                                duration_ms: 0,
-                            };
-                            state.record_step(step);
-                            guard.record_action(&format!("cancelled:{}", tool_name));
-                            continue;
+                        // ===== SWARM EVENT: Decision Made =====
+                        // Publish decision event to swarm coordinator (shadow mode)
+                        if let Some(ref swarm) = self.swarm_coordinator {
+                            let affected_files = extract_affected_files(arguments);
+                            swarm
+                                .publish_event(AgentLoopEvent::DecisionMade {
+                                    agent_id: state.session_id.clone(),
+                                    decision: format!("Using {} to accomplish task", tool_name),
+                                    affected_files,
+                                })
+                                .await;
                         }
-                    }
 
-                    Action::ToolCall {
-                        tool_name: tool_name.clone(),
-                        arguments: arguments.clone(),
+                        // Check if confirmation required
+                        if guard.requires_confirmation(tool_name) {
+                            let confirmed = callback
+                                .on_confirmation_required(tool_name, arguments)
+                                .await;
+                            if !confirmed {
+                                // User cancelled, record and continue
+                                use super::decision::{ToolCallRequest, ToolCallResult, SingleToolResult};
+                                let step = LoopStep {
+                                    step_id: state.step_count,
+                                    observation_summary: String::new(),
+                                    thinking: thinking.clone(),
+                                    action: Action::ToolCalls { calls: vec![ToolCallRequest {
+                                        call_id: call_id.clone(),
+                                        tool_name: tool_name.clone(),
+                                        arguments: arguments.clone(),
+                                    }]},
+                                    result: ActionResult::ToolResults { results: vec![ToolCallResult {
+                                        call_id: call_id.clone(),
+                                        tool_name: tool_name.clone(),
+                                        result: SingleToolResult::Error {
+                                            error: "User cancelled".to_string(),
+                                            retryable: false,
+                                        },
+                                    }]},
+                                    tokens_used: 0,
+                                    duration_ms: 0,
+                                };
+                                state.record_step(step);
+                                guard.record_action(&format!("cancelled:{}", tool_name));
+                                continue;
+                            }
+                        }
+
+                        Action::ToolCalls {
+                            calls: records
+                                .iter()
+                                .map(|r| super::decision::ToolCallRequest {
+                                    call_id: r.call_id.clone(),
+                                    tool_name: r.tool_name.clone(),
+                                    arguments: r.arguments.clone(),
+                                })
+                                .collect(),
+                        }
+                    } else {
+                        // Empty tool call batch — skip
+                        continue;
                     }
                 }
                 Decision::Silent => {
@@ -905,14 +925,16 @@ where
             // ===== SWARM EVENT: Action Initiated =====
             // Publish action initiated event to swarm coordinator (shadow mode)
             if let Some(ref swarm) = self.swarm_coordinator {
-                if let Action::ToolCall { tool_name, .. } = &action {
-                    swarm
-                        .publish_event(AgentLoopEvent::ActionInitiated {
-                            agent_id: state.session_id.clone(),
-                            action_type: action.action_type(),
-                            target: Some(tool_name.clone()),
-                        })
-                        .await;
+                if let Action::ToolCalls { calls: ref requests } = &action {
+                    if let Some(req) = requests.first() {
+                        swarm
+                            .publish_event(AgentLoopEvent::ActionInitiated {
+                                agent_id: state.session_id.clone(),
+                                action_type: action.action_type(),
+                                target: Some(req.tool_name.clone()),
+                            })
+                            .await;
+                    }
                 }
             }
 
@@ -925,46 +947,50 @@ where
             callback.on_action_done(&action, &result).await;
 
             // ===== Escalate Task Tool Detection =====
-            if let Action::ToolCall { tool_name, arguments } = &action {
-                if tool_name == "escalate_task" && result.is_success() {
-                    let output_str = result.full_output();
-                    if output_str.contains("accepted") {
-                        let target = arguments
-                            .get("target")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("multi_step");
-                        let reason = arguments
-                            .get("reason")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("LLM requested escalation")
-                            .to_string();
+            if let Action::ToolCalls { calls: ref requests } = &action {
+                if let Some(req) = requests.first() {
+                    let tool_name = &req.tool_name;
+                    let arguments = &req.arguments;
+                    if tool_name == "escalate_task" && result.is_success() {
+                        let output_str = result.full_output();
+                        if output_str.contains("accepted") {
+                            let target = arguments
+                                .get("target")
+                                .and_then(|v: &serde_json::Value| v.as_str())
+                                .unwrap_or("multi_step");
+                            let reason = arguments
+                                .get("reason")
+                                .and_then(|v: &serde_json::Value| v.as_str())
+                                .unwrap_or("LLM requested escalation")
+                                .to_string();
 
-                        let route = match target {
-                            "critical" => crate::routing::TaskRoute::Critical {
-                                reason,
-                                manifest_hints: crate::routing::ManifestHints::default(),
-                            },
-                            "collaborative" => crate::routing::TaskRoute::Collaborative {
-                                reason,
-                                strategy: crate::routing::CollabStrategy::Parallel,
-                            },
-                            _ => crate::routing::TaskRoute::MultiStep { reason },
-                        };
+                            let route = match target {
+                                "critical" => crate::routing::TaskRoute::Critical {
+                                    reason,
+                                    manifest_hints: crate::routing::ManifestHints::default(),
+                                },
+                                "collaborative" => crate::routing::TaskRoute::Collaborative {
+                                    reason,
+                                    strategy: crate::routing::CollabStrategy::Parallel,
+                                },
+                                _ => crate::routing::TaskRoute::MultiStep { reason },
+                            };
 
-                        tracing::info!(
-                            subsystem = "task_router",
-                            event = "llm_escalation",
-                            route = route.label(),
-                            "LLM self-escalated via escalate_task tool"
-                        );
+                            tracing::info!(
+                                subsystem = "task_router",
+                                event = "llm_escalation",
+                                route = route.label(),
+                                "LLM self-escalated via escalate_task tool"
+                            );
 
-                        let snapshot = crate::routing::EscalationSnapshot {
-                            original_message: state.original_input().to_string(),
-                            completed_steps: state.step_count,
-                            tools_invoked: state.tools_used(),
-                            partial_result: state.last_result_summary(),
-                        };
-                        return LoopResult::Escalated { route, context: snapshot };
+                            let snapshot = crate::routing::EscalationSnapshot {
+                                original_message: state.original_input().to_string(),
+                                completed_steps: state.step_count,
+                                tools_invoked: state.tools_used(),
+                                partial_result: state.last_result_summary(),
+                            };
+                            return LoopResult::Escalated { route, context: snapshot };
+                        }
                     }
                 }
             }
@@ -984,30 +1010,30 @@ where
 
             // ===== COMPACTION TRIGGER: After Tool Execution =====
             // Emit ToolCallCompleted for SessionCompactor pruning check
-            if let Action::ToolCall {
-                tool_name,
-                arguments,
-            } = &action
-            {
-                let call_id = uuid::Uuid::new_v4().to_string();
-                let output = result.full_output();
+            if let Action::ToolCalls { calls: ref requests } = &action {
+                if let Some(req) = requests.first() {
+                    let call_id = req.call_id.clone();
+                    let tool_name = &req.tool_name;
+                    let arguments = &req.arguments;
+                    let output = result.full_output();
 
-                self.compaction_trigger
-                    .emit_tool_completed(
-                        &state.session_id,
-                        &call_id,
-                        tool_name,
-                        arguments.clone(),
-                        &output,
-                        started_at,
-                        completed_at,
-                        0, // Token usage not tracked at this level
-                        0,
-                    )
-                    .await;
+                    self.compaction_trigger
+                        .emit_tool_completed(
+                            &state.session_id,
+                            &call_id,
+                            tool_name,
+                            arguments.clone(),
+                            &output,
+                            started_at,
+                            completed_at,
+                            0, // Token usage not tracked at this level
+                            0,
+                        )
+                        .await;
 
-                // Update last_tool for next iteration's LoopContinue event
-                last_tool = Some(tool_name.clone());
+                    // Update last_tool for next iteration's LoopContinue event
+                    last_tool = Some(tool_name.clone());
+                }
             }
 
             // ===== POE Interceptor: Evaluate Step =====
