@@ -45,6 +45,7 @@ pub mod idle_detector;
 pub mod pattern_extractor;
 pub mod pattern_model;
 pub mod synthesis_backend;
+pub mod provider_backend;
 
 use crate::sync_primitives::Arc;
 use std::time::Instant;
