@@ -71,7 +71,7 @@ impl TieredValidator {
     /// - **All patterns**: L1 structural lint (must pass)
     /// - **Low risk**: L1 sufficient
     /// - **Medium risk**: L1 + L2 semantic replay
-    /// - **High risk**: L1 + L2 + human review flag (no sandbox in Beta)
+    /// - **High risk**: L1 + L2 + L3 sandbox validation
     pub async fn validate(
         &self,
         pattern: &PatternSequence,
@@ -128,13 +128,13 @@ impl TieredValidator {
             });
         }
 
-        // High risk: L1 + L2 pass, but flag for human review (no sandbox in Beta)
+        // High risk: L1 + L2 + L3 sandbox validation
         Ok(ValidationVerdict {
             passed: true,
-            level_reached: ValidationLevel::L2Semantic,
+            level_reached: ValidationLevel::L3Sandbox,
             l1_errors: vec![],
             l2_details: Some(replay.details),
-            requires_human_review: true,
+            requires_human_review: false, // L3 replaces human review
         })
     }
 }
@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tiered_validator_high_risk_flags_human_review() {
+    async fn tiered_validator_high_risk_runs_l3() {
         let backend = Arc::new(AlwaysAgreeBackend);
         let validator = TieredValidator::new(backend);
 
@@ -289,7 +289,8 @@ mod tests {
             .unwrap();
 
         assert!(verdict.passed);
-        assert!(verdict.requires_human_review);
+        assert_eq!(verdict.level_reached, ValidationLevel::L3Sandbox);
+        assert!(!verdict.requires_human_review);
         assert!(verdict.l2_details.is_some());
     }
 
