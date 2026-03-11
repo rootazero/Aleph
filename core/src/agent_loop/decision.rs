@@ -133,16 +133,6 @@ impl Decision {
         }
     }
 
-    /// Temporary adapter: extract single tool call from a UseTools batch.
-    #[deprecated(note = "Migrate to handle UseTools batch directly")]
-    pub fn as_single_tool(&self) -> Option<(&str, &Value)> {
-        match self {
-            Decision::UseTools { calls } if !calls.is_empty() => {
-                Some((&calls[0].tool_name, &calls[0].arguments))
-            }
-            _ => None,
-        }
-    }
 }
 
 /// Action to be executed
@@ -403,7 +393,7 @@ impl ActionResult {
     /// Check if the first tool result is a non-retryable error
     pub fn is_non_retryable_error(&self) -> bool {
         match self {
-            ActionResult::ToolResults { results } => results.first().map_or(false, |r| {
+            ActionResult::ToolResults { results } => results.first().is_some_and(|r| {
                 matches!(&r.result, SingleToolResult::Error { retryable: false, .. })
             }),
             _ => false,
