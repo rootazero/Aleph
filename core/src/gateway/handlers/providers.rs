@@ -715,8 +715,8 @@ pub struct SetDefaultParams {
     pub name: String,
 }
 
-/// Set the default provider
-pub async fn handle_set_default(
+/// Set the default provider (config-only, no runtime swap)
+pub async fn handle_set_default_config_only(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
@@ -726,7 +726,34 @@ pub async fn handle_set_default(
         Err(e) => return e,
     };
 
-    // Set default provider
+    set_default_provider_inner(&request, &params, &config, &event_bus, None).await
+}
+
+/// Set the default provider with runtime hot-swap
+pub async fn handle_set_default(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    event_bus: Arc<GatewayEventBus>,
+    swappable_registry: Arc<crate::thinker::SwappableProviderRegistry>,
+) -> JsonRpcResponse {
+    let params: SetDefaultParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    set_default_provider_inner(&request, &params, &config, &event_bus, Some(&swappable_registry)).await
+}
+
+/// Shared implementation for setting the default provider
+async fn set_default_provider_inner(
+    request: &JsonRpcRequest,
+    params: &SetDefaultParams,
+    config: &Arc<RwLock<Config>>,
+    event_bus: &Arc<GatewayEventBus>,
+    swappable_registry: Option<&Arc<crate::thinker::SwappableProviderRegistry>>,
+) -> JsonRpcResponse {
+    // Set default provider and build new provider instance
+    let provider_config_for_swap: Option<(String, crate::config::ProviderConfig)>;
     {
         let mut cfg = config.write().await;
 
@@ -734,17 +761,24 @@ pub async fn handle_set_default(
         if let Some(provider) = cfg.providers.get(&params.name) {
             if !provider.verified {
                 return JsonRpcResponse::error(
-                    request.id,
+                    request.id.clone(),
                     INVALID_PARAMS,
                     format!("Provider '{}' must pass a connection test before being set as default", params.name),
                 );
             }
         }
 
+        // Capture provider config before setting default (for runtime swap)
+        provider_config_for_swap = if swappable_registry.is_some() {
+            cfg.providers.get(&params.name).map(|pc| (params.name.clone(), pc.clone()))
+        } else {
+            None
+        };
+
         // Use the existing set_default_provider method
         if let Err(e) = cfg.set_default_provider(&params.name) {
             return JsonRpcResponse::error(
-                request.id,
+                request.id.clone(),
                 INVALID_PARAMS,
                 format!("Failed to set default provider: {}", e),
             );
@@ -754,10 +788,24 @@ pub async fn handle_set_default(
         if let Err(e) = save_config_with_secret_redaction(&cfg) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
-                request.id,
+                request.id.clone(),
                 INTERNAL_ERROR,
                 format!("Failed to save config: {}", e),
             );
+        }
+    }
+
+    // Hot-swap the runtime provider
+    if let (Some(registry), Some((name, provider_config))) = (swappable_registry, provider_config_for_swap) {
+        match crate::providers::create_provider(&name, provider_config) {
+            Ok(new_provider) => {
+                registry.swap(new_provider);
+                info!(name = %name, "Runtime provider hot-swapped");
+            }
+            Err(e) => {
+                // Config was saved but runtime swap failed — log but don't fail the request
+                error!(name = %name, error = %e, "Failed to hot-swap runtime provider (config saved)");
+            }
         }
     }
 
@@ -778,7 +826,7 @@ pub async fn handle_set_default(
     }
 
     info!(name = %params.name, "Default provider set");
-    JsonRpcResponse::success(request.id, json!({ "ok": true }))
+    JsonRpcResponse::success(request.id.clone(), json!({ "ok": true }))
 }
 
 #[cfg(test)]

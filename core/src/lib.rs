@@ -149,7 +149,7 @@ pub use crate::agent_loop::{
 };
 
 // Thinker (LLM layer)
-pub use crate::thinker::{Thinker, ThinkerConfig, ProviderRegistry, SingleProviderRegistry};
+pub use crate::thinker::{Thinker, ThinkerConfig, ProviderRegistry, SingleProviderRegistry, SwappableProviderRegistry};
 
 // Compressor
 pub use crate::compressor::{ContextCompressor, NoOpCompressor};

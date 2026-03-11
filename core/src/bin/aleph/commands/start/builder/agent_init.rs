@@ -26,13 +26,12 @@ use alephcore::ProviderRegistry;
 
 use crate::server_init::{handle_run_with_engine, handle_chat_send_with_engine};
 
-/// Try to create a provider registry from app config (Settings UI configured providers).
+/// Try to create a provider from app config (Settings UI configured providers).
 /// Returns None if no usable provider is found.
-pub(in crate::commands::start) fn create_provider_registry_from_config(
+pub(in crate::commands::start) fn create_provider_from_config(
     app_config: &alephcore::Config,
-) -> Option<Arc<alephcore::thinker::SingleProviderRegistry>> {
+) -> Option<Arc<dyn alephcore::providers::AiProvider>> {
     use alephcore::providers::create_provider;
-    use alephcore::thinker::SingleProviderRegistry;
 
     // Determine which provider to use: default_provider or first enabled one
     let provider_name = app_config.general.default_provider.clone()
@@ -53,7 +52,7 @@ pub(in crate::commands::start) fn create_provider_registry_from_config(
     match create_provider(&provider_name, provider_config.clone()) {
         Ok(provider) => {
             tracing::info!(provider = %provider_name, "Created provider from app config");
-            Some(Arc::new(SingleProviderRegistry::new(provider)))
+            Some(provider)
         }
         Err(e) => {
             tracing::warn!(provider = %provider_name, error = %e, "Failed to create provider from config");
@@ -73,6 +72,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub sub_agent_dispatcher: Option<Arc<tokio::sync::RwLock<alephcore::agents::sub_agents::SubAgentDispatcher>>>,
     pub _embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     pub compression_service: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>>,
+    /// Swappable provider registry for hot-switching default provider at runtime
+    pub swappable_registry: Option<Arc<alephcore::SwappableProviderRegistry>>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -101,14 +102,23 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut sub_agent_disp: Option<Arc<tokio::sync::RwLock<alephcore::agents::sub_agents::SubAgentDispatcher>>> = None;
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
     let mut compression_out: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>> = None;
+    let mut swappable_reg: Option<Arc<alephcore::SwappableProviderRegistry>> = None;
 
     // Try to create provider: env vars first, then app config
-    let provider_registry = if can_create_provider_from_env() {
-        create_provider_registry_from_env().ok()
+    let initial_provider = if can_create_provider_from_env() {
+        create_provider_registry_from_env()
+            .ok()
+            .map(|reg| reg.default_provider())
     } else {
-        // Try from app config providers
-        create_provider_registry_from_config(app_config)
+        create_provider_from_config(app_config)
     };
+
+    // Wrap in SwappableProviderRegistry for hot-switching
+    let provider_registry = initial_provider.map(|provider| {
+        let registry = Arc::new(alephcore::SwappableProviderRegistry::new(provider));
+        swappable_reg = Some(registry.clone());
+        registry
+    });
 
     if let Some(provider_registry) = provider_registry {
         // Create embedding provider from app config for memory tools
@@ -619,5 +629,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         sub_agent_dispatcher: sub_agent_disp,
         _embedder: embedder_out,
         compression_service: compression_out,
+        swappable_registry: swappable_reg,
     }
 }
