@@ -5,6 +5,7 @@
 
 use crate::error::{AlephError, Result};
 use super::experience::Experience;
+use super::experience_store::ExperienceStore;
 use crate::memory::store::MemoryBackend;
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
@@ -239,6 +240,60 @@ impl ClusteringService {
     }
 }
 
+// ============================================================================
+// Cluster merge — free function
+// ============================================================================
+
+/// Summary of a cluster merge operation.
+#[derive(Debug, Clone)]
+pub struct MergeReport {
+    /// Number of clusters that were merged.
+    pub clusters_merged: usize,
+    /// Number of redundant entries deleted.
+    pub entries_deleted: usize,
+    /// Number of representative entries kept.
+    pub entries_kept: usize,
+}
+
+/// Merge clusters by keeping each representative and deleting redundant members.
+///
+/// For each cluster:
+/// - If only 1 member, it is kept as-is.
+/// - Otherwise, the `representative_id` is kept and all other member IDs are
+///   deleted from the store.
+pub async fn merge_clusters(
+    clusters: &[Cluster],
+    store: &dyn ExperienceStore,
+) -> anyhow::Result<MergeReport> {
+    let mut clusters_merged: usize = 0;
+    let mut entries_deleted: usize = 0;
+    let mut entries_kept: usize = 0;
+
+    for cluster in clusters {
+        if cluster.members.len() <= 1 {
+            entries_kept += 1;
+            continue;
+        }
+
+        // Delete all members except representative
+        for member_id in &cluster.members {
+            if member_id == &cluster.representative_id {
+                entries_kept += 1;
+            } else {
+                store.delete(member_id).await?;
+                entries_deleted += 1;
+            }
+        }
+        clusters_merged += 1;
+    }
+
+    Ok(MergeReport {
+        clusters_merged,
+        entries_deleted,
+        entries_kept,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,5 +411,48 @@ mod tests {
         assert_eq!(config.similarity_threshold, 0.95);
         assert_eq!(config.min_cluster_size, 2);
         assert!(config.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_merge_clusters_deletes_redundant() {
+        use crate::poe::crystallization::experience_store::{
+            InMemoryExperienceStore, PoeExperience,
+        };
+
+        let store = InMemoryExperienceStore::new();
+
+        // Insert 3 experiences with varying satisfaction
+        let make = |id: &str, sat: f32| PoeExperience {
+            id: id.into(),
+            task_id: format!("task-{}", id),
+            objective: "test".into(),
+            pattern_id: "poe-test".into(),
+            tool_sequence_json: "[]".into(),
+            parameter_mapping: None,
+            satisfaction: sat,
+            distance_score: 1.0 - sat,
+            attempts: 1,
+            duration_ms: 100,
+            created_at: 0,
+        };
+
+        store.insert(make("a", 0.7), &[1.0]).await.unwrap();
+        store.insert(make("b", 0.9), &[1.0]).await.unwrap(); // highest → representative
+        store.insert(make("c", 0.5), &[1.0]).await.unwrap();
+
+        assert_eq!(store.count().await.unwrap(), 3);
+
+        let cluster = Cluster {
+            cluster_id: "cluster-1".into(),
+            members: vec!["a".into(), "b".into(), "c".into()],
+            representative_id: "b".into(), // highest satisfaction
+        };
+
+        let report = merge_clusters(&[cluster], &store).await.unwrap();
+
+        assert_eq!(report.clusters_merged, 1);
+        assert_eq!(report.entries_deleted, 2);
+        assert_eq!(report.entries_kept, 1);
+        assert_eq!(store.count().await.unwrap(), 1);
     }
 }
