@@ -735,39 +735,24 @@ impl InboundMessageRouter {
 
         let mut intent = detector.detect(&msg.text).await;
 
-        // If keyword matched but id is empty, resolve by name match first, then LLM
-        if let DetectedIntent::SwitchAgent { ref id, ref name } = intent {
+        // If LLM returned an id, try to resolve it against registered agents
+        if let DetectedIntent::SwitchAgent { ref id, ref name, .. } = intent {
             if id.is_empty() {
-                // Fast path: match against registered agents by display name
+                // LLM didn't provide an id — try name match against registered agents
                 if let Some(matched_id) = registry.find_by_name(name).await {
                     info!("[Router] Resolved agent by name match: '{}' -> '{}'", name, matched_id);
+                    let task = if let DetectedIntent::SwitchAgent { task, .. } = &intent { task.clone() } else { None };
                     intent = DetectedIntent::SwitchAgent {
                         id: matched_id,
                         name: name.clone(),
+                        task,
                     };
-                } else if let Some(ref provider) = self.llm_provider {
-                    // Slow path: LLM resolve
-                    let prompt = build_id_resolve_prompt(name);
-                    match provider.process(&prompt, None).await {
-                        Ok(response) => {
-                            let resolved_id = response.trim().to_lowercase().replace(' ', "_");
-                            if !resolved_id.is_empty() {
-                                intent = DetectedIntent::SwitchAgent {
-                                    id: resolved_id,
-                                    name: name.clone(),
-                                };
-                            }
-                        }
-                        Err(e) => {
-                            warn!("[Router] Failed to resolve agent id: {}", e);
-                        }
-                    }
                 }
             }
         }
 
         match intent {
-            DetectedIntent::SwitchAgent { ref id, ref name } if !id.is_empty() => {
+            DetectedIntent::SwitchAgent { ref id, ref name, ref task } if !id.is_empty() => {
                 let channel_id = msg.channel_id.as_str();
                 let sender_id = msg.sender_id.as_str();
 
@@ -799,20 +784,42 @@ impl InboundMessageRouter {
                 }
 
                 // Switch active agent
-                let reply_text = match manager.set_active_agent(channel_id, sender_id, id) {
+                let switch_ok = match manager.set_active_agent(channel_id, sender_id, id) {
                     Ok(()) => {
                         info!("[Router] Switched agent for {}:{} -> {} ({})", channel_id, sender_id, id, name);
-                        format!("✅ Switched to {} ({})", name, id)
+                        let reply = OutboundMessage::text(
+                            msg.conversation_id.as_str(),
+                            format!("✅ Switched to {} ({})", name, id),
+                        );
+                        if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
+                            error!("[Router] Failed to send switch reply: {}", e);
+                        }
+                        true
                     }
                     Err(e) => {
                         error!("[Router] Failed to switch agent: {}", e);
-                        format!("❌ Failed to switch: {}", e)
+                        let reply = OutboundMessage::text(
+                            msg.conversation_id.as_str(),
+                            format!("❌ Failed to switch: {}", e),
+                        );
+                        let _ = self.channel_registry.send(&msg.channel_id, reply).await;
+                        false
                     }
                 };
 
-                let reply = OutboundMessage::text(msg.conversation_id.as_str(), reply_text);
-                if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
-                    error!("[Router] Failed to send switch reply: {}", e);
+                // If switch succeeded and there's a trailing task, forward it to the new agent
+                if switch_ok {
+                    if let Some(task_text) = task {
+                        if !task_text.is_empty() {
+                            info!("[Router] Forwarding task to agent '{}': {}", id, task_text);
+                            let mut task_msg = msg.clone();
+                            task_msg.text = task_text.clone();
+                            let ctx = self.build_context_with_agent(&task_msg, id);
+                            if let Err(e) = self.execute_for_context(&ctx).await {
+                                error!("[Router] Failed to execute forwarded task: {}", e);
+                            }
+                        }
+                    }
                 }
 
                 Some(Ok(()))
