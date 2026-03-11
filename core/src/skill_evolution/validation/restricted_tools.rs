@@ -66,15 +66,18 @@ impl RestrictedToolset {
     }
 
     /// Validate that a path resolves within root_dir.
+    ///
+    /// Two-phase check: (1) logical normalization rejects obvious traversals
+    /// without touching the filesystem, then (2) canonicalization catches
+    /// symlink-based escapes for paths that exist on disk.
     fn validate_path(&self, tool_name: &str, path: &Path) -> Result<(), SandboxViolation> {
-        // Normalize: join with root if relative, then canonicalize-like check
+        // Phase 1: Logical normalization (fast-path, no filesystem access)
         let resolved = if path.is_absolute() {
             path.to_path_buf()
         } else {
             self.root_dir.join(path)
         };
 
-        // Use components to check for path traversal
         let normalized = normalize_path(&resolved);
         let root_normalized = normalize_path(&self.root_dir);
 
@@ -87,6 +90,22 @@ impl RestrictedToolset {
                     self.root_dir.display()
                 ),
             });
+        }
+
+        // Phase 2: Canonicalize to catch symlink escapes (only if path exists)
+        if let Ok(canonical) = std::fs::canonicalize(&resolved) {
+            let canonical_root = std::fs::canonicalize(&self.root_dir)
+                .unwrap_or_else(|_| root_normalized.clone());
+            if !canonical.starts_with(&canonical_root) {
+                return Err(SandboxViolation {
+                    tool_name: tool_name.to_string(),
+                    reason: format!(
+                        "path '{}' resolves to '{}' which escapes sandbox root",
+                        path.display(),
+                        canonical.display()
+                    ),
+                });
+            }
         }
 
         Ok(())

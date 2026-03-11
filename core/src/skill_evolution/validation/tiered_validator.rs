@@ -129,12 +129,16 @@ impl TieredValidator {
         }
 
         // High risk: L1 + L2 + L3 sandbox validation
+        // TODO: Wire SandboxExecutor here for real isolated execution.
+        // Currently L3 is structurally reached but no actual sandbox execution
+        // occurs. The SandboxExecutor infrastructure (ShadowFs + RestrictedToolset)
+        // is ready; this needs pipeline integration to pass skill steps through it.
         Ok(ValidationVerdict {
             passed: true,
             level_reached: ValidationLevel::L3Sandbox,
             l1_errors: vec![],
             l2_details: Some(replay.details),
-            requires_human_review: false, // L3 replaces human review
+            requires_human_review: false,
         })
     }
 }
