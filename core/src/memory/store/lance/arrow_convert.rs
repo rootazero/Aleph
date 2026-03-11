@@ -654,12 +654,29 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
     let namespace_arr = StringArray::from_iter_values(memories.iter().map(|m| m.namespace.as_str()));
     let workspace_arr = StringArray::from_iter_values(memories.iter().map(|m| m.workspace.as_str()));
 
-    // Vector column
-    let embeddings: Vec<Option<&[f32]>> = memories
+    // Vector columns (multi-dimension coexistence, same pattern as facts)
+    let normalized: Vec<Option<Vec<f32>>> = memories
         .iter()
-        .map(|m| m.embedding.as_deref().filter(|e| e.len() == 768))
+        .map(|m| m.embedding.as_deref().and_then(normalize_embedding))
         .collect();
-    let vec_768 = build_vector_column(&embeddings, 768)?;
+
+    let embeddings_768: Vec<Option<&[f32]>> = normalized
+        .iter()
+        .map(|e| e.as_deref().filter(|v| v.len() == 768))
+        .collect();
+    let vec_768 = build_vector_column(&embeddings_768, 768)?;
+
+    let embeddings_1024: Vec<Option<&[f32]>> = normalized
+        .iter()
+        .map(|e| e.as_deref().filter(|v| v.len() == 1024))
+        .collect();
+    let vec_1024 = build_vector_column(&embeddings_1024, 1024)?;
+
+    let embeddings_1536: Vec<Option<&[f32]>> = normalized
+        .iter()
+        .map(|e| e.as_deref().filter(|v| v.len() == 1536))
+        .collect();
+    let vec_1536 = build_vector_column(&embeddings_1536, 1536)?;
 
     let batch = RecordBatch::try_new(
         schema,
@@ -673,7 +690,9 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
             Arc::new(session_key_arr),  // 6 session_key
             Arc::new(namespace_arr),    // 7 namespace
             Arc::new(workspace_arr),    // 8 workspace
-            Arc::new(vec_768),          // 9 vec_768
+            Arc::new(vec_768),          // 9  vec_768
+            Arc::new(vec_1024),         // 10 vec_1024
+            Arc::new(vec_1536),         // 11 vec_1536
         ],
     )
     .map_err(conv_err)?;
@@ -698,6 +717,8 @@ pub fn record_batch_to_memories(batch: &RecordBatch) -> Result<Vec<MemoryEntry>,
     let namespace_col = col::<StringArray>(batch, "namespace").ok();
     let workspace_col = col::<StringArray>(batch, "workspace").ok();
     let vec_768_col = col::<FixedSizeListArray>(batch, "vec_768").ok();
+    let vec_1024_col = col::<FixedSizeListArray>(batch, "vec_1024").ok();
+    let vec_1536_col = col::<FixedSizeListArray>(batch, "vec_1536").ok();
 
     let mut entries = Vec::with_capacity(n);
     for i in 0..n {
@@ -711,7 +732,11 @@ pub fn record_batch_to_memories(batch: &RecordBatch) -> Result<Vec<MemoryEntry>,
             topic_id,
         };
 
-        let embedding = vec_768_col.and_then(|c| read_vector(c, i));
+        // Prefer vec_768, then 1024, then 1536 (same priority as facts)
+        let embedding = vec_768_col
+            .and_then(|c| read_vector(c, i))
+            .or_else(|| vec_1024_col.and_then(|c| read_vector(c, i)))
+            .or_else(|| vec_1536_col.and_then(|c| read_vector(c, i)));
 
         entries.push(MemoryEntry {
             id: id_col.value(i).to_string(),
