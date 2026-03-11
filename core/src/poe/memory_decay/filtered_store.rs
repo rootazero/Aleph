@@ -6,6 +6,8 @@
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
+use async_trait::async_trait;
+
 use crate::error::AlephError;
 use crate::poe::crystallization::experience_store::{ExperienceStore, PoeExperience};
 use crate::poe::memory_decay::decay::{DecayCalculator, DecayConfig};
@@ -145,6 +147,51 @@ impl<S: ExperienceStore> DecayFilteredStore<S> {
         );
 
         Ok(weighted)
+    }
+}
+
+// ============================================================================
+// ExperienceStore trait implementation — transparent decay-filtered wrapper
+// ============================================================================
+
+#[async_trait]
+impl<S: ExperienceStore> ExperienceStore for DecayFilteredStore<S> {
+    async fn insert(
+        &self,
+        experience: PoeExperience,
+        embedding: &[f32],
+    ) -> Result<(), AlephError> {
+        self.inner.insert(experience, embedding).await
+    }
+
+    async fn vector_search(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        min_similarity: f64,
+    ) -> Result<Vec<(PoeExperience, f64)>, AlephError> {
+        // Delegate to weighted_search and drop the weight column
+        let weighted = self.weighted_search(query_embedding, limit, min_similarity).await?;
+        Ok(weighted.into_iter().map(|(exp, sim, _weight)| (exp, sim)).collect())
+    }
+
+    async fn get_by_pattern_id(
+        &self,
+        pattern_id: &str,
+    ) -> Result<Vec<PoeExperience>, AlephError> {
+        self.inner.get_by_pattern_id(pattern_id).await
+    }
+
+    async fn count(&self) -> Result<usize, AlephError> {
+        self.inner.count().await
+    }
+
+    async fn delete(&self, experience_id: &str) -> Result<bool, AlephError> {
+        self.inner.delete(experience_id).await
+    }
+
+    async fn get_by_ids(&self, ids: &[String]) -> Result<Vec<PoeExperience>, AlephError> {
+        self.inner.get_by_ids(ids).await
     }
 }
 

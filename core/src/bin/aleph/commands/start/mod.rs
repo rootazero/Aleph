@@ -354,7 +354,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         workspace_manager.clone(), agent_manager.clone(), args.daemon,
     ).await;
 
-    register_poe_handlers(&mut server, event_bus.clone(), args.daemon).await;
+    register_poe_handlers(&mut server, event_bus.clone(), agent_result._embedder.clone(), args.daemon).await;
 
     // Auth subsystem construction
     let auth_bundle = initialize_auth(

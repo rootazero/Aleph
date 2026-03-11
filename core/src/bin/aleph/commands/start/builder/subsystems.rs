@@ -31,6 +31,7 @@ use super::register_channel_handlers;
 pub(in crate::commands::start) async fn register_poe_handlers(
     server: &mut GatewayServer,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
+    embedder: Option<Arc<dyn alephcore::memory::EmbeddingProvider>>,
     daemon: bool,
 ) {
     use alephcore::gateway::{create_claude_provider_from_env, create_openai_provider_from_env};
@@ -43,7 +44,11 @@ pub(in crate::commands::start) async fn register_poe_handlers(
         CompositeValidator, GatewayAgentLoopWorker, ManifestBuilder, PoeConfig,
         create_gateway_worker,
         PoeRunManager, PoeContractService, WorkerFactory, ValidatorFactory,
+        DecayConfig, DecayFilteredStore, InMemoryReuseTracker,
     };
+    use alephcore::poe::crystallization::experience_store::InMemoryExperienceStore;
+    use alephcore::dispatcher::experience_replay_layer::{ExperienceReplayConfig, ExperienceReplayLayer};
+    use tokio::sync::RwLock;
 
     // Try Anthropic first, then fall back to OpenAI-compatible provider
     let poe_provider_result = create_claude_provider_from_env()
@@ -66,12 +71,37 @@ pub(in crate::commands::start) async fn register_poe_handlers(
             CompositeValidator::new(provider_for_validator.clone())
         });
 
-        let poe_run_manager = Arc::new(PoeRunManager::new(
+        let mut poe_run_manager = PoeRunManager::new(
             event_bus.clone(),
             worker_factory,
             validator_factory,
             PoeConfig::default(),
-        ));
+        );
+
+        // Wire experience replay with decay filtering (Phase 2: Memory Decay)
+        if let Some(emb) = embedder {
+            let experience_store = InMemoryExperienceStore::new();
+            let reuse_tracker = Arc::new(RwLock::new(InMemoryReuseTracker::new()));
+            let decay_config = DecayConfig::default();
+            let filtered_store = DecayFilteredStore::new(
+                experience_store,
+                decay_config,
+                reuse_tracker,
+            );
+            let replay_layer = Arc::new(ExperienceReplayLayer::new(
+                Arc::new(filtered_store),
+                emb,
+                ExperienceReplayConfig::default(),
+            ));
+            poe_run_manager = poe_run_manager.with_experience_replay(replay_layer);
+            if !daemon {
+                println!("  POE experience replay: enabled (with memory decay filtering)");
+            }
+        } else if !daemon {
+            println!("  POE experience replay: disabled (no embedding provider)");
+        }
+
+        let poe_run_manager = Arc::new(poe_run_manager);
 
         let poe_contract_service = Arc::new(PoeContractService::new(
             manifest_builder,
