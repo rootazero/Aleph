@@ -516,6 +516,21 @@ impl<W: Worker> PoeManager<W> {
                 );
             }
 
+            // Probe: E-stage decomposition check (detection only, no action)
+            if let Some(sub_objectives) = should_decompose_on_evaluation(&budget, &verdict, &task.manifest) {
+                tracing::info!(
+                    subsystem = "poe",
+                    probe = "phase2",
+                    feature = "decomposition_e_stage_live",
+                    task_id = %task.manifest.task_id,
+                    attempt = budget.current_attempt,
+                    sub_count = sub_objectives.len(),
+                    sub_objectives = ?sub_objectives,
+                    "🔍 E-DECOMP DETECTED in live loop: would split into {} sub-tasks (not acting, probe only)",
+                    sub_objectives.len(),
+                );
+            }
+
             // Check for stuck (no progress over window)
             if budget.is_stuck(self.config.stuck_window) {
                 tracing::info!(

@@ -17,6 +17,7 @@ use crate::gateway::protocol::JsonRpcRequest;
 use crate::poe::{
     CompositeValidator, PoeConfig, PoeManager, PoeOutcome, PoeTask, Worker,
 };
+use crate::poe::blast_radius::assessor::{AssessmentResult, BlastRadiusAssessor};
 use crate::poe::crystallization::ExperienceRecorder;
 use crate::poe::event_bus::PoeEventBus;
 use crate::poe::handler_types::{
@@ -363,6 +364,46 @@ async fn execute_poe_task<W: Worker + 'static>(
     } = ctx;
 
     let start_time = Instant::now();
+
+    // ========== Blast Radius Assessment (Phase 2) ==========
+    let assessor = BlastRadiusAssessor::new();
+    let blast_result = assessor.assess_sync(&task.manifest);
+    match &blast_result {
+        AssessmentResult::Rejected { reason } => {
+            warn!(
+                task_id = %task_id,
+                reason = %reason,
+                "POE task rejected by blast radius assessment"
+            );
+            // Update state and return error
+            let mut tasks = active_tasks.write().await;
+            if let Some(state) = tasks.get_mut(&task_id) {
+                state.status = PoeTaskStatus::Completed(
+                    PoeOutcome::BudgetExhausted {
+                        attempts: 0,
+                        last_error: format!("Blast radius rejected: {}", reason),
+                    }
+                );
+            }
+            return Err(format!("Task rejected by blast radius assessment: {}", reason));
+        }
+        AssessmentResult::Assessed(br) => {
+            info!(
+                task_id = %task_id,
+                risk_level = ?br.level,
+                scope = br.scope,
+                destructiveness = br.destructiveness,
+                reversibility = br.reversibility,
+                "Blast radius assessed"
+            );
+        }
+        AssessmentResult::NeedsLlm => {
+            info!(
+                task_id = %task_id,
+                "Blast radius indeterminate (System 2 not invoked in sync path)"
+            );
+        }
+    }
 
     // Query experience replay for hint injection
     if let Some(ref replay) = experience_replay {
