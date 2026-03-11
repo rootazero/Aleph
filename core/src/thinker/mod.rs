@@ -182,6 +182,38 @@ impl ProviderRegistry for SingleProviderRegistry {
     }
 }
 
+/// Provider registry that supports runtime hot-swapping.
+///
+/// When the user switches the default provider via the Panel,
+/// the new provider is atomically swapped in without restarting the server.
+pub struct SwappableProviderRegistry {
+    provider: std::sync::RwLock<Arc<dyn AiProvider>>,
+}
+
+impl SwappableProviderRegistry {
+    pub fn new(provider: Arc<dyn AiProvider>) -> Self {
+        Self {
+            provider: std::sync::RwLock::new(provider),
+        }
+    }
+
+    /// Atomically swap the underlying provider.
+    pub fn swap(&self, new_provider: Arc<dyn AiProvider>) {
+        let mut guard = self.provider.write().unwrap_or_else(|e| e.into_inner());
+        *guard = new_provider;
+    }
+}
+
+impl ProviderRegistry for SwappableProviderRegistry {
+    fn get(&self, _model: &ModelId) -> Option<Arc<dyn AiProvider>> {
+        Some(self.provider.read().unwrap_or_else(|e| e.into_inner()).clone())
+    }
+
+    fn default_provider(&self) -> Arc<dyn AiProvider> {
+        self.provider.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
 /// Thinker - The thinking layer of Agent Loop
 ///
 /// Thinker is responsible for:
@@ -1599,5 +1631,45 @@ mod truncation_warning_tests {
         let stats: Vec<TruncationStat> = vec![];
         let msg = format_truncation_warning(&stats);
         assert_eq!(msg, "[System] Context truncated: ");
+    }
+}
+
+#[cfg(test)]
+mod swappable_registry_tests {
+    use super::*;
+
+    struct TaggedProvider { tag: String }
+    impl AiProvider for TaggedProvider {
+        fn process(
+            &self, _input: &str, _system_prompt: Option<&str>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<String>> + Send + '_>> {
+            Box::pin(async { Ok(String::new()) })
+        }
+        fn name(&self) -> &str { &self.tag }
+        fn color(&self) -> &str { "#000" }
+    }
+
+    #[test]
+    fn test_swappable_registry_returns_initial_provider() {
+        let provider = Arc::new(TaggedProvider { tag: "initial".into() });
+        let registry = SwappableProviderRegistry::new(provider);
+
+        assert_eq!(registry.default_provider().name(), "initial");
+    }
+
+    #[test]
+    fn test_swappable_registry_swap_changes_provider() {
+        let p1 = Arc::new(TaggedProvider { tag: "provider-a".into() });
+        let p2: Arc<dyn AiProvider> = Arc::new(TaggedProvider { tag: "provider-b".into() });
+
+        let registry = SwappableProviderRegistry::new(p1);
+        assert_eq!(registry.default_provider().name(), "provider-a");
+
+        registry.swap(p2);
+        assert_eq!(registry.default_provider().name(), "provider-b");
+
+        // get() should also return the swapped provider
+        let model = ModelId::new("any-model");
+        assert_eq!(registry.get(&model).unwrap().name(), "provider-b");
     }
 }
