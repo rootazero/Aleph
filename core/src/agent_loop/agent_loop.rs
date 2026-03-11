@@ -127,7 +127,7 @@ impl RunContext {
 pub struct AgentLoop<T, E, C>
 where
     T: ThinkerTrait,
-    E: ActionExecutor,
+    E: ActionExecutor + 'static,
     C: CompressorTrait,
 {
     thinker: Arc<T>,
@@ -147,7 +147,7 @@ where
 impl<T, E, C> AgentLoop<T, E, C>
 where
     T: ThinkerTrait,
-    E: ActionExecutor,
+    E: ActionExecutor + 'static,
     C: CompressorTrait,
 {
     /// Create a new AgentLoop
@@ -940,7 +940,55 @@ where
 
             let start_time = std::time::Instant::now();
             let started_at = chrono::Utc::now().timestamp_millis();
-            let result = self.executor.execute(&action, &identity).await;
+
+            // ===== Parallel Tool Execution via JoinSet =====
+            let result = match &action {
+                Action::ToolCalls { calls: ref requests } if requests.len() > 1 => {
+                    // N>1: parallel execution via JoinSet
+                    let mut join_set = tokio::task::JoinSet::new();
+                    let executor = Arc::clone(&self.executor);
+
+                    for req in requests.clone() {
+                        let exec = Arc::clone(&executor);
+                        let id = identity.clone();
+                        join_set.spawn(async move {
+                            exec.execute_single_tool(&req, &id).await
+                        });
+                    }
+
+                    let mut results = Vec::with_capacity(requests.len());
+                    while let Some(join_result) = join_set.join_next().await {
+                        match join_result {
+                            Ok(tool_result) => results.push(tool_result),
+                            Err(join_err) => results.push(super::decision::ToolCallResult {
+                                call_id: "unknown".into(),
+                                tool_name: "unknown".into(),
+                                result: super::decision::SingleToolResult::Error {
+                                    error: format!("Task panicked: {join_err}"),
+                                    retryable: false,
+                                },
+                            }),
+                        }
+                    }
+
+                    // Restore original request order (JoinSet returns completion order)
+                    results.sort_by_key(|r| {
+                        requests.iter().position(|req| req.call_id == r.call_id).unwrap_or(usize::MAX)
+                    });
+
+                    ActionResult::ToolResults { results }
+                }
+                Action::ToolCalls { calls: ref requests } if requests.len() == 1 => {
+                    // N=1 fast path: no JoinSet overhead
+                    let tool_result = self.executor.execute_single_tool(&requests[0], &identity).await;
+                    ActionResult::ToolResults { results: vec![tool_result] }
+                }
+                _ => {
+                    // Non-tool actions or empty tool calls: delegate to executor
+                    self.executor.execute(&action, &identity).await
+                }
+            };
+
             let duration_ms = start_time.elapsed().as_millis() as u64;
             let completed_at = chrono::Utc::now().timestamp_millis();
 

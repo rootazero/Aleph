@@ -2,6 +2,7 @@
 
 use aleph_protocol::IdentityContext;
 use crate::agent_loop::{Action, ActionResult, LoopState, LoopStep, Thinking};
+use crate::agent_loop::decision::{ToolCallRequest, ToolCallResult, SingleToolResult};
 use crate::agents::thinking::ThinkLevel;
 use crate::error::Result;
 
@@ -77,6 +78,32 @@ pub trait ActionExecutor: Send + Sync {
     /// # Returns
     /// ActionResult indicating success, failure, or permission denial
     async fn execute(&self, action: &Action, identity: &IdentityContext) -> ActionResult;
+
+    /// Execute a single tool call. Used by parallel execution via JoinSet.
+    ///
+    /// Default implementation wraps the call in `Action::ToolCalls` and delegates
+    /// to `execute()`, extracting the single result.
+    async fn execute_single_tool(
+        &self,
+        req: &ToolCallRequest,
+        identity: &IdentityContext,
+    ) -> ToolCallResult {
+        let action = Action::ToolCalls { calls: vec![req.clone()] };
+        let result = self.execute(&action, identity).await;
+        match result {
+            ActionResult::ToolResults { results } if !results.is_empty() => {
+                results.into_iter().next().unwrap()
+            }
+            _ => ToolCallResult {
+                call_id: req.call_id.clone(),
+                tool_name: req.tool_name.clone(),
+                result: SingleToolResult::Error {
+                    error: "Unexpected result type from executor".into(),
+                    retryable: false,
+                },
+            },
+        }
+    }
 }
 
 /// Compressor trait - abstraction for context compression
