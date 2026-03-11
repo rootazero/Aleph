@@ -61,6 +61,27 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 - **原则**: Rust Core 是唯一大脑，UI 通过 Leptos/WASM 统一，原生壳只负责窗口容器和系统集成
 - **备注**: 这已在 R1 和 R2 中体现，此条作为产品层面的重申
 
+### R8. LLM 主权原则 (LLM Sovereignty)
+
+- **禁令**: 严禁用确定性代码替代 LLM 擅长的推理判断（意图识别、任务评估、路由决策、内容分类等）
+- **原则**: 极简系统 + 强大 prompt = 释放 LLM 全部推理能力。把复杂留给模型，把简单留给系统
+- **判断标准**: 对每个模块问 — "这是在赋能 LLM（给它做不到的能力），还是在越俎代庖（替它做推理）？"
+- **赋能层（保留）**: Gateway 多端触达、Memory 持久记忆、Daemon 事件感知、Soul 人格、Provider 多厂商、Tool 执行能力、MCP 外部服务、Extension 插件生态、上下文压缩、安全硬过滤
+- **越俎代庖（禁止）**: Intent Detection 规则引擎、POE 目标验证管线、多层 Tool Filter、Context Aggregation 多层合并、Dispatcher 意图分析
+
+### R9. 工具即一切 (Everything is a Tool)
+
+- **原则**: Aleph 自身的所有可配置操作都应暴露为工具，让 LLM 通过自然语言对话完成配置
+- **实现**: Agent 管理（创建/切换/删除）、Provider 配置、Channel 配置、Skill/MCP 安装卸载、Daemon 订阅规则 — 全部是 Tool
+- **核心循环**: `用户自然语言 → LLM 理解意图 → LLM 选择工具 → 工具执行 → 结果返回 LLM → LLM 回复用户`
+- **效果**: 对话即管理面板。用户无需学习配置文件或 API，自然语言驱动一切
+
+### R10. 智慧在 Prompt 中 (Intelligence Lives in the Prompt)
+
+- **原则**: 被移除的中间件的"智慧"不是丢弃，而是迁移到 system prompt 模板中
+- **实现**: 主循环的 LLM 一次调用自然覆盖所有判断（意图理解 + 工具选择 + 安全评估 + 完成度判断）
+- **效果**: 零额外 LLM 调用，零中间件税，模型推理能力完整释放
+
 ---
 
 ## 🧬 设计原则 (Design Principles)
@@ -113,6 +134,13 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 - **优雅降级** — 外部依赖 (LLM/网络/文件系统) 失败时提供 fallback，不 panic
 - **锁安全** — `.lock().unwrap_or_else(|e| e.into_inner())`，永远处理 poison
 - **UTF-8 安全** — 字符串切片使用 `char_indices()` / `.get(..n)`，不用 `&s[..n]`
+
+### P8. LLM 优先 (LLM-First)
+
+- **语义理解交给 LLM** — 所有需要将自然语言转换为结构化意图的任务（意图识别、参数提取、命令路由），优先使用 LLM 语义理解，而非正则表达式或关键词匹配
+- **禁止脆弱的模式匹配** — 不要用 regex 解析用户自然语言输入。正则只适用于格式固定的机器生成文本（如 JSON、URL、日志格式）
+- **LLM 可做则 LLM 做** — 如果一项任务 LLM 能完成（分类、提取、推理、生成），就交给 LLM，而非硬编码规则
+- **结构化输出** — LLM 返回 JSON 结构化结果，代码层只负责解析和执行，不做语义判断
 
 ---
 
@@ -176,7 +204,7 @@ English commit messages. Format: `<scope>: <description>` — Example: `gateway:
 ## 📝 Session Context
 
 - **项目**: 自托管个人 AI 助手，Rust Core + 多端架构
-- **核心循环**: Observe → Think → Act → Feedback → Compress
+- **核心循环**: Think → Act（极简两步循环，LLM 主权原则）
 - **语言**: 使用中文对话
 
 ### Memory Prompt

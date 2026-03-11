@@ -1,14 +1,12 @@
 //! Intent detection for dynamic agent switching.
 //!
-//! Detects user intent to switch agents via keyword patterns (fast path)
-//! or an optional LLM classify function (slow path).
+//! Uses LLM semantic understanding to detect agent-switch intent,
+//! extract the target agent name, and separate any accompanying task.
 
-use once_cell::sync::Lazy;
-use regex::Regex;
+use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -17,12 +15,15 @@ use tracing::{debug, info};
 /// Detected intent from user message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DetectedIntent {
-    /// User wants to switch to a specific agent.
+    /// User wants to switch to a specific agent, optionally with a task.
     SwitchAgent {
         /// Agent identifier (may be empty when resolved later by LLM).
         id: String,
         /// Human-readable agent name extracted from the message.
         name: String,
+        /// Task to execute after switching (e.g. "写一份会议纪要").
+        /// When present, the router should forward this to the new agent.
+        task: Option<String>,
     },
     /// No switching intent detected — treat as normal message.
     Normal,
@@ -36,108 +37,86 @@ pub type IntentClassifyFn =
     Arc<dyn Fn(&str) -> Pin<Box<dyn Future<Output = Option<DetectedIntent>> + Send>> + Send + Sync>;
 
 // ---------------------------------------------------------------------------
-// Regex patterns
-// ---------------------------------------------------------------------------
-
-/// Chinese switch patterns: "切换到X模式" / "换成X助手" / "切换为X" / "使用X"
-static RE_CN_SWITCH: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?:切换到|换成|切换为|使用)(.+?)(?:模式|agent)?$").unwrap()
-});
-
-/// Chinese "I want to talk with X" patterns: "我想和X聊" / "我想跟X说" / "我想找X咨询"
-static RE_CN_WANT: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^我想(?:和|跟|找)(.+?)(?:聊|说|谈|咨询)").unwrap()
-});
-
-/// English: "switch to X mode" / "change to X agent" / "use X assistant"
-static RE_EN_SWITCH: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^(?:switch to|change to|use) (.+?)(?:\s+(?:mode|agent))?$").unwrap()
-});
-
-// ---------------------------------------------------------------------------
 // IntentDetector
 // ---------------------------------------------------------------------------
 
-/// Detects agent-switching intent from user messages.
+/// Detects agent-switching intent from user messages using LLM.
 ///
-/// Detection pipeline:
-/// 1. Keyword regex matching (fast, no I/O)
-/// 2. Optional LLM classify function (slow, async)
-/// 3. Fall through to `Normal`
+/// When an LLM provider is available, all intent detection is done via
+/// semantic understanding — no brittle regex patterns.
 pub struct IntentDetector {
-    llm_classify_fn: Option<IntentClassifyFn>,
+    /// LLM provider for semantic intent classification
+    llm_provider: Option<Arc<dyn crate::providers::AiProvider>>,
+    /// Available agent names/ids for context in the LLM prompt
+    available_agents: Vec<AgentInfo>,
+}
+
+/// Minimal agent info for intent detection context.
+#[derive(Debug, Clone)]
+pub struct AgentInfo {
+    pub id: String,
+    pub name: String,
 }
 
 impl IntentDetector {
-    /// Create a new detector with keyword matching only.
+    /// Create a new detector (no LLM — all messages treated as Normal).
     pub fn new() -> Self {
         Self {
-            llm_classify_fn: None,
+            llm_provider: None,
+            available_agents: Vec::new(),
         }
     }
 
-    /// Attach an LLM classify function for ambiguous messages.
-    pub fn with_llm_classify(mut self, f: IntentClassifyFn) -> Self {
-        self.llm_classify_fn = Some(f);
+    /// Set the LLM provider for semantic intent detection.
+    pub fn with_llm_provider(mut self, provider: Arc<dyn crate::providers::AiProvider>) -> Self {
+        self.llm_provider = Some(provider);
         self
     }
 
-    /// Detect intent from a user message.
-    ///
-    /// Tries keyword matching first, then falls back to the LLM classifier
-    /// if one is configured.
+    /// Set the available agents for context.
+    pub fn with_available_agents(mut self, agents: Vec<AgentInfo>) -> Self {
+        self.available_agents = agents;
+        self
+    }
+
+    /// Update available agents dynamically.
+    pub fn set_available_agents(&mut self, agents: Vec<AgentInfo>) {
+        self.available_agents = agents;
+    }
+
+    /// Attach an LLM classify function (legacy API, for backward compatibility).
+    pub fn with_llm_classify(self, _f: IntentClassifyFn) -> Self {
+        // No-op: LLM provider is used directly now
+        self
+    }
+
+    /// Detect intent from a user message using LLM semantic understanding.
     pub async fn detect(&self, text: &str) -> DetectedIntent {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return DetectedIntent::Normal;
         }
 
-        // Fast path: keyword regex
-        if let Some(intent) = Self::keyword_match(trimmed) {
-            info!(name = %intent_name(&intent), "intent detected via keyword match");
-            return intent;
-        }
+        // Use LLM for semantic understanding
+        if let Some(ref provider) = self.llm_provider {
+            let prompt = build_intent_classify_prompt(trimmed, &self.available_agents);
+            debug!(prompt_len = prompt.len(), "LLM intent classification");
 
-        // Slow path: LLM classify
-        if let Some(ref classify) = self.llm_classify_fn {
-            debug!("falling back to LLM intent classification");
-            if let Some(intent) = classify(trimmed).await {
-                info!(name = %intent_name(&intent), "intent detected via LLM classify");
-                return intent;
+            match provider.process(&prompt, None).await {
+                Ok(response) => {
+                    if let Some(intent) = parse_intent_response(&response) {
+                        info!(name = %intent_name(&intent), "intent detected via LLM");
+                        return intent;
+                    }
+                    debug!("LLM returned unparseable response, treating as Normal");
+                }
+                Err(e) => {
+                    warn!(error = %e, "LLM intent classification failed, treating as Normal");
+                }
             }
         }
 
         DetectedIntent::Normal
-    }
-
-    /// Try to match the message against keyword regex patterns.
-    ///
-    /// Returns `Some(DetectedIntent::SwitchAgent)` on match, `None` otherwise.
-    pub fn keyword_match(text: &str) -> Option<DetectedIntent> {
-        // Chinese patterns — id left empty for later LLM resolution
-        if let Some(caps) = RE_CN_SWITCH.captures(text) {
-            let name = caps[1].trim().to_string();
-            return Some(DetectedIntent::SwitchAgent {
-                id: String::new(),
-                name,
-            });
-        }
-        if let Some(caps) = RE_CN_WANT.captures(text) {
-            let name = caps[1].trim().to_string();
-            return Some(DetectedIntent::SwitchAgent {
-                id: String::new(),
-                name,
-            });
-        }
-
-        // English pattern — derive id from name
-        if let Some(caps) = RE_EN_SWITCH.captures(text) {
-            let name = caps[1].trim().to_string();
-            let id = name.to_lowercase().replace(' ', "_");
-            return Some(DetectedIntent::SwitchAgent { id, name });
-        }
-
-        None
     }
 }
 
@@ -151,21 +130,40 @@ impl Default for IntentDetector {
 // LLM prompt builders & response parser
 // ---------------------------------------------------------------------------
 
-/// Build prompt for LLM intent classification (keyword miss fallback)
-pub fn build_intent_classify_prompt(message: &str) -> String {
+/// Build prompt for LLM intent classification with available agent context.
+pub fn build_intent_classify_prompt(message: &str, agents: &[AgentInfo]) -> String {
+    let agent_list = if agents.is_empty() {
+        "No specific agents registered.".to_string()
+    } else {
+        agents
+            .iter()
+            .map(|a| format!("- id: \"{}\", name: \"{}\"", a.id, a.name))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
     format!(
-        r#"Classify this message. If the user wants to switch to a different AI agent/persona, return JSON:
-{{"intent":"switch","id":"english_snake_case","name":"display name"}}
-Otherwise return:
-{{"intent":"normal"}}
+        r#"You are an intent classifier. Analyze the user message and determine if they want to switch to a different AI agent/persona.
 
-Rules for id: lowercase English, use underscores, short (1-2 words). Examples:
-- "交易助手" -> id: "trading"
-- "健康顾问" -> id: "health"
-- "coding expert" -> id: "coding"
+Available agents:
+{agent_list}
 
-Message: {}"#,
-        message
+Rules:
+1. If the user wants to switch agent AND also has a task, extract BOTH
+2. The "id" must match one of the available agent ids above, or be a reasonable snake_case id
+3. The "task" is the actual work the user wants done (NOT the switch command itself)
+4. If there is NO switch intent, return {{"intent":"normal"}}
+
+Return ONLY valid JSON, no other text.
+
+Examples:
+- "使用cowork agent写一份报告" → {{"intent":"switch","id":"cowork","name":"cowork","task":"写一份报告"}}
+- "切换到main" → {{"intent":"switch","id":"main","name":"main"}}
+- "今天天气怎么样" → {{"intent":"normal"}}
+- "switch to coding and fix the bug" → {{"intent":"switch","id":"coding","name":"coding","task":"fix the bug"}}
+- "帮我翻译这段话" → {{"intent":"normal"}}
+
+Message: {message}"#
     )
 }
 
@@ -189,7 +187,9 @@ Output ONLY the persona description, no headers or markdown formatting."#
     )
 }
 
-/// Parse LLM response for intent classification
+/// Parse LLM response for intent classification.
+///
+/// Expects JSON with fields: intent, id, name, and optionally task.
 pub fn parse_intent_response(response: &str) -> Option<DetectedIntent> {
     let text = response.trim();
     let start = text.find('{')?;
@@ -200,12 +200,22 @@ pub fn parse_intent_response(response: &str) -> Option<DetectedIntent> {
 
     match value.get("intent")?.as_str()? {
         "switch" => {
-            let id = value.get("id")?.as_str()?.to_string();
-            let name = value.get("name")?.as_str()?.to_string();
-            if id.is_empty() || name.is_empty() {
+            let id = value.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let name = value.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if name.is_empty() && id.is_empty() {
                 return None;
             }
-            Some(DetectedIntent::SwitchAgent { id, name })
+            let task = value
+                .get("task")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let display_name = if name.is_empty() { id.clone() } else { name };
+            Some(DetectedIntent::SwitchAgent {
+                id,
+                name: display_name,
+                task,
+            })
         }
         "normal" => Some(DetectedIntent::Normal),
         _ => None,
@@ -228,259 +238,42 @@ fn intent_name(intent: &DetectedIntent) -> &str {
 mod tests {
     use super::*;
 
-    // -- Chinese keyword: switch to / change to / use (切换到/换成/切换为/使用) --
+    // -- LLM response parser tests --
 
     #[test]
-    fn cn_switch_to_agent() {
-        let result = IntentDetector::keyword_match("切换到编程助手");
-        assert_eq!(
-            result,
-            Some(DetectedIntent::SwitchAgent {
-                id: String::new(),
-                name: "编程助手".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn cn_change_to_mode() {
-        let result = IntentDetector::keyword_match("换成翻译模式");
-        assert_eq!(
-            result,
-            Some(DetectedIntent::SwitchAgent {
-                id: String::new(),
-                name: "翻译".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn cn_switch_as() {
-        let result = IntentDetector::keyword_match("切换为写作agent");
-        assert_eq!(
-            result,
-            Some(DetectedIntent::SwitchAgent {
-                id: String::new(),
-                name: "写作".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn cn_use_agent() {
-        let result = IntentDetector::keyword_match("使用数据分析");
-        assert_eq!(
-            result,
-            Some(DetectedIntent::SwitchAgent {
-                id: String::new(),
-                name: "数据分析".into(),
-            })
-        );
-    }
-
-    // -- Chinese keyword: I want to chat/talk/consult with X (我想和/跟/找 X 聊/说/谈/咨询) --
-
-    #[test]
-    fn cn_want_to_chat() {
-        let result = IntentDetector::keyword_match("我想和法律顾问聊");
-        assert_eq!(
-            result,
-            Some(DetectedIntent::SwitchAgent {
-                id: String::new(),
-                name: "法律顾问".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn cn_want_to_consult() {
-        let result = IntentDetector::keyword_match("我想找医生咨询");
-        assert_eq!(
-            result,
-            Some(DetectedIntent::SwitchAgent {
-                id: String::new(),
-                name: "医生".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn cn_want_to_talk() {
-        let result = IntentDetector::keyword_match("我想跟导师谈");
-        assert_eq!(
-            result,
-            Some(DetectedIntent::SwitchAgent {
-                id: String::new(),
-                name: "导师".into(),
-            })
-        );
-    }
-
-    // -- English keyword patterns --
-
-    #[test]
-    fn en_switch_to() {
-        let result = IntentDetector::keyword_match("switch to coding assistant");
-        assert_eq!(
-            result,
-            Some(DetectedIntent::SwitchAgent {
-                id: "coding_assistant".into(),
-                name: "coding assistant".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn en_change_to_mode() {
-        let result = IntentDetector::keyword_match("change to writer mode");
-        assert_eq!(
-            result,
-            Some(DetectedIntent::SwitchAgent {
-                id: "writer".into(),
-                name: "writer".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn en_use_agent() {
-        let result = IntentDetector::keyword_match("Use Data Analyst agent");
-        assert_eq!(
-            result,
-            Some(DetectedIntent::SwitchAgent {
-                id: "data_analyst".into(),
-                name: "Data Analyst".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn en_case_insensitive() {
-        let result = IntentDetector::keyword_match("SWITCH TO helper");
-        assert_eq!(
-            result,
-            Some(DetectedIntent::SwitchAgent {
-                id: "helper".into(),
-                name: "helper".into(),
-            })
-        );
-    }
-
-    // -- No match --
-
-    #[test]
-    fn no_match_normal_text() {
-        assert_eq!(IntentDetector::keyword_match("今天天气怎么样"), None);
-    }
-
-    #[test]
-    fn no_match_english_normal() {
-        assert_eq!(
-            IntentDetector::keyword_match("What is the weather today?"),
-            None
-        );
-    }
-
-    #[test]
-    fn no_match_empty() {
-        assert_eq!(IntentDetector::keyword_match(""), None);
-    }
-
-    // -- detect() async tests --
-
-    #[tokio::test]
-    async fn detect_keyword_hit() {
-        let detector = IntentDetector::new();
-        let result = detector.detect("switch to coder").await;
-        assert_eq!(
-            result,
-            DetectedIntent::SwitchAgent {
-                id: "coder".into(),
-                name: "coder".into(),
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn detect_normal_without_llm() {
-        let detector = IntentDetector::new();
-        let result = detector.detect("hello world").await;
-        assert_eq!(result, DetectedIntent::Normal);
-    }
-
-    #[tokio::test]
-    async fn detect_llm_fallback() {
-        let classify: IntentClassifyFn = Arc::new(|_text: &str| {
-            Box::pin(async {
-                Some(DetectedIntent::SwitchAgent {
-                    id: "from_llm".into(),
-                    name: "LLM Agent".into(),
-                })
-            })
-        });
-        let detector = IntentDetector::new().with_llm_classify(classify);
-        // "hello" doesn't match keywords, so LLM classify kicks in
-        let result = detector.detect("hello").await;
-        assert_eq!(
-            result,
-            DetectedIntent::SwitchAgent {
-                id: "from_llm".into(),
-                name: "LLM Agent".into(),
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn detect_keyword_takes_priority_over_llm() {
-        let classify: IntentClassifyFn = Arc::new(|_text: &str| {
-            Box::pin(async {
-                Some(DetectedIntent::SwitchAgent {
-                    id: "from_llm".into(),
-                    name: "LLM".into(),
-                })
-            })
-        });
-        let detector = IntentDetector::new().with_llm_classify(classify);
-        // Keyword match should win
-        let result = detector.detect("switch to coder").await;
-        assert_eq!(
-            result,
-            DetectedIntent::SwitchAgent {
-                id: "coder".into(),
-                name: "coder".into(),
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn detect_empty_is_normal() {
-        let detector = IntentDetector::new();
-        assert_eq!(detector.detect("").await, DetectedIntent::Normal);
-        assert_eq!(detector.detect("   ").await, DetectedIntent::Normal);
-    }
-
-    // -- LLM prompt builders & parser --
-
-    #[test]
-    fn parse_intent_switch() {
-        let resp = r#"{"intent":"switch","id":"trading","name":"交易助手"}"#;
+    fn parse_switch_with_task() {
+        let resp = r#"{"intent":"switch","id":"cowork","name":"cowork","task":"写一份会议纪要"}"#;
         assert_eq!(
             parse_intent_response(resp),
             Some(DetectedIntent::SwitchAgent {
-                id: "trading".into(),
-                name: "交易助手".into(),
+                id: "cowork".into(),
+                name: "cowork".into(),
+                task: Some("写一份会议纪要".into()),
             })
         );
     }
 
     #[test]
-    fn parse_intent_normal() {
+    fn parse_switch_without_task() {
+        let resp = r#"{"intent":"switch","id":"main","name":"main"}"#;
+        assert_eq!(
+            parse_intent_response(resp),
+            Some(DetectedIntent::SwitchAgent {
+                id: "main".into(),
+                name: "main".into(),
+                task: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_normal() {
         let resp = r#"{"intent":"normal"}"#;
         assert_eq!(parse_intent_response(resp), Some(DetectedIntent::Normal));
     }
 
     #[test]
-    fn parse_intent_with_surrounding_text() {
+    fn parse_with_surrounding_text() {
         let resp = r#"Based on analysis: {"intent":"switch","id":"health","name":"健康顾问"} end."#;
         assert!(matches!(
             parse_intent_response(resp),
@@ -489,14 +282,70 @@ mod tests {
     }
 
     #[test]
-    fn parse_intent_invalid() {
+    fn parse_invalid() {
         assert_eq!(parse_intent_response("not json"), None);
         assert_eq!(parse_intent_response(r#"{"intent":"unknown"}"#), None);
     }
 
     #[test]
+    fn parse_empty_name_and_id() {
+        let resp = r#"{"intent":"switch","id":"","name":""}"#;
+        assert_eq!(parse_intent_response(resp), None);
+    }
+
+    #[test]
+    fn parse_task_with_empty_string() {
+        let resp = r#"{"intent":"switch","id":"main","name":"main","task":""}"#;
+        assert_eq!(
+            parse_intent_response(resp),
+            Some(DetectedIntent::SwitchAgent {
+                id: "main".into(),
+                name: "main".into(),
+                task: None,
+            })
+        );
+    }
+
+    // -- detect() async tests --
+
+    #[tokio::test]
+    async fn detect_empty_is_normal() {
+        let detector = IntentDetector::new();
+        assert_eq!(detector.detect("").await, DetectedIntent::Normal);
+        assert_eq!(detector.detect("   ").await, DetectedIntent::Normal);
+    }
+
+    #[tokio::test]
+    async fn detect_without_llm_is_always_normal() {
+        let detector = IntentDetector::new();
+        assert_eq!(
+            detector.detect("切换到编程助手").await,
+            DetectedIntent::Normal
+        );
+    }
+
+    // -- prompt builder tests --
+
+    #[test]
+    fn classify_prompt_includes_agents() {
+        let agents = vec![
+            AgentInfo { id: "main".into(), name: "main".into() },
+            AgentInfo { id: "cowork".into(), name: "cowork".into() },
+        ];
+        let prompt = build_intent_classify_prompt("使用cowork写报告", &agents);
+        assert!(prompt.contains("cowork"));
+        assert!(prompt.contains("main"));
+        assert!(prompt.contains("使用cowork写报告"));
+    }
+
+    #[test]
+    fn classify_prompt_empty_agents() {
+        let prompt = build_intent_classify_prompt("hello", &[]);
+        assert!(prompt.contains("No specific agents registered"));
+    }
+
+    #[test]
     fn build_prompts_not_empty() {
-        assert!(!build_intent_classify_prompt("hello").is_empty());
         assert!(!build_id_resolve_prompt("交易助手").is_empty());
         assert!(!build_soul_generation_prompt("trading", "交易助手").is_empty());
     }
