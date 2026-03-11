@@ -67,6 +67,9 @@ impl LoopState {
     pub fn record_step(&mut self, step: LoopStep) {
         self.total_tokens += step.tokens_used;
         self.step_count += 1;
+        if let Action::ToolCalls { ref calls } = step.action {
+            self.total_tool_calls += calls.len();
+        }
         self.steps.push(step);
     }
 
