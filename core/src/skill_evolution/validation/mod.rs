@@ -8,6 +8,7 @@ pub mod test_set_generator;
 pub mod structural_linter;
 pub mod semantic_replayer;
 pub mod tiered_validator;
+pub mod shadow_fs;
 
 pub use risk_profiler::{SkillRiskLevel, SkillRiskProfile, SkillRiskProfiler};
 pub use test_set_generator::{SampleSource, TestSample, TestSetGenerator, ValidationTestSet};
