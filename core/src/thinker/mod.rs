@@ -420,10 +420,11 @@ impl<P: ProviderRegistry> Thinker<P> {
         provider.process_with_payload(payload).await
     }
 
-    /// Map a native tool call from ProviderResponse to a Decision
+    /// Maps a virtual tool call to a terminal decision.
     ///
-    /// Handles both virtual tools (__complete, __ask_user, __fail) and real tools.
-    fn map_native_tool_call_to_decision(
+    /// Handles __complete, __ask_user, and __fail virtual tools.
+    /// Returns Decision::Silent for unrecognized virtual tool names.
+    fn map_virtual_tool_to_decision(
         &self,
         tc: &crate::providers::adapter::NativeToolCall,
     ) -> crate::agent_loop::Decision {
@@ -463,58 +464,96 @@ impl<P: ProviderRegistry> Thinker<P> {
                     .unwrap_or("Unknown failure")
                     .to_string(),
             },
-            _ => Decision::UseTools { calls: vec![crate::agent_loop::decision::ToolCallRecord {
-                call_id: tc.id.clone(),
-                tool_name: tc.name.clone(),
-                arguments: tc.arguments.clone(),
-            }]},
+            _ => Decision::Silent,
         }
+    }
+
+    /// Maps a real (non-virtual) tool call to a ToolCallRecord.
+    fn map_to_record(tc: &crate::providers::adapter::NativeToolCall) -> crate::agent_loop::decision::ToolCallRecord {
+        crate::agent_loop::decision::ToolCallRecord {
+            call_id: tc.id.clone(),
+            tool_name: tc.name.clone(),
+            arguments: tc.arguments.clone(),
+        }
+    }
+
+    /// Pick the highest-priority terminal action from virtual tool calls.
+    ///
+    /// Priority: __fail > __ask_user > __complete
+    fn pick_terminal<'a>(virtuals: &[&'a crate::providers::adapter::NativeToolCall]) -> &'a crate::providers::adapter::NativeToolCall {
+        for name in virtual_tools::TERMINAL_PRIORITY {
+            if let Some(tc) = virtuals.iter().find(|v| v.name == *name) {
+                return tc;
+            }
+        }
+        // Fallback to first virtual call (should not happen if TERMINAL_PRIORITY is exhaustive)
+        virtuals[0]
     }
 
     /// Build a Thinking result from a native ProviderResponse
     ///
-    /// If the response contains tool calls, maps the first tool call to a Decision.
-    /// If no tool calls, falls back to DecisionParser on the text content.
+    /// Collects ALL tool calls from the response. Virtual tool calls are treated as
+    /// terminal actions with priority defense (__fail > __ask_user > __complete).
+    /// Real tool calls are batched into Decision::UseTools.
+    /// Falls back to DecisionParser on text if no tool calls present.
     fn build_thinking_from_native_response(
         &self,
         response: ProviderResponse,
     ) -> Result<Thinking> {
-        if response.has_tool_calls() {
-            let tc = &response.tool_calls[0];
-            let decision = self.map_native_tool_call_to_decision(tc);
+        let reasoning = response.thinking.clone().or(response.text.clone());
+        let tokens_used = response
+            .usage
+            .as_ref()
+            .map(|u| (u.input_tokens + u.output_tokens) as usize);
 
-            // Use thinking content if available, otherwise use text
-            let reasoning = response
-                .thinking
-                .or(response.text)
-                .unwrap_or_default();
+        if !response.has_tool_calls() {
+            // No tool calls — fallback to text parsing
+            if let Some(ref text) = response.text {
+                tracing::warn!(
+                    "Native tool_use provider returned text without tool calls, falling back to DecisionParser"
+                );
+                return self.parse_response(text);
+            } else {
+                return Err(crate::error::AlephError::ProviderError {
+                    message: "Empty LLM response (no text and no tool calls)".into(),
+                    suggestion: Some(
+                        "The provider returned an empty response. Try again or switch providers."
+                            .into(),
+                    ),
+                });
+            }
+        }
 
-            // Use actual token count if available
-            let tokens_used = response
-                .usage
-                .map(|u| (u.input_tokens + u.output_tokens) as usize);
+        // Phase 1: Partition into virtual and real calls
+        let (virtual_calls, real_calls): (Vec<_>, Vec<_>) = response
+            .tool_calls
+            .iter()
+            .partition(|tc| virtual_tools::is_virtual_tool(&tc.name));
 
-            Ok(Thinking {
-                reasoning: Some(reasoning),
+        // Phase 2: Terminal defense — virtual tools take absolute priority
+        if !virtual_calls.is_empty() {
+            let terminal = Self::pick_terminal(&virtual_calls);
+            let decision = self.map_virtual_tool_to_decision(terminal);
+            return Ok(Thinking {
+                reasoning,
                 decision,
                 structured: None,
                 tokens_used,
-            })
-        } else if let Some(ref text) = response.text {
-            // Fallback: no tool calls, try DecisionParser on text
-            tracing::warn!(
-                "Native tool_use provider returned text without tool calls, falling back to DecisionParser"
-            );
-            self.parse_response(text)
-        } else {
-            Err(crate::error::AlephError::ProviderError {
-                message: "Empty LLM response (no text and no tool calls)".into(),
-                suggestion: Some(
-                    "The provider returned an empty response. Try again or switch providers."
-                        .into(),
-                ),
-            })
+            });
         }
+
+        // Phase 3: Batch all real tool calls
+        let records: Vec<crate::agent_loop::decision::ToolCallRecord> = real_calls
+            .iter()
+            .map(|tc| Self::map_to_record(tc))
+            .collect();
+
+        Ok(Thinking {
+            reasoning,
+            decision: crate::agent_loop::Decision::UseTools { calls: records },
+            structured: None,
+            tokens_used,
+        })
     }
 
     /// Collect tool definitions for native tool_use mode
@@ -1082,7 +1121,7 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_map_native_tool_call_to_decision_complete() {
+    fn test_map_virtual_tool_to_decision_complete() {
         let provider = Arc::new(MockProvider::new("{}"));
         let registry = Arc::new(MockProviderRegistry { provider });
         let thinker = Thinker::new(registry, ThinkerConfig::default());
@@ -1093,7 +1132,7 @@ mod tests {
             arguments: serde_json::json!({"summary": "Task done successfully"}),
         };
 
-        let decision = thinker.map_native_tool_call_to_decision(&tc);
+        let decision = thinker.map_virtual_tool_to_decision(&tc);
         match decision {
             crate::agent_loop::Decision::Complete { summary } => {
                 assert_eq!(summary, "Task done successfully");
@@ -1103,7 +1142,7 @@ mod tests {
     }
 
     #[test]
-    fn test_map_native_tool_call_to_decision_ask_user() {
+    fn test_map_virtual_tool_to_decision_ask_user() {
         let provider = Arc::new(MockProvider::new("{}"));
         let registry = Arc::new(MockProviderRegistry { provider });
         let thinker = Thinker::new(registry, ThinkerConfig::default());
@@ -1117,7 +1156,7 @@ mod tests {
             }),
         };
 
-        let decision = thinker.map_native_tool_call_to_decision(&tc);
+        let decision = thinker.map_virtual_tool_to_decision(&tc);
         match decision {
             crate::agent_loop::Decision::AskUser { question, options } => {
                 assert_eq!(question, "Which format?");
@@ -1128,7 +1167,7 @@ mod tests {
     }
 
     #[test]
-    fn test_map_native_tool_call_to_decision_fail() {
+    fn test_map_virtual_tool_to_decision_fail() {
         let provider = Arc::new(MockProvider::new("{}"));
         let registry = Arc::new(MockProviderRegistry { provider });
         let thinker = Thinker::new(registry, ThinkerConfig::default());
@@ -1139,7 +1178,7 @@ mod tests {
             arguments: serde_json::json!({"reason": "File not found"}),
         };
 
-        let decision = thinker.map_native_tool_call_to_decision(&tc);
+        let decision = thinker.map_virtual_tool_to_decision(&tc);
         match decision {
             crate::agent_loop::Decision::Fail { reason } => {
                 assert_eq!(reason, "File not found");
@@ -1149,7 +1188,7 @@ mod tests {
     }
 
     #[test]
-    fn test_map_native_tool_call_to_decision_real_tool() {
+    fn test_map_virtual_tool_to_decision_unknown_returns_silent() {
         let provider = Arc::new(MockProvider::new("{}"));
         let registry = Arc::new(MockProviderRegistry { provider });
         let thinker = Thinker::new(registry, ThinkerConfig::default());
@@ -1160,13 +1199,131 @@ mod tests {
             arguments: serde_json::json!({"query": "rust async"}),
         };
 
-        let decision = thinker.map_native_tool_call_to_decision(&tc);
-        match decision {
-            crate::agent_loop::Decision::UseTools { calls: ref records } => {
-                assert_eq!(records[0].tool_name, "web_search");
-                assert_eq!(records[0].arguments["query"], "rust async");
+        let decision = thinker.map_virtual_tool_to_decision(&tc);
+        assert!(
+            matches!(decision, crate::agent_loop::Decision::Silent),
+            "Expected Silent for non-virtual tool, got {:?}",
+            decision
+        );
+    }
+
+    #[test]
+    fn test_map_to_record() {
+        let tc = crate::providers::adapter::NativeToolCall {
+            id: "call_4".into(),
+            name: "web_search".into(),
+            arguments: serde_json::json!({"query": "rust async"}),
+        };
+
+        let record = Thinker::<MockProviderRegistry>::map_to_record(&tc);
+        assert_eq!(record.call_id, "call_4");
+        assert_eq!(record.tool_name, "web_search");
+        assert_eq!(record.arguments["query"], "rust async");
+    }
+
+    #[test]
+    fn test_pick_terminal_priority() {
+        use crate::providers::adapter::NativeToolCall;
+
+        let complete = NativeToolCall {
+            id: "c1".into(),
+            name: "__complete".into(),
+            arguments: serde_json::json!({"summary": "done"}),
+        };
+        let fail = NativeToolCall {
+            id: "c2".into(),
+            name: "__fail".into(),
+            arguments: serde_json::json!({"reason": "error"}),
+        };
+        let ask = NativeToolCall {
+            id: "c3".into(),
+            name: "__ask_user".into(),
+            arguments: serde_json::json!({"question": "which?"}),
+        };
+
+        // fail > ask > complete
+        let virtuals = vec![&complete, &fail, &ask];
+        let picked = Thinker::<MockProviderRegistry>::pick_terminal(&virtuals);
+        assert_eq!(picked.name, "__fail");
+
+        // ask > complete
+        let virtuals = vec![&complete, &ask];
+        let picked = Thinker::<MockProviderRegistry>::pick_terminal(&virtuals);
+        assert_eq!(picked.name, "__ask_user");
+
+        // complete alone
+        let virtuals = vec![&complete];
+        let picked = Thinker::<MockProviderRegistry>::pick_terminal(&virtuals);
+        assert_eq!(picked.name, "__complete");
+    }
+
+    #[test]
+    fn test_build_thinking_collects_all_tool_calls() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+
+        let response = ProviderResponse {
+            text: None,
+            tool_calls: vec![
+                crate::providers::adapter::NativeToolCall {
+                    id: "call_a".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "ls"}),
+                },
+                crate::providers::adapter::NativeToolCall {
+                    id: "call_b".into(),
+                    name: "web_search".into(),
+                    arguments: serde_json::json!({"query": "rust"}),
+                },
+            ],
+            thinking: Some("run two tools".into()),
+            stop_reason: crate::providers::adapter::StopReason::ToolUse,
+            usage: None,
+        };
+
+        let thinking = thinker.build_thinking_from_native_response(response).unwrap();
+        if let crate::agent_loop::Decision::UseTools { calls: ref records } = thinking.decision {
+            assert_eq!(records.len(), 2);
+            assert_eq!(records[0].call_id, "call_a");
+            assert_eq!(records[1].call_id, "call_b");
+        } else {
+            panic!("Expected UseTools with 2 records, got {:?}", thinking.decision);
+        }
+    }
+
+    #[test]
+    fn test_build_thinking_terminal_defense() {
+        let provider = Arc::new(MockProvider::new("{}"));
+        let registry = Arc::new(MockProviderRegistry { provider });
+        let thinker = Thinker::new(registry, ThinkerConfig::default());
+
+        // LLM returns both a real tool call and a __fail — __fail should win
+        let response = ProviderResponse {
+            text: None,
+            tool_calls: vec![
+                crate::providers::adapter::NativeToolCall {
+                    id: "call_a".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "rm -rf /"}),
+                },
+                crate::providers::adapter::NativeToolCall {
+                    id: "call_b".into(),
+                    name: "__fail".into(),
+                    arguments: serde_json::json!({"reason": "dangerous command"}),
+                },
+            ],
+            thinking: None,
+            stop_reason: crate::providers::adapter::StopReason::ToolUse,
+            usage: None,
+        };
+
+        let thinking = thinker.build_thinking_from_native_response(response).unwrap();
+        match thinking.decision {
+            crate::agent_loop::Decision::Fail { reason } => {
+                assert_eq!(reason, "dangerous command");
             }
-            other => panic!("Expected UseTools, got {:?}", other),
+            other => panic!("Expected Fail (terminal defense), got {:?}", other),
         }
     }
 

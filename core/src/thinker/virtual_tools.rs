@@ -15,6 +15,9 @@ pub const VIRTUAL_COMPLETE: &str = "__complete";
 pub const VIRTUAL_ASK_USER: &str = "__ask_user";
 pub const VIRTUAL_FAIL: &str = "__fail";
 
+/// Priority order for conflicting terminal actions: fail > ask > complete
+pub const TERMINAL_PRIORITY: &[&str] = &[VIRTUAL_FAIL, VIRTUAL_ASK_USER, VIRTUAL_COMPLETE];
+
 /// Generate virtual tool definitions for native tool_use mode
 ///
 /// Returns three virtual tools:
