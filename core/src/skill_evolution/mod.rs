@@ -36,6 +36,7 @@
 //! ```
 
 pub mod approval;
+pub mod differential;
 pub mod collaborative_pipeline;
 pub mod compiler;
 pub mod constraint_validator;
