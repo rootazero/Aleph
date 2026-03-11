@@ -7,7 +7,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "AGPL-3.0-or-later",
   "devDependencies": {
     "tailwindcss": "^4.2",
     "@tailwindcss/cli": "^4.2"

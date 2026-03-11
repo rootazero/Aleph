@@ -3,7 +3,7 @@ name = "aleph-cli"
 version = "0.1.0"
 edition = "2021"
 description = "Aleph CLI - Reference implementation of Aleph Protocol client"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 readme = "README.md"
 
 # IMPORTANT: This crate MUST NOT depend on alephcore
