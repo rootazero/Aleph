@@ -78,6 +78,11 @@ pub struct OpenAiFunction {
     pub name: String,
     pub description: String,
     pub parameters: Value,
+    /// When true, the model must strictly follow the JSON Schema.
+    /// Requires all properties to be listed in `required` and
+    /// `additionalProperties: false` on every object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
 }
 
 /// Tool call in OpenAI API response

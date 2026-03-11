@@ -311,6 +311,7 @@ impl ProtocolAdapter for OpenAiProtocol {
                             name: td.name.clone(),
                             description: td.description.clone(),
                             parameters: params,
+                            strict: if td.strict { Some(true) } else { None },
                         },
                     }
                 })
@@ -608,6 +609,7 @@ mod tests {
                     },
                     "required": ["query"]
                 }),
+                strict: None,
             },
         };
 

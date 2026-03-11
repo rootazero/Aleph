@@ -598,17 +598,22 @@ impl<P: ProviderRegistry> Thinker<P> {
                     .unwrap_or_else(|_| serde_json::json!({"type": "object", "properties": {}}));
                 let mut def =
                     ToolDefinition::new(&t.name, &t.description, params, ToolCategory::Builtin);
-                // Apply strict mode: strictify the schema
-                // TODO(tc2.0): Re-enable once strictify_schema is JSON Schema draft 2020-12 compliant
-                // def.strict = true;
-                // crate::tools::schema_strictify::strictify_schema(&mut def.parameters);
+                // Apply strict mode: constrain schema for deterministic tool arguments
+                def.strict = true;
+                crate::tools::schema_strictify::strictify_schema(&mut def.parameters);
                 def
             })
             .collect();
 
-        // Virtual tools
-        // TODO(tc2.0): Re-enable strict mode once strictify_schema is JSON Schema draft 2020-12 compliant
-        let virtuals = virtual_tools::virtual_tool_definitions();
+        // Virtual tools — also apply strict mode
+        let virtuals = virtual_tools::virtual_tool_definitions()
+            .into_iter()
+            .map(|mut vt| {
+                vt.strict = true;
+                crate::tools::schema_strictify::strictify_schema(&mut vt.parameters);
+                vt
+            })
+            .collect::<Vec<_>>();
         tool_defs.extend(virtuals);
 
         // [PROBE] Tool Calling 2.0 — strict mode stats
