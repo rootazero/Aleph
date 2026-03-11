@@ -7,8 +7,10 @@ pub mod risk_profiler;
 pub mod test_set_generator;
 pub mod structural_linter;
 pub mod semantic_replayer;
+pub mod tiered_validator;
 
 pub use risk_profiler::{SkillRiskLevel, SkillRiskProfile, SkillRiskProfiler};
 pub use test_set_generator::{SampleSource, TestSample, TestSetGenerator, ValidationTestSet};
 pub use structural_linter::{LintResult, StructuralLinter};
 pub use semantic_replayer::{ReplayResult, SemanticReplayer};
+pub use tiered_validator::{TieredValidator, ValidationLevel, ValidationVerdict};
