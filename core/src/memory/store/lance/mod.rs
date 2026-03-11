@@ -83,13 +83,46 @@ impl LanceMemoryBackend {
     }
 
     /// Ensure a table exists — open if it already exists, create empty if not.
+    ///
+    /// If the table exists but its schema is missing columns from the expected
+    /// schema, the table is dropped and recreated. This handles migrations
+    /// (e.g. adding vec_1024/vec_1536 columns to the memories table).
     async fn ensure_table(
         db: &Connection,
         name: &str,
         schema: Arc<arrow_schema::Schema>,
     ) -> Result<Table, AlephError> {
         match db.open_table(name).execute().await {
-            Ok(table) => Ok(table),
+            Ok(table) => {
+                // Check if existing table has all expected columns
+                let table_schema = table.schema().await.map_err(lance_err)?;
+                let missing: Vec<&str> = schema
+                    .fields()
+                    .iter()
+                    .filter(|f| table_schema.field_with_name(f.name()).is_err())
+                    .map(|f| f.name().as_str())
+                    .collect();
+
+                if missing.is_empty() {
+                    Ok(table)
+                } else {
+                    tracing::warn!(
+                        table = name,
+                        missing_columns = ?missing,
+                        "Table schema outdated, dropping and recreating"
+                    );
+                    drop(table);
+                    db.drop_table(name, &[]).await.map_err(lance_err)?;
+                    db.create_empty_table(name, schema)
+                        .execute()
+                        .await
+                        .map_err(|e| {
+                            AlephError::config(format!(
+                                "Failed to recreate table '{}': {}", name, e
+                            ))
+                        })
+                }
+            }
             Err(_) => db
                 .create_empty_table(name, schema)
                 .execute()

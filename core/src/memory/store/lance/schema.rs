@@ -111,7 +111,7 @@ pub fn graph_edges_schema() -> Arc<Schema> {
     ]))
 }
 
-/// Schema for the `memories` table (10 columns).
+/// Schema for the `memories` table (12 columns).
 pub fn memories_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -123,7 +123,10 @@ pub fn memories_schema() -> Arc<Schema> {
         Field::new("session_key", DataType::Utf8, false),
         Field::new("namespace", DataType::Utf8, false),
         Field::new("workspace", DataType::Utf8, false),
+        // Vector columns (multi-dimension coexistence, same as facts table)
         vector_field("vec_768", 768),
+        vector_field("vec_1024", 1024),
+        vector_field("vec_1536", 1536),
     ]))
 }
 
@@ -233,19 +236,27 @@ mod tests {
     #[test]
     fn memories_schema_is_valid() {
         let schema = memories_schema();
-        assert_eq!(schema.fields().len(), 10);
+        assert_eq!(schema.fields().len(), 12);
     }
 
     #[test]
-    fn memories_schema_has_vec_768() {
+    fn memories_schema_has_vector_columns() {
         let schema = memories_schema();
-        let field = schema.field_with_name("vec_768").expect("vec_768 column must exist");
-        assert!(
-            matches!(field.data_type(), DataType::FixedSizeList(_, 768)),
-            "vec_768 should be FixedSizeList(Float32, 768), got {:?}",
-            field.data_type(),
-        );
-        assert!(field.is_nullable());
+        let expected: &[(&str, i32)] = &[
+            ("vec_768", 768),
+            ("vec_1024", 1024),
+            ("vec_1536", 1536),
+        ];
+        for (name, dim) in expected {
+            let field = schema.field_with_name(name).unwrap_or_else(|_| {
+                panic!("memories schema must contain column '{}'", name);
+            });
+            match field.data_type() {
+                DataType::FixedSizeList(_, d) => assert_eq!(d, dim),
+                other => panic!("expected FixedSizeList for '{}', got {:?}", name, other),
+            }
+            assert!(field.is_nullable(), "vector column '{}' should be nullable", name);
+        }
     }
 
     #[test]
