@@ -25,7 +25,7 @@
     "sdk",
     "ai-assistant"
   ],
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "devDependencies": {
     "typescript": "^5.4.0",
     "tsx": "^4.7.0"

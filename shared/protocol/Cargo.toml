@@ -3,7 +3,7 @@ name = "aleph-protocol"
 version = "0.1.0"
 edition = "2021"
 description = "Aleph Agent Protocol - Pure type definitions for protocol communication"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 readme = "README.md"
 
 # This crate is intentionally minimal - pure types only, no runtime dependencies
