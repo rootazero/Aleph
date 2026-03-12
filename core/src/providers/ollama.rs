@@ -55,6 +55,7 @@
 /// ```
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
+use crate::providers::adapter::DiscoveredModel;
 use crate::providers::AiProvider;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -119,6 +120,18 @@ struct GenerateResponse {
 #[derive(Debug, Deserialize)]
 struct OllamaError {
     error: String,
+}
+
+/// Response from Ollama /api/tags endpoint
+#[derive(Debug, Deserialize)]
+struct TagsResponse {
+    models: Vec<OllamaModelInfo>,
+}
+
+/// Model info from Ollama tags
+#[derive(Debug, Deserialize)]
+struct OllamaModelInfo {
+    name: String,
 }
 
 impl OllamaProvider {
@@ -278,6 +291,42 @@ impl OllamaProvider {
             stream: false,
             options: self.build_options(),
         }
+    }
+
+    /// Fetch available models from the local Ollama server
+    pub async fn list_models(&self) -> Result<Vec<DiscoveredModel>> {
+        let base = self.endpoint.trim_end_matches("/api/generate");
+        let url = format!("{}/api/tags", base);
+
+        let response = self
+            .client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .map_err(|e| AlephError::network(format!("Ollama tags request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Ok(vec![]);
+        }
+
+        let tags: TagsResponse = response
+            .json()
+            .await
+            .map_err(|e| AlephError::network(format!("Failed to parse Ollama tags: {}", e)))?;
+
+        let models = tags
+            .models
+            .into_iter()
+            .map(|m| DiscoveredModel {
+                id: m.name.clone(),
+                name: Some(m.name),
+                owned_by: Some("local".to_string()),
+                capabilities: vec!["chat".to_string()],
+            })
+            .collect();
+
+        Ok(models)
     }
 
     /// Handle error response from Ollama
