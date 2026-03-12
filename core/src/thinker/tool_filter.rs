@@ -3,35 +3,15 @@
 //! This module provides intelligent tool filtering to reduce
 //! the number of tools presented to the LLM based on context.
 //!
-//! # Two-Level Filtering
-//!
-//! Tool filtering happens at two levels:
-//!
-//! 1. **Intent-based filtering** (`dispatcher::tool_filter`):
-//!    - Runs before Agent Loop
-//!    - Filters based on detected TaskCategory
-//!    - Produces full_schema_tools + indexed_tools
-//!
-//! 2. **Observation-based filtering** (this module):
-//!    - Runs within Agent Loop
-//!    - Filters based on runtime context (history, attachments)
-//!    - Further refines the tool set based on current step
-//!
-//! The two filters work together:
-//! - Dispatcher filter determines what tools are available
-//! - Thinker filter refines based on what's relevant for current step
+//! Observation-based filtering runs within the Agent Loop,
+//! filtering based on runtime context (history, attachments)
+//! and refining the tool set based on the current step.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::agent_loop::{Observation, ToolInfo};
 use crate::config::ProfileConfig;
-use crate::dispatcher::{tool_filter as intent_filter, UnifiedTool};
-use crate::intent::TaskCategory;
-
-// Re-export intent filter types for convenience
-pub use intent_filter::{
-    FilterResult as IntentFilterResult, ToolFilterConfig as IntentFilterConfig,
-};
+use crate::dispatcher::UnifiedTool;
 
 /// Tool filter configuration
 #[derive(Debug, Clone)]
@@ -40,8 +20,8 @@ pub struct ToolFilterConfig {
     pub max_tools: usize,
     /// Always include these tools regardless of context
     pub always_include: Vec<String>,
-    /// Category to tool mappings
-    pub category_tools: HashMap<TaskCategory, Vec<String>>,
+    /// Category to tool mappings (string keys for flexibility)
+    pub category_tools: HashMap<String, Vec<String>>,
     /// Enable dynamic filtering based on history
     pub dynamic_filtering: bool,
 }
@@ -58,11 +38,11 @@ impl Default for ToolFilterConfig {
 }
 
 impl ToolFilterConfig {
-    fn default_category_tools() -> HashMap<TaskCategory, Vec<String>> {
+    fn default_category_tools() -> HashMap<String, Vec<String>> {
         let mut map = HashMap::new();
 
         map.insert(
-            TaskCategory::FileOperation,
+            "file_operation".to_string(),
             vec![
                 "read_file".to_string(),
                 "write_file".to_string(),
@@ -74,17 +54,17 @@ impl ToolFilterConfig {
         );
 
         map.insert(
-            TaskCategory::WebSearch,
+            "web_search".to_string(),
             vec!["web_search".to_string(), "web_fetch".to_string()],
         );
 
         map.insert(
-            TaskCategory::CodeExecution,
+            "code_execution".to_string(),
             vec!["execute_code".to_string(), "run_command".to_string()],
         );
 
         map.insert(
-            TaskCategory::ImageGeneration,
+            "image_generation".to_string(),
             vec!["generate_image".to_string(), "edit_image".to_string()],
         );
 
@@ -95,8 +75,6 @@ impl ToolFilterConfig {
 /// Tool filter for reducing tool set based on context
 pub struct ToolFilter {
     config: ToolFilterConfig,
-    /// Optional intent-based filter for pre-filtering
-    intent_filter: Option<intent_filter::ToolFilter>,
     /// Optional profile for workspace-based filtering
     profile: Option<ProfileConfig>,
 }
@@ -106,19 +84,6 @@ impl ToolFilter {
     pub fn new(config: ToolFilterConfig) -> Self {
         Self {
             config,
-            intent_filter: None,
-            profile: None,
-        }
-    }
-
-    /// Create a new tool filter with intent-based pre-filtering
-    pub fn with_intent_filter(
-        config: ToolFilterConfig,
-        intent_config: intent_filter::ToolFilterConfig,
-    ) -> Self {
-        Self {
-            config,
-            intent_filter: Some(intent_filter::ToolFilter::new(intent_config)),
             profile: None,
         }
     }
@@ -139,26 +104,6 @@ impl ToolFilter {
         match &self.profile {
             Some(p) if !p.tools.is_empty() => p.is_tool_allowed(tool_name),
             _ => true, // No profile or empty whitelist = all tools allowed
-        }
-    }
-
-    /// Pre-filter tools by task category using intent-based filter
-    ///
-    /// Returns a FilterResult containing:
-    /// - core_tools: Always available with full schema
-    /// - filtered_tools: Relevant to the category with full schema
-    /// - indexed_tools: Available but need get_tool_schema to use
-    pub fn pre_filter_by_category(
-        &self,
-        tools: &[UnifiedTool],
-        category: TaskCategory,
-    ) -> intent_filter::FilterResult {
-        if let Some(ref filter) = self.intent_filter {
-            filter.filter_by_category(tools, category)
-        } else {
-            // Fallback: use default intent filter
-            let default_filter = intent_filter::ToolFilter::default_config();
-            default_filter.filter_by_category(tools, category)
         }
     }
 
@@ -226,7 +171,7 @@ impl ToolFilter {
     }
 
     /// Detect likely task categories from observation
-    fn detect_categories(&self, observation: &Observation) -> Vec<TaskCategory> {
+    fn detect_categories(&self, observation: &Observation) -> Vec<String> {
         let mut categories = Vec::new();
 
         // Check attachments for hints (MediaAttachment is a struct, not enum)
@@ -235,7 +180,7 @@ impl ToolFilter {
             .iter()
             .any(|a| a.media_type == "image" || a.mime_type.starts_with("image/"))
         {
-            categories.push(TaskCategory::ImageGeneration);
+            categories.push("image_generation".to_string());
         }
 
         if observation
@@ -243,7 +188,7 @@ impl ToolFilter {
             .iter()
             .any(|a| a.media_type == "file" || a.media_type == "document")
         {
-            categories.push(TaskCategory::FileOperation);
+            categories.push("file_operation".to_string());
         }
 
         // URL detection from mime_type or filename
@@ -251,24 +196,24 @@ impl ToolFilter {
             a.mime_type.contains("url")
                 || a.filename.as_ref().is_some_and(|f| f.starts_with("http"))
         }) {
-            categories.push(TaskCategory::WebFetch);
+            categories.push("web_fetch".to_string());
         }
 
         // Check recent steps for patterns
         for step in &observation.recent_steps {
             if step.action_type.contains("search") {
-                categories.push(TaskCategory::WebSearch);
+                categories.push("web_search".to_string());
             }
             if step.action_type.contains("file") {
-                categories.push(TaskCategory::FileOperation);
+                categories.push("file_operation".to_string());
             }
             if step.action_type.contains("code") || step.action_type.contains("execute") {
-                categories.push(TaskCategory::CodeExecution);
+                categories.push("code_execution".to_string());
             }
         }
 
         // Deduplicate
-        categories.sort_by_key(|c| format!("{:?}", c));
+        categories.sort();
         categories.dedup();
 
         categories

@@ -95,3 +95,5 @@ pub use types::{
 
 #[cfg(test)]
 mod integration_tests;
+#[cfg(test)]
+mod probe_integration_tests;
