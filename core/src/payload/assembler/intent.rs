@@ -1,8 +1,7 @@
 /// Intent-based prompt building
 ///
 /// This module handles building prompts based on `IntentResult`.
-use crate::intent::{AgentModePrompt, TaskCategory};
-use crate::intent::types::IntentResult;
+use crate::intent::{IntentResult, TaskCategory};
 use crate::payload::{AgentContext, ContextFormat};
 use crate::prompt::{PromptBuilder, PromptConfig, ToolInfo};
 use crate::capability::CapabilityDeclaration;
@@ -52,11 +51,9 @@ pub fn build_prompt_with_intent_result(
 ) -> String {
     let mut prompt = build_capability_aware_prompt(context_format, base_prompt, capabilities, context);
 
-    // Inject agent mode prompt if intent is actionable
+    // Inject agent mode hint if intent is actionable
     if let Some(IntentResult::Execute { .. }) | Some(IntentResult::DirectTool { .. }) = result {
-        let agent_prompt = AgentModePrompt::new().generate();
-        prompt.push_str("\n\n");
-        prompt.push_str(&agent_prompt);
+        prompt.push_str("\n\nYou are in execution mode. Present your best plan directly, show a summary of operations, and wait for user confirmation before destructive operations.");
     }
 
     prompt

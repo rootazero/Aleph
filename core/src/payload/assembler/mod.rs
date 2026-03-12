@@ -33,7 +33,7 @@ impl PromptAssembler {
         base_prompt: &str,
         capabilities: &[crate::capability::CapabilityDeclaration],
         context: Option<&super::AgentContext>,
-        result: Option<&crate::intent::types::IntentResult>,
+        result: Option<&crate::intent::IntentResult>,
     ) -> String {
         intent::build_prompt_with_intent_result(
             &self.context_format,
@@ -49,7 +49,7 @@ impl PromptAssembler {
     /// This is the `IntentResult`-based prompt builder.
     pub fn build_prompt_for_intent(
         &self,
-        result: &crate::intent::types::IntentResult,
+        result: &crate::intent::IntentResult,
         tools: &[crate::prompt::ToolInfo],
         context: Option<&super::AgentContext>,
         config: Option<&crate::prompt::PromptConfig>,
@@ -495,7 +495,7 @@ mod tests {
 
     #[test]
     fn test_build_prompt_with_intent_result_execute() {
-        use crate::intent::types::{DetectionLayer, ExecuteMetadata, IntentResult};
+        use crate::intent::{DetectionLayer, ExecuteMetadata, IntentResult};
 
         let assembler = PromptAssembler::new(ContextFormat::Markdown);
 
@@ -515,14 +515,13 @@ mod tests {
         // Should contain base prompt
         assert!(prompt.contains("Base prompt."));
 
-        // Should contain agent mode prompt
-        assert!(prompt.contains("# Role"));
-        assert!(prompt.contains("task executor"));
+        // Should contain agent mode hint
+        assert!(prompt.contains("execution mode"));
     }
 
     #[test]
     fn test_build_prompt_with_intent_result_converse() {
-        use crate::intent::types::IntentResult;
+        use crate::intent::IntentResult;
 
         let assembler = PromptAssembler::new(ContextFormat::Markdown);
 
