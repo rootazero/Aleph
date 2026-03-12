@@ -67,6 +67,7 @@ pub mod routing_config;
 pub mod inbound_router;
 pub mod intent_detector;
 pub mod execution_adapter;
+pub mod session_scheduler;
 pub mod inter_agent_policy;
 pub mod context;
 pub mod lane;
