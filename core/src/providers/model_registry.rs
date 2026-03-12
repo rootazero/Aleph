@@ -89,6 +89,12 @@ impl ModelRegistry {
         }
     }
 
+    /// Override cache TTL (useful for testing)
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = ttl;
+        self
+    }
+
     /// Get available models for a provider (with caching)
     ///
     /// Resolution order:
@@ -357,5 +363,12 @@ models = [
         assert!(registry.presets.contains_key("openai"));
         assert!(registry.presets.contains_key("gemini"));
         assert!(!registry.presets["anthropic"].is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_with_ttl_overrides_default() {
+        let registry = ModelRegistry::new(None)
+            .with_ttl(Duration::from_millis(50));
+        assert_eq!(registry.ttl, Duration::from_millis(50));
     }
 }
