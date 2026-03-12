@@ -124,14 +124,14 @@ struct OllamaError {
 
 /// Response from Ollama /api/tags endpoint
 #[derive(Debug, Deserialize)]
-struct TagsResponse {
-    models: Vec<OllamaModelInfo>,
+pub(crate) struct TagsResponse {
+    pub(crate) models: Vec<OllamaModelInfo>,
 }
 
 /// Model info from Ollama tags
 #[derive(Debug, Deserialize)]
-struct OllamaModelInfo {
-    name: String,
+pub(crate) struct OllamaModelInfo {
+    pub(crate) name: String,
 }
 
 impl OllamaProvider {
@@ -698,5 +698,29 @@ mod tests {
         let opts = options.unwrap();
         assert_eq!(opts.temperature, Some(0.8));
         assert_eq!(opts.num_predict, Some(1000));
+    }
+
+    #[test]
+    fn parse_tags_response_success() {
+        let json = r#"{"models": [{"name": "llama3:latest"}, {"name": "codellama:7b"}]}"#;
+        let tags: TagsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(tags.models.len(), 2);
+        assert_eq!(tags.models[0].name, "llama3:latest");
+        assert_eq!(tags.models[1].name, "codellama:7b");
+    }
+
+    #[test]
+    fn parse_tags_response_empty() {
+        let json = r#"{"models": []}"#;
+        let tags: TagsResponse = serde_json::from_str(json).unwrap();
+        assert!(tags.models.is_empty());
+    }
+
+    #[test]
+    fn parse_tags_response_vision_model_detection() {
+        let json = r#"{"models": [{"name": "llava:latest"}, {"name": "bakllava:7b"}]}"#;
+        let tags: TagsResponse = serde_json::from_str(json).unwrap();
+        assert!(tags.models[0].name.contains("llava"));
+        assert!(tags.models[1].name.contains("llava"));
     }
 }
