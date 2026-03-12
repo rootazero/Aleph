@@ -579,3 +579,64 @@ async fn then_keep_system_false(w: &mut AlephWorld) {
     let params = ctx.clear_params.as_ref().expect("ClearParams not deserialized");
     assert!(!params.keep_system, "keep_system should be false");
 }
+
+// =========================================================================
+// Model Discovery Steps
+// =========================================================================
+
+#[then("the models array should contain models with source field")]
+async fn then_models_have_source(w: &mut AlephWorld) {
+    let ctx = w.models.as_ref().expect("Models context not initialized");
+    let models = ctx.get_models_array().expect("No models in response");
+    for model in models {
+        assert!(model.get("source").is_some(), "Model missing 'source' field: {:?}", model);
+    }
+}
+
+#[then("the models should include preset models")]
+async fn then_models_include_presets(w: &mut AlephWorld) {
+    let ctx = w.models.as_ref().expect("Models context not initialized");
+    let models = ctx.get_models_array().expect("No models in response");
+    assert!(!models.is_empty(), "Expected preset models but got empty");
+}
+
+#[when(expr = "I call models.refresh for provider {string}")]
+async fn when_call_models_refresh(w: &mut AlephWorld, provider: String) {
+    let ctx = w.models.as_mut().expect("Models context not initialized");
+    let config = ctx.get_config();
+    let request = JsonRpcRequest::new(
+        "models.refresh",
+        Some(json!({"provider": provider})),
+        Some(json!(1)),
+    );
+    let response = models::handle_refresh(request, config).await;
+    ctx.response = Some(response);
+}
+
+#[given(expr = "a mutable config with providers {string} and {string} default {string}")]
+async fn given_mutable_config(w: &mut AlephWorld, p1: String, p2: String, default: String) {
+    let ctx = w.models.get_or_insert_with(ModelsContext::default);
+    ctx.init_mutable_config_with_providers(vec![(&p1, "model-1"), (&p2, "model-2")]);
+    // Set default on the mutable config
+    {
+        let mutable_cfg = ctx.get_mutable_config();
+        let mut config = mutable_cfg.write().await;
+        config.general.default_provider = Some(default.clone());
+    }
+    // Also init read-only config for other handlers
+    ctx.init_config_with_providers(vec![(&p1, "model-1"), (&p2, "model-2")]);
+    ctx.set_default_provider(&default);
+}
+
+#[when(expr = "I call models.set with model {string}")]
+async fn when_call_models_set(w: &mut AlephWorld, model: String) {
+    let ctx = w.models.as_mut().expect("Models context not initialized");
+    let config = ctx.get_mutable_config();
+    let request = JsonRpcRequest::new(
+        "models.set",
+        Some(json!({"model": model})),
+        Some(json!(1)),
+    );
+    let response = models::handle_set(request, config).await;
+    ctx.response = Some(response);
+}

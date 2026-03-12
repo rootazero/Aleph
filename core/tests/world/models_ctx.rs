@@ -3,6 +3,7 @@
 //! Provides shared state for testing models.* and chat.* RPC handlers.
 
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use alephcore::gateway::handlers::chat::{ClearParams, HistoryParams, SendParams};
 use alephcore::gateway::protocol::JsonRpcResponse;
@@ -12,8 +13,10 @@ use serde_json::Value;
 /// Models test context
 #[derive(Debug, Default)]
 pub struct ModelsContext {
-    /// Config under test
+    /// Config under test (read-only)
     pub config: Option<Arc<Config>>,
+    /// Mutable config for handlers that need write access
+    pub mutable_config: Option<Arc<RwLock<Config>>>,
     /// Last JSON-RPC response
     pub response: Option<JsonRpcResponse>,
     /// JSON value for param deserialization
@@ -51,7 +54,7 @@ impl ModelsContext {
     fn protocol_for_provider(name: &str) -> String {
         match name {
             "openai" => "openai".to_string(),
-            "claude" => "anthropic".to_string(),
+            "anthropic" | "claude" => "anthropic".to_string(),
             "gemini" => "gemini".to_string(),
             "ollama" => "ollama".to_string(),
             _ => "openai".to_string(),
@@ -86,6 +89,22 @@ impl ModelsContext {
     pub fn set_default_provider(&mut self, provider: &str) {
         let config = Arc::make_mut(self.config.as_mut().expect("Config not initialized"));
         config.general.default_provider = Some(provider.to_string());
+    }
+
+    /// Create mutable config with multiple providers for handlers that need write access
+    pub fn init_mutable_config_with_providers(&mut self, providers: Vec<(&str, &str)>) {
+        let mut config = Config::default();
+        for (name, model) in providers {
+            let mut provider_config = ProviderConfig::test_config(model);
+            provider_config.protocol = Some(Self::protocol_for_provider(name));
+            config.providers.insert(name.to_string(), provider_config);
+        }
+        self.mutable_config = Some(Arc::new(RwLock::new(config)));
+    }
+
+    /// Get mutable config
+    pub fn get_mutable_config(&self) -> Arc<RwLock<Config>> {
+        self.mutable_config.clone().expect("Mutable config not initialized")
     }
 
     /// Get config

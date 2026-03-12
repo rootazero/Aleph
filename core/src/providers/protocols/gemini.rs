@@ -7,7 +7,7 @@ use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{
-    NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason,
+    DiscoveredModel, NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason,
 };
 use crate::providers::gemini::{
     Content, GeminiFunctionDeclaration, GeminiToolConfig, GenerateContentRequest,
@@ -427,6 +427,65 @@ impl ProtocolAdapter for GeminiProtocol {
     fn name(&self) -> &'static str {
         "gemini"
     }
+
+    async fn list_models(&self, config: &ProviderConfig) -> Result<Option<Vec<DiscoveredModel>>> {
+        let base_url = config
+            .base_url
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_string());
+
+        let api_key = config.api_key.as_deref().unwrap_or("");
+        let url = format!("{}/v1beta/models?key={}", base_url, api_key);
+
+        let response = self
+            .client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .map_err(|e| AlephError::network(format!("Gemini model list request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| AlephError::network(format!("Failed to parse Gemini model list: {}", e)))?;
+
+        let models = parse_gemini_models_response(&body)?;
+
+        Ok(Some(models))
+    }
+}
+
+/// Parse Gemini /v1beta/models JSON response into DiscoveredModel list
+pub(crate) fn parse_gemini_models_response(
+    body: &serde_json::Value,
+) -> crate::error::Result<Vec<DiscoveredModel>> {
+    let models = body["models"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    // Gemini returns "models/gemini-1.5-pro" format
+                    let full_name = m["name"].as_str()?;
+                    let id = full_name.strip_prefix("models/").unwrap_or(full_name);
+                    let display_name = m["displayName"].as_str().map(|s| s.to_string());
+                    Some(DiscoveredModel {
+                        id: id.to_string(),
+                        name: display_name,
+                        owned_by: Some("google".to_string()),
+                        capabilities: vec!["chat".to_string()],
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(models)
 }
 
 #[cfg(test)]
@@ -852,5 +911,35 @@ mod tests {
 
         assert_eq!(result.text.as_deref(), Some("Partial response"));
         assert_eq!(result.stop_reason, StopReason::Unknown);
+    }
+
+    #[test]
+    fn parse_gemini_models_success() {
+        let body = serde_json::json!({
+            "models": [
+                {"name": "models/gemini-2.5-pro", "displayName": "Gemini 2.5 Pro"},
+                {"name": "models/gemini-2.5-flash", "displayName": "Gemini 2.5 Flash"}
+            ]
+        });
+        let models = parse_gemini_models_response(&body).unwrap();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gemini-2.5-pro");
+        assert_eq!(models[0].name, Some("Gemini 2.5 Pro".to_string()));
+        assert_eq!(models[0].owned_by, Some("google".to_string()));
+        assert_eq!(models[0].capabilities, vec!["chat".to_string()]);
+    }
+
+    #[test]
+    fn parse_gemini_models_empty() {
+        let body = serde_json::json!({"models": []});
+        let models = parse_gemini_models_response(&body).unwrap();
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn parse_gemini_models_malformed() {
+        let body = serde_json::json!({"invalid": true});
+        let models = parse_gemini_models_response(&body).unwrap();
+        assert!(models.is_empty());
     }
 }

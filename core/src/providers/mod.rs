@@ -68,6 +68,7 @@ pub mod shared;
 pub mod adapter;
 pub mod http_provider;
 pub mod presets;
+pub mod model_registry;
 pub mod protocols;
 
 // Re-exports
@@ -94,6 +95,7 @@ pub use retry::retry_with_backoff;
 pub use adapter::{ProtocolAdapter, RequestPayload, ProviderResponse, NativeToolCall, StopReason, TokenUsage};
 pub use http_provider::HttpProvider;
 pub use presets::{get_preset, ProviderPreset, PRESETS};
+pub use model_registry::ModelRegistry;
 pub use protocols::OpenAiProtocol;
 
 use crate::agents::thinking::ThinkLevel;

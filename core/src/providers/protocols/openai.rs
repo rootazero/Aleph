@@ -6,7 +6,8 @@
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{
-    NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
+    DiscoveredModel, NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason,
+    TokenUsage,
 };
 use crate::providers::openai::{
     ChatCompletionResponse, ContentBlock, ImageUrl, Message, MessageContent, OpenAiFunction,
@@ -459,6 +460,69 @@ impl ProtocolAdapter for OpenAiProtocol {
     fn name(&self) -> &'static str {
         "openai"
     }
+
+    async fn list_models(&self, config: &ProviderConfig) -> Result<Option<Vec<DiscoveredModel>>> {
+        let base_url = config
+            .base_url
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+
+        // Normalize: ensure we have /v1 suffix for the models endpoint
+        let url = if base_url.ends_with("/v1") {
+            format!("{}/models", base_url)
+        } else {
+            format!("{}/v1/models", base_url)
+        };
+
+        let api_key = config.api_key.as_deref().unwrap_or("");
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .map_err(|e| AlephError::network(format!("Model list request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| AlephError::network(format!("Failed to parse model list: {}", e)))?;
+
+        let models = parse_models_response(&body)?;
+
+        Ok(Some(models))
+    }
+}
+
+/// Parse OpenAI /v1/models JSON response into DiscoveredModel list
+pub(crate) fn parse_models_response(
+    body: &serde_json::Value,
+) -> crate::error::Result<Vec<DiscoveredModel>> {
+    let models = body["data"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    let id = m["id"].as_str()?;
+                    Some(DiscoveredModel {
+                        id: id.to_string(),
+                        name: Some(id.to_string()),
+                        owned_by: m["owned_by"].as_str().map(|s| s.to_string()),
+                        capabilities: vec!["chat".to_string()],
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(models)
 }
 
 #[cfg(test)]
@@ -807,5 +871,39 @@ mod tests {
         assert_eq!(tools_array.len(), 2);
         assert_eq!(tools_array[0]["function"]["name"], "search");
         assert_eq!(tools_array[1]["function"]["name"], "read_file");
+    }
+
+    // =========================================================================
+    // parse_models_response L1 unit tests
+    // =========================================================================
+
+    #[test]
+    fn parse_models_response_success() {
+        let body = serde_json::json!({
+            "data": [
+                {"id": "gpt-4o", "owned_by": "openai"},
+                {"id": "gpt-4o-mini", "owned_by": "openai"}
+            ]
+        });
+        let models = parse_models_response(&body).unwrap();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gpt-4o");
+        assert_eq!(models[0].owned_by, Some("openai".to_string()));
+        assert_eq!(models[0].capabilities, vec!["chat".to_string()]);
+        assert_eq!(models[1].id, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn parse_models_response_empty() {
+        let body = serde_json::json!({"data": []});
+        let models = parse_models_response(&body).unwrap();
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn parse_models_response_malformed() {
+        let body = serde_json::json!({"invalid": true});
+        let models = parse_models_response(&body).unwrap();
+        assert!(models.is_empty());
     }
 }
