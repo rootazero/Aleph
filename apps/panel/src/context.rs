@@ -11,6 +11,36 @@ use futures::channel::{oneshot, mpsc};
 use serde_json::Value;
 use crate::components::sidebar::SystemAlert;
 
+#[cfg(target_arch = "wasm32")]
+fn get_local_storage(key: &str) -> Option<String> {
+    web_sys::window()?
+        .local_storage().ok()??
+        .get_item(key).ok()?
+}
+
+#[cfg(target_arch = "wasm32")]
+fn set_local_storage(key: &str, value: &str) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok()).flatten() {
+        let _ = storage.set_item(key, value);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn remove_local_storage(key: &str) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok()).flatten() {
+        let _ = storage.remove_item(key);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn get_local_storage(_key: &str) -> Option<String> { None }
+
+#[cfg(not(target_arch = "wasm32"))]
+fn set_local_storage(_key: &str, _value: &str) {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn remove_local_storage(_key: &str) {}
+
 // RPC request sent to the message loop
 struct RpcRequest {
     id: String,
@@ -194,6 +224,69 @@ impl DashboardState {
         response_rx.await.map_err(|_| "Response channel closed".to_string())?
     }
 
+    /// Authenticate with the gateway after WebSocket connection is established
+    async fn authenticate(&self) -> Result<(), String> {
+        // Try stored device token first
+        if let Some(token) = get_local_storage("aleph_device_token") {
+            let result = self.rpc_call("connect", serde_json::json!({
+                "token": token,
+                "device_name": "Web Panel"
+            })).await;
+
+            if let Ok(resp) = result {
+                // Update stored token if a new one was issued
+                if let Some(new_token) = resp.get("token").and_then(|t| t.as_str()) {
+                    set_local_storage("aleph_device_token", new_token);
+                }
+                return Ok(());
+            }
+            // Token invalid, clear it and try shared token
+            remove_local_storage("aleph_device_token");
+            web_sys::console::log_1(&"Device token invalid, trying shared token...".into());
+        }
+
+        // Try shared token from localStorage (set during login page)
+        if let Some(token) = get_local_storage("aleph_shared_token") {
+            let result = self.rpc_call("connect", serde_json::json!({
+                "shared_token": token,
+                "device_name": "Web Panel"
+            })).await;
+
+            match result {
+                Ok(resp) => {
+                    // Store device token for future use
+                    if let Some(device_token) = resp.get("token").and_then(|t| t.as_str()) {
+                        set_local_storage("aleph_device_token", device_token);
+                    }
+                    return Ok(());
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Shared token auth failed: {}", e).into());
+                    // Clear invalid shared token
+                    remove_local_storage("aleph_shared_token");
+                }
+            }
+        }
+
+        // No token available — try a plain connect (works when auth_mode is "none")
+        let result = self.rpc_call("connect", serde_json::json!({
+            "device_name": "Web Panel"
+        })).await;
+
+        match result {
+            Ok(resp) => {
+                if let Some(token) = resp.get("token").and_then(|t| t.as_str()) {
+                    set_local_storage("aleph_device_token", token);
+                }
+                Ok(())
+            }
+            Err(_) => {
+                // Auth required but no token — redirect to login
+                Err("Authentication required".to_string())
+            }
+        }
+    }
+
     /// Connect to the gateway
     pub async fn connect(&self) -> Result<(), String> {
         let url = self.gateway_url.get();
@@ -326,22 +419,37 @@ impl DashboardState {
                     web_sys::console::log_1(&"Message loop stopped".into());
                 });
 
-                self.is_connected.set(true);
-                self.connection_error.set(None);
-                self.reconnect_count.set(0);
-                self.is_reconnecting.set(false);
+                // Authenticate before marking as connected
+                let auth_state = *self;
+                let auth_result = auth_state.authenticate().await;
+                match auth_result {
+                    Ok(()) => {
+                        self.is_connected.set(true);
+                        self.connection_error.set(None);
+                        self.reconnect_count.set(0);
+                        self.is_reconnecting.set(false);
 
-                // Subscribe to config events automatically
-                let state_for_subscribe = *self;
-                spawn_local(async move {
-                    if let Err(e) = state_for_subscribe.subscribe_topic("config.**").await {
-                        web_sys::console::error_1(&format!("Failed to subscribe to config events: {}", e).into());
-                    } else {
-                        web_sys::console::log_1(&"Subscribed to config.** events".into());
+                        // Subscribe to config events automatically
+                        let state_for_subscribe = *self;
+                        spawn_local(async move {
+                            if let Err(e) = state_for_subscribe.subscribe_topic("config.**").await {
+                                web_sys::console::error_1(&format!("Failed to subscribe to config events: {}", e).into());
+                            }
+                        });
+
+                        Ok(())
                     }
-                });
-
-                Ok(())
+                    Err(e) => {
+                        // Auth failed — redirect to login page
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            if let Some(window) = web_sys::window() {
+                                let _ = window.location().set_href("/login");
+                            }
+                        }
+                        Err(e)
+                    }
+                }
             }
             Err(e) => {
                 self.is_connected.set(false);
