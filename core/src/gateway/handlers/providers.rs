@@ -706,6 +706,29 @@ pub async fn handle_test(request: JsonRpcRequest, config_store: Arc<RwLock<Confi
 }
 
 // ============================================================================
+// Needs Setup
+// ============================================================================
+
+/// Check if first-run setup is needed
+///
+/// Returns true if no provider is both enabled and verified.
+/// Panel calls this on startup to decide whether to show the setup wizard.
+pub async fn handle_needs_setup(request: JsonRpcRequest, config_store: Arc<RwLock<Config>>) -> JsonRpcResponse {
+    let cfg = config_store.read().await;
+    let provider_count = cfg.providers.len();
+    let has_verified = cfg.providers.values().any(|p| p.enabled && p.verified);
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "needs_setup": !has_verified,
+            "provider_count": provider_count,
+            "has_verified": has_verified,
+        }),
+    )
+}
+
+// ============================================================================
 // Set Default
 // ============================================================================
 
@@ -929,5 +952,48 @@ mod tests {
         .unwrap();
 
         assert_eq!(key.as_deref(), Some("sk-inline-test"));
+    }
+
+    #[tokio::test]
+    async fn test_needs_setup_empty_providers() {
+        let config = Arc::new(RwLock::new(Config::default()));
+        let request = JsonRpcRequest::with_id("providers.needsSetup", None, serde_json::json!(1));
+        let response = handle_needs_setup(request, config).await;
+        let result: serde_json::Value = serde_json::from_value(response.result.unwrap()).unwrap();
+        assert_eq!(result["needs_setup"], true);
+        assert_eq!(result["provider_count"], 0);
+        assert_eq!(result["has_verified"], false);
+    }
+
+    #[tokio::test]
+    async fn test_needs_setup_has_verified_provider() {
+        let mut config = Config::default();
+        let mut provider_cfg = ProviderConfig::test_config("gpt-4o");
+        provider_cfg.enabled = true;
+        provider_cfg.verified = true;
+        config.providers.insert("openai".to_string(), provider_cfg);
+        let config = Arc::new(RwLock::new(config));
+        let request = JsonRpcRequest::with_id("providers.needsSetup", None, serde_json::json!(1));
+        let response = handle_needs_setup(request, config).await;
+        let result: serde_json::Value = serde_json::from_value(response.result.unwrap()).unwrap();
+        assert_eq!(result["needs_setup"], false);
+        assert_eq!(result["provider_count"], 1);
+        assert_eq!(result["has_verified"], true);
+    }
+
+    #[tokio::test]
+    async fn test_needs_setup_has_unverified_provider() {
+        let mut config = Config::default();
+        let mut provider_cfg = ProviderConfig::test_config("gpt-4o");
+        provider_cfg.enabled = true;
+        provider_cfg.verified = false;
+        config.providers.insert("openai".to_string(), provider_cfg);
+        let config = Arc::new(RwLock::new(config));
+        let request = JsonRpcRequest::with_id("providers.needsSetup", None, serde_json::json!(1));
+        let response = handle_needs_setup(request, config).await;
+        let result: serde_json::Value = serde_json::from_value(response.result.unwrap()).unwrap();
+        assert_eq!(result["needs_setup"], true);
+        assert_eq!(result["provider_count"], 1);
+        assert_eq!(result["has_verified"], false);
     }
 }
