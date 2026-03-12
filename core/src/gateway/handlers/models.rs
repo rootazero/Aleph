@@ -469,6 +469,17 @@ pub async fn handle_refresh(request: JsonRpcRequest, config: Arc<Config>) -> Jso
         protocol_registry.register_builtin();
     }
 
+    // Validate specific provider filter exists in config
+    if let Some(ref filter) = params.provider {
+        if !config.providers.contains_key(filter.as_str()) {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Provider not found: {}", filter),
+            );
+        }
+    }
+
     let providers_to_refresh: Vec<_> = config
         .providers
         .iter()
