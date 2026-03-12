@@ -285,8 +285,7 @@ mod tests {
         ToolInfo {
             name: name.to_string(),
             description: format!("{} tool description", name),
-            parameters_schema: "{}".to_string(),
-            category: None,
+            parameters_schema: None,
         }
     }
 

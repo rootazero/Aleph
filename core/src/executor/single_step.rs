@@ -35,8 +35,7 @@ use std::time::Instant;
 use tracing::{debug, error, info};
 
 use aleph_protocol::IdentityContext;
-use crate::agent_loop::{Action, ActionExecutor, ActionResult};
-use crate::agent_loop::decision::{ToolCallResult, SingleToolResult};
+use super::action_types::{Action, ActionExecutor, ActionResult, ToolCallResult, SingleToolResult};
 use crate::config::ProfileConfig;
 use crate::dispatcher::UnifiedTool;
 use crate::error::{AlephError, Result};
@@ -564,7 +563,7 @@ mod tests {
 
         let executor = SingleStepExecutor::new(Arc::new(registry));
 
-        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
+        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
             tool_name: "search".to_string(),
             arguments: json!({"query": "test"}) }]};
 
@@ -581,7 +580,7 @@ mod tests {
         let registry = MockToolRegistry::new();
         let executor = SingleStepExecutor::new(Arc::new(registry));
 
-        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
+        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
             tool_name: "unknown".to_string(),
             arguments: json!({}) }]};
 
@@ -651,7 +650,7 @@ mod tests {
         let executor = SingleStepExecutor::new(Arc::new(registry));
 
         // LLM returns tool name with suffix "file_ops:mkdir"
-        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
+        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
             tool_name: "file_ops:mkdir".to_string(),
             arguments: json!({"operation": "mkdir", "path": "/tmp/test"}) }]};
 
@@ -687,7 +686,7 @@ mod tests {
             source_channel: "test".to_string(),
         };
 
-        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
+        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
             tool_name: "shell_exec".to_string(),
             arguments: json!({"command": "ls"}) }]};
 
@@ -724,7 +723,7 @@ mod tests {
             source_channel: "test".to_string(),
         };
 
-        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
+        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
             tool_name: "translate".to_string(),
             arguments: json!({"text": "你好"}) }]};
 
@@ -749,7 +748,7 @@ mod tests {
             .with_exec_security_gate(gate);
 
         let identity = IdentityContext::owner("session:test".to_string(), "test".to_string());
-        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
+        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
             tool_name: "bash".to_string(),
             arguments: serde_json::json!({"cmd": "rm -rf /"}) }]};
 
@@ -772,7 +771,7 @@ mod tests {
             "session:test".to_string(), "test".to_string()
         );
         // A safe action that doesn't require shell
-        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest { call_id: String::new(),
+        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
             tool_name: "bash".to_string(),
             arguments: serde_json::json!({"cmd": "echo hello"}) }]};
 

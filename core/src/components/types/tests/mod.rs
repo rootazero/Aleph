@@ -1,6 +1,5 @@
 //! Tests for types module
 
-use crate::agent_loop::RequestContext;
 use crate::components::types::*;
 
 #[test]
@@ -210,11 +209,10 @@ fn test_system_reminder_part() {
 
 #[test]
 fn test_execution_session_with_request_context() {
-    let ctx = RequestContext {
-        current_app: Some("Terminal".to_string()),
-        working_directory: Some("/tmp".to_string()),
-        ..Default::default()
-    };
+    let ctx = serde_json::json!({
+        "current_app": "Terminal",
+        "working_directory": "/tmp",
+    });
 
     let session = ExecutionSession::new()
         .with_original_request("Find files")
@@ -222,7 +220,7 @@ fn test_execution_session_with_request_context() {
 
     assert_eq!(session.original_request, "Find files");
     assert!(session.context.is_some());
-    assert_eq!(session.context.as_ref().unwrap().current_app, Some("Terminal".to_string()));
+    assert_eq!(session.context.as_ref().unwrap()["current_app"], "Terminal");
     assert!(!session.needs_compaction);
 }
 

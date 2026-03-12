@@ -4,13 +4,10 @@
 //! including system prompts and message history.
 
 mod cache;
-mod messages;
 mod sections;
 
 #[cfg(test)]
 mod tests;
-
-pub use messages::{Message, MessageRole};
 
 use crate::config::ProfileConfig;
 use crate::dispatcher::tool_index::HydrationResult;

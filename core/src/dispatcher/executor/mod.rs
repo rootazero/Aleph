@@ -18,25 +18,20 @@ pub use registry::ExecutorRegistry;
 
 use async_trait::async_trait;
 
-use crate::agent_loop::RequestContext;
 use crate::dispatcher::agent_types::{Task, TaskResult, TaskType};
 use crate::error::Result;
 
 /// Context provided to executors during task execution
 ///
 /// This is the lowest-level context in the hierarchy:
-/// - **RequestContext** (agent_loop): User environment context (UI layer)
 /// - **TaskContext** (dispatcher): Inter-task communication in DAG
-/// - **ExecutionContext** (executor): Single task execution context ← this type
-///
-/// Use `from_request_context()` to create from higher-level RequestContext.
+/// - **ExecutionContext** (executor): Single task execution context -- this type
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionContext {
     /// ID of the task graph being executed
     pub graph_id: String,
 
     /// Working directory for file operations
-    /// Note: Unified naming with RequestContext.working_directory
     pub working_directory: Option<String>,
 
     /// Additional context data
@@ -64,14 +59,6 @@ impl ExecutionContext {
     pub fn with_working_dir(mut self, dir: impl Into<String>) -> Self {
         self.working_directory = Some(dir.into());
         self
-    }
-
-    /// Create from RequestContext
-    ///
-    /// Converts a higher-level RequestContext from agent_loop into an
-    /// ExecutionContext suitable for task executors.
-    pub fn from_request_context(request_ctx: &RequestContext, graph_id: impl Into<String>) -> Self {
-        request_ctx.to_execution_context(graph_id)
     }
 }
 

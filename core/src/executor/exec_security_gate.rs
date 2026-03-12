@@ -249,11 +249,11 @@ impl ExecSecurityGate {
     ///
     /// Applies SecretMasker to stdout and stderr string fields in the output Value.
     /// Non-Success results and non-ToolResults variants are passed through unchanged.
-    pub fn post_execute(&self, result: crate::agent_loop::ActionResult) -> crate::agent_loop::ActionResult {
+    pub fn post_execute(&self, result: crate::executor::action_types::ActionResult) -> crate::executor::action_types::ActionResult {
         match result {
-            crate::agent_loop::ActionResult::ToolResults { results } => {
+            crate::executor::action_types::ActionResult::ToolResults { results } => {
                 let masked_results: Vec<_> = results.into_iter().map(|mut r| {
-                    if let crate::agent_loop::decision::SingleToolResult::Success { ref mut output, .. } = r.result {
+                    if let crate::executor::action_types::SingleToolResult::Success { ref mut output, .. } = r.result {
                         // Mask stdout field if present
                         if let Some(stdout) = output.get("stdout").and_then(|v| v.as_str()) {
                             let masked = self.masker.mask(stdout);
@@ -273,7 +273,7 @@ impl ExecSecurityGate {
                     }
                     r
                 }).collect();
-                crate::agent_loop::ActionResult::ToolResults { results: masked_results }
+                crate::executor::action_types::ActionResult::ToolResults { results: masked_results }
             }
             other => other,
         }
@@ -440,11 +440,11 @@ mod tests {
             "exit_code": 0,
         });
 
-        let result = crate::agent_loop::ActionResult::ToolResults { results: vec![
-            crate::agent_loop::decision::ToolCallResult {
+        let result = crate::executor::action_types::ActionResult::ToolResults { results: vec![
+            crate::executor::action_types::ToolCallResult {
                 call_id: "test".to_string(),
                 tool_name: "bash".to_string(),
-                result: crate::agent_loop::decision::SingleToolResult::Success {
+                result: crate::executor::action_types::SingleToolResult::Success {
                     output: raw_output,
                     duration_ms: 100,
                 },
@@ -453,8 +453,8 @@ mod tests {
 
         let masked = gate.post_execute(result);
 
-        if let crate::agent_loop::ActionResult::ToolResults { ref results } = masked {
-            if let crate::agent_loop::decision::SingleToolResult::Success { ref output, .. } = results[0].result {
+        if let crate::executor::action_types::ActionResult::ToolResults { ref results } = masked {
+            if let crate::executor::action_types::SingleToolResult::Success { ref output, .. } = results[0].result {
                 let stdout = output["stdout"].as_str().unwrap();
                 // The secret should be redacted somehow (not present in full form)
                 assert!(!stdout.contains("abcdefghijklmno"), "API key should be redacted");
@@ -471,11 +471,11 @@ mod tests {
         let manager = Arc::new(ExecApprovalManager::new());
         let gate = ExecSecurityGate::new(manager, None);
 
-        let result = crate::agent_loop::ActionResult::ToolResults { results: vec![
-            crate::agent_loop::decision::ToolCallResult {
+        let result = crate::executor::action_types::ActionResult::ToolResults { results: vec![
+            crate::executor::action_types::ToolCallResult {
                 call_id: "test".to_string(),
                 tool_name: "bash".to_string(),
-                result: crate::agent_loop::decision::SingleToolResult::Error {
+                result: crate::executor::action_types::SingleToolResult::Error {
                     error: "execution failed".to_string(),
                     retryable: false,
                 },
@@ -483,8 +483,8 @@ mod tests {
         ]};
 
         let masked = gate.post_execute(result);
-        if let crate::agent_loop::ActionResult::ToolResults { ref results } = masked {
-            assert!(matches!(results[0].result, crate::agent_loop::decision::SingleToolResult::Error { .. }));
+        if let crate::executor::action_types::ActionResult::ToolResults { ref results } = masked {
+            assert!(matches!(results[0].result, crate::executor::action_types::SingleToolResult::Error { .. }));
         } else {
             panic!("Expected ToolResults");
         }
@@ -503,11 +503,11 @@ mod tests {
 
         let original_stdout = raw_output["stdout"].as_str().unwrap().to_string();
 
-        let result = crate::agent_loop::ActionResult::ToolResults { results: vec![
-            crate::agent_loop::decision::ToolCallResult {
+        let result = crate::executor::action_types::ActionResult::ToolResults { results: vec![
+            crate::executor::action_types::ToolCallResult {
                 call_id: "test".to_string(),
                 tool_name: "bash".to_string(),
-                result: crate::agent_loop::decision::SingleToolResult::Success {
+                result: crate::executor::action_types::SingleToolResult::Success {
                     output: raw_output,
                     duration_ms: 50,
                 },
@@ -516,8 +516,8 @@ mod tests {
 
         let masked = gate.post_execute(result);
 
-        if let crate::agent_loop::ActionResult::ToolResults { ref results } = masked {
-            if let crate::agent_loop::decision::SingleToolResult::Success { ref output, .. } = results[0].result {
+        if let crate::executor::action_types::ActionResult::ToolResults { ref results } = masked {
+            if let crate::executor::action_types::SingleToolResult::Success { ref output, .. } = results[0].result {
                 assert_eq!(output["stdout"].as_str().unwrap(), original_stdout);
             } else {
                 panic!("Expected Success");

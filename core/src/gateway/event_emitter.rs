@@ -14,7 +14,27 @@ use tokio::sync::Mutex;
 
 use super::event_bus::GatewayEventBus;
 use super::protocol::JsonRpcRequest;
-use crate::agent_loop::thinking::{ConfidenceLevel, ReasoningStepType};
+/// Confidence level for reasoning blocks
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfidenceLevel {
+    High,
+    Medium,
+    Low,
+    Unknown,
+}
+
+/// Semantic type of a reasoning step
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningStepType {
+    Observation,
+    Analysis,
+    Planning,
+    Decision,
+    Reflection,
+    Verification,
+}
 
 /// Streaming event types for real-time agent feedback
 #[derive(Debug, Clone, Serialize, Deserialize)]

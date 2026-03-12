@@ -5,7 +5,15 @@
 //! them as XML team communication protocol.
 
 use crate::sync_primitives::Arc;
-use crate::agent_loop::ContextProvider;
+/// Trait for providing additional context to the agent loop
+pub trait ContextProvider: Send + Sync {
+    /// Get context to inject into the agent loop
+    fn get_context(&self) -> Option<String>;
+    /// Priority of this provider (higher = injected first)
+    fn priority(&self) -> i32;
+    /// Name of this provider for logging
+    fn name(&self) -> &str;
+}
 use super::context_injector::ContextInjector;
 
 /// Swarm context provider for team awareness injection

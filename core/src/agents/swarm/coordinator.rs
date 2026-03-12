@@ -11,8 +11,41 @@ use super::bus::AgentMessageBus;
 use super::collective_memory::CollectiveMemory;
 use super::context_injector::ContextInjector;
 use super::events::*;
-use crate::agent_loop::{AgentLoopEvent, InsightSeverity};
 use crate::error::Result;
+
+/// Events from the agent loop that can be published to the swarm
+#[derive(Debug, Clone)]
+pub enum AgentLoopEvent {
+    ActionInitiated {
+        agent_id: String,
+        action_type: String,
+        target: String,
+    },
+    ActionCompleted {
+        agent_id: String,
+        action_type: String,
+        result: String,
+        duration_ms: u64,
+    },
+    DecisionMade {
+        agent_id: String,
+        decision: String,
+        affected_files: Vec<String>,
+    },
+    InsightCaptured {
+        agent_id: String,
+        insight: String,
+        severity: InsightSeverity,
+    },
+}
+
+/// Severity level for captured insights
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsightSeverity {
+    Critical,
+    Warning,
+    Info,
+}
 
 /// Swarm Coordinator Configuration
 #[derive(Debug, Clone)]
@@ -154,7 +187,7 @@ impl SwarmCoordinator {
             } => AgentEvent::Info(InfoEvent::ActionStarted {
                 agent_id,
                 action_type,
-                target,
+                target: Some(target),
                 timestamp: chrono::Utc::now().timestamp() as u64,
             }),
             AgentLoopEvent::ActionCompleted {

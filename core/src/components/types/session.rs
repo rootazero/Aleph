@@ -5,7 +5,6 @@ use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agent_loop::RequestContext;
 use crate::dispatcher::ToolRegistry;
 use crate::event::EventBus;
 
@@ -37,7 +36,7 @@ pub struct ExecutionSession {
 
     /// Request context (attachments, selected files, clipboard, etc.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context: Option<RequestContext>,
+    pub context: Option<serde_json::Value>,
 
     /// Session start timestamp (from LoopState, unix timestamp)
     #[serde(default)]
@@ -94,7 +93,7 @@ impl ExecutionSession {
     }
 
     /// Set the request context (builder pattern)
-    pub fn with_context(mut self, context: RequestContext) -> Self {
+    pub fn with_context(mut self, context: serde_json::Value) -> Self {
         self.context = Some(context);
         self
     }

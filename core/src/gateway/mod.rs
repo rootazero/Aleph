@@ -49,7 +49,7 @@ pub mod agent_lifecycle;
 pub mod config;
 pub mod session_manager;
 pub mod execution_engine;
-pub mod loop_callback_adapter;
+// loop_callback_adapter removed (depended on old OTAF agent_loop types)
 pub mod provider_factory;
 pub mod channel;
 pub mod channel_registry;
@@ -96,7 +96,7 @@ pub use agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry, Agen
 pub use config::GatewayConfig;
 pub use session_manager::{SessionManager, SessionManagerConfig};
 pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus, SimpleExecutionEngine};
-pub use loop_callback_adapter::{EventEmittingCallback, ResponseChunkEmitter, UserQuestion};
+// EventEmittingCallback, ResponseChunkEmitter, UserQuestion removed (old OTAF types)
 pub use provider_factory::{
     create_provider_registry_from_env, create_claude_provider_from_env,
     create_openai_provider_from_env, can_create_provider_from_env,

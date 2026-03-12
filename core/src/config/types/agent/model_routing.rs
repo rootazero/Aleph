@@ -7,8 +7,31 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::agent_loop::ModelRoutingConfig as AgentLoopModelRoutingConfig;
 use crate::dispatcher::model_router::{Capability, CostStrategy, ModelRoutingRules};
+
+/// Simple model routing configuration for agent loop
+///
+/// Maps task categories to model profile IDs.
+#[derive(Debug, Clone)]
+pub struct SimpleModelRoutingConfig {
+    pub default_model: String,
+    pub vision_model: String,
+    pub reasoning_model: String,
+    pub fast_model: String,
+    pub auto_route: bool,
+}
+
+impl Default for SimpleModelRoutingConfig {
+    fn default() -> Self {
+        Self {
+            default_model: "claude-sonnet".to_string(),
+            vision_model: "claude-sonnet".to_string(),
+            reasoning_model: "claude-sonnet".to_string(),
+            fast_model: "claude-sonnet".to_string(),
+            auto_route: true,
+        }
+    }
+}
 
 use super::ab_testing::ABTestingConfigToml;
 use super::ensemble::EnsembleConfigToml;
@@ -365,7 +388,7 @@ impl ModelRoutingConfigToml {
         ids
     }
 
-    /// Convert to agent_loop::ModelRoutingConfig for simple routing scenarios
+    /// Convert to SimpleModelRoutingConfig for simple routing scenarios
     ///
     /// This bridges the gap between the full TOML configuration and the
     /// simplified agent loop model routing. Maps:
@@ -373,17 +396,15 @@ impl ModelRoutingConfigToml {
     /// - `image_analysis` → `vision_model`
     /// - `reasoning` → `reasoning_model`
     /// - `quick_tasks` → `fast_model`
-    pub fn to_agent_loop_config(&self) -> AgentLoopModelRoutingConfig {
+    pub fn to_agent_loop_config(&self) -> SimpleModelRoutingConfig {
         // Resolve default_model first — all other roles inherit from it if unset.
-        // This ensures every model role uses the user's configured model,
-        // never a hardcoded model name.
         let resolved_default = self
             .default_model
             .clone()
             .or_else(|| self.code_generation.clone())
-            .unwrap_or_else(|| AgentLoopModelRoutingConfig::default().default_model);
+            .unwrap_or_else(|| "claude-sonnet".to_string());
 
-        AgentLoopModelRoutingConfig {
+        SimpleModelRoutingConfig {
             default_model: resolved_default.clone(),
             vision_model: self
                 .image_analysis

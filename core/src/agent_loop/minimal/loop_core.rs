@@ -165,6 +165,7 @@ impl<P: MinimalProvider> MinimalAgentLoop<P> {
             .map(|td| ToolInfo {
                 name: td.name.clone(),
                 description: td.description.clone(),
+                parameters_schema: Some(td.parameters.clone()),
             })
             .collect();
         let system_prompt = self.prompt_builder.build(&tool_infos, None);

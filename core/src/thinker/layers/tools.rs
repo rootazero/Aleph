@@ -43,8 +43,11 @@ impl PromptLayer for ToolsLayer {
                 for tool in tools {
                     output.push_str(&format!("#### {}\n", tool.name));
                     output.push_str(&format!("{}\n", tool.description));
-                    if !tool.parameters_schema.is_empty() {
-                        output.push_str(&format!("Parameters: {}\n", tool.parameters_schema));
+                    if let Some(ref schema) = tool.parameters_schema {
+                        let schema_str = serde_json::to_string(schema).unwrap_or_default();
+                        if !schema_str.is_empty() {
+                            output.push_str(&format!("Parameters: {}\n", schema_str));
+                        }
                     }
                     output.push('\n');
                 }
@@ -135,8 +138,7 @@ mod tests {
         let tools = vec![ToolInfo {
             name: "bash".to_string(),
             description: "Run shell commands".to_string(),
-            parameters_schema: "{\"command\": \"string\"}".to_string(),
-            category: None,
+            parameters_schema: Some(serde_json::json!({"command": "string"})),
         }];
         let input = LayerInput::basic(&config, &tools);
         let mut out = String::new();
@@ -211,8 +213,7 @@ mod tests {
         let tools = vec![ToolInfo {
             name: "bash".to_string(),
             description: "Run shell commands".to_string(),
-            parameters_schema: "{\"command\": \"string\"}".to_string(),
-            category: None,
+            parameters_schema: Some(serde_json::json!({"command": "string"})),
         }];
         let input = LayerInput::basic(&config, &tools);
         let mut out = String::new();

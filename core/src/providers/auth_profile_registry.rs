@@ -240,7 +240,7 @@ impl AuthProfileProviderRegistry {
 }
 
 impl ProviderRegistry for AuthProfileProviderRegistry {
-    fn get(&self, _model: &crate::thinker::ModelId) -> Option<Arc<dyn AiProvider>> {
+    fn get(&self, _model: &str) -> Option<Arc<dyn AiProvider>> {
         // For now, ignore model routing and use default
         Some(self.default_provider())
     }
