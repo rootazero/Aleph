@@ -250,8 +250,7 @@ pub use crate::resilient::{
 // =============================================================================
 
 pub use crate::daemon::{
-    DaemonCli, DaemonCommand, DaemonConfig, DaemonEventBus, DaemonStatus, PerceptionConfig,
-    WatcherRegistry,
+    DaemonCli, DaemonCommand, DaemonConfig, DaemonEventBus, DaemonStatus,
 };
 
 // WorldModel (Phase 3)

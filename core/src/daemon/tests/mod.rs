@@ -4,7 +4,6 @@
 // - launchd_tests -> launchd.feature
 // See: core/tests/features/daemon/
 
-mod perception_integration;
 #[cfg(target_os = "macos")]
 mod integration_tests;
 
