@@ -31,6 +31,8 @@ pub struct HelloParams {
 pub struct ConnectParams {
     /// Device token (for returning devices)
     pub token: Option<String>,
+    /// Shared token (for web panel / UI access)
+    pub shared_token: Option<String>,
     /// Guest invitation token (for guest access)
     pub invitation_token: Option<String>,
     /// Device name (for new devices)
@@ -102,6 +104,7 @@ pub async fn handle_connect(
         },
         _ => ConnectParams {
             token: None,
+            shared_token: None,
             invitation_token: None,
             device_name: None,
             device_type: None,
@@ -189,6 +192,68 @@ pub async fn handle_connect(
                     -32001,
                     format!("Invalid invitation: {}", e),
                 );
+            }
+        }
+    }
+
+    // Case 0: Shared token authentication (before device token check)
+    if let Some(ref shared_token) = params.shared_token {
+        debug!("Processing shared token authentication");
+        match ctx.shared_token_mgr.validate(shared_token) {
+            Ok(true) => {
+                let device_id = params
+                    .device_id
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let device_name = params.device_name.as_deref().unwrap_or("Web Panel");
+
+                // Register device in SecurityStore (required for FK constraint on tokens)
+                let device_fingerprint: String = device_id.chars().take(16).collect();
+                if let Err(e) = ctx.security_store.upsert_device(&DeviceUpsertData {
+                    device_id: &device_id,
+                    device_name,
+                    device_type: None,
+                    public_key: &[0u8; 32],
+                    fingerprint: &device_fingerprint,
+                    role: DeviceRole::Operator.as_str(),
+                    scopes: &["*".to_string()],
+                }) {
+                    warn!(error = %e, "Failed to register device via shared token");
+                    return JsonRpcResponse::error(request.id, -32603, format!("Failed to register device: {}", e));
+                }
+
+                let signed_token = match ctx
+                    .token_manager
+                    .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
+                {
+                    Ok(t) => t,
+                    Err(e) => {
+                        warn!(error = %e, "Failed to issue token");
+                        return JsonRpcResponse::error(request.id, -32603, format!("Failed to issue token: {}", e));
+                    }
+                };
+
+                info!(device_id = %device_id, "Connection authenticated via shared token");
+
+                return JsonRpcResponse::success(
+                    request.id,
+                    json!(ConnectResult {
+                        token: format!("{}:{}", signed_token.token, signed_token.signature),
+                        device_id,
+                        permissions: vec!["*".to_string()],
+                        expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()),
+                    }),
+                );
+            }
+            Ok(false) => {
+                debug!("Invalid shared token provided");
+                return JsonRpcResponse::error(request.id, AUTH_FAILED, "Invalid shared token");
+            }
+            Err(e) => {
+                warn!(error = %e, "Shared token validation error");
+                return JsonRpcResponse::error(request.id, -32603, format!("Token validation error: {}", e));
             }
         }
     }
@@ -852,6 +917,54 @@ mod tests {
         );
         let reconnect_resp = handle_connect(reconnect_req, ctx).await;
         assert!(reconnect_resp.is_success());
+    }
+
+    #[tokio::test]
+    async fn test_connect_with_shared_token() {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        store
+            .upsert_device(&DeviceUpsertData {
+                device_id: "test-dev",
+                device_name: "Test",
+                device_type: None,
+                public_key: &[1u8; 32],
+                fingerprint: "fp",
+                role: "operator",
+                scopes: &[],
+            })
+            .unwrap();
+
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone()));
+        let token = shared_token_mgr.generate_token().unwrap();
+
+        let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
+        let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
+        let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+
+        let ctx = Arc::new(AuthContext {
+            token_manager: Arc::new(TokenManager::new(store.clone())),
+            pairing_manager: Arc::new(PairingManager::new(store.clone())),
+            device_store: Arc::new(DeviceStore::in_memory().unwrap()),
+            security_store: store,
+            shared_token_mgr,
+            invitation_manager,
+            guest_session_manager,
+            event_bus,
+            auth_mode: AuthMode::Token,
+        });
+
+        let request = JsonRpcRequest::new(
+            "connect",
+            Some(json!({"shared_token": token, "device_name": "Test Panel"})),
+            Some(json!(1)),
+        );
+
+        let response = handle_connect(request, ctx).await;
+        assert!(response.is_success(), "Expected success but got: {:?}", response);
+
+        let result = response.result.unwrap();
+        assert!(result.get("token").is_some());
+        assert!(result.get("device_id").is_some());
     }
 
     #[tokio::test]
