@@ -10,7 +10,8 @@ use tracing::{debug, info, warn};
 use crate::gateway::device_store::{ApprovedDevice, DeviceStore};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_FAILED, INVALID_PARAMS};
 use crate::gateway::handlers::parse_params;
-use crate::gateway::security::{DeviceRole, DeviceType, PairingManager, PairingRequest, TokenManager};
+use crate::gateway::config::AuthMode;
+use crate::gateway::security::{DeviceRole, DeviceType, PairingManager, PairingRequest, SharedTokenManager, TokenManager};
 use crate::gateway::security::store::DeviceUpsertData;
 use crate::gateway::security::SecurityStore;
 
@@ -73,7 +74,8 @@ pub struct AuthContext {
     pub invitation_manager: Arc<crate::gateway::security::InvitationManager>,
     pub guest_session_manager: Arc<crate::gateway::security::GuestSessionManager>,
     pub event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
-    pub require_auth: bool,
+    pub auth_mode: AuthMode,
+    pub shared_token_mgr: Arc<SharedTokenManager>,
 }
 
 // AuthContext fields are all `pub`, so it is constructed directly via struct literal.
@@ -192,7 +194,7 @@ pub async fn handle_connect(
     }
 
     // If authentication is not required, allow any connection
-    if !ctx.require_auth {
+    if !ctx.auth_mode.is_auth_required() {
         let device_id = params
             .device_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -689,13 +691,13 @@ pub async fn handle_devices_revoke(
 }
 
 /// Create a "hello" notification to send to newly connected clients
-pub fn create_hello_notification(require_auth: bool) -> JsonRpcRequest {
+pub fn create_hello_notification(auth_mode: &AuthMode) -> JsonRpcRequest {
     JsonRpcRequest::notification(
         "hello",
         Some(json!(HelloParams {
             version: "1".to_string(),
             server: format!("aleph-gateway/{}", env!("CARGO_PKG_VERSION")),
-            auth_required: require_auth,
+            auth_required: auth_mode.is_auth_required(),
         })),
     )
 }
@@ -722,6 +724,7 @@ mod tests {
         let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
         let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
         let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone()));
 
         Arc::new(AuthContext {
             token_manager: Arc::new(TokenManager::new(store.clone())),
@@ -731,7 +734,8 @@ mod tests {
             invitation_manager,
             guest_session_manager,
             event_bus,
-            require_auth: true,
+            auth_mode: AuthMode::Token,
+            shared_token_mgr,
         })
     }
 
@@ -754,6 +758,7 @@ mod tests {
         let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
         let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
         let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone()));
 
         let ctx = Arc::new(AuthContext {
             token_manager: Arc::new(TokenManager::new(store.clone())),
@@ -763,7 +768,8 @@ mod tests {
             invitation_manager,
             guest_session_manager,
             event_bus,
-            require_auth: false, // Auth not required
+            auth_mode: AuthMode::None, // Auth not required
+            shared_token_mgr,
         });
 
         let request = JsonRpcRequest::new(

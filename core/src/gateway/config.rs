@@ -104,6 +104,13 @@ pub enum AuthMode {
     None,
 }
 
+impl AuthMode {
+    /// Whether this mode requires authentication
+    pub fn is_auth_required(&self) -> bool {
+        matches!(self, AuthMode::Token)
+    }
+}
+
 /// Authentication configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
