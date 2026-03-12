@@ -1,7 +1,7 @@
-//! Adapter bridging executor::ToolRegistry to MinimalTool.
+//! Adapter bridging executor::ToolRegistry to LoopTool.
 //!
 //! Wraps `ToolRegistry::execute_tool()` + `UnifiedTool` metadata into
-//! MinimalTool instances for use in the minimal agent loop.
+//! LoopTool instances for use in the agent loop.
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -10,9 +10,9 @@ use std::sync::Arc;
 use crate::dispatcher::UnifiedTool;
 use crate::executor::ToolRegistry;
 
-use super::super::tool::{MinimalTool, MinimalToolRegistry, ToolResult};
+use super::super::tool::{LoopTool, LoopToolRegistry, ToolResult};
 
-/// A MinimalTool backed by a shared ToolRegistry.
+/// A LoopTool backed by a shared ToolRegistry.
 ///
 /// Each instance holds the metadata from a `UnifiedTool` (name, description,
 /// schema) and delegates execution to `ToolRegistry::execute_tool()`.
@@ -24,7 +24,7 @@ struct RegistryToolAdapter<R: ToolRegistry + 'static> {
 }
 
 #[async_trait]
-impl<R: ToolRegistry + 'static> MinimalTool for RegistryToolAdapter<R> {
+impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
     fn name(&self) -> &str {
         &self.name
     }
@@ -48,15 +48,15 @@ impl<R: ToolRegistry + 'static> MinimalTool for RegistryToolAdapter<R> {
     }
 }
 
-/// Build a `MinimalToolRegistry` from an executor `ToolRegistry` + `UnifiedTool` list.
+/// Build a `LoopToolRegistry` from an executor `ToolRegistry` + `UnifiedTool` list.
 ///
-/// Each `UnifiedTool` becomes a `MinimalTool` that delegates execution to the
+/// Each `UnifiedTool` becomes a `LoopTool` that delegates execution to the
 /// shared `ToolRegistry`. Only active tools are included.
 pub fn build_registry_from_tools<R: ToolRegistry + 'static>(
     tool_registry: Arc<R>,
     unified_tools: &[UnifiedTool],
-) -> MinimalToolRegistry {
-    let mut registry = MinimalToolRegistry::new();
+) -> LoopToolRegistry {
+    let mut registry = LoopToolRegistry::new();
 
     for tool in unified_tools {
         if !tool.is_active {
@@ -93,7 +93,7 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
-    /// Minimal mock ToolRegistry for testing.
+    /// Mock ToolRegistry for testing.
     struct MockRegistry {
         results: HashMap<String, Value>,
     }

@@ -1,11 +1,11 @@
 //! Execution Engine
 //!
-//! Bridges the Gateway with the MinimalAgentLoop.
+//! Bridges the Gateway with the AgentLoop.
 //! Manages run lifecycle, emits events, and handles cancellation.
 //!
 //! # Module structure
 //!
-//! - `engine` - Full `ExecutionEngine<P,R>` with MinimalAgentLoop integration
+//! - `engine` - Full `ExecutionEngine<P,R>` with AgentLoop integration
 //! - `simple` - `SimpleExecutionEngine` for when providers/tools are not available
 
 mod engine;

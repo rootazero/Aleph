@@ -1,7 +1,7 @@
-//! Adapter from AlephToolDyn to MinimalTool.
+//! Adapter from AlephToolDyn to LoopTool.
 //!
 //! Wraps an existing `AlephToolDyn` trait object so it can be used
-//! seamlessly within the minimal agent loop.
+//! seamlessly within the agent loop.
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use crate::tools::AlephToolDyn;
 
-use super::super::tool::{MinimalTool, ToolResult};
+use super::super::tool::{LoopTool, ToolResult};
 
-/// Adapter that wraps an `AlephToolDyn` as a `MinimalTool`.
+/// Adapter that wraps an `AlephToolDyn` as a `LoopTool`.
 ///
 /// Caches name, description, and schema at construction time so that
 /// the `&str`-returning trait methods have owned backing storage.
@@ -38,7 +38,7 @@ impl BuiltinToolAdapter {
 }
 
 #[async_trait]
-impl MinimalTool for BuiltinToolAdapter {
+impl LoopTool for BuiltinToolAdapter {
     fn name(&self) -> &str {
         &self.cached_name
     }

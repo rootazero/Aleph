@@ -1,4 +1,4 @@
-//! Adapters bridging existing tool traits to MinimalTool.
+//! Adapters bridging existing tool traits to LoopTool.
 
 mod builtin_adapter;
 pub mod daemon_adapter;

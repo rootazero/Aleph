@@ -1,6 +1,6 @@
-//! MinimalAgentLoop — the core think → act two-step loop.
+//! AgentLoop — the core think → act two-step loop.
 //!
-//! This is the heart of the minimal agent architecture. Each iteration:
+//! This is the heart of the agent architecture. Each iteration:
 //! 1. **Think**: Call the AI provider with the conversation history
 //! 2. **Act**: Execute any tool calls the provider requested
 //!
@@ -14,13 +14,13 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Instant;
 
-use super::prompt_builder::{MinimalPromptBuilder, ToolInfo};
+use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
-use super::tool::{MinimalToolRegistry, ToolDefinition, ToolResult};
+use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
 use crate::providers::adapter::{ProviderResponse, StopReason};
 
 // =============================================================================
-// MinimalProvider trait
+// LoopProvider trait
 // =============================================================================
 
 /// Abstraction over AI provider for testability.
@@ -28,7 +28,7 @@ use crate::providers::adapter::{ProviderResponse, StopReason};
 /// Implementations translate `LoopMessage` history into provider-specific
 /// API calls and return a structured `ProviderResponse`.
 #[async_trait]
-pub trait MinimalProvider: Send + Sync {
+pub trait LoopProvider: Send + Sync {
     async fn call(
         &self,
         messages: &[LoopMessage],
@@ -110,24 +110,24 @@ pub struct NoopCallback;
 impl LoopCallback for NoopCallback {}
 
 // =============================================================================
-// MinimalAgentLoop
+// AgentLoop
 // =============================================================================
 
 /// The core agent loop: think → act, repeated until done.
-pub struct MinimalAgentLoop<P: MinimalProvider> {
+pub struct AgentLoop<P: LoopProvider> {
     provider: P,
-    tool_registry: MinimalToolRegistry,
-    prompt_builder: MinimalPromptBuilder,
+    tool_registry: LoopToolRegistry,
+    prompt_builder: PromptBuilder,
     safety_guard: SafetyGuard,
     config: LoopConfig,
 }
 
-impl<P: MinimalProvider> MinimalAgentLoop<P> {
+impl<P: LoopProvider> AgentLoop<P> {
     /// Create a new agent loop with all dependencies injected.
     pub fn new(
         provider: P,
-        tool_registry: MinimalToolRegistry,
-        prompt_builder: MinimalPromptBuilder,
+        tool_registry: LoopToolRegistry,
+        prompt_builder: PromptBuilder,
         safety_guard: SafetyGuard,
         config: LoopConfig,
     ) -> Self {
@@ -343,7 +343,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl MinimalProvider for MockProvider {
+    impl LoopProvider for MockProvider {
         async fn call(
             &self,
             _messages: &[LoopMessage],
@@ -394,7 +394,7 @@ mod tests {
     struct EchoTool;
 
     #[async_trait]
-    impl super::super::tool::MinimalTool for EchoTool {
+    impl super::super::tool::LoopTool for EchoTool {
         fn name(&self) -> &str {
             "echo"
         }
@@ -416,17 +416,17 @@ mod tests {
     }
 
     // =========================================================================
-    // Helper to build a minimal loop
+    // Helper to build a agent loop
     // =========================================================================
 
-    fn make_loop(provider: MockProvider) -> MinimalAgentLoop<MockProvider> {
-        let mut registry = MinimalToolRegistry::new();
+    fn make_loop(provider: MockProvider) -> AgentLoop<MockProvider> {
+        let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(EchoTool));
 
-        MinimalAgentLoop::new(
+        AgentLoop::new(
             provider,
             registry,
-            MinimalPromptBuilder::new(),
+            PromptBuilder::new(),
             SafetyGuard::new(vec![], vec![]),
             LoopConfig {
                 max_iterations: 10,
@@ -537,14 +537,14 @@ mod tests {
             .collect();
 
         let provider = MockProvider::new(responses);
-        let agent = MinimalAgentLoop::new(
+        let agent = AgentLoop::new(
             provider,
             {
-                let mut r = MinimalToolRegistry::new();
+                let mut r = LoopToolRegistry::new();
                 r.register(Box::new(EchoTool));
                 r
             },
-            MinimalPromptBuilder::new(),
+            PromptBuilder::new(),
             SafetyGuard::new(vec![], vec![]),
             LoopConfig {
                 max_iterations: 5,
@@ -587,10 +587,10 @@ mod tests {
             },
         ]);
 
-        let agent = MinimalAgentLoop::new(
+        let agent = AgentLoop::new(
             provider,
-            MinimalToolRegistry::new(), // no tools registered
-            MinimalPromptBuilder::new(),
+            LoopToolRegistry::new(), // no tools registered
+            PromptBuilder::new(),
             SafetyGuard::new(
                 vec![r"rm\s+-rf\s+/".to_string()],
                 vec![],

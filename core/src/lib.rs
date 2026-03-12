@@ -140,10 +140,10 @@ pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer
 // Agent System Exports
 // =============================================================================
 
-// Agent Loop (minimal loop types)
+// Agent Loop (agent loop types)
 pub use crate::agent_loop::{
     LoopCallback, LoopConfig as AgentLoopConfig, LoopRunResult,
-    MinimalAgentLoop,
+    AgentLoop,
 };
 
 // Thinker (LLM layer - provider registry)

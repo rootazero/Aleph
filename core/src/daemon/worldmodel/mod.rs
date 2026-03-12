@@ -2,7 +2,7 @@
 //!
 //! Provides state storage for CoreState and EnhancedContext.
 //! Event processing, inference rules, batch processing, and persistence
-//! have been removed as part of the minimal loop migration.
+//! have been removed as part of the agent loop migration.
 
 pub mod config;
 pub mod state;

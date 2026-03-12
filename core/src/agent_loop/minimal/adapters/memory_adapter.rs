@@ -1,4 +1,4 @@
-//! Memory search/store adapters exposing the memory system as MinimalTool.
+//! Memory search/store adapters exposing the memory system as LoopTool.
 //!
 //! Defines a `MemoryBackend` trait for testability and two tools:
 //! - `MemorySearchTool` — semantic search over long-term memory
@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use super::super::tool::{MinimalTool, ToolResult};
+use super::super::tool::{LoopTool, ToolResult};
 
 // =============================================================================
 // MemoryBackend trait
@@ -49,7 +49,7 @@ impl<M: MemoryBackend> MemorySearchTool<M> {
 }
 
 #[async_trait]
-impl<M: MemoryBackend + 'static> MinimalTool for MemorySearchTool<M> {
+impl<M: MemoryBackend + 'static> LoopTool for MemorySearchTool<M> {
     fn name(&self) -> &str {
         "memory_search"
     }
@@ -132,7 +132,7 @@ impl<M: MemoryBackend> MemoryStoreTool<M> {
 }
 
 #[async_trait]
-impl<M: MemoryBackend + 'static> MinimalTool for MemoryStoreTool<M> {
+impl<M: MemoryBackend + 'static> LoopTool for MemoryStoreTool<M> {
     fn name(&self) -> &str {
         "memory_store"
     }

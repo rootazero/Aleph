@@ -1,4 +1,4 @@
-//! Daemon event source adapters exposing the daemon/event system as MinimalTool.
+//! Daemon event source adapters exposing the daemon/event system as LoopTool.
 //!
 //! Defines a `DaemonBackend` trait for testability and two tools:
 //! - `DaemonQueryTool` — query active system events and notifications
@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use super::super::tool::{MinimalTool, ToolResult};
+use super::super::tool::{LoopTool, ToolResult};
 
 // =============================================================================
 // DaemonBackend trait
@@ -49,7 +49,7 @@ impl<D: DaemonBackend> DaemonQueryTool<D> {
 }
 
 #[async_trait]
-impl<D: DaemonBackend + 'static> MinimalTool for DaemonQueryTool<D> {
+impl<D: DaemonBackend + 'static> LoopTool for DaemonQueryTool<D> {
     fn name(&self) -> &str {
         "daemon_query"
     }
@@ -106,7 +106,7 @@ impl<D: DaemonBackend> DaemonSubscribeTool<D> {
 }
 
 #[async_trait]
-impl<D: DaemonBackend + 'static> MinimalTool for DaemonSubscribeTool<D> {
+impl<D: DaemonBackend + 'static> LoopTool for DaemonSubscribeTool<D> {
     fn name(&self) -> &str {
         "daemon_subscribe"
     }
