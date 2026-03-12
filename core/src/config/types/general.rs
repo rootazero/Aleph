@@ -22,6 +22,10 @@ pub struct GeneralConfig {
     /// Preferred language override (e.g., 'en', 'zh-Hans'). If None, use system language.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// Use the minimal agent loop (think→act two-step) instead of the full OTAF loop.
+    /// Default: false. Set to true to enable the Claude Code-inspired minimalist loop.
+    #[serde(default)]
+    pub use_minimal_loop: bool,
     /// Session queue mode: how incoming messages are handled while agent is busy.
     /// Options: "followup" (default), "steer", "collect"
     #[serde(default)]

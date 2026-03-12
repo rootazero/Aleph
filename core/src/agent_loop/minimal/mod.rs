@@ -4,12 +4,14 @@
 //! with a single `MinimalTool` trait and a flat `MinimalToolRegistry`.
 
 pub mod adapters;
+pub mod factory;
 mod loop_core;
 mod prompt_builder;
 pub mod provider_bridge;
 mod safety;
 mod tool;
 
+pub use factory::MinimalLoopFactory;
 pub use loop_core::{
     LoopCallback, LoopConfig, LoopMessage, LoopRunResult, MinimalAgentLoop, MinimalProvider,
     NoopCallback,
