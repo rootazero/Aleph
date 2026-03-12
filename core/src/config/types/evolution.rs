@@ -263,15 +263,6 @@ impl EvolutionConfig {
         }
     }
 
-    /// Convert config thresholds to SolidificationConfig type
-    pub fn to_solidification_config(&self) -> crate::skill_evolution::SolidificationConfig {
-        crate::skill_evolution::SolidificationConfig {
-            min_success_count: self.thresholds.min_success_count,
-            min_success_rate: self.thresholds.min_success_rate,
-            min_age_days: self.thresholds.min_age_days,
-            max_idle_days: self.thresholds.max_idle_days,
-        }
-    }
 }
 
 impl ToolGenerationConfig {

@@ -7,7 +7,42 @@ use std::path::PathBuf;
 use tracing::{debug, info};
 
 use crate::error::Result;
-use crate::skill_evolution::types::SolidificationSuggestion;
+
+/// Metrics for a skill pattern (previously in skill_evolution module).
+#[derive(Debug, Clone)]
+pub struct SkillMetrics {
+    pub skill_id: String,
+    pub total_executions: usize,
+    pub successful_executions: usize,
+    pub avg_duration_ms: f64,
+    pub avg_satisfaction: Option<f64>,
+    pub failure_rate: f64,
+    pub first_used: i64,
+    pub last_used: i64,
+    pub context_frequency: std::collections::HashMap<String, usize>,
+}
+
+impl SkillMetrics {
+    /// Success rate (0.0 - 1.0)
+    pub fn success_rate(&self) -> f64 {
+        if self.total_executions == 0 {
+            return 0.0;
+        }
+        self.successful_executions as f64 / self.total_executions as f64
+    }
+}
+
+/// Suggestion for solidifying a detected usage pattern into a skill.
+#[derive(Debug, Clone)]
+pub struct SolidificationSuggestion {
+    pub pattern_id: String,
+    pub suggested_name: String,
+    pub suggested_description: String,
+    pub confidence: f32,
+    pub instructions_preview: String,
+    pub sample_contexts: Vec<String>,
+    pub metrics: SkillMetrics,
+}
 
 use super::spec::{
     AlephExtensions, AlephSkillSpec, ConfirmationMode, EvolutionMeta,

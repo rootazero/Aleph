@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::agent_instance::AgentRegistry;
-use super::intent_detector::{IntentDetector, DetectedIntent, build_id_resolve_prompt, build_soul_generation_prompt};
+use super::intent_detector::{IntentDetector, DetectedIntent, build_soul_generation_prompt};
 use super::channel::{InboundMessage, OutboundMessage};
 use super::channel_registry::ChannelRegistry;
 use super::execution_adapter::ExecutionAdapter;

@@ -1002,26 +1002,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                                     }
                                 }
                             }
-                            crate::routing::TaskRoute::Critical { ref reason, ref manifest_hints } => {
+                            crate::routing::TaskRoute::Critical { ref reason, .. } => {
                                 info!(subsystem = "task_router", run_id = %run_id, reason = %reason,
-                                    "Escalation re-dispatch → POE Full");
-                                match self.run_poe_critical(
-                                    run_id, &escalated_request, &agent_workspace_dir, manifest_hints,
-                                    thinker.clone(), local_executor.clone(), compressor.clone(),
-                                    loop_config.clone(), allowed_tools.clone(), callback.clone(),
-                                ).await {
-                                    Ok(r) => Ok(r),
-                                    Err(e) => {
-                                        warn!(subsystem = "task_router", run_id = %run_id, error = %e,
-                                            "Escalated POE failed, falling back to Agent Loop");
-                                        self.execute_simple_loop(
-                                            run_id, &escalated_request, &agent_workspace_dir, thinker,
-                                            local_executor, compressor, loop_config, context,
-                                            allowed_tools, identity, escalated_history,
-                                            watch::channel(false).1, callback,
-                                        ).await
-                                    }
-                                }
+                                    "Critical route escalation — falling back to Agent Loop (POE removed)");
+                                self.execute_simple_loop(
+                                    run_id, &escalated_request, &agent_workspace_dir, thinker,
+                                    local_executor, compressor, loop_config, context,
+                                    allowed_tools, identity, escalated_history,
+                                    watch::channel(false).1, callback,
+                                ).await
                             }
                             crate::routing::TaskRoute::Collaborative { ref reason, ref strategy } => {
                                 info!(subsystem = "task_router", run_id = %run_id, reason = %reason,
@@ -1086,35 +1075,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     }
                 }
             }
-            crate::routing::TaskRoute::Critical { ref reason, ref manifest_hints } => {
+            crate::routing::TaskRoute::Critical { ref reason, .. } => {
                 info!(
                     subsystem = "task_router",
                     run_id = %run_id,
                     reason = %reason,
-                    "Dispatching to POE Full Manager"
+                    "Critical route — falling back to Agent Loop (POE removed)"
                 );
-                // POE Full: PoeManager wraps execution with SuccessManifest validation
-                match self.run_poe_critical(
-                    run_id, request, &agent_workspace_dir, manifest_hints,
-                    thinker.clone(), local_executor.clone(), compressor.clone(),
-                    loop_config.clone(), allowed_tools.clone(), callback.clone(),
-                ).await {
-                    Ok(result) => Ok(result),
-                    Err(e) => {
-                        // Graceful degradation: POE failure → fallback to Agent Loop
-                        warn!(
-                            subsystem = "task_router",
-                            run_id = %run_id,
-                            error = %e,
-                            "POE execution failed, falling back to Agent Loop"
-                        );
-                        self.execute_simple_loop(
-                            run_id, request, &agent_workspace_dir, thinker, local_executor,
-                            compressor, loop_config, context, allowed_tools, identity,
-                            initial_history, abort_rx, callback,
-                        ).await
-                    }
-                }
+                self.execute_simple_loop(
+                    run_id, request, &agent_workspace_dir, thinker, local_executor,
+                    compressor, loop_config, context, allowed_tools, identity,
+                    initial_history, abort_rx, callback,
+                ).await
             }
             crate::routing::TaskRoute::Collaborative { ref reason, ref strategy } => {
                 info!(
@@ -1588,106 +1560,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // 4. Aggregate results
         let summary = result.detailed_summary();
         Ok(summary)
-    }
-
-    /// Execute via POE Full Manager: wraps execution with SuccessManifest validation.
-    #[allow(clippy::too_many_arguments)]
-    async fn run_poe_critical<E: EventEmitter + Send + Sync + 'static>(
-        &self,
-        run_id: &str,
-        request: &RunRequest,
-        agent_workspace_dir: &std::path::Path,
-        manifest_hints: &crate::routing::ManifestHints,
-        thinker: Arc<Thinker<SingleProviderRegistry>>,
-        executor: Arc<SingleStepExecutor<impl ToolRegistry + 'static>>,
-        compressor: Arc<NoOpCompressor>,
-        loop_config: LoopConfig,
-        allowed_tools: Vec<UnifiedTool>,
-        _callback: Arc<EventEmittingCallback<E>>,
-    ) -> Result<String, ExecutionError> {
-        use crate::poe::{PoeManager, PoeConfig, CompositeValidator};
-        use crate::poe::types::{PoeTask, PoeOutcome, SuccessManifest};
-        use crate::poe::worker::AgentLoopWorker;
-
-        info!(subsystem = "task_router", run_id = %run_id, "Building success manifest for POE");
-
-        // 1. Build SuccessManifest from hints
-        let mut manifest = SuccessManifest::new(run_id, &request.input);
-        manifest.max_attempts = 3;
-
-        // Add hard constraints from hints as semantic checks
-        for constraint in &manifest_hints.hard_constraints {
-            manifest.hard_constraints.push(
-                crate::poe::types::ValidationRule::SemanticCheck {
-                    target: crate::poe::types::JudgeTarget::Content(String::new()),
-                    prompt: constraint.clone(),
-                    passing_criteria: constraint.clone(),
-                    model_tier: Default::default(),
-                }
-            );
-        }
-
-        // 2. Create PoeTask
-        let task = PoeTask::new(manifest, request.input.clone());
-
-        // 3. Create AgentLoopWorker as the POE worker
-        let worker = AgentLoopWorker::new(
-            agent_workspace_dir.to_path_buf(),
-            thinker,
-            executor,
-            compressor,
-            allowed_tools,
-            loop_config,
-        );
-
-        // 4. Create PoeManager and execute
-        let poe_provider = self.provider_registry.default_provider();
-        let validator = CompositeValidator::new(poe_provider);
-        let poe_config = PoeConfig::default();
-        let manager = PoeManager::new(worker, validator, poe_config)
-            .with_workspace(agent_workspace_dir.to_path_buf());
-
-        info!(subsystem = "task_router", run_id = %run_id, "POE execution starting");
-
-        let outcome = manager.execute(task).await.map_err(|e| {
-            ExecutionError::Failed(format!("POE execution failed: {}", e))
-        })?;
-
-        info!(
-            subsystem = "task_router",
-            run_id = %run_id,
-            "POE execution complete"
-        );
-
-        // 5. Convert outcome to response
-        match outcome {
-            PoeOutcome::Success { worker_summary, verdict } => {
-                // Return worker's actual output; append verification status
-                if worker_summary.is_empty() {
-                    Ok(verdict.reason)
-                } else {
-                    Ok(worker_summary)
-                }
-            }
-            PoeOutcome::StrategySwitch { reason, suggestion } => {
-                Ok(format!(
-                    "⚠️ POE 检测到执行策略需要调整: {}\n建议: {}",
-                    reason, suggestion
-                ))
-            }
-            PoeOutcome::BudgetExhausted { attempts, last_error } => {
-                Ok(format!(
-                    "⚠️ POE 已用完所有 {} 次重试，最后错误: {}",
-                    attempts, last_error
-                ))
-            }
-            PoeOutcome::DecompositionRequired { sub_manifests, reason } => {
-                Ok(format!(
-                    "📋 POE 需要将任务分解为 {} 个子任务: {}",
-                    sub_manifests.len(), reason
-                ))
-            }
-        }
     }
 
     /// Execute via collaborative multi-agent execution.
