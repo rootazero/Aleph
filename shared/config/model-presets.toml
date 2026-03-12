@@ -1,0 +1,28 @@
+# Model Presets
+#
+# Fallback model lists for providers that don't support API-based model listing
+# or when API probe fails. Protocol keys must match ProviderConfig.protocol() values.
+
+[anthropic]
+models = [
+    { id = "claude-opus-4-20250514", name = "Claude Opus 4", capabilities = ["chat", "vision", "tools", "thinking"] },
+    { id = "claude-sonnet-4-20250514", name = "Claude Sonnet 4", capabilities = ["chat", "vision", "tools", "thinking"] },
+    { id = "claude-haiku-4-20250506", name = "Claude Haiku 4", capabilities = ["chat", "vision", "tools"] },
+]
+
+[openai]
+# API probe takes priority; this is fallback for network failures
+models = [
+    { id = "gpt-4o", name = "GPT-4o", capabilities = ["chat", "vision", "tools"] },
+    { id = "gpt-4o-mini", name = "GPT-4o Mini", capabilities = ["chat", "vision", "tools"] },
+    { id = "o3", name = "O3", capabilities = ["chat", "tools", "thinking"] },
+    { id = "o3-mini", name = "O3 Mini", capabilities = ["chat", "tools", "thinking"] },
+]
+
+[gemini]
+models = [
+    { id = "gemini-2.5-pro", name = "Gemini 2.5 Pro", capabilities = ["chat", "vision", "tools", "thinking"] },
+    { id = "gemini-2.5-flash", name = "Gemini 2.5 Flash", capabilities = ["chat", "vision", "tools", "thinking"] },
+]
+
+# Ollama: no presets — models depend on local installation
