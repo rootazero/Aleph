@@ -33,6 +33,8 @@ pub struct ExecutionEngineConfig {
     pub default_timeout_secs: u64,
     /// Enable detailed tracing
     pub enable_tracing: bool,
+    /// Use the minimal agent loop (think→act two-step) instead of the full OTAF loop.
+    pub use_minimal_loop: bool,
 }
 
 impl Default for ExecutionEngineConfig {
@@ -41,6 +43,7 @@ impl Default for ExecutionEngineConfig {
             max_concurrent_runs: 5,
             default_timeout_secs: 900,
             enable_tracing: true,
+            use_minimal_loop: false,
         }
     }
 }

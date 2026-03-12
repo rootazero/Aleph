@@ -380,13 +380,27 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .timeout_secs
             .unwrap_or(self.config.default_timeout_secs);
 
+        // Choose execution path: minimal loop or full OTAF loop
+        let use_minimal = self.config.use_minimal_loop;
+
         let result = tokio::select! {
-            result = self.run_agent_loop(
-                &run_id,
-                &request,
-                agent.clone(),
-                emitter.clone(),
-            ) => result,
+            result = async {
+                if use_minimal {
+                    self.run_minimal_loop(
+                        &run_id,
+                        &request,
+                        agent.clone(),
+                        emitter.clone(),
+                    ).await
+                } else {
+                    self.run_agent_loop(
+                        &run_id,
+                        &request,
+                        agent.clone(),
+                        emitter.clone(),
+                    ).await
+                }
+            } => result,
 
             _ = cancel_rx.recv() => {
                 info!("Run {} cancelled", run_id);
@@ -1898,6 +1912,184 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // Return last output after max rounds
         Ok(last_output)
+    }
+
+    /// Run the minimal agent loop (think→act two-step, Claude Code-inspired).
+    ///
+    /// This is the alternative execution path when `use_minimal_loop` is enabled.
+    /// It uses the flat `MinimalToolRegistry` and single-layer `SafetyGuard`.
+    async fn run_minimal_loop<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        request: &RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<E>,
+    ) -> Result<String, ExecutionError> {
+        use crate::agent_loop::minimal::{
+            MinimalAgentLoop, MinimalPromptBuilder, SafetyGuard,
+            adapters::build_registry_from_tools,
+            provider_bridge::AiProviderBridge,
+            LoopConfig as MinimalLoopConfig,
+        };
+
+        info!(run_id = run_id, "Starting minimal agent loop (think→act)");
+
+        // Get provider
+        let provider = self.provider_registry.default_provider();
+        let bridge = AiProviderBridge::new(provider);
+
+        // Build tool registry from UnifiedTool list (filtered by agent whitelist)
+        let allowed_tools: Vec<UnifiedTool> = self
+            .tools
+            .iter()
+            .filter(|t| agent.is_tool_allowed(&t.name))
+            .cloned()
+            .collect();
+
+        let tool_registry = build_registry_from_tools(
+            self.tool_registry.clone(),
+            &allowed_tools,
+        );
+
+        debug!(
+            run_id = run_id,
+            tool_count = tool_registry.len(),
+            "Minimal loop: built tool registry"
+        );
+
+        // Resolve soul for prompt building
+        let identity_resolver = crate::thinker::identity::IdentityResolver::with_defaults();
+        let resolved_soul = identity_resolver.resolve();
+        let prompt_builder = if resolved_soul.is_empty() {
+            MinimalPromptBuilder::new()
+        } else {
+            MinimalPromptBuilder::from_soul(&resolved_soul)
+        };
+
+        // Safety guard with defaults
+        let safety = SafetyGuard::default_guard();
+
+        // Config from agent
+        let max_loops = agent.config().max_loops as usize;
+        let timeout_secs = request
+            .timeout_secs
+            .unwrap_or(self.config.default_timeout_secs);
+        let loop_config = MinimalLoopConfig {
+            max_iterations: max_loops,
+            token_budget: agent.config().max_tokens.unwrap_or(200_000) as usize,
+            timeout_secs,
+        };
+
+        // Create and run the minimal loop
+        let minimal_loop = MinimalAgentLoop::new(
+            bridge,
+            tool_registry,
+            prompt_builder,
+            safety,
+            loop_config,
+        );
+
+        // Create a streaming callback that emits events
+        let mut callback = MinimalStreamCallback::new(emitter.clone(), run_id.to_string());
+
+        match minimal_loop.run(&request.input, &mut callback).await {
+            Ok(result) => {
+                info!(
+                    run_id = run_id,
+                    iterations = result.iterations,
+                    tool_calls = result.tool_calls_made,
+                    tokens = result.total_tokens,
+                    "Minimal loop completed"
+                );
+                Ok(result.final_text.unwrap_or_default())
+            }
+            Err(e) => {
+                error!(run_id = run_id, error = %e, "Minimal loop failed");
+                Err(ExecutionError::Failed(e.to_string()))
+            }
+        }
+    }
+}
+
+/// Callback adapter that bridges MinimalAgentLoop events to Gateway StreamEvents.
+struct MinimalStreamCallback<E: EventEmitter + Send + Sync + 'static> {
+    emitter: Arc<E>,
+    run_id: String,
+    seq: u64,
+    chunk_index: u32,
+}
+
+impl<E: EventEmitter + Send + Sync + 'static> MinimalStreamCallback<E> {
+    fn new(emitter: Arc<E>, run_id: String) -> Self {
+        Self {
+            emitter,
+            run_id,
+            seq: 0,
+            chunk_index: 0,
+        }
+    }
+}
+
+impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::minimal::LoopCallback
+    for MinimalStreamCallback<E>
+{
+    fn on_text(&mut self, text: &str) {
+        self.seq += 1;
+        let chunk_index = self.chunk_index;
+        self.chunk_index += 1;
+
+        let event = StreamEvent::ResponseChunk {
+            run_id: self.run_id.clone(),
+            seq: self.seq,
+            content: text.to_string(),
+            chunk_index,
+            is_final: false,
+        };
+
+        // Fire-and-forget emit (LoopCallback is sync, emitter is async)
+        let emitter = self.emitter.clone();
+        tokio::spawn(async move {
+            let _ = emitter.emit(event).await;
+        });
+    }
+
+    fn on_tool_start(&mut self, name: &str, input: &serde_json::Value) {
+        self.seq += 1;
+        let event = StreamEvent::ToolStart {
+            run_id: self.run_id.clone(),
+            seq: self.seq,
+            tool_name: name.to_string(),
+            tool_id: name.to_string(),
+            params: input.clone(),
+        };
+        let emitter = self.emitter.clone();
+        tokio::spawn(async move {
+            let _ = emitter.emit(event).await;
+        });
+    }
+
+    fn on_tool_done(&mut self, name: &str, result: &crate::agent_loop::minimal::ToolResult) {
+        use crate::gateway::event_emitter::ToolResult as EmitterToolResult;
+        self.seq += 1;
+        let tool_result = match result {
+            crate::agent_loop::minimal::ToolResult::Success { output } => {
+                EmitterToolResult::success(output.to_string())
+            }
+            crate::agent_loop::minimal::ToolResult::Error { error, .. } => {
+                EmitterToolResult::error(error.clone())
+            }
+        };
+        let event = StreamEvent::ToolEnd {
+            run_id: self.run_id.clone(),
+            seq: self.seq,
+            tool_id: name.to_string(),
+            result: tool_result,
+            duration_ms: 0,
+        };
+        let emitter = self.emitter.clone();
+        tokio::spawn(async move {
+            let _ = emitter.emit(event).await;
+        });
     }
 }
 

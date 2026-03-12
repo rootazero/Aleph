@@ -302,8 +302,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Capture default provider before provider_registry is moved into engine
         default_prov = Some(provider_registry.default_provider());
 
+        let engine_config = ExecutionEngineConfig {
+            use_minimal_loop: app_config.general.use_minimal_loop,
+            ..ExecutionEngineConfig::default()
+        };
         let mut engine = ExecutionEngine::new(
-            ExecutionEngineConfig::default(),
+            engine_config,
             provider_registry,
             tool_registry,
             tools,
