@@ -14,6 +14,7 @@ use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
 use alephcore::gateway::handlers::oauth as oauth_handlers;
 use alephcore::gateway::handlers::config as config_handlers;
 use alephcore::gateway::handlers::auth as auth_handlers;
+use alephcore::gateway::handlers::auth_tools as auth_tools_handlers;
 use alephcore::gateway::handlers::memory as memory_handlers;
 use alephcore::gateway::handlers::models as models_handlers;
 use alephcore::gateway::handlers::workspace as workspace_handlers;
@@ -90,6 +91,12 @@ pub(in crate::commands::start) fn register_auth_handlers(
     register_handler!(server, "pairing.list", auth_handlers::handle_pairing_list, auth_ctx);
     register_handler!(server, "devices.list", auth_handlers::handle_devices_list, auth_ctx);
     register_handler!(server, "devices.revoke", auth_handlers::handle_devices_revoke, auth_ctx);
+
+    // Auth management tools (R9: Everything is a Tool)
+    register_handler!(server, "auth.show_token", auth_tools_handlers::handle_auth_show_token, auth_ctx);
+    register_handler!(server, "auth.reset_token", auth_tools_handlers::handle_auth_reset_token, auth_ctx);
+    register_handler!(server, "auth.list_sessions", auth_tools_handlers::handle_auth_list_sessions, auth_ctx);
+    register_handler!(server, "auth.revoke_session", auth_tools_handlers::handle_auth_revoke_session, auth_ctx);
 }
 
 // ─── register_guest_handlers ─────────────────────────────────────────────────

@@ -10,7 +10,7 @@ use crate::sync_primitives::Mutex;
 use tracing::{debug, info};
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 /// Unified security storage backed by SQLite
 pub struct SecurityStore {
@@ -55,11 +55,11 @@ impl SecurityStore {
     fn migrate(&self) -> SqliteResult<()> {
         let version = self.get_schema_version()?;
 
-        if version < SCHEMA_VERSION {
+        if version < 2 {
             info!(
                 from = version,
-                to = SCHEMA_VERSION,
-                "Migrating security schema"
+                to = 2,
+                "Migrating security schema to v2"
             );
 
             let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -81,11 +81,23 @@ impl SecurityStore {
             conn.execute_batch(SCHEMA_V2)?;
 
             drop(conn);
-            self.set_schema_version(SCHEMA_VERSION)?;
-
-            info!("Security schema migration complete");
         }
 
+        if version < 3 {
+            info!(
+                from = version,
+                to = 3,
+                "Migrating security schema to v3"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute_batch(SCHEMA_V3)?;
+            drop(conn);
+        }
+
+        self.set_schema_version(SCHEMA_VERSION)?;
+
+        info!("Security schema migration complete");
         debug!("Security store initialized (schema v{})", SCHEMA_VERSION);
         Ok(())
     }
@@ -423,6 +435,111 @@ impl SecurityStore {
         Ok(rows > 0)
     }
 
+    // ========== Shared Token Operations ==========
+
+    /// Replace the stored shared token hash (only one active at a time).
+    pub fn set_shared_token_hash(&self, hash: &str) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute("DELETE FROM shared_token", [])?;
+        conn.execute(
+            "INSERT INTO shared_token (token_hash, created_at) VALUES (?1, ?2)",
+            params![hash, current_timestamp_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Check if the given hash matches the stored shared token.
+    pub fn validate_shared_token_hash(&self, hash: &str) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM shared_token WHERE token_hash = ?1",
+            params![hash],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    // ========== Session Operations ==========
+
+    /// Insert a new session.
+    pub fn insert_session(
+        &self,
+        session_id: &str,
+        token_hash: &str,
+        created_at: i64,
+        expires_at: i64,
+    ) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO sessions (session_id, token_hash, created_at, expires_at, last_used_at) VALUES (?1, ?2, ?3, ?4, ?3)",
+            params![session_id, token_hash, created_at, expires_at],
+        )?;
+        Ok(())
+    }
+
+    /// Check if a session is still valid (not expired).
+    pub fn validate_session(&self, session_id: &str) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = current_timestamp_ms();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE session_id = ?1 AND expires_at > ?2",
+            params![session_id, now],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Update session last_used_at timestamp.
+    pub fn touch_session(&self, session_id: &str) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE sessions SET last_used_at = ?1 WHERE session_id = ?2",
+            params![current_timestamp_ms(), session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a specific session.
+    pub fn delete_session(&self, session_id: &str) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "DELETE FROM sessions WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete all expired sessions, returning the count removed.
+    pub fn delete_expired_sessions(&self) -> SqliteResult<u64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let count = conn.execute(
+            "DELETE FROM sessions WHERE expires_at <= ?1",
+            params![current_timestamp_ms()],
+        )?;
+        Ok(count as u64)
+    }
+
+    /// List active (non-expired) sessions as (session_id, created_at, expires_at, last_used_at).
+    pub fn list_active_sessions(&self) -> SqliteResult<Vec<(String, i64, i64, i64)>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = current_timestamp_ms();
+        let mut stmt = conn.prepare(
+            "SELECT session_id, created_at, expires_at, last_used_at FROM sessions WHERE expires_at > ?1 ORDER BY created_at DESC",
+        )?;
+        let sessions = stmt
+            .query_map(params![now], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(sessions)
+    }
+
     /// List approved senders for a channel
     pub fn list_senders(&self, channel: &str) -> SqliteResult<Vec<(String, i64)>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -660,6 +777,24 @@ CREATE TABLE approved_senders (
     revoked_at      INTEGER,
     PRIMARY KEY (channel, sender_id)
 );
+"#;
+
+/// Schema v3 SQL — incremental additions for shared token and sessions
+const SCHEMA_V3: &str = r#"
+CREATE TABLE IF NOT EXISTS shared_token (
+    token_hash  TEXT PRIMARY KEY,
+    created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id    TEXT PRIMARY KEY,
+    token_hash    TEXT NOT NULL,
+    created_at    INTEGER NOT NULL,
+    expires_at    INTEGER NOT NULL,
+    last_used_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 "#;
 
 #[cfg(test)]

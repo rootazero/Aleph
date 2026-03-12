@@ -254,7 +254,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let server_config = ServerConfig {
         max_connections: final_max_connections,
-        require_auth: full_config.gateway.require_auth,
+        auth_mode: full_config.gateway.auth.mode.clone(),
         timeout_secs: 300,
     };
     let mut server = GatewayServer::with_config(addr, server_config);
@@ -357,7 +357,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Auth subsystem construction
     let auth_bundle = initialize_auth(
         args.port, event_bus.clone(),
-        full_config.gateway.require_auth, args.daemon,
+        full_config.gateway.auth.mode.clone(), args.daemon,
     );
     register_auth_handlers(&mut server, &auth_bundle.auth_ctx);
     register_guest_handlers(&mut server, &auth_bundle.invitation_manager, &auth_bundle.guest_session_manager, &event_bus);

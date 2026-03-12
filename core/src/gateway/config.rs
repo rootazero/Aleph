@@ -70,10 +70,14 @@ pub struct GatewayServerConfig {
     pub port: u16,
     /// Maximum concurrent connections
     pub max_connections: usize,
-    /// Require authentication
+    /// Legacy field — kept for TOML backward compat
+    #[serde(default)]
     pub require_auth: bool,
     /// Protocol version
     pub protocol_version: u32,
+    /// Authentication configuration
+    #[serde(default)]
+    pub auth: AuthConfig,
 }
 
 impl Default for GatewayServerConfig {
@@ -84,7 +88,59 @@ impl Default for GatewayServerConfig {
             max_connections: 100,
             require_auth: false,
             protocol_version: 1,
+            auth: AuthConfig::default(),
         }
+    }
+}
+
+/// Authentication mode
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMode {
+    /// Require shared token for access (default)
+    #[default]
+    Token,
+    /// No authentication required
+    None,
+}
+
+impl AuthMode {
+    /// Whether this mode requires authentication
+    pub fn is_auth_required(&self) -> bool {
+        matches!(self, AuthMode::Token)
+    }
+}
+
+/// Authentication configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AuthConfig {
+    /// Authentication mode
+    pub mode: AuthMode,
+    /// HTTP session cookie expiry (hours)
+    pub session_expiry_hours: u64,
+    /// Device token expiry (hours)
+    pub token_expiry_hours: u64,
+    /// Allowed WebSocket origins (additional to same-origin)
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            mode: AuthMode::Token,
+            session_expiry_hours: 72,
+            token_expiry_hours: 24,
+            allowed_origins: vec![],
+        }
+    }
+}
+
+impl AuthConfig {
+    /// Whether authentication is required
+    pub fn is_auth_required(&self) -> bool {
+        matches!(self.mode, AuthMode::Token)
     }
 }
 
@@ -479,6 +535,60 @@ model = "test"
         std::env::set_var("TEST_VAR", "hello");
         let result = expand_env_var("prefix_${TEST_VAR}_suffix");
         assert_eq!(result, "prefix_hello_suffix");
+    }
+
+    #[test]
+    fn test_parse_auth_config() {
+        let toml = r#"
+[gateway]
+port = 18790
+
+[gateway.auth]
+mode = "token"
+session_expiry_hours = 48
+token_expiry_hours = 12
+
+[agents.main]
+model = "test"
+"#;
+        let config = GatewayConfig::from_toml(toml).unwrap();
+        assert!(matches!(config.gateway.auth.mode, AuthMode::Token));
+        assert_eq!(config.gateway.auth.session_expiry_hours, 48);
+        assert_eq!(config.gateway.auth.token_expiry_hours, 12);
+    }
+
+    #[test]
+    fn test_auth_mode_default_is_token() {
+        let config = GatewayConfig::default();
+        assert!(matches!(config.gateway.auth.mode, AuthMode::Token));
+    }
+
+    #[test]
+    fn test_auth_mode_none() {
+        let toml = r#"
+[gateway.auth]
+mode = "none"
+
+[agents.main]
+model = "test"
+"#;
+        let config = GatewayConfig::from_toml(toml).unwrap();
+        assert!(matches!(config.gateway.auth.mode, AuthMode::None));
+        assert!(!config.gateway.auth.is_auth_required());
+    }
+
+    #[test]
+    fn test_legacy_require_auth_compat() {
+        let toml = r#"
+[gateway]
+port = 18790
+require_auth = true
+
+[agents.main]
+model = "test"
+"#;
+        let config = GatewayConfig::from_toml(toml).unwrap();
+        assert!(matches!(config.gateway.auth.mode, AuthMode::Token));
     }
 
 }
