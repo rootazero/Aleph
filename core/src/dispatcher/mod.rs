@@ -73,14 +73,6 @@ pub mod analyzer;
 // === Risk Evaluation ===
 pub mod risk;
 
-// === Tool Filtering ===
-pub mod tool_filter;
-pub mod smart_filter;
-pub mod content_category;
-pub mod profile_filter;
-
-// === Cortex 2.0: Robust dispatcher internals ===
-pub mod cortex;
 
 // === Experience Replay Layer: L1.5 routing ===
 pub mod experience_replay_layer;
@@ -152,11 +144,6 @@ pub use analyzer::{AnalysisResult, TaskAnalyzer};
 // === Re-exports: Risk Evaluation ===
 pub use risk::{RiskEvaluator, RiskLevel};
 
-// === Re-exports: Tool Filtering ===
-pub use content_category::{infer_required_tools, ContentCategory};
-pub use profile_filter::{ProfileFilter, ToolPermission};
-pub use smart_filter::SmartToolFilter;
-pub use tool_filter::{FilterResult, ToolFilter, ToolFilterConfig};
 
 // === Re-exports: Experience Replay Layer ===
 pub use experience_replay_layer::{ExperienceReplayConfig, ExperienceReplayLayer};

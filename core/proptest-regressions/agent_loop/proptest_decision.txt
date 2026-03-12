@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c57ebde9d3afb341995a7e81368e431644efd95894733f224ecfd5a13a359627 # shrinks to action = ToolCalls([ToolCallRequest { call_id: "proptest", tool_name: "a", arguments: Null }])
+cc db76908e195c1e565111fb8efc6714f45358f8916ddaa875c65e80607888d93e # shrinks to decision = UseTools([ToolCallRecord { call_id: "proptest", tool_name: "_", arguments: Null }])
+cc dec473c7a3049b21442f64f61fa4aad35dbb569671badc9a8857c3b065fc1a22 # shrinks to result = ToolResults([ToolCallResult { call_id: "proptest", tool_name: "proptest_tool", result: Success { output: Null, duration_ms: 0 } }])

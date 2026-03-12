@@ -94,61 +94,57 @@ impl TieredValidator {
 
         // L1: Structural lint (all patterns)
         let lint = self.linter.validate(pattern, &test_set);
-        if !lint.passed {
-            return Ok(ValidationVerdict {
+        let verdict = if !lint.passed {
+            ValidationVerdict {
                 passed: false,
                 level_reached: ValidationLevel::L1Structural,
                 l1_errors: lint.errors,
                 l2_details: None,
                 requires_human_review: false,
-            });
-        }
-
-        // Low risk: L1 sufficient
-        if risk.level == SkillRiskLevel::Low {
-            return Ok(ValidationVerdict {
+            }
+        } else if risk.level == SkillRiskLevel::Low {
+            // Low risk: L1 sufficient
+            ValidationVerdict {
                 passed: true,
                 level_reached: ValidationLevel::L1Structural,
                 l1_errors: vec![],
                 l2_details: None,
                 requires_human_review: false,
-            });
-        }
-
-        // L2: Semantic replay (medium + high risk)
-        let replay = self.replayer.replay(pattern, &test_set).await?;
-        if !replay.passed {
-            return Ok(ValidationVerdict {
-                passed: false,
-                level_reached: ValidationLevel::L2Semantic,
-                l1_errors: vec![],
-                l2_details: Some(replay.details),
-                requires_human_review: false,
-            });
-        }
-
-        // Medium risk: L1 + L2 sufficient
-        if risk.level == SkillRiskLevel::Medium {
-            return Ok(ValidationVerdict {
-                passed: true,
-                level_reached: ValidationLevel::L2Semantic,
-                l1_errors: vec![],
-                l2_details: Some(replay.details),
-                requires_human_review: false,
-            });
-        }
-
-        // High risk: L1 + L2 + L3 sandbox validation
-        // TODO: Wire SandboxExecutor here for real isolated execution.
-        // Currently L3 is structurally reached but no actual sandbox execution
-        // occurs. The SandboxExecutor infrastructure (ShadowFs + RestrictedToolset)
-        // is ready; this needs pipeline integration to pass skill steps through it.
-        let verdict = ValidationVerdict {
-            passed: true,
-            level_reached: ValidationLevel::L3Sandbox,
-            l1_errors: vec![],
-            l2_details: Some(replay.details),
-            requires_human_review: false,
+            }
+        } else {
+            // L2: Semantic replay (medium + high risk)
+            let replay = self.replayer.replay(pattern, &test_set).await?;
+            if !replay.passed {
+                ValidationVerdict {
+                    passed: false,
+                    level_reached: ValidationLevel::L2Semantic,
+                    l1_errors: vec![],
+                    l2_details: Some(replay.details),
+                    requires_human_review: false,
+                }
+            } else if risk.level == SkillRiskLevel::Medium {
+                // Medium risk: L1 + L2 sufficient
+                ValidationVerdict {
+                    passed: true,
+                    level_reached: ValidationLevel::L2Semantic,
+                    l1_errors: vec![],
+                    l2_details: Some(replay.details),
+                    requires_human_review: false,
+                }
+            } else {
+                // High risk: L1 + L2 + L3 sandbox validation
+                // TODO: Wire SandboxExecutor here for real isolated execution.
+                // Currently L3 is structurally reached but no actual sandbox execution
+                // occurs. The SandboxExecutor infrastructure (ShadowFs + RestrictedToolset)
+                // is ready; this needs pipeline integration to pass skill steps through it.
+                ValidationVerdict {
+                    passed: true,
+                    level_reached: ValidationLevel::L3Sandbox,
+                    l1_errors: vec![],
+                    l2_details: Some(replay.details),
+                    requires_human_review: false,
+                }
+            }
         };
 
         info!(

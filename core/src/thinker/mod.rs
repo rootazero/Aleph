@@ -78,7 +78,7 @@ pub use prompt_budget::{PromptResult, TokenBudget, TruncationStat, TruncationWar
 pub use prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 pub use prompt_mode::PromptMode;
 pub use prompt_pipeline::PromptPipeline;
-pub use tool_filter::{IntentFilterConfig, IntentFilterResult, ToolFilter, ToolFilterConfig};
+pub use tool_filter::{ToolFilter, ToolFilterConfig};
 pub use interaction::{Capability, InteractionConstraints, InteractionManifest, InteractionParadigm};
 pub use security_context::{
     ElevatedPolicy, SandboxLevel, SecurityContext, ToolPermission, is_network_tool,
