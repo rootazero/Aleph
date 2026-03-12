@@ -28,7 +28,7 @@ use crate::group_chat::{
     DefaultGroupChatCommandParser, GroupChatCommandParser, GroupChatExecutor,
     GroupChatRequest, GroupChatStatus,
 };
-use crate::intent::{DirectToolSource, IntentResult, UnifiedIntentClassifier};
+use crate::intent::{DirectToolSource, IntentResult};
 
 #[cfg(target_os = "macos")]
 use super::interfaces::imessage::normalize_phone;
@@ -243,8 +243,6 @@ pub struct InboundMessageRouter {
     /// Command parser for unified slash command resolution (optional)
     /// When set, resolves all command sources (builtin, skill, MCP, custom)
     command_parser: Option<Arc<CommandParser>>,
-    /// New unified intent classifier (v3 pipeline, additive migration)
-    unified_classifier: Option<UnifiedIntentClassifier>,
 }
 
 /// Unified channel config for permission checking
@@ -343,7 +341,6 @@ impl InboundMessageRouter {
             llm_provider: None,
 
             command_parser: None,
-            unified_classifier: None,
         }
     }
 
@@ -375,7 +372,6 @@ impl InboundMessageRouter {
             llm_provider: None,
 
             command_parser: None,
-            unified_classifier: None,
         }
     }
 
@@ -409,7 +405,6 @@ impl InboundMessageRouter {
             llm_provider: None,
 
             command_parser: None,
-            unified_classifier: None,
         }
     }
 
@@ -431,10 +426,6 @@ impl InboundMessageRouter {
         self
     }
 
-    /// Set the unified intent classifier (v3 pipeline).
-    pub fn set_unified_classifier(&mut self, classifier: UnifiedIntentClassifier) {
-        self.unified_classifier = Some(classifier);
-    }
 
     /// Enable group chat support.
     ///
