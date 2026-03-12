@@ -206,6 +206,43 @@ pub(in crate::commands::start) fn initialize_auth(
 
     let shared_token_mgr = Arc::new(alephcore::gateway::security::SharedTokenManager::new(security_store.clone()));
 
+    // Auto-generate shared token if auth is required and none exists yet
+    if auth_mode.is_auth_required() && shared_token_mgr.get_current_token().is_none() {
+        match shared_token_mgr.generate_token() {
+            Ok(token) => {
+                info!("========================================");
+                info!("  Access token: {}", token);
+                info!("========================================");
+
+                // Write to file for reference
+                let data_dir = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                    .join(".aleph/data");
+
+                // Ensure directory exists
+                let _ = std::fs::create_dir_all(&data_dir);
+
+                let token_file = data_dir.join(".shared_token");
+                if let Err(e) = std::fs::write(&token_file, &token) {
+                    warn!("Failed to write token file: {}", e);
+                } else {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(
+                            &token_file,
+                            std::fs::Permissions::from_mode(0o600),
+                        );
+                    }
+                    info!("  Token saved to: {}", token_file.display());
+                }
+            }
+            Err(e) => {
+                warn!("Failed to generate shared token: {}", e);
+            }
+        }
+    }
+
     let auth_ctx = Arc::new(auth_handlers::AuthContext {
         token_manager,
         pairing_manager,
