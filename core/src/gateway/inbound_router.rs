@@ -245,6 +245,8 @@ pub struct InboundMessageRouter {
     command_parser: Option<Arc<CommandParser>>,
     /// New unified intent classifier (v3 pipeline, additive migration)
     unified_classifier: Option<UnifiedIntentClassifier>,
+    /// Debounce buffer for message merging (new pipeline path)
+    debounce_buffer: Option<Arc<crate::gateway::pipeline::DebounceBuffer>>,
 }
 
 /// Unified channel config for permission checking
@@ -344,6 +346,7 @@ impl InboundMessageRouter {
 
             command_parser: None,
             unified_classifier: None,
+            debounce_buffer: None,
         }
     }
 
@@ -376,6 +379,7 @@ impl InboundMessageRouter {
 
             command_parser: None,
             unified_classifier: None,
+            debounce_buffer: None,
         }
     }
 
@@ -410,6 +414,7 @@ impl InboundMessageRouter {
 
             command_parser: None,
             unified_classifier: None,
+            debounce_buffer: None,
         }
     }
 
@@ -470,6 +475,16 @@ impl InboundMessageRouter {
     /// (/screenshot, /ocr, /search, /webfetch, /gen) are recognized.
     pub fn with_command_parser(mut self, parser: Arc<CommandParser>) -> Self {
         self.command_parser = Some(parser);
+        self
+    }
+
+    /// Set the debounce buffer for message merging (new pipeline path).
+    ///
+    /// When set, `execute_for_context()` submits messages to the debounce
+    /// buffer instead of directly spawning agent execution, enabling rapid
+    /// sequential messages to be merged before processing.
+    pub fn with_debounce_buffer(mut self, buffer: Arc<crate::gateway::pipeline::DebounceBuffer>) -> Self {
+        self.debounce_buffer = Some(buffer);
         self
     }
 
@@ -1141,6 +1156,12 @@ impl InboundMessageRouter {
     /// If execution support is not configured (agent_registry or execution_adapter
     /// is None), this method logs a warning and returns Ok(()).
     async fn execute_for_context(&self, ctx: &InboundContext) -> Result<(), RoutingError> {
+        // Pipeline path: if debounce buffer is configured, use it
+        if let Some(buffer) = &self.debounce_buffer {
+            buffer.submit(ctx.clone()).await;
+            return Ok(());
+        }
+
         // Check if execution support is configured
         let (agent_registry, execution_adapter) = match (
             self.agent_registry.as_ref(),
