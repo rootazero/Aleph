@@ -496,25 +496,33 @@ impl ProtocolAdapter for OpenAiProtocol {
             .await
             .map_err(|e| AlephError::network(format!("Failed to parse model list: {}", e)))?;
 
-        let models = body["data"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|m| {
-                        let id = m["id"].as_str()?;
-                        Some(DiscoveredModel {
-                            id: id.to_string(),
-                            name: Some(id.to_string()),
-                            owned_by: m["owned_by"].as_str().map(|s| s.to_string()),
-                            capabilities: vec!["chat".to_string()],
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let models = parse_models_response(&body)?;
 
         Ok(Some(models))
     }
+}
+
+/// Parse OpenAI /v1/models JSON response into DiscoveredModel list
+pub(crate) fn parse_models_response(
+    body: &serde_json::Value,
+) -> crate::error::Result<Vec<DiscoveredModel>> {
+    let models = body["data"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    let id = m["id"].as_str()?;
+                    Some(DiscoveredModel {
+                        id: id.to_string(),
+                        name: Some(id.to_string()),
+                        owned_by: m["owned_by"].as_str().map(|s| s.to_string()),
+                        capabilities: vec!["chat".to_string()],
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(models)
 }
 
 #[cfg(test)]
@@ -863,5 +871,39 @@ mod tests {
         assert_eq!(tools_array.len(), 2);
         assert_eq!(tools_array[0]["function"]["name"], "search");
         assert_eq!(tools_array[1]["function"]["name"], "read_file");
+    }
+
+    // =========================================================================
+    // parse_models_response L1 unit tests
+    // =========================================================================
+
+    #[test]
+    fn parse_models_response_success() {
+        let body = serde_json::json!({
+            "data": [
+                {"id": "gpt-4o", "owned_by": "openai"},
+                {"id": "gpt-4o-mini", "owned_by": "openai"}
+            ]
+        });
+        let models = parse_models_response(&body).unwrap();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gpt-4o");
+        assert_eq!(models[0].owned_by, Some("openai".to_string()));
+        assert_eq!(models[0].capabilities, vec!["chat".to_string()]);
+        assert_eq!(models[1].id, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn parse_models_response_empty() {
+        let body = serde_json::json!({"data": []});
+        let models = parse_models_response(&body).unwrap();
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn parse_models_response_malformed() {
+        let body = serde_json::json!({"invalid": true});
+        let models = parse_models_response(&body).unwrap();
+        assert!(models.is_empty());
     }
 }
