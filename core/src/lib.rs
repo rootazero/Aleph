@@ -73,7 +73,6 @@ pub mod metrics;
 pub mod payload;
 pub mod permission;
 pub mod pii;
-pub mod poe;
 pub mod prompt;
 pub mod providers;
 pub mod question;
@@ -91,7 +90,6 @@ pub mod utils;
 pub mod vision;
 pub mod wizard;
 pub mod spec_driven;
-pub mod skill_evolution;
 pub mod resilience;
 pub mod resilient;
 pub mod daemon;
@@ -235,16 +233,6 @@ pub use crate::spec_driven::{
     AssertionType, EvaluationResult, LlmJudge, NoOpWorkflowCallback, Spec, SpecDrivenWorkflow,
     SpecMetadata, SpecTarget, SpecWriter, TestCase, TestResult, TestType, TestWriter,
     WorkflowCallback, WorkflowConfig, WorkflowResult,
-};
-
-// =============================================================================
-// Skill Evolution Exports
-// =============================================================================
-
-pub use crate::skill_evolution::{
-    CommitResult, EvolutionTracker, ExecutionStatus, GenerationResult, GitCommitter,
-    SkillExecution, SkillGenerator, SkillMetrics, SolidificationConfig, SolidificationDetector,
-    SolidificationSuggestion,
 };
 
 // =============================================================================

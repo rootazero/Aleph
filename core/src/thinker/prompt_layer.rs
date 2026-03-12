@@ -2,7 +2,6 @@
 
 use crate::agent_loop::ToolInfo;
 use crate::dispatcher::tool_index::HydrationResult;
-use crate::poe::PoePromptContext;
 use super::context::ResolvedContext;
 use super::inbound_context::InboundContext;
 use super::prompt_builder::PromptConfig;
@@ -50,8 +49,6 @@ pub struct LayerInput<'a> {
     pub hydration: Option<&'a HydrationResult>,
     pub soul: Option<&'a SoulManifest>,
     pub context: Option<&'a ResolvedContext>,
-    /// POE context (success criteria, behavioral anchors, hints)
-    pub poe: Option<&'a PoePromptContext>,
     /// Active workspace profile (system_prompt overlay, tool whitelist, etc.)
     pub profile: Option<&'a crate::config::ProfileConfig>,
     /// Prompt mode for this assembly (default: Full)
@@ -67,28 +64,22 @@ pub struct LayerInput<'a> {
 impl<'a> LayerInput<'a> {
     /// Input for the `Basic` path — config + tool list.
     pub fn basic(config: &'a PromptConfig, tools: &'a [ToolInfo]) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
+        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
     }
 
     /// Input for the `Hydration` path — config + hydration result.
     pub fn hydration(config: &'a PromptConfig, hydration: &'a HydrationResult) -> Self {
-        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
+        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
     }
 
     /// Input for the `Soul` path — config + tools + soul manifest.
     pub fn soul(config: &'a PromptConfig, tools: &'a [ToolInfo], soul: &'a SoulManifest) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
+        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
     }
 
     /// Input for the `Context` path — config + resolved context.
     pub fn context(config: &'a PromptConfig, ctx: &'a ResolvedContext) -> Self {
-        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), poe: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
-    }
-
-    /// Attach POE context to this input.
-    pub fn with_poe(mut self, poe: &'a PoePromptContext) -> Self {
-        self.poe = Some(poe);
-        self
+        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
     }
 
     /// Attach workspace profile to this input.
@@ -101,16 +92,6 @@ impl<'a> LayerInput<'a> {
     pub fn with_mode(mut self, mode: PromptMode) -> Self {
         self.mode = mode;
         self
-    }
-
-    /// Get POE manifest if present.
-    pub fn poe_manifest(&self) -> Option<&crate::poe::types::SuccessManifest> {
-        self.poe.and_then(|p| p.manifest.as_ref())
-    }
-
-    /// Get POE hint if present.
-    pub fn poe_hint(&self) -> Option<&str> {
-        self.poe.and_then(|p| p.current_hint.as_deref())
     }
 
     /// Attach inbound context to this input.

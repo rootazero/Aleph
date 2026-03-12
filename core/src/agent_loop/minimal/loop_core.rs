@@ -17,7 +17,7 @@ use std::time::Instant;
 use super::prompt_builder::{MinimalPromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
 use super::tool::{MinimalToolRegistry, ToolDefinition, ToolResult};
-use crate::providers::adapter::{NativeToolCall, ProviderResponse, StopReason, TokenUsage};
+use crate::providers::adapter::{ProviderResponse, StopReason};
 
 // =============================================================================
 // MinimalProvider trait
@@ -318,6 +318,7 @@ impl<P: MinimalProvider> MinimalAgentLoop<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::adapter::{NativeToolCall, TokenUsage};
     use serde_json::json;
     use std::sync::Mutex;
 

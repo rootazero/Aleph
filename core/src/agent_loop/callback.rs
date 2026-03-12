@@ -11,7 +11,19 @@ use super::decision::{Action, ActionResult};
 use super::guards::GuardViolation;
 use super::question::QuestionKind;
 use super::state::{LoopState, Thinking};
-use crate::poe::StepDirective;
+/// Directive returned by `on_step_evaluate` to control agent loop flow.
+/// (Previously in `crate::poe`; inlined here after POE module removal.)
+#[derive(Debug, Clone)]
+pub enum StepDirective {
+    /// Continue normally
+    Continue,
+    /// Continue but inject a hint into the next iteration
+    ContinueWithHint { hint: String },
+    /// Suggest switching strategy (triggers guard violation)
+    SuggestStrategySwitch { reason: String, suggestion: String },
+    /// Abort the loop
+    Abort { reason: String },
+}
 
 /// Callback interface for Agent Loop events
 ///

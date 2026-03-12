@@ -21,7 +21,7 @@ use super::state::{LoopState, LoopStep, RequestContext};
 use super::traits::{ActionExecutor, CompressorTrait, ThinkerTrait};
 use super::events::AgentLoopEvent;
 use crate::compressor::PreCompactionPrompt;
-use crate::poe::StepDirective;
+use super::callback::StepDirective;
 
 static FIRST_CYCLE_LOGGED: AtomicBool = AtomicBool::new(false);
 

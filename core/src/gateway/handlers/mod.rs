@@ -36,7 +36,6 @@
 //! | exec_approvals | Exec approval management |
 //! | wizard | Wizard session management |
 //! | supervisor | Process supervision via PTY |
-//! | poe | POE (Principle-Operation-Evaluation) task execution |
 //! | identity | Identity/soul management |
 //! | workspace | Workspace isolation management |
 //! | daemon | Daemon status, shutdown, logs |
@@ -88,7 +87,6 @@ pub mod exec_approvals;
 pub mod wizard;
 pub mod supervisor;
 pub mod approval_bridge;
-pub mod poe;
 pub mod identity;
 pub mod debug;
 pub mod guests;
@@ -268,66 +266,6 @@ impl HandlerRegistry {
                 req.id,
                 INTERNAL_ERROR,
                 "session.compact requires SessionStore — wire in Gateway startup".to_string(),
-            )
-        });
-
-        // POE handlers (placeholders - actual handlers wired with PoeRunManager)
-        registry.register("poe.run", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "poe.run requires POE runtime - wire PoeRunManager first".to_string(),
-            )
-        });
-        registry.register("poe.status", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "poe.status requires POE runtime - wire PoeRunManager first".to_string(),
-            )
-        });
-        registry.register("poe.cancel", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "poe.cancel requires POE runtime - wire PoeRunManager first".to_string(),
-            )
-        });
-        registry.register("poe.list", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "poe.list requires POE runtime - wire PoeRunManager first".to_string(),
-            )
-        });
-
-        // POE Contract Signing handlers (placeholders - actual handlers wired with PoeContractService)
-        registry.register("poe.prepare", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "poe.prepare requires POE runtime - wire PoeContractService first".to_string(),
-            )
-        });
-        registry.register("poe.sign", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "poe.sign requires POE runtime - wire PoeContractService first".to_string(),
-            )
-        });
-        registry.register("poe.reject", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "poe.reject requires POE runtime - wire PoeContractService first".to_string(),
-            )
-        });
-        registry.register("poe.pending", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "poe.pending requires POE runtime - wire PoeContractService first".to_string(),
             )
         });
 
@@ -747,21 +685,6 @@ mod tests {
         assert!(registry.has_method("cron.run"));
         assert!(registry.has_method("cron.runs"));
         assert!(registry.has_method("cron.toggle"));
-    }
-
-    #[test]
-    fn test_poe_handlers_registered() {
-        let registry = HandlerRegistry::new();
-        // Direct execution methods
-        assert!(registry.has_method("poe.run"));
-        assert!(registry.has_method("poe.status"));
-        assert!(registry.has_method("poe.cancel"));
-        assert!(registry.has_method("poe.list"));
-        // Contract signing methods
-        assert!(registry.has_method("poe.prepare"));
-        assert!(registry.has_method("poe.sign"));
-        assert!(registry.has_method("poe.reject"));
-        assert!(registry.has_method("poe.pending"));
     }
 
     #[test]

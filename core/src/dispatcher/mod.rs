@@ -74,8 +74,6 @@ pub mod analyzer;
 pub mod risk;
 
 
-// === Experience Replay Layer: L1.5 routing ===
-pub mod experience_replay_layer;
 
 // === Tool Index: Semantic tool retrieval ===
 pub mod tool_index;
@@ -145,8 +143,6 @@ pub use analyzer::{AnalysisResult, TaskAnalyzer};
 pub use risk::{RiskEvaluator, RiskLevel};
 
 
-// === Re-exports: Experience Replay Layer ===
-pub use experience_replay_layer::{ExperienceReplayConfig, ExperienceReplayLayer};
 
 // === Re-exports: Tool Index (Semantic Retrieval) ===
 pub use tool_index::{

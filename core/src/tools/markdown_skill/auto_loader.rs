@@ -8,8 +8,9 @@ use crate::sync_primitives::Arc;
 use tracing::{info, warn};
 
 use crate::error::Result;
-use crate::skill_evolution::types::SolidificationSuggestion;
 use crate::tools::{AlephToolDyn, AlephToolServer};
+
+use super::generator::SolidificationSuggestion;
 
 use super::generator::{MarkdownSkillGenerator, MarkdownSkillGeneratorConfig};
 use super::loader::load_skills_from_dir;
@@ -201,7 +202,7 @@ impl BatchLoadResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skill_evolution::types::SkillMetrics;
+    use super::super::generator::SkillMetrics;
     use std::collections::HashMap;
     use tempfile::TempDir;
 

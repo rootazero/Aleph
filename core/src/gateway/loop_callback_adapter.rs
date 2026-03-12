@@ -16,8 +16,6 @@ use crate::agent_loop::callback::LoopCallback;
 use crate::agent_loop::decision::{Action, ActionResult, QuestionGroup};
 use crate::agent_loop::guards::GuardViolation;
 use crate::agent_loop::state::{LoopState, Thinking};
-use crate::poe::lazy_evaluator::LazyPoeEvaluator;
-
 use super::event_emitter::{EventEmitter, StreamEvent, ToolResult};
 
 /// Adapter that implements LoopCallback and emits StreamEvents
@@ -40,8 +38,6 @@ pub struct EventEmittingCallback<E: EventEmitter> {
     tool_start_times: Mutex<HashMap<String, Instant>>,
     /// Channel sender for sending user questions to UI
     user_question_tx: Option<tokio::sync::mpsc::Sender<UserQuestion>>,
-    /// Lazy POE evaluator for lightweight quality checks
-    lazy_poe: LazyPoeEvaluator,
 }
 
 /// User question sent from callback to UI
@@ -63,7 +59,6 @@ impl<E: EventEmitter> EventEmittingCallback<E> {
             tool_id_map: Mutex::new(HashMap::new()),
             tool_start_times: Mutex::new(HashMap::new()),
             user_question_tx: None,
-            lazy_poe: LazyPoeEvaluator::new(""),
         }
     }
 
@@ -83,7 +78,6 @@ impl<E: EventEmitter> EventEmittingCallback<E> {
             tool_id_map: Mutex::new(HashMap::new()),
             tool_start_times: Mutex::new(HashMap::new()),
             user_question_tx: Some(user_question_tx),
-            lazy_poe: LazyPoeEvaluator::new(""),
         }
     }
 
@@ -107,11 +101,6 @@ impl<E: EventEmitter> EventEmittingCallback<E> {
 impl<E: EventEmitter + Send + Sync + 'static> LoopCallback for EventEmittingCallback<E> {
     /// Called when the loop starts
     async fn on_loop_start(&self, state: &LoopState) {
-        // Capture the original query for lazy POE evaluator
-        if !state.original_request.is_empty() {
-            self.lazy_poe.set_query(&state.original_request).await;
-        }
-
         tracing::debug!(
             run_id = %self.run_id,
             session_id = %state.session_id,
@@ -180,13 +169,6 @@ impl<E: EventEmitter + Send + Sync + 'static> LoopCallback for EventEmittingCall
 
     /// Called when action execution starts
     async fn on_action_start(&self, action: &Action) {
-        // Activate lazy POE evaluator on first tool call
-        if let Action::ToolCalls { .. } = action {
-            if !self.lazy_poe.is_active().await {
-                self.lazy_poe.activate().await;
-            }
-        }
-
         if let Action::ToolCalls { calls: ref requests } = action {
             if let Some(req) = requests.first() {
                 let tool_name = &req.tool_name;
@@ -270,39 +252,11 @@ impl<E: EventEmitter + Send + Sync + 'static> LoopCallback for EventEmittingCall
                     })
                     .await;
 
-                // Record tool result for lazy POE evaluator
-                let result_non_empty = match result {
-                    ActionResult::ToolResults { ref results } => {
-                        if let Some(r) = results.first() {
-                            match &r.result {
-                                crate::agent_loop::decision::SingleToolResult::Success { output, .. } => match output {
-                                    serde_json::Value::Null => false,
-                                    serde_json::Value::String(s) => !s.trim().is_empty(),
-                                    serde_json::Value::Array(arr) => !arr.is_empty(),
-                                    serde_json::Value::Object(obj) => !obj.is_empty(),
-                                    _ => true,
-                                },
-                                _ => false,
-                            }
-                        } else {
-                            false
-                        }
-                    }
-                    _ => false,
-                };
-                self.lazy_poe.record_tool_result(tool_name, result_non_empty).await;
             }
         }
     }
 
-    /// Called after each step to evaluate via lazy POE evaluator
-    async fn on_step_evaluate(
-        &self,
-        step: &crate::agent_loop::state::LoopStep,
-        _state: &crate::agent_loop::state::LoopState,
-    ) -> crate::poe::interceptor::directive::StepDirective {
-        self.lazy_poe.evaluate_step(&step.action, &step.result).await
-    }
+    // on_step_evaluate: uses default (StepDirective::Continue)
 
     /// Called when confirmation is required for high-risk operations
     async fn on_confirmation_required(&self, tool_name: &str, arguments: &Value) -> bool {
@@ -391,14 +345,7 @@ impl<E: EventEmitter + Send + Sync + 'static> LoopCallback for EventEmittingCall
             .await;
     }
 
-    /// Called before completing to validate response quality via lazy POE
-    async fn on_validate_completion(
-        &self,
-        summary: &str,
-        _state: &crate::agent_loop::state::LoopState,
-    ) -> Option<String> {
-        self.lazy_poe.validate_completion(summary).await
-    }
+    // on_validate_completion: uses default (None — no validation)
 
     /// Called when task completes successfully
     async fn on_complete(&self, summary: &str) {
