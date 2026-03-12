@@ -56,6 +56,7 @@ pub mod search_config;
 pub mod session;
 pub mod session_usage;
 pub mod auth;
+pub mod auth_tools;
 pub mod events;
 pub mod channel;
 pub mod config;

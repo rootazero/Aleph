@@ -36,7 +36,9 @@ pub mod tool_display;
 pub mod stream_buffer;
 pub mod message_dedup;
 pub mod router;
+pub mod auth_middleware;
 pub mod security;
+pub mod session;
 pub mod handlers;
 pub mod mdns_broadcaster;
 
@@ -148,6 +150,9 @@ pub use workspace::{
 mod proptest_protocol;
 #[cfg(test)]
 mod proptest_channel;
+
+#[cfg(test)]
+mod auth_probe_tests;
 
 #[cfg(all(test, feature = "loom"))]
 mod loom_concurrency;

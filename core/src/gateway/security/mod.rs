@@ -25,6 +25,7 @@ pub mod identity_map;
 pub mod invitation_manager;
 pub mod pairing;
 pub mod policy_engine;
+pub mod shared_token;
 pub mod store;
 pub mod token;
 
@@ -44,5 +45,6 @@ pub use identity_map::{IdentityMap, PlatformIdentity, UserId};
 pub use invitation_manager::{InvitationError, InvitationManager};
 pub use pairing::{PairingError, PairingManager, PairingRequest};
 pub use policy_engine::{PermissionResult, PolicyEngine};
+pub use shared_token::{SharedTokenError, SharedTokenManager};
 pub use store::{DeviceRow, DeviceUpsertData, PairingRequestData, PairingRequestRow, SecurityStore, TokenRow};
 pub use token::{SignedToken, TokenError, TokenManager, TokenValidation};

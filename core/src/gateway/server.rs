@@ -30,6 +30,7 @@ use super::state_version::StateVersionTracker;
 use super::rate_limiter::{RateLimiter, RateLimitKey, RateLimitConfig, scope_for_method, RateLimitError};
 use super::lane::{LaneManager, LaneConfig};
 use super::event_scope::EventScopeGuard;
+use super::config::AuthMode;
 use crate::providers::protocols::ProtocolLoader;
 use notify::RecommendedWatcher;
 use notify_debouncer_full::{Debouncer, FileIdMap};
@@ -88,7 +89,7 @@ pub struct GatewaySharedState {
     pub connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
     pub subscription_manager: Arc<SubscriptionManager>,
     pub guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
-    pub require_auth: bool,
+    pub auth_mode: AuthMode,
     pub max_connections: usize,
     pub presence: Arc<PresenceTracker>,
     pub state_versions: Arc<StateVersionTracker>,
@@ -102,8 +103,8 @@ pub struct GatewaySharedState {
 pub struct GatewayConfig {
     /// Maximum number of concurrent connections
     pub max_connections: usize,
-    /// Whether to require authentication
-    pub require_auth: bool,
+    /// Authentication mode
+    pub auth_mode: AuthMode,
     /// Connection timeout in seconds
     pub timeout_secs: u64,
 }
@@ -112,7 +113,7 @@ impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
             max_connections: 1000,
-            require_auth: false,
+            auth_mode: AuthMode::default(),
             timeout_secs: 300,
         }
     }
@@ -276,7 +277,7 @@ impl GatewayServer {
             connections: self.connections.clone(),
             subscription_manager: self.subscription_manager.clone(),
             guest_session_manager: self.guest_session_manager.clone(),
-            require_auth: self.config.require_auth,
+            auth_mode: self.config.auth_mode.clone(),
             max_connections: self.config.max_connections,
             presence: self.presence.clone(),
             state_versions: self.state_versions.clone(),
@@ -290,7 +291,7 @@ impl GatewayServer {
         // OpenAI-compatible API routes (/v1/models, /v1/health, /v1/chat/completions)
         let openai_state = Arc::new(OpenAiApiState {
             server_id: format!("aleph-{}", self.addr),
-            api_token: None, // TODO: populate from GatewayConfig when token auth is configured
+            api_token: None, // Auth handled by HTTP middleware layer
         });
         let openai = openai_routes(openai_state);
 
@@ -405,7 +406,7 @@ struct ConnectionContext {
     connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
     subscription_manager: Arc<SubscriptionManager>,
     guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
-    require_auth: bool,
+    auth_mode: AuthMode,
     presence: Arc<PresenceTracker>,
     state_versions: Arc<StateVersionTracker>,
     rate_limiter: Arc<RateLimiter>,
@@ -433,7 +434,7 @@ async fn ws_upgrade_handler(
             connections: state.connections.clone(),
             subscription_manager: state.subscription_manager.clone(),
             guest_session_manager: state.guest_session_manager.clone(),
-            require_auth: state.require_auth,
+            auth_mode: state.auth_mode.clone(),
             presence: state.presence.clone(),
             state_versions: state.state_versions.clone(),
             rate_limiter: state.rate_limiter.clone(),
@@ -491,7 +492,7 @@ async fn handle_connection(
                                 };
 
                                 // Auth gating logic
-                                if ctx.require_auth && !is_authenticated {
+                                if ctx.auth_mode.is_auth_required() && !is_authenticated {
                                     // First message must be "connect"
                                     if is_first && req.method != "connect" {
                                         warn!(
@@ -689,7 +690,7 @@ async fn handle_connection(
                                             }
                                         };
 
-                                        // Extract guest_session_id from connect response (when require_auth=false)
+                                        // Extract guest_session_id from connect response
                                         if req.method == "connect" {
                                             if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
                                                 if resp.is_success() {
@@ -1015,6 +1016,6 @@ mod tests {
     fn test_gateway_config_default() {
         let config = GatewayConfig::default();
         assert_eq!(config.max_connections, 1000);
-        assert!(!config.require_auth);
+        assert_eq!(config.auth_mode, AuthMode::Token);
     }
 }
