@@ -211,6 +211,11 @@ impl HandlerRegistry {
             let config = cfg.clone();
             async move { models::handle_capabilities(req, config).await }
         });
+        let cfg = models_config.clone();
+        registry.register("models.refresh", move |req| {
+            let config = cfg.clone();
+            async move { models::handle_refresh(req, config).await }
+        });
 
         // Cron handlers (stubs — real handlers wired with SharedCronService in Gateway startup)
         registry.register("cron.list", cron::handle_list_stub);
