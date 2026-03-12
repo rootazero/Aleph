@@ -1,7 +1,7 @@
 //! Resilience Module — Database and Core Types
 //!
 //! Governance, collaboration, perception, and recovery middleware have been
-//! removed as part of the minimal loop migration. Only the database layer
+//! removed as part of the agent loop migration. Only the database layer
 //! (StateDatabase) and shared types remain.
 
 pub mod database;

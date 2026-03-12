@@ -1,4 +1,4 @@
-//! MinimalTool trait and MinimalToolRegistry.
+//! LoopTool trait and LoopToolRegistry.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ pub struct ToolDefinition {
 }
 
 // =============================================================================
-// MinimalTool trait
+// LoopTool trait
 // =============================================================================
 
 /// Unified tool trait — one trait to rule them all.
@@ -41,7 +41,7 @@ pub struct ToolDefinition {
 /// Schema is returned as a raw JSON value so tools can describe themselves
 /// without pulling in heavy schema crates.
 #[async_trait]
-pub trait MinimalTool: Send + Sync {
+pub trait LoopTool: Send + Sync {
     /// Unique tool name used in function calls.
     fn name(&self) -> &str;
 
@@ -56,15 +56,15 @@ pub trait MinimalTool: Send + Sync {
 }
 
 // =============================================================================
-// MinimalToolRegistry
+// LoopToolRegistry
 // =============================================================================
 
 /// Flat registry mapping tool names to trait objects.
-pub struct MinimalToolRegistry {
-    tools: HashMap<String, Box<dyn MinimalTool>>,
+pub struct LoopToolRegistry {
+    tools: HashMap<String, Box<dyn LoopTool>>,
 }
 
-impl MinimalToolRegistry {
+impl LoopToolRegistry {
     /// Create an empty registry.
     pub fn new() -> Self {
         Self {
@@ -73,12 +73,12 @@ impl MinimalToolRegistry {
     }
 
     /// Register a tool. Overwrites any existing tool with the same name.
-    pub fn register(&mut self, tool: Box<dyn MinimalTool>) {
+    pub fn register(&mut self, tool: Box<dyn LoopTool>) {
         self.tools.insert(tool.name().to_string(), tool);
     }
 
     /// Look up a tool by name.
-    pub fn get(&self, name: &str) -> Option<&dyn MinimalTool> {
+    pub fn get(&self, name: &str) -> Option<&dyn LoopTool> {
         self.tools.get(name).map(|b| b.as_ref())
     }
 
@@ -119,7 +119,7 @@ impl MinimalToolRegistry {
     }
 }
 
-impl Default for MinimalToolRegistry {
+impl Default for LoopToolRegistry {
     fn default() -> Self {
         Self::new()
     }
@@ -138,7 +138,7 @@ mod tests {
     struct EchoTool;
 
     #[async_trait]
-    impl MinimalTool for EchoTool {
+    impl LoopTool for EchoTool {
         fn name(&self) -> &str {
             "echo"
         }
@@ -163,7 +163,7 @@ mod tests {
     struct FailTool;
 
     #[async_trait]
-    impl MinimalTool for FailTool {
+    impl LoopTool for FailTool {
         fn name(&self) -> &str {
             "fail"
         }
@@ -197,7 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_minimal_tool_registry() {
-        let mut registry = MinimalToolRegistry::new();
+        let mut registry = LoopToolRegistry::new();
         assert!(registry.is_empty());
 
         registry.register(Box::new(EchoTool));
@@ -235,7 +235,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_registry_schemas() {
-        let mut registry = MinimalToolRegistry::new();
+        let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(EchoTool));
         registry.register(Box::new(FailTool));
 

@@ -1,6 +1,6 @@
-//! AiProviderBridge — connects MinimalProvider to existing AiProvider implementations.
+//! AiProviderBridge — connects LoopProvider to existing AiProvider implementations.
 //!
-//! The bridge converts between the minimal loop's local `ToolDefinition` (3 fields)
+//! The bridge converts between the agent loop's local `ToolDefinition` (3 fields)
 //! and the dispatcher's `ToolDefinition` (7 fields), and formats `LoopMessage`
 //! history into a structured text input for the provider's `process_with_payload`.
 
@@ -13,10 +13,10 @@ use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 
-use super::loop_core::{LoopMessage, MinimalProvider};
-use super::tool::ToolDefinition as MinimalToolDefinition;
+use super::loop_core::{LoopMessage, LoopProvider};
+use super::tool::ToolDefinition as LoopToolDefinition;
 
-/// Bridge from `MinimalProvider` to any `Arc<dyn AiProvider>`.
+/// Bridge from `LoopProvider` to any `Arc<dyn AiProvider>`.
 ///
 /// Translates LoopMessage conversation history into a single input string
 /// and converts minimal ToolDefinitions into dispatcher ToolDefinitions
@@ -80,12 +80,12 @@ impl AiProviderBridge {
         parts.join("\n")
     }
 
-    /// Convert a minimal ToolDefinition to the dispatcher's ToolDefinition.
-    fn convert_tool_def(minimal: &MinimalToolDefinition) -> DispatcherToolDefinition {
+    /// Convert a loop ToolDefinition to the dispatcher's ToolDefinition.
+    fn convert_tool_def(def: &LoopToolDefinition) -> DispatcherToolDefinition {
         DispatcherToolDefinition {
-            name: minimal.name.clone(),
-            description: minimal.description.clone(),
-            parameters: minimal.parameters.clone(),
+            name: def.name.clone(),
+            description: def.description.clone(),
+            parameters: def.parameters.clone(),
             requires_confirmation: false,
             category: ToolCategory::Builtin,
             llm_context: None,
@@ -103,12 +103,12 @@ fn format_json_compact(value: &Value) -> String {
 }
 
 #[async_trait]
-impl MinimalProvider for AiProviderBridge {
+impl LoopProvider for AiProviderBridge {
     async fn call(
         &self,
         messages: &[LoopMessage],
         system_prompt: &str,
-        tools: &[MinimalToolDefinition],
+        tools: &[LoopToolDefinition],
     ) -> anyhow::Result<ProviderResponse> {
         let input = Self::format_messages(messages);
 
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn test_convert_tool_def() {
-        let minimal = MinimalToolDefinition {
+        let def = LoopToolDefinition {
             name: "search".to_string(),
             description: "Search the web".to_string(),
             parameters: json!({
@@ -210,11 +210,11 @@ mod tests {
             }),
         };
 
-        let converted = AiProviderBridge::convert_tool_def(&minimal);
+        let converted = AiProviderBridge::convert_tool_def(&def);
 
         assert_eq!(converted.name, "search");
         assert_eq!(converted.description, "Search the web");
-        assert_eq!(converted.parameters, minimal.parameters);
+        assert_eq!(converted.parameters, def.parameters);
         assert!(!converted.requires_confirmation);
         assert_eq!(converted.category, ToolCategory::Builtin);
         assert!(converted.llm_context.is_none());

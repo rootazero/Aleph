@@ -1,4 +1,4 @@
-//! Adapter from MCP (Model Context Protocol) tools to MinimalTool.
+//! Adapter from MCP (Model Context Protocol) tools to LoopTool.
 //!
 //! Wraps an MCP tool behind an abstract transport trait so that the
 //! adapter can be tested without a real MCP server connection.
@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 
-use super::super::tool::{MinimalTool, ToolResult};
+use super::super::tool::{LoopTool, ToolResult};
 
 // =============================================================================
 // McpTransportTrait
@@ -40,7 +40,7 @@ pub struct McpToolSpec {
 // McpToolAdapter
 // =============================================================================
 
-/// Adapter that presents an MCP tool as a [`MinimalTool`].
+/// Adapter that presents an MCP tool as a [`LoopTool`].
 pub struct McpToolAdapter<T: McpTransportTrait> {
     spec: McpToolSpec,
     transport: Arc<T>,
@@ -54,7 +54,7 @@ impl<T: McpTransportTrait> McpToolAdapter<T> {
 }
 
 #[async_trait]
-impl<T: McpTransportTrait + 'static> MinimalTool for McpToolAdapter<T> {
+impl<T: McpTransportTrait + 'static> LoopTool for McpToolAdapter<T> {
     fn name(&self) -> &str {
         &self.spec.name
     }

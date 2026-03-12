@@ -3,7 +3,7 @@
 //! Subscribes to: InputReceived
 //! Publishes: PlanRequested or ToolCallRequested
 //!
-//! With the minimal loop, intent classification is handled by the LLM.
+//! With the agent loop, intent classification is handled by the LLM.
 //! This component retains only complexity detection (multi-step vs simple).
 
 use async_trait::async_trait;

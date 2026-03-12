@@ -1,7 +1,7 @@
-//! Factory for assembling MinimalAgentLoop from existing Aleph services.
+//! Factory for assembling AgentLoop from existing Aleph services.
 //!
 //! Bridges the "old world" (AiProvider, AlephToolServer, SoulManifest) to the
-//! "new world" (MinimalAgentLoop with flat tool registry and prompt builder).
+//! "new world" (AgentLoop with flat tool registry and prompt builder).
 
 use std::sync::Arc;
 
@@ -10,17 +10,17 @@ use crate::thinker::soul::SoulManifest;
 use crate::tools::AlephToolDyn;
 
 use super::adapters::BuiltinToolAdapter;
-use super::loop_core::{LoopConfig, MinimalAgentLoop};
-use super::prompt_builder::MinimalPromptBuilder;
+use super::loop_core::{LoopConfig, AgentLoop};
+use super::prompt_builder::PromptBuilder;
 use super::provider_bridge::AiProviderBridge;
 use super::safety::SafetyGuard;
-use super::tool::MinimalToolRegistry;
+use super::tool::LoopToolRegistry;
 
-/// Factory that assembles a `MinimalAgentLoop` from existing Aleph services.
-pub struct MinimalLoopFactory;
+/// Factory that assembles a `AgentLoop` from existing Aleph services.
+pub struct LoopFactory;
 
-impl MinimalLoopFactory {
-    /// Build a `MinimalAgentLoop` from existing Aleph services.
+impl LoopFactory {
+    /// Build a `AgentLoop` from existing Aleph services.
     ///
     /// # Arguments
     ///
@@ -33,29 +33,29 @@ impl MinimalLoopFactory {
         tools: Vec<Arc<dyn AlephToolDyn>>,
         soul: Option<&SoulManifest>,
         config: LoopConfig,
-    ) -> MinimalAgentLoop<AiProviderBridge> {
+    ) -> AgentLoop<AiProviderBridge> {
         // Wrap provider via bridge
         let bridge = AiProviderBridge::new(provider);
 
-        // Adapt existing tools into MinimalTool
-        let mut registry = MinimalToolRegistry::new();
+        // Adapt existing tools into LoopTool
+        let mut registry = LoopToolRegistry::new();
         for tool_dyn in tools {
             registry.register(Box::new(BuiltinToolAdapter::new(tool_dyn)));
         }
 
         // Build prompt from soul or defaults
         let prompt_builder = match soul {
-            Some(s) => MinimalPromptBuilder::from_soul(s),
-            None => MinimalPromptBuilder::new(),
+            Some(s) => PromptBuilder::from_soul(s),
+            None => PromptBuilder::new(),
         };
 
         // Safety guard with sensible defaults
         let safety = SafetyGuard::default_guard();
 
-        MinimalAgentLoop::new(bridge, registry, prompt_builder, safety, config)
+        AgentLoop::new(bridge, registry, prompt_builder, safety, config)
     }
 
-    /// Build a `MinimalAgentLoop` from an `AlephToolServer`.
+    /// Build a `AgentLoop` from an `AlephToolServer`.
     ///
     /// Convenience wrapper that fetches tools from the server (async).
     pub async fn build_from_server(
@@ -63,7 +63,7 @@ impl MinimalLoopFactory {
         tool_server: &crate::tools::AlephToolServer,
         soul: Option<&SoulManifest>,
         config: LoopConfig,
-    ) -> MinimalAgentLoop<AiProviderBridge> {
+    ) -> AgentLoop<AiProviderBridge> {
         let tools = tool_server.list_tools_arc().await;
         Self::build(provider, tools, soul, config)
     }
@@ -82,7 +82,7 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
-    /// Minimal fake provider for factory tests.
+    /// Test fake provider for factory tests.
     struct FakeProvider;
 
     impl AiProvider for FakeProvider {
@@ -103,7 +103,7 @@ mod tests {
         }
     }
 
-    /// Minimal fake tool for factory tests.
+    /// Test fake tool for factory tests.
     struct FakeTool {
         tool_name: String,
     }
@@ -139,7 +139,7 @@ mod tests {
             timeout_secs: 30,
         };
 
-        let loop_instance = MinimalLoopFactory::build(provider, vec![], None, config);
+        let loop_instance = LoopFactory::build(provider, vec![], None, config);
         // Should create a valid loop with empty registry
         let defs = loop_instance.tool_definitions();
         assert!(defs.is_empty());
@@ -162,7 +162,7 @@ mod tests {
             timeout_secs: 60,
         };
 
-        let loop_instance = MinimalLoopFactory::build(provider, tools, None, config);
+        let loop_instance = LoopFactory::build(provider, tools, None, config);
         let defs = loop_instance.tool_definitions();
         assert_eq!(defs.len(), 2);
 
@@ -191,7 +191,7 @@ mod tests {
             timeout_secs: 60,
         };
 
-        let _loop_instance = MinimalLoopFactory::build(provider, vec![], Some(&soul), config);
+        let _loop_instance = LoopFactory::build(provider, vec![], Some(&soul), config);
         // Factory should succeed — prompt builder was configured from soul
     }
 
@@ -219,7 +219,7 @@ mod tests {
         };
 
         let loop_instance =
-            MinimalLoopFactory::build_from_server(provider, &server, None, config).await;
+            LoopFactory::build_from_server(provider, &server, None, config).await;
         let defs = loop_instance.tool_definitions();
         assert_eq!(defs.len(), 2);
     }

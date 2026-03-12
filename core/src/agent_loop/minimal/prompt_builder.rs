@@ -1,4 +1,4 @@
-//! MinimalPromptBuilder — assembles system prompt from sections.
+//! PromptBuilder — assembles system prompt from sections.
 
 use crate::thinker::soul::SoulManifest;
 
@@ -17,7 +17,7 @@ pub struct ToolInfo {
 }
 
 // =============================================================================
-// MinimalPromptBuilder
+// PromptBuilder
 // =============================================================================
 
 const SECTION_SEPARATOR: &str = "\n\n---\n\n";
@@ -32,7 +32,7 @@ const BASE_BEHAVIOR: &str = "\
 - Provide concise summaries of actions taken and results obtained.";
 
 /// Builds the system prompt by assembling sections.
-pub struct MinimalPromptBuilder {
+pub struct PromptBuilder {
     soul_identity: Option<String>,
     soul_tone: Option<String>,
     soul_directives: Vec<String>,
@@ -40,7 +40,7 @@ pub struct MinimalPromptBuilder {
     custom_instructions: Option<String>,
 }
 
-impl MinimalPromptBuilder {
+impl PromptBuilder {
     /// Build a prompt builder pre-configured from a SoulManifest.
     pub fn from_soul(soul: &SoulManifest) -> Self {
         let mut builder = Self::new();
@@ -181,7 +181,7 @@ impl MinimalPromptBuilder {
     }
 }
 
-impl Default for MinimalPromptBuilder {
+impl Default for PromptBuilder {
     fn default() -> Self {
         Self::new()
     }
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn test_build_includes_soul() {
-        let prompt = MinimalPromptBuilder::new()
+        let prompt = PromptBuilder::new()
             .with_soul_identity("I am Aleph, your personal AI.")
             .with_soul_tone("Speak concisely and warmly.")
             .build(&[], None);
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_build_includes_tool_rules() {
-        let prompt = MinimalPromptBuilder::new()
+        let prompt = PromptBuilder::new()
             .with_capability_rules("Always confirm before destructive actions.")
             .build(&[], None);
 
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn test_build_includes_memory_context() {
-        let prompt = MinimalPromptBuilder::new()
+        let prompt = PromptBuilder::new()
             .build(&[], Some("User prefers dark mode and short replies."));
 
         assert!(prompt.contains("# Context from Memory"));
@@ -243,7 +243,7 @@ mod tests {
             },
         ];
 
-        let prompt = MinimalPromptBuilder::new().build(&tools, None);
+        let prompt = PromptBuilder::new().build(&tools, None);
 
         assert!(prompt.contains("# Available Tools"));
         assert!(prompt.contains("- **web_search**: Search the web for information."));
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_build_empty_is_valid() {
-        let prompt = MinimalPromptBuilder::new().build(&[], None);
+        let prompt = PromptBuilder::new().build(&[], None);
 
         assert!(!prompt.is_empty());
         assert!(prompt.contains("assistant"));
@@ -271,7 +271,7 @@ mod tests {
             ..Default::default()
         };
 
-        let prompt = MinimalPromptBuilder::from_soul(&soul).build(&[], None);
+        let prompt = PromptBuilder::from_soul(&soul).build(&[], None);
 
         assert!(prompt.contains("I am Aleph, a personal AI companion."));
         assert!(prompt.contains("warm and concise"));
@@ -288,7 +288,7 @@ mod tests {
             ..Default::default()
         };
 
-        let prompt = MinimalPromptBuilder::from_soul(&soul).build(&[], None);
+        let prompt = PromptBuilder::from_soul(&soul).build(&[], None);
 
         assert!(prompt.contains("Always explain reasoning"));
         assert!(prompt.contains("Be precise"));
@@ -302,7 +302,7 @@ mod tests {
             ..Default::default()
         };
 
-        let prompt = MinimalPromptBuilder::from_soul(&soul).build(&[], None);
+        let prompt = PromptBuilder::from_soul(&soul).build(&[], None);
 
         assert!(prompt.contains("# Additional Instructions"));
         assert!(prompt.contains("Remember the user prefers dark mode."));
@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn test_from_soul_empty() {
         let soul = SoulManifest::default();
-        let prompt = MinimalPromptBuilder::from_soul(&soul).build(&[], None);
+        let prompt = PromptBuilder::from_soul(&soul).build(&[], None);
 
         // Should still produce a valid prompt with defaults
         assert!(!prompt.is_empty());
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_custom_instructions() {
-        let prompt = MinimalPromptBuilder::new()
+        let prompt = PromptBuilder::new()
             .with_custom_instructions("Reply only in haiku format.")
             .build(&[], None);
 
