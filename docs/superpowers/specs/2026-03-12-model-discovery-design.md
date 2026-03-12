@@ -42,9 +42,10 @@ New data structure:
 ```rust
 /// A model discovered via API probe or preset list
 pub struct DiscoveredModel {
-    pub id: String,              // Model ID (e.g., "gpt-4o")
-    pub name: Option<String>,    // Display name
-    pub owned_by: Option<String>, // Owner/organization
+    pub id: String,                       // Model ID (e.g., "gpt-4o")
+    pub name: Option<String>,             // Display name
+    pub owned_by: Option<String>,         // Owner/organization
+    pub capabilities: Vec<String>,        // ["chat", "vision", "tools", "thinking"]
 }
 ```
 
@@ -53,12 +54,15 @@ Protocol implementation matrix:
 | Protocol | Discovery Method | Endpoint |
 |----------|-----------------|----------|
 | OpenAI | `GET /v1/models` | Native support |
-| Ollama | `GET /api/tags` | Native support |
 | Gemini | `GET /v1beta/models` | Supported with API key |
 | Anthropic | Returns `None` | No public list API |
 | ChatGPT | Returns `None` | OAuth mode, not applicable |
 
+Note: Ollama uses a standalone `OllamaProvider` (not the `ProtocolAdapter` pattern). Its model discovery (`GET /api/tags`) is implemented directly on `OllamaProvider` as a separate `list_models()` method, not through this trait.
+
 The default implementation `Ok(None)` means no existing protocol code needs modification to compile.
+
+For API-probed models, `capabilities` defaults to `["chat"]`. Protocols that can extract richer capability info from the API response (e.g., OpenAI's model metadata) should populate this field. For preset-sourced models, capabilities are declared in the preset TOML file.
 
 ### 2. Preset Model List (External Config)
 
@@ -67,24 +71,24 @@ File: `shared/config/model-presets.toml`
 ```toml
 [anthropic]
 models = [
-    { id = "claude-opus-4-20250514", name = "Claude Opus 4" },
-    { id = "claude-sonnet-4-20250514", name = "Claude Sonnet 4" },
-    { id = "claude-haiku-4-20250506", name = "Claude Haiku 4" },
+    { id = "claude-opus-4-20250514", name = "Claude Opus 4", capabilities = ["chat", "vision", "tools", "thinking"] },
+    { id = "claude-sonnet-4-20250514", name = "Claude Sonnet 4", capabilities = ["chat", "vision", "tools", "thinking"] },
+    { id = "claude-haiku-4-20250506", name = "Claude Haiku 4", capabilities = ["chat", "vision", "tools"] },
 ]
 
 [openai]
 # API probe takes priority; this is fallback for network failures
 models = [
-    { id = "gpt-4o", name = "GPT-4o" },
-    { id = "gpt-4o-mini", name = "GPT-4o Mini" },
-    { id = "o3", name = "O3" },
-    { id = "o3-mini", name = "O3 Mini" },
+    { id = "gpt-4o", name = "GPT-4o", capabilities = ["chat", "vision", "tools"] },
+    { id = "gpt-4o-mini", name = "GPT-4o Mini", capabilities = ["chat", "vision", "tools"] },
+    { id = "o3", name = "O3", capabilities = ["chat", "tools", "thinking"] },
+    { id = "o3-mini", name = "O3 Mini", capabilities = ["chat", "tools", "thinking"] },
 ]
 
 [gemini]
 models = [
-    { id = "gemini-2.5-pro", name = "Gemini 2.5 Pro" },
-    { id = "gemini-2.5-flash", name = "Gemini 2.5 Flash" },
+    { id = "gemini-2.5-pro", name = "Gemini 2.5 Pro", capabilities = ["chat", "vision", "tools", "thinking"] },
+    { id = "gemini-2.5-flash", name = "Gemini 2.5 Flash", capabilities = ["chat", "vision", "tools", "thinking"] },
 ]
 
 # Ollama has no presets — models depend on local installation
@@ -166,7 +170,11 @@ pub struct AvailableModel {
 3. API returns `None` or fails → check presets → found → write cache with source = Preset
 4. No presets either → return empty list
 
-Lifecycle: `ModelRegistry` is owned by `AppContext`, global singleton, created at startup.
+Lifecycle: `ModelRegistry` is a global singleton via `static Lazy<ModelRegistry>`, following the same pattern as `PROTOCOL_REGISTRY` in `core/src/providers/protocols/registry.rs`. Initialized lazily on first access.
+
+Concurrency: The `cache` field uses `tokio::sync::RwLock` (not `std::sync::RwLock`) since `list_models()` is async. The lock is acquired for read to check cache, released, then if a refresh is needed, the async API call happens without holding the lock. After the call completes, a write lock is acquired to update the cache. This means two concurrent refreshes for the same provider may both execute, but the last write wins — acceptable since model lists are idempotent.
+
+Probe timeout: API probe requests use a 5-second timeout (`reqwest::Client::builder().timeout(Duration::from_secs(5))`).
 
 ### 4. RPC Interface Changes
 
@@ -218,19 +226,37 @@ New fields: `is_current` (whether this is the provider's currently configured mo
 
 #### `models.refresh` — New
 
-Force refresh a provider's model list:
+Force refresh a provider's model list. Returns the refreshed models directly to avoid a second `models.list` round-trip:
 
 ```json
 // Request
 { "provider": "openai" }  // optional, omit to refresh all
 
 // Response
-{ "provider": "openai", "count": 15, "source": "api" }
+{
+    "provider": "openai",
+    "count": 15,
+    "source": "api",
+    "last_refreshed": "2026-03-12T10:30:00Z",
+    "models": [ ... ]
+}
 ```
 
-#### `models.set` — Modified
+#### `models.set_default` — New (replaces ambiguous `models.set`)
 
-Add validation: the model must exist in the provider's available model list:
+Set the default provider (what the old `models.set` did):
+
+```json
+// Request
+{ "provider": "openai" }
+
+// Response
+{ "message": "Default provider set to openai" }
+```
+
+#### `models.set_model` — New
+
+Change a specific provider's configured model, with validation:
 
 ```json
 // Request
@@ -250,7 +276,7 @@ Agent `model` field behavior change:
 - **Empty/omitted** → uses `general.default_provider`'s currently configured model
 - **Model ID specified** → matched against all providers' available model pool, validated for existence
 
-The `ProviderConfig.model` field changes from `String` (required) to `Option<String>` (optional). When omitted, the system uses the preset's first model or the provider's default.
+`ProviderConfig.model` remains `String` (required). Every provider must have a configured model — this is the "current model" shown via `is_current` in the API. The `models.set_model` RPC changes this value. This avoids a high-blast-radius breaking change across all protocol adapters and RPC handlers that read `config.model`.
 
 ## File Change Summary
 
@@ -259,13 +285,13 @@ The `ProviderConfig.model` field changes from `String` (required) to `Option<Str
 | Modify | `core/src/providers/adapter.rs` | Add `list_models()` default method + `DiscoveredModel` |
 | Modify | `core/src/providers/protocols/openai.rs` | Implement `list_models` via GET /v1/models |
 | Modify | `core/src/providers/protocols/gemini.rs` | Implement `list_models` via GET /v1beta/models |
-| Modify | `core/src/providers/ollama.rs` | Implement `list_models` via GET /api/tags |
+| Modify | `core/src/providers/ollama.rs` | Add `list_models()` method on `OllamaProvider` directly (not via ProtocolAdapter) |
 | No change | `core/src/providers/protocols/anthropic.rs` | Uses default `Ok(None)` |
 | No change | `core/src/providers/protocols/chatgpt.rs` | Uses default `Ok(None)` |
 | New | `core/src/providers/model_registry.rs` | ModelRegistry cache service |
 | New | `shared/config/model-presets.toml` | Preset model lists per protocol |
 | Modify | `core/src/gateway/handlers/models.rs` | RPC handlers use ModelRegistry |
-| Modify | `core/src/config/types/provider.rs` | `model` field becomes `Option<String>` |
+| No change | `core/src/config/types/provider.rs` | `model` stays `String` (required) |
 
 ## Out of Scope
 
