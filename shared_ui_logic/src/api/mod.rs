@@ -112,4 +112,4 @@ pub use config::{
 pub use memory::{MemoryApi, MemorySearchItem, MemoryStats};
 pub use plugins::{PluginInfo, PluginsApi};
 pub use models::{ModelInfo, ModelsApi, RefreshModelEntry, RefreshResult};
-pub use providers::{ProviderConfig, ProviderInfo, ProvidersApi, TestResult};
+pub use providers::{DiscoveredModel, NeedsSetupResult, ProbeResult, ProviderConfig, ProviderInfo, ProvidersApi, TestResult};
