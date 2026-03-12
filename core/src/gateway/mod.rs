@@ -60,6 +60,7 @@ pub mod bind_mode;
 pub mod hot_reload;
 pub mod http_server;
 pub mod inbound_context;
+pub mod pipeline;
 pub mod pairing_store;
 pub mod reply_emitter;
 pub mod routing_config;
