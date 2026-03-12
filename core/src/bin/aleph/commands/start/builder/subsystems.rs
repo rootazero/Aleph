@@ -161,7 +161,7 @@ pub(in crate::commands::start) struct AuthBundle {
 pub(in crate::commands::start) fn initialize_auth(
     port: u16,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
-    require_auth: bool,
+    auth_mode: alephcore::gateway::config::AuthMode,
     daemon: bool,
 ) -> AuthBundle {
     use alephcore::utils::paths;
@@ -204,6 +204,8 @@ pub(in crate::commands::start) fn initialize_auth(
         }
     };
 
+    let shared_token_mgr = Arc::new(alephcore::gateway::security::SharedTokenManager::new(security_store.clone()));
+
     let auth_ctx = Arc::new(auth_handlers::AuthContext {
         token_manager,
         pairing_manager,
@@ -212,7 +214,8 @@ pub(in crate::commands::start) fn initialize_auth(
         invitation_manager: invitation_manager.clone(),
         guest_session_manager: guest_session_manager.clone(),
         event_bus: event_bus.clone(),
-        require_auth,
+        auth_mode,
+        shared_token_mgr,
     });
 
     if !daemon {
