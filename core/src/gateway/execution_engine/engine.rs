@@ -147,7 +147,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let mut runs = self.active_runs.write().await;
             let agent_runs = runs
                 .values()
-                .filter(|r| r.request.session_key.agent_id() == request.session_key.agent_id())
+                .filter(|r| {
+                    r.request.session_key.agent_id() == request.session_key.agent_id()
+                        && matches!(r.state, RunState::Running)
+                })
                 .count();
 
             if agent_runs >= self.config.max_concurrent_runs {
@@ -497,11 +500,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         };
 
-        // Remove from active runs after a delay (for status queries)
+        // Remove from active runs after a short delay (for status queries)
         let runs_clone = active_runs.clone();
         let run_id_clone = run_id.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             runs_clone.write().await.remove(&run_id_clone);
         });
 
