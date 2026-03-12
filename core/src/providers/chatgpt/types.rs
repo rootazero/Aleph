@@ -18,6 +18,19 @@ pub struct ResponsesRequest {
     pub store: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ReasoningConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<FunctionToolDef>>,
+}
+
+/// Function tool definition for the Responses API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionToolDef {
+    /// Always "function"
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
 }
 
 /// Input item in the conversation (tagged union)

@@ -5,9 +5,9 @@
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload};
+use crate::providers::adapter::{NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::chatgpt::types::{
-    InputItem, ReasoningConfig, ResponseResource, ResponsesRequest, StreamEvent,
+    FunctionToolDef, InputItem, ReasoningConfig, ResponseResource, ResponsesRequest, StreamEvent,
 };
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -72,6 +72,32 @@ impl ChatGptProtocol {
             content: payload.input.to_string(),
         }];
 
+        // Convert tool definitions to Responses API format
+        let tools = payload.tools.map(|tool_defs| {
+            tool_defs
+                .iter()
+                .map(|td| {
+                    // Ensure parameters schema has required "properties" field
+                    // OpenAI rejects object schemas without it
+                    let mut params = td.parameters.clone();
+                    if let Some(obj) = params.as_object_mut() {
+                        if !obj.contains_key("properties") {
+                            obj.insert(
+                                "properties".to_string(),
+                                serde_json::Value::Object(serde_json::Map::new()),
+                            );
+                        }
+                    }
+                    FunctionToolDef {
+                        tool_type: "function".to_string(),
+                        name: td.name.clone(),
+                        description: td.description.clone(),
+                        parameters: params,
+                    }
+                })
+                .collect()
+        });
+
         ResponsesRequest {
             model: model.to_string(),
             input,
@@ -79,6 +105,7 @@ impl ChatGptProtocol {
             stream: true,
             store: false,
             reasoning: Self::build_reasoning(payload),
+            tools,
         }
     }
 
@@ -101,6 +128,29 @@ impl ChatGptProtocol {
         }
     }
 
+    /// Extract native tool calls from a completed ResponseResource
+    fn extract_tool_calls(response: &ResponseResource) -> Vec<NativeToolCall> {
+        let mut calls = Vec::new();
+        for item in &response.output {
+            if let crate::providers::chatgpt::types::OutputItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+                ..
+            } = item
+            {
+                let args = serde_json::from_str(arguments)
+                    .unwrap_or_else(|_| serde_json::Value::String(arguments.clone()));
+                calls.push(NativeToolCall {
+                    id: call_id.clone(),
+                    name: name.clone(),
+                    arguments: args,
+                });
+            }
+        }
+        calls
+    }
+
     /// Parse a single SSE data line into a StreamEvent
     fn parse_sse_data(data: &str) -> Option<StreamEvent> {
         if data == "[DONE]" {
@@ -112,6 +162,10 @@ impl ChatGptProtocol {
 
 #[async_trait]
 impl ProtocolAdapter for ChatGptProtocol {
+    fn supports_native_tools(&self) -> bool {
+        true
+    }
+
     fn build_request(
         &self,
         payload: &RequestPayload,
@@ -170,6 +224,7 @@ impl ProtocolAdapter for ChatGptProtocol {
 
         // Parse SSE events, looking for the Completed event with full response
         let mut result = String::new();
+        let mut tool_calls: Vec<NativeToolCall> = Vec::new();
         for line in text.lines() {
             let data = if let Some(d) = line.strip_prefix("data: ") {
                 d
@@ -186,6 +241,8 @@ impl ProtocolAdapter for ChatGptProtocol {
                         if let Some(full_text) = Self::extract_text(response) {
                             result = full_text;
                         }
+                        // Extract function calls
+                        tool_calls = Self::extract_tool_calls(response);
                     }
                     StreamEvent::Failed { response } => {
                         let msg = response
@@ -199,7 +256,14 @@ impl ProtocolAdapter for ChatGptProtocol {
             }
         }
 
-        if result.is_empty() {
+        if !tool_calls.is_empty() {
+            Ok(ProviderResponse {
+                text: if result.is_empty() { None } else { Some(result) },
+                tool_calls,
+                stop_reason: StopReason::ToolUse,
+                ..Default::default()
+            })
+        } else if result.is_empty() {
             Err(AlephError::provider("Empty response from Codex"))
         } else {
             Ok(ProviderResponse::text_only(result))

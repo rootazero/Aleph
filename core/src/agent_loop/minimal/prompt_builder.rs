@@ -25,8 +25,9 @@ const SECTION_SEPARATOR: &str = "\n\n---\n\n";
 const DEFAULT_IDENTITY: &str = "You are a helpful personal AI assistant.";
 
 const BASE_BEHAVIOR: &str = "\
-- Use available tools to gather information and take actions when needed.\n\
-- Continue working until the user's request is fully resolved.\n\
+- ALWAYS use available tools to gather information and take actions. Do NOT answer from memory or guess when a tool can provide the answer.\n\
+- When the user asks you to do something and a matching tool exists, call it immediately rather than describing what you would do.\n\
+- Continue working until the user's request is fully resolved. Chain multiple tool calls if needed.\n\
 - When a tool call fails, analyze the error and retry with corrected parameters if possible.\n\
 - Provide concise summaries of actions taken and results obtained.";
 
