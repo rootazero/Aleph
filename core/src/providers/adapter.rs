@@ -160,6 +160,12 @@ pub trait ProtocolAdapter: Send + Sync {
 
     /// Get the protocol name for logging
     fn name(&self) -> &'static str;
+
+    /// Fetch available models from the provider API.
+    /// Returns None if the protocol does not support model listing.
+    async fn list_models(&self, _config: &ProviderConfig) -> Result<Option<Vec<DiscoveredModel>>> {
+        Ok(None)
+    }
 }
 
 // =============================================================================
@@ -231,6 +237,19 @@ pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub cache_read_tokens: Option<u32>,
+}
+
+/// A model discovered via API probe or preset list
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredModel {
+    /// Model ID (e.g., "gpt-4o")
+    pub id: String,
+    /// Display name (e.g., "GPT-4o")
+    pub name: Option<String>,
+    /// Owner/organization
+    pub owned_by: Option<String>,
+    /// Capabilities: "chat", "vision", "tools", "thinking"
+    pub capabilities: Vec<String>,
 }
 
 #[cfg(test)]
@@ -309,5 +328,30 @@ mod tests {
         let payload = RequestPayload::new("test input")
             .with_tools(None);
         assert!(payload.tools.is_none());
+    }
+
+    #[test]
+    fn test_discovered_model_serialize() {
+        let model = DiscoveredModel {
+            id: "gpt-4o".to_string(),
+            name: Some("GPT-4o".to_string()),
+            owned_by: Some("openai".to_string()),
+            capabilities: vec!["chat".to_string(), "vision".to_string()],
+        };
+        let json = serde_json::to_value(&model).unwrap();
+        assert_eq!(json["id"], "gpt-4o");
+        assert_eq!(json["name"], "GPT-4o");
+        assert_eq!(json["capabilities"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_discovered_model_default_capabilities() {
+        let model = DiscoveredModel {
+            id: "some-model".to_string(),
+            name: None,
+            owned_by: None,
+            capabilities: vec!["chat".to_string()],
+        };
+        assert_eq!(model.capabilities, vec!["chat"]);
     }
 }
