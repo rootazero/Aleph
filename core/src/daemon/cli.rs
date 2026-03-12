@@ -1,8 +1,6 @@
 use crate::daemon::{
-    create_service_manager, DaemonConfig, DaemonEventBus, PerceptionConfig, Result,
-    WatcherRegistry,
+    create_service_manager, DaemonConfig, DaemonEventBus, Result,
 };
-use crate::daemon::perception::watchers::{FSEventWatcher, ProcessWatcher, SystemStateWatcher, TimeWatcher};
 use clap::{Parser, Subcommand};
 use crate::sync_primitives::Arc;
 use tracing::{error, info};
@@ -114,67 +112,21 @@ impl DaemonCli {
         use crate::daemon::dispatcher::{Dispatcher, DispatcherConfig};
         use crate::daemon::worldmodel::{WorldModel, WorldModelConfig};
 
-        info!("Starting Aleph daemon with Perception Layer, WorldModel, and Dispatcher...");
+        info!("Starting Aleph daemon with WorldModel and Dispatcher...");
 
         // 1. Load configurations
         let config = DaemonConfig::default();
-        let mut perception_config = PerceptionConfig::load()?;
-        perception_config.expand_paths()?;
 
         // 2. Create EventBus
         let event_bus = Arc::new(DaemonEventBus::new(1000));
 
-        // 3. Create and register Watchers (Perception Layer)
-        let mut registry = WatcherRegistry::new();
-
-        if perception_config.enabled {
-            if perception_config.process.enabled {
-                registry.register(Arc::new(ProcessWatcher::new(
-                    perception_config.process.clone(),
-                )));
-            }
-
-            if perception_config.filesystem.enabled {
-                registry.register(Arc::new(FSEventWatcher::new(
-                    perception_config.filesystem.clone(),
-                )));
-            }
-
-            if perception_config.time.enabled {
-                registry.register(Arc::new(TimeWatcher::new(
-                    perception_config.time.clone(),
-                )));
-            }
-
-            if perception_config.system.enabled {
-                registry.register(Arc::new(SystemStateWatcher::new(
-                    perception_config.system.clone(),
-                )));
-            }
-
-            info!("Registered {} watchers", registry.watcher_count());
-
-            // 4. Start all Watchers
-            registry.start_all(event_bus.clone()).await?;
-            info!("All watchers started");
-        } else {
-            info!("Perception layer disabled in configuration");
-        }
-
-        // 5. Create and start WorldModel (Phase 3)
+        // 3. Create and start WorldModel
         info!("Initializing WorldModel...");
         let worldmodel_config = WorldModelConfig::default();
         let worldmodel = Arc::new(WorldModel::new(worldmodel_config, event_bus.clone()).await?);
-
-        let worldmodel_clone = worldmodel.clone();
-        let worldmodel_handle = tokio::spawn(async move {
-            if let Err(e) = worldmodel_clone.run().await {
-                error!("WorldModel error: {}", e);
-            }
-        });
         info!("WorldModel started");
 
-        // 6. Create and start Dispatcher (Phase 4)
+        // 4. Create and start Dispatcher
         info!("Initializing Dispatcher...");
         let dispatcher_config = DispatcherConfig::default();
         let dispatcher = Dispatcher::new(dispatcher_config, worldmodel.clone(), event_bus.clone());
@@ -187,7 +139,7 @@ impl DaemonCli {
         });
         info!("Dispatcher started");
 
-        // 7. Start IPC Server (Unix only — uses Unix domain sockets)
+        // 5. Start IPC Server (Unix only — uses Unix domain sockets)
         #[cfg(unix)]
         let server_handle = {
             let server = IpcServer::new(config.socket_path.clone());
@@ -198,13 +150,11 @@ impl DaemonCli {
             })
         };
 
-        // 8. Wait for Ctrl+C
+        // 6. Wait for Ctrl+C
         tokio::signal::ctrl_c().await?;
 
-        // 9. Graceful shutdown
+        // 7. Graceful shutdown
         info!("Shutting down daemon...");
-        registry.shutdown_all().await?;
-        worldmodel_handle.abort();
         dispatcher_handle.abort();
         #[cfg(unix)]
         server_handle.abort();

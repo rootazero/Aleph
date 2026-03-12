@@ -8,7 +8,6 @@ pub mod error;
 pub mod event_bus;
 pub mod events;
 pub mod ipc;
-pub mod perception;
 pub mod resource_governor;
 pub mod service_manager;
 pub mod types;
@@ -34,11 +33,6 @@ pub use events::{
 #[cfg(unix)]
 pub use ipc::IpcServer;
 pub use ipc::{JsonRpcRequest, JsonRpcResponse};
-pub use perception::{
-    FSEventWatcher, FSWatcherConfig, PerceptionConfig, ProcessWatcher, ProcessWatcherConfig,
-    SystemStateWatcher, SystemWatcherConfig, TimeWatcher, TimeWatcherConfig, Watcher,
-    WatcherControl, WatcherHealth, WatcherRegistry,
-};
 pub use resource_governor::{GovernorDecision, ResourceGovernor, ResourceLimits};
 pub use service_manager::{ServiceManager, create_service_manager};
 pub use types::{DaemonConfig, DaemonStatus, ServiceStatus};
