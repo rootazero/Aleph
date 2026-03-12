@@ -291,7 +291,7 @@ impl GatewayServer {
         // OpenAI-compatible API routes (/v1/models, /v1/health, /v1/chat/completions)
         let openai_state = Arc::new(OpenAiApiState {
             server_id: format!("aleph-{}", self.addr),
-            api_token: None, // TODO: populate from GatewayConfig when token auth is configured
+            api_token: None, // Auth handled by HTTP middleware layer
         });
         let openai = openai_routes(openai_state);
 
@@ -690,7 +690,7 @@ async fn handle_connection(
                                             }
                                         };
 
-                                        // Extract guest_session_id from connect response (when require_auth=false)
+                                        // Extract guest_session_id from connect response
                                         if req.method == "connect" {
                                             if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
                                                 if resp.is_success() {

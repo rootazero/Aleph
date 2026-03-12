@@ -112,8 +112,8 @@ pub async fn handle_connect(
         },
     };
 
-    // Check for guest invitation token FIRST (before require_auth bypass)
-    // Guest invitations should work regardless of require_auth setting
+    // Check for guest invitation token FIRST
+    // Guest invitations should work regardless of auth_mode setting
     if let Some(invitation_token) = &params.invitation_token {
         debug!("Processing guest invitation token: {}...", invitation_token.get(..8).unwrap_or("***"));
         match ctx.invitation_manager.activate_invitation(invitation_token) {
