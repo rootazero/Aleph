@@ -156,3 +156,32 @@ Feature: Models and Chat RPC Handlers
     When I deserialize the ClearParams
     Then the clear session_key should be "agent:main:main"
     And keep_system should be true
+
+  # === Model Discovery Scenarios ===
+
+  Scenario: List models returns models with source field
+    Given a config with provider "openai" with model "gpt-4o"
+    When I call models.list with no params
+    Then the response should be successful
+    And the models array should contain models with source field
+
+  Scenario: Anthropic returns preset models
+    Given a config with provider "anthropic" with model "claude-opus-4-20250514"
+    When I call models.list with provider filter "anthropic"
+    Then the response should be successful
+    And the models should include preset models
+
+  Scenario: Refresh for single provider
+    Given a config with provider "openai" with model "gpt-4o"
+    When I call models.refresh for provider "openai"
+    Then the response should be successful
+
+  Scenario: Refresh unknown provider returns error
+    Given an empty config for models testing
+    When I call models.refresh for provider "nonexistent"
+    Then the response should have an error
+
+  Scenario: Set model backward compatibility
+    Given a mutable config with providers "openai" and "anthropic" default "openai"
+    When I call models.set with model "anthropic"
+    Then the response should be successful

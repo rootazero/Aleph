@@ -218,6 +218,7 @@ aleph-sdk = { path = "../apps/shared" }
 aleph-protocol = { path = "../shared/protocol" }
 proptest = "1.4"
 http-body-util = "0.1"
+wiremock = "0.6"
 
 [[bench]]
 name = "memory_benchmarks_simple"

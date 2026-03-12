@@ -55,6 +55,7 @@
 /// ```
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
+use crate::providers::adapter::DiscoveredModel;
 use crate::providers::AiProvider;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -119,6 +120,18 @@ struct GenerateResponse {
 #[derive(Debug, Deserialize)]
 struct OllamaError {
     error: String,
+}
+
+/// Response from Ollama /api/tags endpoint
+#[derive(Debug, Deserialize)]
+pub(crate) struct TagsResponse {
+    pub(crate) models: Vec<OllamaModelInfo>,
+}
+
+/// Model info from Ollama tags
+#[derive(Debug, Deserialize)]
+pub(crate) struct OllamaModelInfo {
+    pub(crate) name: String,
 }
 
 impl OllamaProvider {
@@ -278,6 +291,42 @@ impl OllamaProvider {
             stream: false,
             options: self.build_options(),
         }
+    }
+
+    /// Fetch available models from the local Ollama server
+    pub async fn list_models(&self) -> Result<Vec<DiscoveredModel>> {
+        let base = self.endpoint.trim_end_matches("/api/generate");
+        let url = format!("{}/api/tags", base);
+
+        let response = self
+            .client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .map_err(|e| AlephError::network(format!("Ollama tags request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Ok(vec![]);
+        }
+
+        let tags: TagsResponse = response
+            .json()
+            .await
+            .map_err(|e| AlephError::network(format!("Failed to parse Ollama tags: {}", e)))?;
+
+        let models = tags
+            .models
+            .into_iter()
+            .map(|m| DiscoveredModel {
+                id: m.name.clone(),
+                name: Some(m.name),
+                owned_by: Some("local".to_string()),
+                capabilities: vec!["chat".to_string()],
+            })
+            .collect();
+
+        Ok(models)
     }
 
     /// Handle error response from Ollama
@@ -649,5 +698,29 @@ mod tests {
         let opts = options.unwrap();
         assert_eq!(opts.temperature, Some(0.8));
         assert_eq!(opts.num_predict, Some(1000));
+    }
+
+    #[test]
+    fn parse_tags_response_success() {
+        let json = r#"{"models": [{"name": "llama3:latest"}, {"name": "codellama:7b"}]}"#;
+        let tags: TagsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(tags.models.len(), 2);
+        assert_eq!(tags.models[0].name, "llama3:latest");
+        assert_eq!(tags.models[1].name, "codellama:7b");
+    }
+
+    #[test]
+    fn parse_tags_response_empty() {
+        let json = r#"{"models": []}"#;
+        let tags: TagsResponse = serde_json::from_str(json).unwrap();
+        assert!(tags.models.is_empty());
+    }
+
+    #[test]
+    fn parse_tags_response_vision_model_detection() {
+        let json = r#"{"models": [{"name": "llava:latest"}, {"name": "bakllava:7b"}]}"#;
+        let tags: TagsResponse = serde_json::from_str(json).unwrap();
+        assert!(tags.models[0].name.contains("llava"));
+        assert!(tags.models[1].name.contains("llava"));
     }
 }
