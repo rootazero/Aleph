@@ -36,6 +36,7 @@ pub mod tool_display;
 pub mod stream_buffer;
 pub mod message_dedup;
 pub mod router;
+pub mod auth_middleware;
 pub mod security;
 pub mod session;
 pub mod handlers;
