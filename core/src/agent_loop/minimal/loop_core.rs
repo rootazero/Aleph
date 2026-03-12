@@ -140,6 +140,11 @@ impl<P: MinimalProvider> MinimalAgentLoop<P> {
         }
     }
 
+    /// Get tool definitions from the registry (for inspection/testing).
+    pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
+        self.tool_registry.tool_definitions()
+    }
+
     /// Run the agent loop with the given user input.
     ///
     /// This is THE CORE LOOP:

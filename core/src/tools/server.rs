@@ -228,6 +228,13 @@ impl AlephToolServer {
         self.tools.read().await.keys().cloned().collect()
     }
 
+    /// List all registered tools as `Arc<dyn AlephToolDyn>`.
+    ///
+    /// Used by the minimal agent loop factory to wrap tools via adapters.
+    pub async fn list_tools_arc(&self) -> Vec<Arc<dyn AlephToolDyn>> {
+        self.tools.read().await.values().cloned().collect()
+    }
+
     /// Get the number of registered tools.
     pub async fn len(&self) -> usize {
         self.tools.read().await.len()
@@ -556,6 +563,13 @@ impl AlephToolServerHandle {
     /// List all tool names.
     pub async fn list_names(&self) -> Vec<String> {
         self.tools.read().await.keys().cloned().collect()
+    }
+
+    /// List all registered tools as `Arc<dyn AlephToolDyn>`.
+    ///
+    /// Used by the minimal agent loop factory to wrap tools via adapters.
+    pub async fn list_tools_arc(&self) -> Vec<Arc<dyn AlephToolDyn>> {
+        self.tools.read().await.values().cloned().collect()
     }
 
     /// Get the number of registered tools.
