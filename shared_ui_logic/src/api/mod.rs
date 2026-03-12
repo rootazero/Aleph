@@ -97,6 +97,7 @@
 pub mod alerts;
 pub mod config;
 pub mod memory;
+pub mod models;
 pub mod plugins;
 pub mod providers;
 
@@ -110,4 +111,5 @@ pub use config::{
 };
 pub use memory::{MemoryApi, MemorySearchItem, MemoryStats};
 pub use plugins::{PluginInfo, PluginsApi};
+pub use models::{ModelInfo, ModelsApi, RefreshModelEntry, RefreshResult};
 pub use providers::{ProviderConfig, ProviderInfo, ProvidersApi, TestResult};
