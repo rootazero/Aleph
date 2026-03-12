@@ -4,6 +4,9 @@
 //! - models.list: List available models with filtering
 //! - models.get: Get detailed information about a specific model
 //! - models.capabilities: Get capability map for a model
+//! - models.refresh: Force refresh model lists from providers
+//! - models.set_default: Set the default provider
+//! - models.set_model: Change a provider's configured model
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -12,6 +15,58 @@ use crate::sync_primitives::Arc;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use super::parse_params;
 use crate::config::Config;
+
+// ============================================================================
+// OllamaDiscoveryAdapter
+// ============================================================================
+
+/// Adapter that wraps OllamaProvider::list_models() for ModelRegistry caching
+struct OllamaDiscoveryAdapter {
+    name: String,
+    config: crate::config::ProviderConfig,
+}
+
+impl OllamaDiscoveryAdapter {
+    fn new(name: String, config: crate::config::ProviderConfig) -> Self {
+        Self { name, config }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::providers::ProtocolAdapter for OllamaDiscoveryAdapter {
+    fn build_request(
+        &self,
+        _payload: &crate::providers::RequestPayload,
+        _config: &crate::config::ProviderConfig,
+        _is_streaming: bool,
+    ) -> crate::error::Result<reqwest::RequestBuilder> {
+        unimplemented!("OllamaDiscoveryAdapter is only used for list_models")
+    }
+    async fn parse_response(
+        &self,
+        _response: reqwest::Response,
+    ) -> crate::error::Result<crate::providers::ProviderResponse> {
+        unimplemented!("OllamaDiscoveryAdapter is only used for list_models")
+    }
+    async fn parse_stream(
+        &self,
+        _response: reqwest::Response,
+    ) -> crate::error::Result<futures::stream::BoxStream<'static, crate::error::Result<String>>> {
+        unimplemented!("OllamaDiscoveryAdapter is only used for list_models")
+    }
+    fn name(&self) -> &'static str {
+        "ollama-discovery"
+    }
+    async fn list_models(
+        &self,
+        _config: &crate::config::ProviderConfig,
+    ) -> crate::error::Result<Option<Vec<crate::providers::adapter::DiscoveredModel>>> {
+        match crate::providers::OllamaProvider::new(self.name.clone(), self.config.clone()) {
+            Ok(provider) => Ok(Some(provider.list_models().await.unwrap_or_default())),
+            Err(_) => Ok(None),
+        }
+    }
+}
 
 // ============================================================================
 // Types
@@ -30,8 +85,12 @@ pub struct ModelInfo {
     pub enabled: bool,
     /// Whether this is the default model
     pub is_default: bool,
+    /// Whether this is the provider's currently configured model
+    pub is_current: bool,
     /// Model capabilities as string list: "chat", "vision", "tools", "thinking"
     pub capabilities: Vec<String>,
+    /// Source of this model info: "api", "preset", "config"
+    pub source: String,
 }
 
 /// Parameters for models.list
@@ -43,6 +102,9 @@ pub struct ListParams {
     /// Only return enabled models
     #[serde(default)]
     pub enabled_only: bool,
+    /// Force cache refresh before listing
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 /// Parameters for models.get
@@ -165,6 +227,7 @@ pub fn infer_capabilities(provider_type: &str, model: &str) -> Vec<String> {
 /// # Parameters
 /// - `provider` (optional): Filter by provider name
 /// - `enabled_only` (optional, default false): Only return enabled models
+/// - `refresh` (optional, default false): Force cache refresh before listing
 ///
 /// # Returns
 /// ```json
@@ -176,7 +239,9 @@ pub fn infer_capabilities(provider_type: &str, model: &str) -> Vec<String> {
 ///       "provider_type": "openai",
 ///       "enabled": true,
 ///       "is_default": true,
-///       "capabilities": ["chat", "vision", "tools"]
+///       "is_current": true,
+///       "capabilities": ["chat", "vision", "tools"],
+///       "source": "api"
 ///     }
 ///   ]
 /// }
@@ -197,39 +262,91 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<Config>) -> JsonRp
     };
 
     let default_provider = config.general.default_provider.clone();
+    let registry = &crate::providers::model_registry::MODEL_REGISTRY;
+    let protocol_registry = crate::providers::protocols::ProtocolRegistry::global();
+    if protocol_registry.list_protocols().is_empty() {
+        protocol_registry.register_builtin();
+    }
 
-    let models: Vec<ModelInfo> = config
-        .providers
-        .iter()
-        .filter(|(name, cfg)| {
-            // Filter by provider name if specified
-            if let Some(ref filter_provider) = params.provider {
-                if name.as_str() != filter_provider {
-                    return false;
+    let mut all_models = Vec::new();
+
+    for (name, cfg) in &config.providers {
+        if let Some(ref filter) = params.provider {
+            if name != filter {
+                continue;
+            }
+        }
+        if params.enabled_only && !cfg.enabled {
+            continue;
+        }
+
+        let protocol = cfg.protocol();
+        let is_default = default_provider.as_ref() == Some(name);
+
+        let discovered = if protocol == "ollama" {
+            let ollama_adapter = OllamaDiscoveryAdapter::new(name.clone(), cfg.clone());
+            if params.refresh {
+                registry.refresh(name, &protocol, &ollama_adapter, cfg).await
+            } else {
+                registry.list_models(name, &protocol, &ollama_adapter, cfg).await
+            }
+        } else {
+            match protocol_registry.get(&protocol) {
+                Some(adapter) => {
+                    if params.refresh {
+                        registry.refresh(name, &protocol, adapter.as_ref(), cfg).await
+                    } else {
+                        registry.list_models(name, &protocol, adapter.as_ref(), cfg).await
+                    }
                 }
+                None => vec![],
             }
-            // Filter by enabled status if requested
-            if params.enabled_only && !cfg.enabled {
-                return false;
-            }
-            true
-        })
-        .map(|(name, cfg)| {
-            let protocol = cfg.protocol();
-            let capabilities = infer_capabilities(&protocol, &cfg.model);
+        };
 
-            ModelInfo {
+        if discovered.is_empty() {
+            all_models.push(ModelInfo {
                 id: cfg.model.clone(),
                 provider: name.clone(),
-                provider_type: protocol,
+                provider_type: protocol.clone(),
                 enabled: cfg.enabled,
-                is_default: default_provider.as_ref() == Some(name),
-                capabilities,
-            }
-        })
-        .collect();
+                is_default,
+                is_current: true,
+                capabilities: infer_capabilities(&protocol, &cfg.model),
+                source: "config".to_string(),
+            });
+        } else {
+            let source = registry
+                .get_source(name)
+                .await
+                .map(|s| match s {
+                    crate::providers::model_registry::ModelSource::Api => "api",
+                    crate::providers::model_registry::ModelSource::Preset => "preset",
+                })
+                .unwrap_or("config");
 
-    JsonRpcResponse::success(request.id, json!({ "models": models }))
+            for model in discovered {
+                let is_current = model.id == cfg.model;
+                let capabilities = if model.capabilities.is_empty() {
+                    infer_capabilities(&protocol, &model.id)
+                } else {
+                    model.capabilities.clone()
+                };
+
+                all_models.push(ModelInfo {
+                    id: model.id,
+                    provider: name.clone(),
+                    provider_type: protocol.clone(),
+                    enabled: cfg.enabled,
+                    is_default: is_default && is_current,
+                    is_current,
+                    capabilities,
+                    source: source.to_string(),
+                });
+            }
+        }
+    }
+
+    JsonRpcResponse::success(request.id, json!({ "models": all_models }))
 }
 
 /// Get detailed information about a specific model
@@ -249,7 +366,9 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<Config>) -> JsonRp
 ///     "provider_type": "openai",
 ///     "enabled": true,
 ///     "is_default": true,
-///     "capabilities": ["chat", "vision", "tools"]
+///     "is_current": true,
+///     "capabilities": ["chat", "vision", "tools"],
+///     "source": "config"
 ///   }
 /// }
 /// ```
@@ -271,7 +390,9 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<Config>) -> JsonRpc
                 provider_type: protocol,
                 enabled: cfg.enabled,
                 is_default: default_provider.as_ref() == Some(&params.provider),
+                is_current: true,
                 capabilities,
+                source: "config".to_string(),
             };
 
             JsonRpcResponse::success(request.id, json!({ "model": info }))
@@ -319,57 +440,218 @@ pub async fn handle_capabilities(request: JsonRpcRequest, config: Arc<Config>) -
     }
 }
 
-/// Parameters for models.set
-#[derive(Debug, Deserialize)]
-pub struct SetParams {
-    /// Model/provider name to set as active
-    pub model: String,
+/// Parameters for models.refresh
+#[derive(Debug, Deserialize, Default)]
+pub struct RefreshParams {
+    #[serde(default)]
+    pub provider: Option<String>,
 }
 
-/// Set the active model (default provider)
-///
-/// # RPC Method
-/// `models.set`
-///
-/// # Parameters
-/// - `model` (required): Provider name to set as the default
-///
-/// # Returns
-/// ```json
-/// {
-///   "model": "openai",
-///   "message": "Default model set to: openai"
-/// }
-/// ```
-pub async fn handle_set(
+/// Force refresh model list for a provider
+pub async fn handle_refresh(request: JsonRpcRequest, config: Arc<Config>) -> JsonRpcResponse {
+    let params: RefreshParams = match &request.params {
+        Some(p) => match serde_json::from_value(p.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid params: {}", e),
+                );
+            }
+        },
+        None => RefreshParams::default(),
+    };
+
+    let registry = &crate::providers::model_registry::MODEL_REGISTRY;
+    let protocol_registry = crate::providers::protocols::ProtocolRegistry::global();
+    if protocol_registry.list_protocols().is_empty() {
+        protocol_registry.register_builtin();
+    }
+
+    let providers_to_refresh: Vec<_> = config
+        .providers
+        .iter()
+        .filter(|(name, _)| {
+            params.provider.as_ref().map_or(true, |filter| name.as_str() == filter)
+        })
+        .collect();
+
+    let mut results = Vec::new();
+
+    for (name, cfg) in providers_to_refresh {
+        let protocol = cfg.protocol();
+
+        let models = if protocol == "ollama" {
+            let ollama_adapter = OllamaDiscoveryAdapter::new(name.clone(), cfg.clone());
+            registry.refresh(name, &protocol, &ollama_adapter, cfg).await
+        } else {
+            match protocol_registry.get(&protocol) {
+                Some(adapter) => {
+                    registry.refresh(name, &protocol, adapter.as_ref(), cfg).await
+                }
+                None => vec![],
+            }
+        };
+
+        let source = registry
+            .get_source(name)
+            .await
+            .map(|s| match s {
+                crate::providers::model_registry::ModelSource::Api => "api",
+                crate::providers::model_registry::ModelSource::Preset => "preset",
+            })
+            .unwrap_or("config");
+
+        results.push(json!({
+            "provider": name,
+            "count": models.len(),
+            "source": source,
+            "models": models.iter().map(|m| json!({
+                "id": m.id,
+                "name": m.name,
+                "capabilities": m.capabilities,
+            })).collect::<Vec<_>>(),
+        }));
+    }
+
+    if results.len() == 1 {
+        JsonRpcResponse::success(request.id, results.into_iter().next().unwrap())
+    } else {
+        JsonRpcResponse::success(request.id, json!({ "results": results }))
+    }
+}
+
+/// Parameters for models.set_default
+#[derive(Debug, Deserialize)]
+pub struct SetDefaultParams {
+    pub provider: String,
+}
+
+/// Set the default provider
+pub async fn handle_set_default(
     request: JsonRpcRequest,
     config: Arc<tokio::sync::RwLock<Config>>,
 ) -> JsonRpcResponse {
-    let params: SetParams = match parse_params(&request) {
+    let params: SetDefaultParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
     let mut cfg = config.write().await;
 
-    // Verify the provider exists
-    if !cfg.providers.contains_key(&params.model) {
+    if !cfg.providers.contains_key(&params.provider) {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            format!("Provider not found: {}", params.model),
+            format!("Provider not found: {}", params.provider),
         );
     }
 
-    cfg.general.default_provider = Some(params.model.clone());
+    cfg.general.default_provider = Some(params.provider.clone());
 
     JsonRpcResponse::success(
         request.id,
-        json!({
-            "model": params.model,
-            "message": format!("Default model set to: {}", params.model),
-        }),
+        json!({ "message": format!("Default provider set to {}", params.provider) }),
     )
+}
+
+/// Parameters for models.set_model
+#[derive(Debug, Deserialize)]
+pub struct SetModelParams {
+    pub provider: String,
+    pub model: String,
+}
+
+/// Change a provider's configured model with validation
+pub async fn handle_set_model(
+    request: JsonRpcRequest,
+    config: Arc<tokio::sync::RwLock<Config>>,
+) -> JsonRpcResponse {
+    let params: SetModelParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let mut cfg = config.write().await;
+
+    let provider_cfg = match cfg.providers.get(&params.provider) {
+        Some(c) => c.clone(),
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Provider not found: {}", params.provider),
+            );
+        }
+    };
+
+    // Validate model exists in available models
+    let registry = &crate::providers::model_registry::MODEL_REGISTRY;
+    let protocol = provider_cfg.protocol();
+    let protocol_registry = crate::providers::protocols::ProtocolRegistry::global();
+    if protocol_registry.list_protocols().is_empty() {
+        protocol_registry.register_builtin();
+    }
+
+    let available = if protocol == "ollama" {
+        let ollama_adapter = OllamaDiscoveryAdapter::new(params.provider.clone(), provider_cfg.clone());
+        registry.list_models(&params.provider, &protocol, &ollama_adapter, &provider_cfg).await
+    } else {
+        match protocol_registry.get(&protocol) {
+            Some(adapter) => {
+                registry
+                    .list_models(&params.provider, &protocol, adapter.as_ref(), &provider_cfg)
+                    .await
+            }
+            None => vec![],
+        }
+    };
+
+    // If we have a model list, validate against it
+    if !available.is_empty() && !available.iter().any(|m| m.id == params.model) {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!(
+                "Model '{}' not found in {}'s available models. Available: {}",
+                params.model,
+                params.provider,
+                available.iter().map(|m| m.id.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+        );
+    }
+
+    // Update the model
+    if let Some(provider) = cfg.providers.get_mut(&params.provider) {
+        provider.model = params.model.clone();
+    }
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({ "message": format!("Provider {} model set to {}", params.provider, params.model) }),
+    )
+}
+
+/// Set the active model (default provider) — backward compatibility alias
+///
+/// DEPRECATED: Use models.set_default instead
+pub async fn handle_set(
+    request: JsonRpcRequest,
+    config: Arc<tokio::sync::RwLock<Config>>,
+) -> JsonRpcResponse {
+    // Translate old params format { "model": "openai" } to new { "provider": "openai" }
+    let new_params = request.params.as_ref().and_then(|p| {
+        p.get("model").map(|m| json!({ "provider": m }))
+    });
+
+    let new_request = JsonRpcRequest::new(
+        "models.set_default",
+        new_params,
+        request.id.clone(),
+    );
+
+    handle_set_default(new_request, config).await
 }
 
 // ============================================================================
@@ -385,6 +667,7 @@ mod tests {
         let params: ListParams = serde_json::from_value(json!({})).unwrap();
         assert!(params.provider.is_none());
         assert!(!params.enabled_only);
+        assert!(!params.refresh);
     }
 
     #[test]
@@ -396,6 +679,15 @@ mod tests {
         .unwrap();
         assert_eq!(params.provider, Some("openai".to_string()));
         assert!(params.enabled_only);
+    }
+
+    #[test]
+    fn test_list_params_with_refresh() {
+        let params: ListParams = serde_json::from_value(json!({
+            "refresh": true
+        }))
+        .unwrap();
+        assert!(params.refresh);
     }
 
     #[test]
@@ -415,11 +707,13 @@ mod tests {
             provider_type: "openai".to_string(),
             enabled: true,
             is_default: true,
+            is_current: true,
             capabilities: vec![
                 "chat".to_string(),
                 "vision".to_string(),
                 "tools".to_string(),
             ],
+            source: "config".to_string(),
         };
 
         let json = serde_json::to_value(&info).unwrap();
@@ -428,6 +722,8 @@ mod tests {
         assert_eq!(json["provider_type"], "openai");
         assert!(json["enabled"].as_bool().unwrap());
         assert!(json["is_default"].as_bool().unwrap());
+        assert!(json["is_current"].as_bool().unwrap());
+        assert_eq!(json["source"], "config");
         let caps = json["capabilities"].as_array().unwrap();
         assert!(caps.iter().any(|c| c == "chat"));
         assert!(caps.iter().any(|c| c == "vision"));
@@ -564,7 +860,8 @@ mod tests {
         assert!(response.is_success());
         let result = response.result.unwrap();
         let models = result["models"].as_array().unwrap();
-        assert_eq!(models.len(), 2);
+        // With registry, each provider returns preset models (not just 1 config model)
+        assert!(!models.is_empty());
     }
 
     #[tokio::test]
@@ -593,8 +890,10 @@ mod tests {
         assert!(response.is_success());
         let result = response.result.unwrap();
         let models = result["models"].as_array().unwrap();
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0]["provider"], "openai");
+        // All returned models should be from openai provider
+        for m in models {
+            assert_eq!(m["provider"], "openai");
+        }
     }
 
     #[tokio::test]
@@ -620,6 +919,8 @@ mod tests {
         let result = response.result.unwrap();
         assert_eq!(result["model"]["id"], "gpt-4o");
         assert_eq!(result["model"]["provider"], "openai");
+        assert!(result["model"]["is_current"].as_bool().unwrap());
+        assert_eq!(result["model"]["source"], "config");
     }
 
     #[tokio::test]
