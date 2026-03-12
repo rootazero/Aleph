@@ -6,7 +6,8 @@
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{
-    NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
+    DiscoveredModel, NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason,
+    TokenUsage,
 };
 use crate::providers::openai::{
     ChatCompletionResponse, ContentBlock, ImageUrl, Message, MessageContent, OpenAiFunction,
@@ -458,6 +459,61 @@ impl ProtocolAdapter for OpenAiProtocol {
 
     fn name(&self) -> &'static str {
         "openai"
+    }
+
+    async fn list_models(&self, config: &ProviderConfig) -> Result<Option<Vec<DiscoveredModel>>> {
+        let base_url = config
+            .base_url
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+
+        // Normalize: ensure we have /v1 suffix for the models endpoint
+        let url = if base_url.ends_with("/v1") {
+            format!("{}/models", base_url)
+        } else {
+            format!("{}/v1/models", base_url)
+        };
+
+        let api_key = config.api_key.as_deref().unwrap_or("");
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .map_err(|e| AlephError::network(format!("Model list request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| AlephError::network(format!("Failed to parse model list: {}", e)))?;
+
+        let models = body["data"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        let id = m["id"].as_str()?;
+                        Some(DiscoveredModel {
+                            id: id.to_string(),
+                            name: Some(id.to_string()),
+                            owned_by: m["owned_by"].as_str().map(|s| s.to_string()),
+                            capabilities: vec!["chat".to_string()],
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(Some(models))
     }
 }
 
