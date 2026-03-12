@@ -98,9 +98,7 @@ fn extract_session_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
         .and_then(|cookies| {
             cookies.split(';')
                 .filter_map(|c| {
-                    let mut parts = c.trim().splitn(2, '=');
-                    let name = parts.next()?;
-                    let value = parts.next()?;
+                    let (name, value) = c.trim().split_once('=')?;
                     if name == "aleph_session" { Some(value.to_string()) } else { None }
                 })
                 .next()
