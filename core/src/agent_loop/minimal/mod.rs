@@ -6,6 +6,7 @@
 pub mod adapters;
 mod loop_core;
 mod prompt_builder;
+pub mod provider_bridge;
 mod safety;
 mod tool;
 
@@ -15,4 +16,5 @@ pub use loop_core::{
 };
 pub use prompt_builder::{MinimalPromptBuilder, ToolInfo};
 pub use safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
+pub use provider_bridge::AiProviderBridge;
 pub use tool::{MinimalTool, MinimalToolRegistry, ToolDefinition, ToolResult};
