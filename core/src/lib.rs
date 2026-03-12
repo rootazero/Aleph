@@ -140,17 +140,14 @@ pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer
 // Agent System Exports
 // =============================================================================
 
-// Agent Loop (core types)
+// Agent Loop (minimal loop types)
 pub use crate::agent_loop::{
-    AgentLoop, LoopCallback, LoopConfig as AgentLoopConfig, LoopResult,
-    LoopState as AgentLoopState, RequestContext,
+    LoopCallback, LoopConfig as AgentLoopConfig, LoopRunResult,
+    MinimalAgentLoop,
 };
 
-// Thinker (LLM layer)
-pub use crate::thinker::{Thinker, ThinkerConfig, ProviderRegistry, SingleProviderRegistry, SwappableProviderRegistry};
-
-// Compressor
-pub use crate::compressor::{ContextCompressor, NoOpCompressor};
+// Thinker (LLM layer - provider registry)
+pub use crate::thinker::{ProviderRegistry, SingleProviderRegistry, SwappableProviderRegistry};
 
 // =============================================================================
 // Tool System Exports

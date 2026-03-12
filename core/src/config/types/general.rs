@@ -5,9 +5,21 @@
 //! - ShortcutsConfig: Keyboard shortcuts configuration
 //! - BehaviorConfig: Input/output behavior settings
 
-use crate::agent_loop::QueueMode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+/// Queue mode for incoming messages while agent is busy
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum QueueMode {
+    /// Follow-up: queue messages and process after current run
+    #[default]
+    Followup,
+    /// Steer: inject new message into current run
+    Steer,
+    /// Collect: batch messages within a time window
+    Collect,
+}
 
 // =============================================================================
 // GeneralConfig
@@ -22,10 +34,6 @@ pub struct GeneralConfig {
     /// Preferred language override (e.g., 'en', 'zh-Hans'). If None, use system language.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
-    /// Use the minimal agent loop (think→act two-step) instead of the full OTAF loop.
-    /// Default: false. Set to true to enable the Claude Code-inspired minimalist loop.
-    #[serde(default)]
-    pub use_minimal_loop: bool,
     /// Session queue mode: how incoming messages are handled while agent is busy.
     /// Options: "followup" (default), "steer", "collect"
     #[serde(default)]

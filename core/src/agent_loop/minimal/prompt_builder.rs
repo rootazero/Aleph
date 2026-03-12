@@ -7,10 +7,13 @@ use crate::thinker::soul::SoulManifest;
 // =============================================================================
 
 /// Lightweight tool info for prompt building.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolInfo {
     pub name: String,
     pub description: String,
+    /// Optional JSON Schema for tool parameters
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters_schema: Option<serde_json::Value>,
 }
 
 // =============================================================================
@@ -230,10 +233,12 @@ mod tests {
             ToolInfo {
                 name: "web_search".to_string(),
                 description: "Search the web for information.".to_string(),
+                parameters_schema: None,
             },
             ToolInfo {
                 name: "file_read".to_string(),
                 description: "Read a file from disk.".to_string(),
+                parameters_schema: None,
             },
         ];
 

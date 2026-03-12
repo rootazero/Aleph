@@ -1,82 +1,15 @@
-//! Integration tests for AtomicEngine with Agent Loop
+//! Integration tests for AtomicEngine
 //!
-//! These tests validate the end-to-end integration of AtomicEngine
-//! with the existing Agent Loop architecture.
+//! These tests validate the AtomicEngine routing logic.
 
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod integration_tests {
     use crate::sync_primitives::Arc;
-    use std::time::Instant;
     use tempfile::TempDir;
 
-    use crate::agent_loop::{Action, ActionExecutor, ActionResult};
     use crate::engine::{AtomicEngine, RoutingLayer};
-    use crate::executor::AtomicActionExecutor;
-    use aleph_protocol::IdentityContext;
     use serde_json::json;
-
-    // Mock executor for baseline comparison
-    struct BaselineExecutor;
-
-    #[async_trait::async_trait]
-    impl ActionExecutor for BaselineExecutor {
-        async fn execute(&self, action: &Action, _identity: &IdentityContext) -> ActionResult {
-            // Simulate traditional execution with some latency
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-
-            match action {
-                Action::ToolCalls { calls: ref requests } => {
-                    let tn = requests.first().map(|r| r.tool_name.as_str()).unwrap_or("unknown");
-                    ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
-                        call_id: String::new(), tool_name: tn.to_string(),
-                        result: crate::agent_loop::decision::SingleToolResult::Success {
-                            output: json!(format!("Executed {}", tn)),
-                            duration_ms: 10,
-                        },
-                    }]}
-                }
-                _ => ActionResult::Failed,
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_l2_routing_faster_than_baseline() {
-        let temp_dir = TempDir::new().unwrap();
-        let baseline = Arc::new(BaselineExecutor);
-        let atomic_executor = AtomicActionExecutor::new(baseline.clone(), temp_dir.path().to_path_buf());
-
-        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest {
-            call_id: String::new(),
-            tool_name: "bash".to_string(),
-            arguments: json!({"cmd": "git status"}),
-        }]};
-
-        let identity = IdentityContext::owner("test-session".to_string(), "test-channel".to_string());
-
-        // Measure atomic execution (should use L2 routing)
-        let start = Instant::now();
-        let atomic_result = atomic_executor.execute(&action, &identity).await;
-        let atomic_duration = start.elapsed();
-
-        // Measure baseline execution
-        let start = Instant::now();
-        let baseline_result = baseline.execute(&action, &identity).await;
-        let baseline_duration = start.elapsed();
-
-        // Both should succeed
-        assert!(atomic_result.is_success());
-        assert!(baseline_result.is_success());
-
-        // Atomic should be faster (L2 routing < 50ms, baseline = 10ms + overhead)
-        // We expect atomic to be comparable or faster
-        println!("Atomic duration: {:?}", atomic_duration);
-        println!("Baseline duration: {:?}", baseline_duration);
-
-        // Atomic routing should complete in under 100ms
-        assert!(atomic_duration.as_millis() < 100);
-    }
 
     #[tokio::test]
     async fn test_routing_statistics() {
@@ -126,25 +59,6 @@ mod integration_tests {
         let result2 = engine.route_query(&custom_query).await;
         assert_eq!(result2.layer, RoutingLayer::L1);
         assert!(result2.action.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_fallback_on_unknown_tool() {
-        let temp_dir = TempDir::new().unwrap();
-        let baseline = Arc::new(BaselineExecutor);
-        let atomic_executor = AtomicActionExecutor::new(baseline, temp_dir.path().to_path_buf());
-
-        let action = Action::ToolCalls { calls: vec![crate::agent_loop::decision::ToolCallRequest {
-            call_id: String::new(),
-            tool_name: "unknown_tool".to_string(),
-            arguments: json!({"some_arg": "value"}),
-        }]};
-
-        let identity = IdentityContext::owner("test-session".to_string(), "test-channel".to_string());
-        let result = atomic_executor.execute(&action, &identity).await;
-
-        // Should fall back to baseline and succeed
-        assert!(result.is_success());
     }
 
     #[tokio::test]

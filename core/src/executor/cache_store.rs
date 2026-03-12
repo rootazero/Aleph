@@ -8,7 +8,7 @@ use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 
-use crate::agent_loop::ActionResult;
+use super::action_types::ActionResult;
 
 use super::cache_config::ToolCacheConfig;
 
@@ -165,9 +165,9 @@ mod tests {
 
         let tool_name = "search";
         let args = serde_json::json!({"query": "test query"});
-        let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+        let result = ActionResult::ToolResults { results: vec![crate::executor::action_types::ToolCallResult {
             call_id: String::new(), tool_name: String::new(),
-            result: crate::agent_loop::decision::SingleToolResult::Success { output: serde_json::json!("file content"), duration_ms: 100 },
+            result: crate::executor::action_types::SingleToolResult::Success { output: serde_json::json!("file content"), duration_ms: 100 },
             }]};
 
         // Store
@@ -187,9 +187,9 @@ mod tests {
         let tool_name = "search";
         let args1 = serde_json::json!({"query": "query1"});
         let args2 = serde_json::json!({"query": "query2"});
-        let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+        let result = ActionResult::ToolResults { results: vec![crate::executor::action_types::ToolCallResult {
             call_id: String::new(), tool_name: String::new(),
-            result: crate::agent_loop::decision::SingleToolResult::Success { output: serde_json::json!("content"), duration_ms: 100 },
+            result: crate::executor::action_types::SingleToolResult::Success { output: serde_json::json!("content"), duration_ms: 100 },
             }]};
 
         // Store with args1
@@ -210,9 +210,9 @@ mod tests {
 
         let tool_name = "search";
         let args = serde_json::json!({"query": "test"});
-        let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+        let result = ActionResult::ToolResults { results: vec![crate::executor::action_types::ToolCallResult {
             call_id: String::new(), tool_name: String::new(),
-            result: crate::agent_loop::decision::SingleToolResult::Success { output: serde_json::json!("content"), duration_ms: 100 },
+            result: crate::executor::action_types::SingleToolResult::Success { output: serde_json::json!("content"), duration_ms: 100 },
             }]};
 
         // Store
@@ -236,9 +236,9 @@ mod tests {
 
         let tool_name = "bash";
         let args = serde_json::json!({"command": "ls"});
-        let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+        let result = ActionResult::ToolResults { results: vec![crate::executor::action_types::ToolCallResult {
             call_id: String::new(), tool_name: String::new(),
-            result: crate::agent_loop::decision::SingleToolResult::Success { output: serde_json::json!("output"), duration_ms: 100 },
+            result: crate::executor::action_types::SingleToolResult::Success { output: serde_json::json!("output"), duration_ms: 100 },
             }]};
 
         // Store - should not cache
@@ -256,9 +256,9 @@ mod tests {
 
         let tool_name = "search";
         let args = serde_json::json!({"query": "test"});
-        let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+        let result = ActionResult::ToolResults { results: vec![crate::executor::action_types::ToolCallResult {
             call_id: String::new(), tool_name: String::new(),
-            result: crate::agent_loop::decision::SingleToolResult::Error { error: "File not found".to_string(), retryable: false },
+            result: crate::executor::action_types::SingleToolResult::Error { error: "File not found".to_string(), retryable: false },
             }]};
 
         // Store error result - should not cache
@@ -276,9 +276,9 @@ mod tests {
 
         let tool_name = "search";
         let args = serde_json::json!({"query": "test"});
-        let result = ActionResult::ToolResults { results: vec![crate::agent_loop::decision::ToolCallResult {
+        let result = ActionResult::ToolResults { results: vec![crate::executor::action_types::ToolCallResult {
             call_id: String::new(), tool_name: String::new(),
-            result: crate::agent_loop::decision::SingleToolResult::Success { output: serde_json::json!("content"), duration_ms: 100 },
+            result: crate::executor::action_types::SingleToolResult::Success { output: serde_json::json!("content"), duration_ms: 100 },
             }]};
 
         // Store
