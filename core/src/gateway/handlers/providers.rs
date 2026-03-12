@@ -746,7 +746,7 @@ pub struct ProbeParams {
 }
 
 /// Probe result combining connection test + model discovery
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ProbeResult {
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
