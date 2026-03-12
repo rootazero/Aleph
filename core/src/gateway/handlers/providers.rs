@@ -729,6 +729,136 @@ pub async fn handle_needs_setup(request: JsonRpcRequest, config_store: Arc<RwLoc
 }
 
 // ============================================================================
+// Probe
+// ============================================================================
+
+/// Parameters for providers.probe
+#[derive(Debug, Deserialize)]
+pub struct ProbeParams {
+    /// Protocol type: "openai", "anthropic", "gemini", "ollama"
+    pub protocol: String,
+    /// API key (not needed for Ollama)
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Custom base URL (None = protocol default)
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+/// Probe result combining connection test + model discovery
+#[derive(Debug, Serialize)]
+pub struct ProbeResult {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    pub models: Vec<crate::providers::adapter::DiscoveredModel>,
+    pub model_source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Probe a provider: test connection + discover available models
+///
+/// Combines connection verification and model discovery in a single call.
+/// Used by the setup wizard and enhanced settings form.
+pub async fn handle_probe(request: JsonRpcRequest, _config_store: Arc<RwLock<Config>>) -> JsonRpcResponse {
+    let params: ProbeParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let protocol = params.protocol.clone();
+
+    // Build temporary config for probing
+    let mut probe_config = ProviderConfig::test_config("probe-placeholder");
+    probe_config.protocol = Some(protocol.clone());
+    if let Some(api_key) = params.api_key {
+        probe_config.api_key = Some(api_key);
+    }
+    if let Some(base_url) = params.base_url {
+        probe_config.base_url = Some(base_url);
+    }
+
+    let registry = &crate::providers::model_registry::MODEL_REGISTRY;
+    let probe_name = format!("probe-{}", uuid::Uuid::new_v4());
+    let start = std::time::Instant::now();
+
+    // Attempt model discovery (implicitly tests connection)
+    let (models, model_source, error) = if protocol == "ollama" {
+        let ollama_adapter = super::models::OllamaDiscoveryAdapter::new(
+            probe_name.clone(),
+            probe_config.clone(),
+        );
+        match registry
+            .list_models(&probe_name, &protocol, &ollama_adapter, &probe_config)
+            .await
+        {
+            models if !models.is_empty() => {
+                let source = registry
+                    .get_source(&probe_name)
+                    .await
+                    .map(|s| match s {
+                        crate::providers::model_registry::ModelSource::Api => "api".to_string(),
+                        crate::providers::model_registry::ModelSource::Preset => "preset".to_string(),
+                    })
+                    .unwrap_or_else(|| "preset".to_string());
+                (models, source, None)
+            }
+            _ => (vec![], "preset".to_string(), Some("No models found".to_string())),
+        }
+    } else {
+        let protocol_registry = crate::providers::protocols::ProtocolRegistry::global();
+        if protocol_registry.list_protocols().is_empty() {
+            protocol_registry.register_builtin();
+        }
+
+        match protocol_registry.get(&protocol) {
+            Some(adapter) => {
+                let models = registry
+                    .list_models(&probe_name, &protocol, adapter.as_ref(), &probe_config)
+                    .await;
+                if models.is_empty() {
+                    (
+                        vec![],
+                        "preset".to_string(),
+                        Some("No models discovered — check API key and endpoint".to_string()),
+                    )
+                } else {
+                    let source = registry
+                        .get_source(&probe_name)
+                        .await
+                        .map(|s| match s {
+                            crate::providers::model_registry::ModelSource::Api => "api".to_string(),
+                            crate::providers::model_registry::ModelSource::Preset => "preset".to_string(),
+                        })
+                        .unwrap_or_else(|| "preset".to_string());
+                    (models, source, None)
+                }
+            }
+            None => (
+                vec![],
+                "preset".to_string(),
+                Some(format!("Unknown protocol: {}", protocol)),
+            ),
+        }
+    };
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+    let success = error.is_none();
+
+    JsonRpcResponse::success(
+        request.id,
+        json!(ProbeResult {
+            success,
+            latency_ms: Some(latency_ms),
+            models,
+            model_source,
+            error,
+        }),
+    )
+}
+
+// ============================================================================
 // Set Default
 // ============================================================================
 
@@ -979,6 +1109,31 @@ mod tests {
         assert_eq!(result["needs_setup"], false);
         assert_eq!(result["provider_count"], 1);
         assert_eq!(result["has_verified"], true);
+    }
+
+    #[tokio::test]
+    async fn test_probe_needs_protocol() {
+        let config = Arc::new(RwLock::new(Config::default()));
+        let request = JsonRpcRequest::with_id(
+            "providers.probe",
+            Some(json!({})),
+            serde_json::json!(1),
+        );
+        let response = handle_probe(request, config).await;
+        assert!(response.error.is_some(), "Should fail without protocol");
+    }
+
+    #[tokio::test]
+    async fn test_probe_unknown_protocol() {
+        let config = Arc::new(RwLock::new(Config::default()));
+        let request = JsonRpcRequest::with_id(
+            "providers.probe",
+            Some(json!({"protocol": "nonexistent"})),
+            serde_json::json!(1),
+        );
+        let response = handle_probe(request, config).await;
+        let result: serde_json::Value = serde_json::from_value(response.result.unwrap()).unwrap();
+        assert_eq!(result["success"], false);
     }
 
     #[tokio::test]
