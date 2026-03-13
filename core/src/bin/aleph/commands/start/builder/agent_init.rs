@@ -93,6 +93,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     memory_db: &alephcore::memory::store::MemoryBackend,
     workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
     agent_manager: Arc<alephcore::AgentManager>,
+    acp_manager: Option<Arc<alephcore::acp::manager::AcpHarnessManager>>,
     daemon: bool,
 ) -> AgentHandlersResult {
     let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
@@ -187,6 +188,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             agent_manager: Some(agent_manager.clone()),
             sub_agent_dispatcher,
             extension_manager: extension_manager.clone(),
+            acp_manager: acp_manager.clone(),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config);
