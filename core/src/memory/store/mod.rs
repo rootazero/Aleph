@@ -23,7 +23,6 @@ use crate::config::types::memory::GraphDecayPolicy;
 use crate::error::AlephError;
 use crate::memory::context::{CompressionSession, FactStats, FactType, MemoryEntry, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
-use crate::memory::audit::AuditEntry;
 use crate::memory::dreaming::{DailyInsight, DreamStatus};
 
 use types::{MemoryFilter, ScoredFact, SearchFilter};
@@ -445,36 +444,6 @@ pub trait DreamStore: Send + Sync {
 
     /// Get the daily insight for a specific date (YYYY-MM-DD format).
     async fn get_daily_insight(&self, date: &str) -> Result<Option<DailyInsight>, AlephError>;
-}
-
-// ---------------------------------------------------------------------------
-// AuditStore -- Fact audit log persistence trait
-// ---------------------------------------------------------------------------
-
-/// Abstraction over fact audit log storage.
-///
-/// Records all mutations (creation, update, invalidation, deletion) that
-/// happen to facts, providing a complete audit trail.
-#[deprecated(
-    since = "0.2.0",
-    note = "Use MemoryEventStore for event-sourced audit. AuditStore will be removed in a future release."
-)]
-#[async_trait]
-pub trait AuditStore: Send + Sync {
-    /// Insert a new audit entry.
-    async fn insert_audit_entry(&self, entry: &AuditEntry) -> Result<(), AlephError>;
-
-    /// Get all audit entries for a specific fact.
-    async fn get_audit_entries_for_fact(
-        &self,
-        fact_id: &str,
-    ) -> Result<Vec<AuditEntry>, AlephError>;
-
-    /// Get the most recent audit entries across all facts.
-    async fn get_recent_audit_entries(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<AuditEntry>, AlephError>;
 }
 
 // ---------------------------------------------------------------------------

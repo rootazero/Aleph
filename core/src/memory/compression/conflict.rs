@@ -50,14 +50,6 @@ pub enum ConflictResolution {
         /// Strategy used for merging
         merge_strategy: MergeStrategy,
     },
-    /// Old fact should be invalidated (legacy, kept for backward compatibility)
-    #[deprecated(since = "0.2.0", note = "Use Override instead")]
-    InvalidateOld {
-        /// ID of the old fact to invalidate
-        old_fact_id: String,
-        /// Reason for invalidation
-        reason: String,
-    },
 }
 
 /// Configuration for conflict detection
@@ -161,17 +153,11 @@ impl ConflictDetector {
         let mut invalidated_count = 0;
 
         for resolution in resolutions {
-            // Handle Override (new) and InvalidateOld (legacy) for invalidation
             let (fact_id, reason) = match resolution {
                 ConflictResolution::Override {
                     invalidated_id,
                     reason,
                 } => (invalidated_id, reason),
-                #[allow(deprecated)]
-                ConflictResolution::InvalidateOld {
-                    old_fact_id,
-                    reason,
-                } => (old_fact_id, reason),
                 // Skip other resolution types for now
                 ConflictResolution::NoConflict
                 | ConflictResolution::Reject { .. }
