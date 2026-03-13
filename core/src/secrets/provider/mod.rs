@@ -35,8 +35,8 @@ pub struct SecretMetadata {
 /// Trait for pluggable secret backends.
 ///
 /// Each implementation encapsulates access to one secret source.
-/// The `SecretRouter` (future) will dispatch `get()` calls to the
-/// appropriate provider based on reference syntax.
+/// SharedTokenManager dispatches `get()` calls to the local vault.
+/// External providers (e.g., 1Password) can be registered separately.
 #[async_trait]
 pub trait SecretProvider: Send + Sync {
     /// Returns a human-readable provider type identifier (e.g., "local_vault", "1password").

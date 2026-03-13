@@ -343,7 +343,7 @@ pub enum AuditAction {
 /// Secret subcommands
 #[derive(Subcommand, Debug)]
 pub enum SecretAction {
-    /// Initialize secret vault with current ALEPH_MASTER_KEY
+    /// Initialize secret vault (uses token as master key)
     Init,
     /// Set a secret value (prompts when --value is omitted)
     Set {
