@@ -149,12 +149,25 @@ impl<P: LoopProvider> AgentLoop<P> {
     ///
     /// This is THE CORE LOOP:
     /// 1. Build system prompt and tool definitions
-    /// 2. Start with `LoopMessage::User(input)`
+    /// 2. Start with optional history + `LoopMessage::User(input)`
     /// 3. Loop: call provider → process response → execute tools → repeat
     /// 4. Stop on EndTurn, max iterations, token budget, or timeout
     pub async fn run(
         &self,
         input: &str,
+        callback: &mut dyn LoopCallback,
+    ) -> anyhow::Result<LoopRunResult> {
+        self.run_with_history(input, Vec::new(), callback).await
+    }
+
+    /// Run the agent loop with conversation history prepended.
+    ///
+    /// `history` contains prior User/Assistant messages from the session.
+    /// The current `input` is appended as the final User message.
+    pub async fn run_with_history(
+        &self,
+        input: &str,
+        history: Vec<LoopMessage>,
         callback: &mut dyn LoopCallback,
     ) -> anyhow::Result<LoopRunResult> {
         // Build system prompt with tool info (no memory context for now)
@@ -173,8 +186,9 @@ impl<P: LoopProvider> AgentLoop<P> {
         // Get tool definitions for the provider
         let tool_defs = self.tool_registry.tool_definitions();
 
-        // Initialize conversation with user message
-        let mut messages = vec![LoopMessage::User(input.to_string())];
+        // Initialize conversation with history + current user message
+        let mut messages = history;
+        messages.push(LoopMessage::User(input.to_string()));
 
         let mut final_text: Option<String> = None;
         let mut iterations: usize = 0;

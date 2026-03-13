@@ -883,10 +883,37 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             loop_config,
         );
 
+        // Load conversation history from session (for multi-turn context)
+        let history = {
+            use crate::agent_loop::LoopMessage;
+            use crate::gateway::agent_instance::MessageRole;
+
+            let session_history = agent.get_history(&request.session_key, Some(50)).await;
+            // Convert SessionMessage to LoopMessage, excluding the current user input
+            // (which was just added above and will be appended by run_with_history)
+            let mut msgs: Vec<LoopMessage> = Vec::new();
+            // Skip the last message if it's the current user input we just stored
+            let history_slice = if session_history.last().map(|m| {
+                m.role == MessageRole::User && m.content == request.input
+            }).unwrap_or(false) {
+                &session_history[..session_history.len() - 1]
+            } else {
+                &session_history
+            };
+            for msg in history_slice {
+                match msg.role {
+                    MessageRole::User => msgs.push(LoopMessage::User(msg.content.clone())),
+                    MessageRole::Assistant => msgs.push(LoopMessage::Assistant(msg.content.clone())),
+                    _ => {}
+                }
+            }
+            msgs
+        };
+
         // Create a streaming callback that emits events
         let mut callback = StreamCallback::new(emitter.clone(), run_id.to_string());
 
-        match agent_loop.run(&request.input, &mut callback).await {
+        match agent_loop.run_with_history(&request.input, history, &mut callback).await {
             Ok(result) => {
                 info!(
                     run_id = run_id,
