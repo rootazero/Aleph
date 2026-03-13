@@ -10,7 +10,7 @@ use crate::sync_primitives::Mutex;
 use tracing::{debug, info};
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 /// Unified security storage backed by SQLite
 pub struct SecurityStore {
@@ -92,6 +92,18 @@ impl SecurityStore {
 
             let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             conn.execute_batch(SCHEMA_V3)?;
+            drop(conn);
+        }
+
+        if version < 4 {
+            info!(
+                from = version,
+                to = 4,
+                "Migrating security schema to v4 (persistent HMAC secret)"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute_batch(SCHEMA_V4)?;
             drop(conn);
         }
 
@@ -448,6 +460,51 @@ impl SecurityStore {
         Ok(())
     }
 
+    /// Store shared token hash together with the HMAC secret for persistence across restarts.
+    pub fn set_shared_token_with_secret(&self, hash: &str, secret: &[u8; 32]) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute("DELETE FROM shared_token", [])?;
+        conn.execute(
+            "INSERT INTO shared_token (token_hash, created_at, hmac_secret) VALUES (?1, ?2, ?3)",
+            params![hash, current_timestamp_ms(), &secret[..]],
+        )?;
+        Ok(())
+    }
+
+    /// Load the persisted HMAC secret (if any) from the shared_token table.
+    pub fn get_shared_token_secret(&self) -> SqliteResult<Option<[u8; 32]>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let result = conn.query_row(
+            "SELECT hmac_secret FROM shared_token WHERE hmac_secret IS NOT NULL LIMIT 1",
+            [],
+            |row| {
+                let blob: Vec<u8> = row.get(0)?;
+                Ok(blob)
+            },
+        );
+        match result {
+            Ok(blob) if blob.len() == 32 => {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&blob);
+                Ok(Some(arr))
+            }
+            Ok(_) => Ok(None), // wrong length
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Check if any shared token hash exists in the store.
+    pub fn has_shared_token(&self) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM shared_token",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
     /// Check if the given hash matches the stored shared token.
     pub fn validate_shared_token_hash(&self, hash: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -795,6 +852,11 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+"#;
+
+/// Schema v4 SQL — add HMAC secret column to shared_token for persistence across restarts
+const SCHEMA_V4: &str = r#"
+ALTER TABLE shared_token ADD COLUMN hmac_secret BLOB;
 "#;
 
 #[cfg(test)]

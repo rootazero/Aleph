@@ -3,6 +3,7 @@
 // Context-aware sidebar that switches content based on current panel mode.
 //
 use leptos::prelude::*;
+use leptos_router::components::A;
 use leptos_router::hooks::use_location;
 use super::bottom_bar::PanelMode;
 use super::agents_sidebar::AgentsSidebar;
@@ -57,9 +58,9 @@ fn SettingsSidebar() -> impl IntoView {
                             };
 
                             view! {
-                                <a
+                                <A
                                     href=path
-                                    class=move || {
+                                    attr:class=move || {
                                         if is_active() {
                                             "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 bg-sidebar-active text-sidebar-accent font-medium"
                                         } else {
@@ -77,7 +78,7 @@ fn SettingsSidebar() -> impl IntoView {
                                          inner_html=icon_svg
                                     />
                                     <span>{tab_label}</span>
-                                </a>
+                                </A>
                             }
                         }).collect_view()}
                     </div>

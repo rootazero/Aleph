@@ -504,17 +504,20 @@ fn ProviderDetailPanel(
     let probe_status = RwSignal::new(ProbeStatus::Idle);
     let is_refreshing = RwSignal::new(false);
 
-    // Sync form_model <-> selected_model for ModelSelector
+    // Sync form_model <-> selected_model for ModelSelector.
+    // Guard with get_untracked() to prevent infinite reactive loop.
     let selected_model = RwSignal::new(None::<String>);
     Effect::new(move || {
         let m = form_model.get();
-        if !m.is_empty() {
+        if !m.is_empty() && selected_model.get_untracked() != Some(m.clone()) {
             selected_model.set(Some(m));
         }
     });
     Effect::new(move || {
         if let Some(m) = selected_model.get() {
-            form_model.set(m);
+            if form_model.get_untracked() != m {
+                form_model.set(m);
+            }
         }
     });
 
