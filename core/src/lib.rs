@@ -103,6 +103,7 @@ pub mod initialization {
 }
 
 pub mod a2a;
+pub mod acp;
 pub mod gateway;
 pub mod group_chat;
 pub mod cron;
