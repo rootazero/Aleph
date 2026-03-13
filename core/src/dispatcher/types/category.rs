@@ -7,9 +7,8 @@ use std::fmt;
 
 /// Tool category for UI grouping and filtering
 ///
-/// Tools are classified into 6 categories based on their source:
+/// Tools are classified into 5 categories based on their source:
 /// - **Builtin**: Built-in rig-core tools (search, web_fetch, file_ops)
-/// - **Native**: Legacy native tools (deprecated)
 /// - **Skills**: User-configured skills (instruction injection)
 /// - **Mcp**: MCP server tools (dynamically loaded)
 /// - **Custom**: User-defined custom tools
@@ -19,9 +18,6 @@ use std::fmt;
 pub enum ToolCategory {
     /// Built-in rig-core tools
     Builtin,
-    /// Legacy native tools (deprecated)
-    #[deprecated(note = "Use rig-core tools instead")]
-    Native,
     /// User-configured skills (via UI settings)
     Skills,
     /// MCP server tools (via UI settings)
@@ -37,8 +33,6 @@ impl ToolCategory {
     pub fn display_name(&self) -> &'static str {
         match self {
             ToolCategory::Builtin => "Builtin",
-            #[allow(deprecated)]
-            ToolCategory::Native => "Native",
             ToolCategory::Skills => "Skills",
             ToolCategory::Mcp => "MCP",
             ToolCategory::Custom => "Custom",
@@ -50,8 +44,6 @@ impl ToolCategory {
     pub fn icon(&self) -> &'static str {
         match self {
             ToolCategory::Builtin => "command.square.fill",
-            #[allow(deprecated)]
-            ToolCategory::Native => "wrench.and.screwdriver.fill",
             ToolCategory::Skills => "sparkles",
             ToolCategory::Mcp => "server.rack",
             ToolCategory::Custom => "slider.horizontal.3",

@@ -160,38 +160,6 @@ impl PolicyEngine {
         }
     }
 
-    /// Deprecated: PolicyEngine is now stateless
-    ///
-    /// This method is kept for backward compatibility but does nothing.
-    /// The PolicyEngine no longer maintains internal state.
-    #[deprecated(
-        since = "0.2.0",
-        note = "PolicyEngine is now stateless. Use PolicyEngine::check_tool_permission directly."
-    )]
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        Self
-    }
-
-    /// Deprecated: PolicyEngine no longer maintains guest scopes
-    ///
-    /// Guest scopes are now stored in SessionIdentityMeta and passed via IdentityContext.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Guest scopes are now stored in SessionIdentityMeta. This method does nothing."
-    )]
-    pub fn set_guest_scope(&self, _guest_id: String, _scope: GuestScope) {
-        // No-op: Scopes are now in IdentityContext
-    }
-
-    /// Deprecated: PolicyEngine no longer maintains guest scopes
-    #[deprecated(
-        since = "0.2.0",
-        note = "Guest scopes are now stored in SessionIdentityMeta. This method does nothing."
-    )]
-    pub fn remove_guest_scope(&self, _guest_id: &str) {
-        // No-op: Scopes are now in IdentityContext
-    }
 }
 
 impl Default for PolicyEngine {
@@ -385,18 +353,4 @@ mod tests {
         assert!(!PolicyEngine::check_tool_permission(&identity, "delete").is_allowed());
     }
 
-    #[test]
-    #[allow(deprecated)]
-    fn test_deprecated_new_still_works() {
-        let _engine = PolicyEngine::new();
-        // Should compile with deprecation warning
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_deprecated_set_guest_scope_noop() {
-        let engine = PolicyEngine::new();
-        engine.set_guest_scope("guest1".to_string(), test_scope(vec!["tool1"]));
-        // Should not panic, just no-op
-    }
 }

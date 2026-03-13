@@ -235,16 +235,6 @@ impl ToolRegistrar {
         );
     }
 
-    /// Register native AgentTools (DEPRECATED)
-    ///
-    /// This method is deprecated. Native tools are now handled by rig-core's
-    /// Tool trait and McpToolWrapper. Use register_mcp_tools() instead.
-    #[deprecated(note = "Use rig-core tools and register_mcp_tools instead")]
-    pub async fn register_agent_tools<T>(&self, _tools: &[std::sync::Arc<T>], _service_name: &str) {
-        // No-op - legacy method kept for API compatibility
-        debug!("register_agent_tools called (deprecated, no-op)");
-    }
-
     /// Register skills from SkillInfo list (Flat Namespace Mode)
     ///
     /// In flat namespace mode, skills are registered as root-level commands

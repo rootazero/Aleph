@@ -12,7 +12,7 @@
 //! - `MemoryStore`: Fact CRUD, vector search, path operations
 //! - `SessionStore`: Session memory management, compression tracking
 //! - `GraphStore`: Entity relationship graph operations
-//! - `DreamStore`, `AuditStore` (deprecated), `CompressionStore`: Specialized operations
+//! - `DreamStore`, `CompressionStore`: Specialized operations
 
 // Public submodules
 pub mod adaptive_retrieval;
@@ -65,7 +65,7 @@ pub use adaptive_retrieval::{AdaptiveRetrievalConfig, AdaptiveRetrievalGate, Ret
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
 pub use backup::MemoryBackupService;
 pub use audit::{
-    AuditAction, AuditActor, AuditDetails, AuditEntry, AuditLogger,
+    AuditAction, AuditActor, AuditDetails, AuditEntry,
     ExplainedEvent, FactExplanation, ForgettingExplanation,
 };
 pub use events::{
