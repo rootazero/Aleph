@@ -5,6 +5,7 @@
 
 pub mod harness;
 pub mod harnesses;
+pub mod manager;
 pub mod protocol;
 pub mod session;
 pub mod transport;
