@@ -112,16 +112,6 @@ Aleph 的核心领域划分为以下限界上下文：
 | `AggregatedIntent` | ValueObject | `intent/types.rs` |
 | `IntentSignal` | ValueObject | `intent/types.rs` |
 
-### POE Context
-
-**职责**：成功契约、验证规则、评估结果
-
-| 类型 | 角色 | 位置 |
-|------|------|------|
-| `SuccessManifest` | AggregateRoot | `poe/types.rs` |
-| `ValidationRule` | ValueObject | `poe/types.rs` |
-| `Verdict` | ValueObject | `poe/types.rs` |
-
 ---
 
 ## 使用指南

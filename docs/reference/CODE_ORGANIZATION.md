@@ -288,7 +288,6 @@ Files identified for refactoring, ordered by priority. Each item links to the pa
 
 | File | Lines | Problem | Pattern |
 |------|-------|---------|---------|
-| `poe/worker.rs` | 1128 | `MockWorker` mixed with production code | Extract to `mock.rs` under `#[cfg(test)]` |
 | `tools/server.rs` | 1034 | `AlephToolServer` and `AlephToolServerHandle` mirror each other | Use `Deref` or macro delegation |
 | `extension/hooks/mod.rs` | 993 | Similar to `extension/mod.rs` | Pattern C |
 | `dispatcher/model_router/health/status.rs` | 997 | Health status logic mixed with model routing | Pattern A |

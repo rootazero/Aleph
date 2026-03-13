@@ -216,7 +216,6 @@ Thinker Decision (tool_use)
 | **memory** | `core/src/memory/` | Facts DB, hybrid retrieval |
 | **extension** | `core/src/extension/` | Plugin system (WASM, Node.js) |
 | **exec** | `core/src/exec/` | Shell execution, approval system, OS-native sandboxing |
-| **skill_evolution** | `core/src/skill_evolution/` | Dynamic skill generation, sandboxed execution |
 | **mcp** | `core/src/mcp/` | MCP client implementation |
 | **routing** | `core/src/routing/` | Session key resolution |
 | **config** | `core/src/config/` | Configuration management |
