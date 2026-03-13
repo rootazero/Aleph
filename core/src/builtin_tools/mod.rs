@@ -66,6 +66,7 @@ pub mod soul_update;
 pub mod vision;
 pub mod escalate_task;
 pub mod subagent_manage;
+pub mod acp_tools;
 
 pub use agent_manage::{
     AgentCreateArgs, AgentCreateOutput, AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput,
@@ -117,6 +118,11 @@ pub use escalate_task::{EscalateTaskArgs, EscalateTaskOutput, EscalateTaskTool};
 pub use subagent_manage::{
     SubagentKillArgs, SubagentKillOutput, SubagentKillTool, SubagentSpawnArgs, SubagentSpawnOutput,
     SubagentSpawnTool, SubagentSteerArgs, SubagentSteerOutput, SubagentSteerTool,
+};
+pub use acp_tools::{
+    AcpDelegateArgs, AcpDelegateOutput,
+    ClaudeCodeTool, CodexTool, GeminiCliTool,
+    AcpSwitchArgs, AcpSwitchOutput, AcpSwitchTool,
 };
 
 
