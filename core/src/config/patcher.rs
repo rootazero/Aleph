@@ -231,7 +231,6 @@ impl ConfigPatcher {
         // 10. Check conflict (mtime) — hard error if file was modified externally
         self.check_conflict().await?;
 
-        let new_config = new_config;
         // Note: secret_fields are accepted for future use but currently ignored.
         // Secrets are managed via SharedTokenManager, not the config patcher.
 
