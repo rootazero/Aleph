@@ -50,7 +50,6 @@ pub use types::ResolvedCommand;
 ///
 /// // Register tools from various sources
 /// registry.register_builtin_tools().await;
-/// registry.register_agent_tools(&native_tools, "filesystem").await;
 /// registry.register_mcp_tools(&mcp_tools, "server", false).await;
 /// registry.register_skills(&skills).await;
 /// registry.register_custom_commands(&rules).await;
@@ -113,13 +112,6 @@ impl ToolRegistry {
         self.registrar
             .register_mcp_tools(mcp_tools, server_name, is_builtin, &self.conflict_resolver)
             .await;
-    }
-
-    /// Register native AgentTools (DEPRECATED)
-    #[deprecated(note = "Use rig-core tools and register_mcp_tools instead")]
-    #[allow(deprecated)]
-    pub async fn register_agent_tools<T>(&self, tools: &[Arc<T>], service_name: &str) {
-        self.registrar.register_agent_tools(tools, service_name).await;
     }
 
     /// Register skills from SkillInfo list (Flat Namespace Mode)

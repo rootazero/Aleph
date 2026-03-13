@@ -14,12 +14,10 @@ use lance_index::scalar::FullTextSearchQuery;
 use lancedb::query::{ExecutableQuery, QueryBase, Select};
 
 use crate::error::AlephError;
-use crate::memory::audit::AuditEntry;
 use crate::memory::context::{FactStats, FactType, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::types::{escape_sql_string, ScoredFact, SearchFilter};
-#[allow(deprecated)]
-use crate::memory::store::{AuditStore, HybridSearchParams, MemoryStore, PathEntry};
+use crate::memory::store::{HybridSearchParams, MemoryStore, PathEntry};
 
 use super::arrow_convert::{facts_to_record_batch, record_batch_to_facts};
 use super::LanceMemoryBackend;
@@ -690,39 +688,6 @@ impl LanceMemoryBackend {
         results.truncate(params.limit);
 
         Ok(results)
-    }
-}
-
-// ============================================================================
-// AuditStore implementation
-// ============================================================================
-
-#[allow(deprecated)]
-#[async_trait]
-impl AuditStore for LanceMemoryBackend {
-    async fn insert_audit_entry(&self, _entry: &AuditEntry) -> Result<(), AlephError> {
-        // TODO: Store audit entries in a dedicated LanceDB table.
-        // The audit schema needs to be designed to serialize AuditAction/AuditActor
-        // as strings plus a JSON details column. For now, this is a no-op.
-        Ok(())
-    }
-
-    async fn get_audit_entries_for_fact(
-        &self,
-        _fact_id: &str,
-    ) -> Result<Vec<AuditEntry>, AlephError> {
-        // TODO: Query audit entries from a dedicated table filtered by fact_id.
-        // For now, return an empty list.
-        Ok(Vec::new())
-    }
-
-    async fn get_recent_audit_entries(
-        &self,
-        _limit: usize,
-    ) -> Result<Vec<AuditEntry>, AlephError> {
-        // TODO: Query the most recent audit entries ordered by created_at DESC.
-        // For now, return an empty list.
-        Ok(Vec::new())
     }
 }
 

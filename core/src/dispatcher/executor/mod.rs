@@ -53,13 +53,6 @@ impl ExecutionContext {
         self.working_directory = Some(dir.into());
         self
     }
-
-    /// Deprecated: Use with_working_directory instead
-    #[deprecated(since = "0.2.0", note = "Use with_working_directory instead")]
-    pub fn with_working_dir(mut self, dir: impl Into<String>) -> Self {
-        self.working_directory = Some(dir.into());
-        self
-    }
 }
 
 /// Trait for task executors
