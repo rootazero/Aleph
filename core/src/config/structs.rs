@@ -125,6 +125,9 @@ pub struct Config {
     /// A2A protocol configuration
     #[serde(default)]
     pub a2a: crate::a2a::config::A2AConfig,
+    /// ACP (Agent Communication Protocol) harness configuration
+    #[serde(default)]
+    pub acp: AcpConfig,
     /// Agent definitions for multi-agent configuration
     /// Defines available agents, their workspaces, profiles, and capabilities
     #[serde(default)]
@@ -305,6 +308,7 @@ impl Default for Config {
             prompt: PromptSectionConfig::default(),
             channels: HashMap::new(),
             a2a: crate::a2a::config::A2AConfig::default(),
+            acp: AcpConfig::default(),
             agents: AgentsConfig::default(),
             bindings: Vec::new(),
             presets_override: crate::config::presets_override::PresetsOverride::default(),
