@@ -185,6 +185,63 @@ impl SharedTokenManager {
         let vault = self.vault.read().unwrap_or_else(|e| e.into_inner());
         Ok(vault.list_names())
     }
+
+    /// Reset the token and re-encrypt all vault entries with the new token.
+    ///
+    /// Flow:
+    /// 1. Decrypt all entries with current token
+    /// 2. Generate new token (updates HMAC, current_token)
+    /// 3. Re-encrypt all entries with new token
+    /// 4. Atomically replace vault entries
+    pub fn reset_token(&self) -> Result<String, SharedTokenError> {
+        use std::collections::HashMap;
+
+        let old_crypto = self.crypto()?;
+
+        // 1. Decrypt all entries with old token
+        let vault = self.vault.read().unwrap_or_else(|e| e.into_inner());
+        let mut plaintext_entries: Vec<(String, String, EncryptedEntry)> = Vec::new();
+        for (name, entry) in vault.entries() {
+            let decrypted = old_crypto
+                .decrypt(&entry.ciphertext, &entry.nonce, &entry.salt)
+                .map_err(|e| {
+                    SharedTokenError::Storage(format!("Decrypt failed for '{}': {}", name, e))
+                })?;
+            plaintext_entries.push((name.clone(), decrypted, entry.clone()));
+        }
+        drop(vault);
+
+        // 2. Generate new token (updates HMAC hash, current_token)
+        let new_token = self.generate_token()?;
+        let new_crypto = self.crypto()?;
+
+        // 3. Re-encrypt all entries with new token
+        let mut new_entries = HashMap::new();
+        for (name, plaintext, old_entry) in plaintext_entries {
+            let encrypted = new_crypto.encrypt(&plaintext).map_err(|e| {
+                SharedTokenError::Storage(format!("Re-encrypt failed for '{}': {}", name, e))
+            })?;
+            new_entries.insert(
+                name,
+                EncryptedEntry {
+                    ciphertext: encrypted.ciphertext,
+                    nonce: encrypted.nonce,
+                    salt: encrypted.salt,
+                    created_at: old_entry.created_at,
+                    updated_at: chrono::Utc::now().timestamp(),
+                    metadata: old_entry.metadata,
+                },
+            );
+        }
+
+        // 4. Atomic replace
+        let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
+        vault
+            .replace_all(new_entries)
+            .map_err(|e| SharedTokenError::Storage(e.to_string()))?;
+
+        Ok(new_token)
+    }
 }
 
 #[cfg(test)]
@@ -335,6 +392,42 @@ mod tests {
         let mut names = mgr.list_secret_names().unwrap();
         names.sort();
         assert_eq!(names, vec!["anthropic", "openai"]);
+    }
+
+    #[test]
+    fn test_reset_token_reencrypts_secrets() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let mgr = SharedTokenManager::new(store, dir.path().join("test.vault"));
+
+        let old_token = mgr.generate_token().unwrap();
+        mgr.store_secret("anthropic", "sk-ant-secret").unwrap();
+        mgr.store_secret("openai", "sk-openai-key").unwrap();
+
+        let new_token = mgr.reset_token().unwrap();
+        assert_ne!(old_token, new_token);
+
+        // Secrets still accessible with new token
+        let s1 = mgr.get_secret("anthropic").unwrap().unwrap();
+        assert_eq!(s1.expose(), "sk-ant-secret");
+        let s2 = mgr.get_secret("openai").unwrap().unwrap();
+        assert_eq!(s2.expose(), "sk-openai-key");
+
+        // Old token no longer validates
+        assert!(!mgr.validate(&old_token).unwrap());
+        assert!(mgr.validate(&new_token).unwrap());
+    }
+
+    #[test]
+    fn test_reset_token_empty_vault() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let mgr = SharedTokenManager::new(store, dir.path().join("test.vault"));
+
+        let old_token = mgr.generate_token().unwrap();
+        let new_token = mgr.reset_token().unwrap();
+        assert_ne!(old_token, new_token);
+        assert!(mgr.validate(&new_token).unwrap());
     }
 
     #[test]
