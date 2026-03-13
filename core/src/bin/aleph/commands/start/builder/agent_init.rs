@@ -9,6 +9,7 @@ use std::sync::Arc;
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::router::AgentRouter;
 use alephcore::gateway::handlers::agent::{
+    self as agent_handlers,
     AgentRunManager, handle_run,
     handle_status as handle_agent_status,
     handle_cancel as handle_agent_cancel,
@@ -608,11 +609,21 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         handle_respond_to_input(req).await
     });
 
+    // agent.list — returns available agents from the router
+    {
+        let router_list = router.clone();
+        server.handlers_mut().register("agent.list", move |req| {
+            let r = router_list.clone();
+            async move { agent_handlers::handle_list(req, r).await }
+        });
+    }
+
     if !daemon {
         println!("Agent control methods:");
         println!("  - agent.run            : Execute agent request with streaming");
         println!("  - agent.status         : Query run status by run_id");
         println!("  - agent.cancel         : Cancel an active run");
+        println!("  - agent.list           : List available agents");
         println!("  - agent.respondToInput : Respond to user input request");
         println!("  - chat.send            : Send chat message (wraps agent.run)");
         println!("  - chat.abort           : Abort message generation");

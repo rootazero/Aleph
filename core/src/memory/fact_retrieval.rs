@@ -163,13 +163,24 @@ impl FactRetrieval {
             .await
             .map_err(|e| AlephError::other(format!("Failed to embed query: {}", e)))?;
 
+        self.retrieve_with_embedding(&query_embedding, filter).await
+    }
+
+    /// Internal: retrieve using a pre-computed embedding vector.
+    /// Avoids redundant embedding API calls when the same query is searched
+    /// across multiple workspace scopes (e.g., smart recall Phase 1 + Phase 2).
+    async fn retrieve_with_embedding(
+        &self,
+        query_embedding: &[f32],
+        filter: crate::gateway::workspace::WorkspaceFilter,
+    ) -> Result<RetrievalResult, AlephError> {
         // Build search filter with workspace scope
         let dim_hint = query_embedding.len() as u32;
         let search_filter = SearchFilter::valid_only(Some(NamespaceScope::Owner))
             .with_workspace(filter.clone());
         let scored_facts = self
             .database
-            .vector_search(&query_embedding, dim_hint, &search_filter, self.config.max_facts as usize)
+            .vector_search(query_embedding, dim_hint, &search_filter, self.config.max_facts as usize)
             .await?;
 
         let facts: Vec<MemoryFact> = scored_facts
@@ -191,7 +202,7 @@ impl FactRetrieval {
                     ..Default::default()
                 };
                 self.database
-                    .search_memories(&query_embedding, &mem_filter, remaining as usize)
+                    .search_memories(query_embedding, &mem_filter, remaining as usize)
                     .await?
             } else {
                 Vec::new()
@@ -332,9 +343,16 @@ impl FactRetrieval {
         use crate::gateway::workspace::WorkspaceFilter;
         use tracing::debug;
 
+        // Embed query ONCE — reused across both phases
+        let query_embedding = self
+            .embedder
+            .embed(query)
+            .await
+            .map_err(|e| AlephError::other(format!("Failed to embed query: {}", e)))?;
+
         // Phase 1: Search primary workspace
         let primary = self
-            .retrieve_with_filter(query, WorkspaceFilter::Single(primary_workspace.to_string()))
+            .retrieve_with_embedding(&query_embedding, WorkspaceFilter::Single(primary_workspace.to_string()))
             .await?;
 
         // Evaluate trigger conditions
@@ -384,7 +402,7 @@ impl FactRetrieval {
         );
 
         let all_results = self
-            .retrieve_with_filter(query, WorkspaceFilter::All)
+            .retrieve_with_embedding(&query_embedding, WorkspaceFilter::All)
             .await?;
 
         // Collect primary fact IDs for deduplication
