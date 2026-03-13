@@ -525,7 +525,6 @@ impl UnifiedTool {
     /// Converts `AgentTool` definitions to `UnifiedTool` for unified
     /// registry management. The source is automatically determined from
     /// the tool's category:
-    /// - `ToolCategory::Native` → `ToolSource::Native`
     /// - `ToolCategory::Builtin` → `ToolSource::Builtin`
     /// - `ToolCategory::Mcp` → `ToolSource::Mcp { server: service_name }`
     /// - `ToolCategory::Skills` → `ToolSource::Skill { id: tool_name }`
@@ -549,20 +548,12 @@ impl UnifiedTool {
     /// let mcp_bridge = McpToolBridge::new(tool_def, client, "github".to_string());
     /// let unified = UnifiedTool::from_tool_definition(mcp_bridge.definition(), Some("github"));
     /// ```
-    #[allow(deprecated)] // ToolCategory::Native is deprecated but still needed for compatibility
     pub fn from_tool_definition(def: ToolDefinition, service_name: Option<&str>) -> Self {
         // Determine ToolSource from ToolCategory
         let (source, id) = match def.category {
             ToolCategory::Builtin => {
                 let id = format!("builtin:{}", def.name);
                 (ToolSource::Builtin, id)
-            }
-            ToolCategory::Native => {
-                let id = match service_name {
-                    Some(svc) => format!("native:{}:{}", svc, def.name),
-                    None => format!("native:{}", def.name),
-                };
-                (ToolSource::Native, id)
             }
             ToolCategory::Mcp => {
                 let server = service_name.unwrap_or("unknown").to_string();
@@ -638,7 +629,6 @@ impl UnifiedTool {
     ///
     /// If a `ToolSafetyPolicy` is provided, uses configurable keywords from policy.
     /// Otherwise, uses hardcoded defaults for backward compatibility.
-    #[allow(deprecated)] // ToolCategory::Native is deprecated but still needed for compatibility
     pub fn infer_safety_level(
         name: &str,
         category: ToolCategory,
@@ -668,7 +658,6 @@ impl UnifiedTool {
         // Fall back to category-based inference using policy fallbacks
         let fallback_str = match category {
             ToolCategory::Builtin => &policy.builtin_fallback,
-            ToolCategory::Native => &policy.native_fallback,
             ToolCategory::Skills => &policy.skill_fallback,
             ToolCategory::Mcp => &policy.mcp_fallback,
             ToolCategory::Custom => &policy.custom_fallback,
@@ -882,28 +871,26 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)] // Testing legacy ToolCategory::Native behavior
     fn test_infer_safety_level_high_risk() {
         assert_eq!(
-            UnifiedTool::infer_safety_level("delete_file", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("delete_file", ToolCategory::Builtin, None),
             ToolSafetyLevel::IrreversibleHighRisk
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("shell_execute", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("shell_execute", ToolCategory::Builtin, None),
             ToolSafetyLevel::IrreversibleHighRisk
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("run_bash_command", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("run_bash_command", ToolCategory::Builtin, None),
             ToolSafetyLevel::IrreversibleHighRisk
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("remove_directory", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("remove_directory", ToolCategory::Builtin, None),
             ToolSafetyLevel::IrreversibleHighRisk
         );
     }
 
     #[test]
-    #[allow(deprecated)] // Testing legacy ToolCategory::Native behavior
     fn test_infer_safety_level_low_risk() {
         assert_eq!(
             UnifiedTool::infer_safety_level("send_notification", ToolCategory::Builtin, None),
@@ -914,28 +901,27 @@ mod tests {
             ToolSafetyLevel::IrreversibleLowRisk
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("git_push", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("git_push", ToolCategory::Builtin, None),
             ToolSafetyLevel::IrreversibleLowRisk
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("commit_changes", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("commit_changes", ToolCategory::Builtin, None),
             ToolSafetyLevel::IrreversibleLowRisk
         );
     }
 
     #[test]
-    #[allow(deprecated)] // Testing legacy ToolCategory::Native behavior
     fn test_infer_safety_level_reversible() {
         assert_eq!(
-            UnifiedTool::infer_safety_level("create_file", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("create_file", ToolCategory::Builtin, None),
             ToolSafetyLevel::Reversible
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("copy_file", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("copy_file", ToolCategory::Builtin, None),
             ToolSafetyLevel::Reversible
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("write_text", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("write_text", ToolCategory::Builtin, None),
             ToolSafetyLevel::Reversible
         );
         assert_eq!(
@@ -945,41 +931,35 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)] // Testing legacy ToolCategory::Native behavior
     fn test_infer_safety_level_readonly() {
         assert_eq!(
-            UnifiedTool::infer_safety_level("search_web", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("search_web", ToolCategory::Builtin, None),
             ToolSafetyLevel::ReadOnly
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("read_file", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("read_file", ToolCategory::Builtin, None),
             ToolSafetyLevel::ReadOnly
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("list_files", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("list_files", ToolCategory::Builtin, None),
             ToolSafetyLevel::ReadOnly
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("translate_text", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("translate_text", ToolCategory::Builtin, None),
             ToolSafetyLevel::ReadOnly
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("summarize_document", ToolCategory::Native, None),
+            UnifiedTool::infer_safety_level("summarize_document", ToolCategory::Builtin, None),
             ToolSafetyLevel::ReadOnly
         );
     }
 
     #[test]
-    #[allow(deprecated)] // Testing legacy ToolCategory::Native behavior
     fn test_infer_safety_level_category_fallback() {
         // Unknown tool names should fall back to category-based inference
         assert_eq!(
             UnifiedTool::infer_safety_level("xyz_unknown", ToolCategory::Builtin, None),
             ToolSafetyLevel::ReadOnly
-        );
-        assert_eq!(
-            UnifiedTool::infer_safety_level("xyz_unknown", ToolCategory::Native, None),
-            ToolSafetyLevel::Reversible
         );
         assert_eq!(
             UnifiedTool::infer_safety_level("xyz_unknown", ToolCategory::Mcp, None),
