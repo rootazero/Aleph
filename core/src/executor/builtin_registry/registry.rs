@@ -110,6 +110,11 @@ pub struct BuiltinToolRegistry {
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Extension manager for plugin tool execution
     extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
+    /// ACP delegate tools (optional - requires AcpHarnessManager)
+    pub(crate) claude_code_tool: Option<crate::builtin_tools::acp_tools::ClaudeCodeTool>,
+    pub(crate) codex_tool: Option<crate::builtin_tools::acp_tools::CodexTool>,
+    pub(crate) gemini_cli_tool: Option<crate::builtin_tools::acp_tools::GeminiCliTool>,
+    pub(crate) acp_switch_tool: Option<crate::builtin_tools::acp_tools::AcpSwitchTool>,
     /// Tool metadata for lookup
     tools: HashMap<String, UnifiedTool>,
 }
@@ -637,6 +642,50 @@ impl BuiltinToolRegistry {
                 (None, None, None, None, None)
             };
 
+        // Add ACP delegate tools (if AcpHarnessManager is provided)
+        let (claude_code_tool, codex_tool, gemini_cli_tool, acp_switch_tool) =
+            if let Some(ref manager) = config.acp_manager {
+                use crate::builtin_tools::acp_tools::{ClaudeCodeTool, CodexTool, GeminiCliTool, AcpSwitchTool};
+                info!("Creating ACP delegate tools");
+
+                let cc = if manager.has_harness("claude-code") {
+                    tools.insert("claude_code".to_string(), UnifiedTool::new(
+                        "builtin:claude_code", "claude_code",
+                        ClaudeCodeTool::DESCRIPTION, ToolSource::Builtin,
+                    ));
+                    Some(ClaudeCodeTool::new(Arc::clone(manager)))
+                } else { None };
+
+                let cx = if manager.has_harness("codex") {
+                    tools.insert("codex".to_string(), UnifiedTool::new(
+                        "builtin:codex", "codex",
+                        CodexTool::DESCRIPTION, ToolSource::Builtin,
+                    ));
+                    Some(CodexTool::new(Arc::clone(manager)))
+                } else { None };
+
+                let gm = if manager.has_harness("gemini") {
+                    tools.insert("gemini_cli".to_string(), UnifiedTool::new(
+                        "builtin:gemini_cli", "gemini_cli",
+                        GeminiCliTool::DESCRIPTION, ToolSource::Builtin,
+                    ));
+                    Some(GeminiCliTool::new(Arc::clone(manager)))
+                } else { None };
+
+                // acp_switch is always available when manager exists
+                tools.insert("acp_switch".to_string(), UnifiedTool::new(
+                    "builtin:acp_switch", "acp_switch",
+                    AcpSwitchTool::DESCRIPTION, ToolSource::Builtin,
+                ));
+                let sw = Some(AcpSwitchTool::new(Arc::clone(manager)));
+
+                info!("Registered ACP tools (claude_code={}, codex={}, gemini_cli={}, acp_switch=true)",
+                    cc.is_some(), cx.is_some(), gm.is_some());
+                (cc, cx, gm, sw)
+            } else {
+                (None, None, None, None)
+            };
+
         // Initialize tool policy handle (use provided or create a default one)
         let tool_policy_handle = config.tool_policy.clone()
             .or_else(|| Some(crate::builtin_tools::agent_manage::new_tool_policy_handle()));
@@ -687,6 +736,10 @@ impl BuiltinToolRegistry {
             tool_policy_handle,
             event_bus: config.event_bus.clone(),
             extension_manager: config.extension_manager.clone(),
+            claude_code_tool,
+            codex_tool,
+            gemini_cli_tool,
+            acp_switch_tool,
             tools,
         }
     }
@@ -944,6 +997,32 @@ impl ToolRegistry for BuiltinToolRegistry {
                     _ => unreachable!(),
                 }
             }
+
+            // ACP delegate tools
+            "claude_code" => Box::pin(async move {
+                let tool = self.claude_code_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("claude_code not available: ACP not configured or claude-code harness not found")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "codex" => Box::pin(async move {
+                let tool = self.codex_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("codex not available: ACP not configured or codex harness not found")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "gemini_cli" => Box::pin(async move {
+                let tool = self.gemini_cli_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("gemini_cli not available: ACP not configured or gemini harness not found")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "acp_switch" => Box::pin(async move {
+                let tool = self.acp_switch_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("acp_switch not available: ACP not configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
 
             _ => {
                 // Check if this is a plugin tool

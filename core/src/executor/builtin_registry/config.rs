@@ -4,6 +4,7 @@ use crate::sync_primitives::Arc;
 
 use tokio::sync::RwLock;
 
+use crate::acp::manager::AcpHarnessManager;
 use crate::agents::sub_agents::{SubAgentDispatcher, SubAgentRegistry};
 use crate::config::{Config, ConfigPatcher};
 use crate::dispatcher::ToolRegistry as DispatcherToolRegistry;
@@ -51,4 +52,6 @@ pub struct BuiltinToolConfig {
     pub media_pipeline: Option<Arc<crate::media::MediaPipeline>>,
     /// Extension manager for plugin tool execution
     pub extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
+    /// ACP harness manager for delegate tools (claude_code, codex, gemini_cli, acp_switch)
+    pub acp_manager: Option<Arc<AcpHarnessManager>>,
 }

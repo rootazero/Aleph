@@ -291,8 +291,60 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let event_bus = server.event_bus().clone();
 
+    // Auth subsystem construction (early — vault needed for API key resolution)
+    let auth_bundle = initialize_auth(
+        args.port, event_bus.clone(),
+        full_config.gateway.auth.mode.clone(), args.daemon,
+    );
+    register_auth_handlers(&mut server, &auth_bundle.auth_ctx);
+    register_guest_handlers(&mut server, &auth_bundle.invitation_manager, &auth_bundle.guest_session_manager, &event_bus);
+    server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
+
     // Load app config early so agent handlers can use configured providers
-    let loaded_app_config = load_app_config();
+    let mut loaded_app_config = load_app_config();
+
+    // Resolve API keys from vault into runtime Config (api_key is #[serde(skip)], never persisted)
+    {
+        let vault = &auth_bundle.auth_ctx.shared_token_mgr;
+
+        // AI providers: vault key "ai:<name>"
+        for (name, provider_cfg) in loaded_app_config.providers.iter_mut() {
+            if provider_cfg.api_key.is_none() {
+                if let Ok(Some(secret)) = vault.get_secret(&format!("ai:{}", name)) {
+                    provider_cfg.api_key = Some(secret.expose().to_string());
+                }
+            }
+        }
+
+        // Generation providers: vault key "gen:<name>"
+        for (name, provider_cfg) in loaded_app_config.generation.providers.iter_mut() {
+            if provider_cfg.api_key.is_none() {
+                if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+                    provider_cfg.api_key = Some(secret.expose().to_string());
+                }
+            }
+        }
+
+        // Embedding providers: vault key "embed:<id>"
+        for provider_cfg in loaded_app_config.memory.embedding.providers.iter_mut() {
+            if provider_cfg.api_key.is_none() {
+                if let Ok(Some(secret)) = vault.get_secret(&format!("embed:{}", provider_cfg.id)) {
+                    provider_cfg.api_key = Some(secret.expose().to_string());
+                }
+            }
+        }
+
+        // Search backends: vault key "search:<name>"
+        if let Some(ref mut search) = loaded_app_config.search {
+            for (name, backend_cfg) in search.backends.iter_mut() {
+                if backend_cfg.api_key.is_none() {
+                    if let Ok(Some(secret)) = vault.get_secret(&format!("search:{}", name)) {
+                        backend_cfg.api_key = Some(secret.expose().to_string());
+                    }
+                }
+            }
+        }
+    }
 
     // Resolve agent definitions from config (initializes workspace directories)
     let mut agent_resolver = alephcore::AgentDefinitionResolver::new();
@@ -340,6 +392,29 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
+    // Initialize ACP manager if enabled
+    let acp_manager = {
+        let app_cfg = app_config.read().await;
+        if app_cfg.acp.enabled {
+            use alephcore::acp::manager::{AcpHarnessManager, AcpManagerConfig};
+
+            let mut mgr_config = AcpManagerConfig::default();
+            for (id, entry) in &app_cfg.acp.harnesses {
+                mgr_config.enabled.insert(id.clone(), entry.enabled);
+                if let Some(ref exec) = entry.executable {
+                    mgr_config.executables.insert(id.clone(), exec.clone());
+                }
+            }
+            let manager = Arc::new(AcpHarnessManager::with_config(mgr_config));
+            if !args.daemon {
+                println!("ACP harness manager initialized ({} harnesses configured)", app_cfg.acp.harnesses.len());
+            }
+            Some(manager)
+        } else {
+            None
+        }
+    };
+
     // Create agent manager (shared between tool config and RPC handlers)
     let agent_manager = Arc::new(alephcore::AgentManager::new(
         alephcore::Config::default_path(),
@@ -351,17 +426,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let agent_result = register_agent_handlers(
         &mut server, session_manager.clone(), event_bus.clone(),
         router.clone(), &full_config, &*app_config.read().await, app_config.clone(), &memory_db,
-        workspace_manager.clone(), agent_manager.clone(), args.daemon,
+        workspace_manager.clone(), agent_manager.clone(), acp_manager.clone(), args.daemon,
     ).await;
 
-    // Auth subsystem construction
-    let auth_bundle = initialize_auth(
-        args.port, event_bus.clone(),
-        full_config.gateway.auth.mode.clone(), args.daemon,
-    );
-    register_auth_handlers(&mut server, &auth_bundle.auth_ctx);
-    register_guest_handlers(&mut server, &auth_bundle.invitation_manager, &auth_bundle.guest_session_manager, &event_bus);
-    server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
     let config_patcher = {
         let config_path = alephcore::Config::default_path();
         let backup = alephcore::ConfigBackup::new(
@@ -378,7 +445,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let app_config_for_reload = app_config.clone();
     let app_config_for_oauth = app_config.clone();
     let app_config_for_models = app_config.clone();
-    register_config_handlers(&mut server, app_config, config_patcher, event_bus.clone(), auth_bundle.device_store.clone(), agent_result.swappable_registry.clone());
+    register_config_handlers(&mut server, app_config, config_patcher, event_bus.clone(), auth_bundle.device_store.clone(), agent_result.swappable_registry.clone(), auth_bundle.auth_ctx.shared_token_mgr.clone());
 
     register_session_handlers(&mut server, &session_manager, args.daemon);
     register_memory_handlers(&mut server, &memory_db, &agent_result.compression_service, args.daemon);
@@ -675,8 +742,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let shutdown_rx = setup_graceful_shutdown(args);
     server.run_until_shutdown(shutdown_rx).await?;
 
-    // Graceful shutdown: stop desktop bridge and mDNS
+    // Graceful shutdown: stop desktop bridge, ACP harnesses, and mDNS
     bridge_manager.stop().await;
+
+    if let Some(ref manager) = acp_manager {
+        manager.shutdown_all().await;
+    }
 
     if let Some(broadcaster) = auth_bundle.mdns_broadcaster {
         broadcaster.shutdown();
