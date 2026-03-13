@@ -4,3 +4,5 @@
 //! Supports Tool mode (LLM-dispatched) and Agent mode (direct conversation).
 
 pub mod protocol;
+pub mod session;
+pub mod transport;
