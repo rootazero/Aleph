@@ -77,6 +77,9 @@ impl MessagePipeline {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+mod integration_test;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
