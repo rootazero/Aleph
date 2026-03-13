@@ -17,6 +17,7 @@
 //! - `orchestrator`: Three-Layer Control orchestrator settings (OrchestratorConfig, OrchestratorGuards)
 //! - `evolution`: Skill compiler settings (EvolutionConfig, SolidificationThresholds)
 
+pub mod acp;
 pub mod agent;
 pub mod agents_def;
 pub mod dispatcher;
@@ -43,6 +44,7 @@ pub mod tools;
 
 // Re-export all types for backward compatibility
 // Users can still use `use crate::config::XXX` instead of `use crate::config::types::XXX`
+pub use acp::*;
 pub use agent::*;
 pub use agents_def::*;
 pub use dispatcher::*;
