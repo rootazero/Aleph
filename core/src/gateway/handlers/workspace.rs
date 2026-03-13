@@ -394,6 +394,7 @@ pub async fn handle_get_active(
         request.id,
         json!({
             "agent_id": agent_id,
+            "workspace_id": agent_id,
             "profile": profile,
         }),
     )

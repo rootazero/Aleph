@@ -542,6 +542,23 @@ impl WorkspaceManager {
         )
         .map_err(|e| WorkspaceError::Database(format!("Schema init failed: {}", e)))?;
 
+        // Migrate: add columns that may be missing on older databases.
+        // SQLite ALTER TABLE ADD COLUMN is a no-op error if column exists,
+        // so we simply ignore "duplicate column name" errors.
+        let migrations = [
+            "ALTER TABLE workspaces ADD COLUMN name TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE workspaces ADD COLUMN icon TEXT",
+            "ALTER TABLE workspaces ADD COLUMN is_archived INTEGER DEFAULT 0",
+            "ALTER TABLE workspaces ADD COLUMN decay_rate REAL",
+            "ALTER TABLE workspaces ADD COLUMN permanent_fact_types TEXT",
+            "ALTER TABLE workspaces ADD COLUMN default_model TEXT",
+            "ALTER TABLE workspaces ADD COLUMN system_prompt_override TEXT",
+            "ALTER TABLE workspaces ADD COLUMN allowed_tools TEXT",
+        ];
+        for sql in &migrations {
+            let _ = conn.execute(sql, []);  // ignore "duplicate column" errors
+        }
+
         // Ensure global workspace exists
         let now = Utc::now().timestamp();
         conn.execute(

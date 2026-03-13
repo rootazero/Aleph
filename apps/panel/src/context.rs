@@ -226,6 +226,36 @@ impl DashboardState {
 
     /// Authenticate with the gateway after WebSocket connection is established
     async fn authenticate(&self) -> Result<(), String> {
+        // Extract ?token= from URL and store as shared token (auto-login via URL)
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(window) = web_sys::window() {
+                if let Ok(search) = window.location().search() {
+                    if let Some(token) = search
+                        .trim_start_matches('?')
+                        .split('&')
+                        .find_map(|pair| {
+                            let mut parts = pair.splitn(2, '=');
+                            if parts.next() == Some("token") {
+                                parts.next().map(|v| v.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                    {
+                        if !token.is_empty() {
+                            set_local_storage("aleph_shared_token", &token);
+                            // Clean URL to remove token from address bar
+                            let _ = window.history()
+                                .and_then(|h| h.replace_state_with_url(
+                                    &wasm_bindgen::JsValue::NULL, "", Some("/"),
+                                ));
+                        }
+                    }
+                }
+            }
+        }
+
         // Try stored device token first
         if let Some(token) = get_local_storage("aleph_device_token") {
             let result = self.rpc_call("connect", serde_json::json!({
