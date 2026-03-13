@@ -292,7 +292,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let event_bus = server.event_bus().clone();
 
     // Load app config early so agent handlers can use configured providers
-    let loaded_app_config = load_app_config().await;
+    let loaded_app_config = load_app_config();
 
     // Resolve agent definitions from config (initializes workspace directories)
     let mut agent_resolver = alephcore::AgentDefinitionResolver::new();
@@ -371,7 +371,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Arc::new(alephcore::ConfigPatcher::new(
             app_config.clone(),
             config_path,
-            None, // Vault will be wired in a future iteration
             backup,
         ))
     };

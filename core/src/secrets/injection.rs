@@ -7,8 +7,14 @@
 use std::hash::{Hash, Hasher};
 
 use super::placeholder::extract_secret_refs;
-use super::router::AsyncSecretResolver;
-use super::types::SecretError;
+use super::types::{DecryptedSecret, SecretError};
+
+/// Trait for resolving secret names to decrypted values.
+#[async_trait::async_trait]
+pub trait AsyncSecretResolver: Send + Sync {
+    /// Resolve a secret name to its decrypted value.
+    async fn resolve(&self, name: &str) -> Result<DecryptedSecret, SecretError>;
+}
 
 /// Record of a secret injected during rendering.
 ///
@@ -88,7 +94,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl super::super::router::AsyncSecretResolver for MockResolver {
+    impl AsyncSecretResolver for MockResolver {
         async fn resolve(&self, name: &str) -> Result<DecryptedSecret, SecretError> {
             self.secrets
                 .get(name)

@@ -230,19 +230,6 @@ fn test_config_toml_round_trip() {
 }
 
 #[test]
-fn test_cloud_provider_validate_with_secret_name_only() {
-    let mut config = Config::default();
-    let mut provider = ProviderConfig::test_config("gpt-4o");
-    provider.protocol = Some("openai".to_string());
-    provider.api_key = None;
-    provider.secret_name = Some("openai_main_api_key".to_string());
-    config.providers.insert("openai".to_string(), provider);
-    config.general.default_provider = Some("openai".to_string());
-
-    assert!(config.validate().is_ok());
-}
-
-#[test]
 fn test_atomic_write_creates_parent_directory() {
     use tempfile::TempDir;
 

@@ -760,7 +760,7 @@ model = "claude-opus-4-5"
 
         let config = Arc::new(RwLock::new(config));
         let backup = ConfigBackup::new(temp_dir.path().join("backups"), 3);
-        let patcher = Arc::new(ConfigPatcher::new(config, config_path, None, backup));
+        let patcher = Arc::new(ConfigPatcher::new(config, config_path, backup));
 
         (patcher, temp_dir)
     }

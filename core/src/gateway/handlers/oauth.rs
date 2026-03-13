@@ -113,7 +113,6 @@ fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
     ProviderConfig {
         protocol: preset.map(|p| p.protocol.to_string()),
         api_key: None,
-        secret_name: None,
         model: preset
             .map(|p| p.default_model.to_string())
             .unwrap_or_else(|| "gpt-5.3-codex".to_string()),
