@@ -353,3 +353,78 @@ async fn concurrent_list_models_no_panic() {
         assert!(!models.is_empty());
     }
 }
+
+// ── providers.probe + providers.needs_setup integration tests ────────────────
+
+use alephcore::gateway::handlers::providers::{handle_probe, handle_needs_setup, ProbeResult};
+use alephcore::gateway::protocol::JsonRpcRequest;
+use alephcore::Config;
+use tokio::sync::RwLock;
+use std::sync::Arc;
+
+#[tokio::test]
+async fn probe_openai_discovers_models_via_mock() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(openai_models_response()))
+        .mount(&server)
+        .await;
+
+    let config = Arc::new(RwLock::new(Config::default()));
+    let request = JsonRpcRequest::with_id(
+        "providers.probe",
+        Some(json!({
+            "protocol": "openai",
+            "api_key": "test-key",
+            "base_url": server.uri()
+        })),
+        serde_json::json!(1),
+    );
+
+    let response = handle_probe(request, config).await;
+    let result: ProbeResult = serde_json::from_value(response.result.unwrap()).unwrap();
+
+    assert!(result.success);
+    assert!(!result.models.is_empty());
+    assert_eq!(result.model_source, "api");
+    assert!(result.error.is_none());
+    assert!(result.latency_ms.is_some());
+}
+
+#[tokio::test]
+async fn probe_falls_back_to_preset_on_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let config = Arc::new(RwLock::new(Config::default()));
+    let request = JsonRpcRequest::with_id(
+        "providers.probe",
+        Some(json!({
+            "protocol": "openai",
+            "api_key": "bad-key",
+            "base_url": server.uri()
+        })),
+        serde_json::json!(1),
+    );
+
+    let response = handle_probe(request, config).await;
+    let result: ProbeResult = serde_json::from_value(response.result.unwrap()).unwrap();
+
+    // ModelRegistry falls back to preset models on API failure.
+    // With embedded model-presets.toml, OpenAI presets exist.
+    assert_eq!(result.model_source, "preset");
+}
+
+#[tokio::test]
+async fn needs_setup_returns_true_for_empty_config() {
+    let config = Arc::new(RwLock::new(Config::default()));
+    let request = JsonRpcRequest::with_id("providers.needsSetup", None, serde_json::json!(1));
+    let response = handle_needs_setup(request, config).await;
+    let result: serde_json::Value = serde_json::from_value(response.result.unwrap()).unwrap();
+    assert_eq!(result["needs_setup"], true);
+}

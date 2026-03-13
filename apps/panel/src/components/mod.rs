@@ -1,5 +1,7 @@
 //! Component modules
 
+pub mod api_key_input;
+pub mod probe_indicator;
 pub mod agents_sidebar;
 pub mod bottom_bar;
 pub mod chat_sidebar;
@@ -8,6 +10,7 @@ pub mod dashboard_sidebar;
 pub mod forms;
 pub mod layouts;
 pub mod markdown;
+pub mod model_selector;
 pub mod mode_sidebar;
 pub mod settings_sidebar;
 pub mod sidebar;

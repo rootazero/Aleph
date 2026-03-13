@@ -9,176 +9,10 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::context::DashboardState;
 use crate::api::{ProvidersApi, ProviderInfo, ProviderConfig, TestResult, OAuthStatus};
-use crate::components::ui::SecretInput;
-
-// ============================================================================
-// Preset Definitions
-// ============================================================================
-
-struct ProviderPreset {
-    name: &'static str,
-    protocol: &'static str,
-    model: &'static str,
-    base_url: &'static str,
-    description: &'static str,
-    api_key_placeholder: &'static str,
-    icon_color: &'static str,
-    needs_api_key: bool,
-    auth_type: &'static str,
-}
-
-const PRESETS: &[ProviderPreset] = &[
-    ProviderPreset {
-        name: "anthropic",
-        protocol: "anthropic",
-        model: "claude-sonnet-4-5-20250514",
-        base_url: "https://api.anthropic.com",
-        description: "Claude by Anthropic",
-        api_key_placeholder: "sk-ant-...",
-        icon_color: "#D97757",
-        needs_api_key: true,
-        auth_type: "api_key",
-    },
-    ProviderPreset {
-        name: "openai",
-        protocol: "openai",
-        model: "gpt-4o",
-        base_url: "https://api.openai.com/v1",
-        description: "GPT models by OpenAI",
-        api_key_placeholder: "sk-...",
-        icon_color: "#10A37F",
-        needs_api_key: true,
-        auth_type: "api_key",
-    },
-    ProviderPreset {
-        name: "gemini",
-        protocol: "gemini",
-        model: "gemini-2.5-flash",
-        base_url: "https://generativelanguage.googleapis.com",
-        description: "Gemini by Google",
-        api_key_placeholder: "AIza...",
-        icon_color: "#4285F4",
-        needs_api_key: true,
-        auth_type: "api_key",
-    },
-    ProviderPreset {
-        name: "deepseek",
-        protocol: "openai",
-        model: "deepseek-chat",
-        base_url: "https://api.deepseek.com/v1",
-        description: "DeepSeek AI",
-        api_key_placeholder: "sk-...",
-        icon_color: "#4D6BFE",
-        needs_api_key: true,
-        auth_type: "api_key",
-    },
-    ProviderPreset {
-        name: "moonshot",
-        protocol: "openai",
-        model: "moonshot-v1-8k",
-        base_url: "https://api.moonshot.cn/v1",
-        description: "Kimi by Moonshot AI",
-        api_key_placeholder: "sk-...",
-        icon_color: "#5B21B6",
-        needs_api_key: true,
-        auth_type: "api_key",
-    },
-    ProviderPreset {
-        name: "volcengine",
-        protocol: "openai",
-        model: "doubao-1.5-pro-256k",
-        base_url: "https://ark.cn-beijing.volces.com/api/v3",
-        description: "Doubao by Volcengine",
-        api_key_placeholder: "sk-...",
-        icon_color: "#FF6B35",
-        needs_api_key: true,
-        auth_type: "api_key",
-    },
-    ProviderPreset {
-        name: "siliconflow",
-        protocol: "openai",
-        model: "deepseek-ai/DeepSeek-V3",
-        base_url: "https://api.siliconflow.cn/v1",
-        description: "SiliconFlow AI Cloud",
-        api_key_placeholder: "sk-...",
-        icon_color: "#6C5CE7",
-        needs_api_key: true,
-        auth_type: "api_key",
-    },
-    ProviderPreset {
-        name: "zhipu",
-        protocol: "openai",
-        model: "GLM-5",
-        base_url: "https://open.bigmodel.cn/api/paas/v4",
-        description: "GLM by Zhipu AI",
-        api_key_placeholder: "sk-...",
-        icon_color: "#3B5998",
-        needs_api_key: true,
-        auth_type: "api_key",
-    },
-    ProviderPreset {
-        name: "minimax",
-        protocol: "openai",
-        model: "MiniMax-M2.5",
-        base_url: "https://api.minimax.io/v1",
-        description: "MiniMax AI",
-        api_key_placeholder: "sk-...",
-        icon_color: "#E84393",
-        needs_api_key: true,
-        auth_type: "api_key",
-    },
-    ProviderPreset {
-        name: "ollama",
-        protocol: "ollama",
-        model: "llama3.3",
-        base_url: "http://localhost:11434",
-        description: "Local models via Ollama",
-        api_key_placeholder: "",
-        icon_color: "#1D1D1F",
-        needs_api_key: false,
-        auth_type: "api_key",
-    },
-    ProviderPreset {
-        name: "groq",
-        protocol: "openai",
-        model: "llama-3.3-70b-versatile",
-        base_url: "https://api.groq.com/openai/v1",
-        description: "Fast inference by Groq",
-        api_key_placeholder: "gsk_...",
-        icon_color: "#F55036",
-        needs_api_key: true,
-        auth_type: "api_key",
-    },
-    ProviderPreset {
-        name: "openrouter",
-        protocol: "openai",
-        model: "anthropic/claude-sonnet-4-5",
-        base_url: "https://openrouter.ai/api/v1",
-        description: "Unified API gateway",
-        api_key_placeholder: "sk-or-...",
-        icon_color: "#6366F1",
-        needs_api_key: true,
-        auth_type: "api_key",
-    },
-];
-
-const OAUTH_PRESETS: &[ProviderPreset] = &[
-    ProviderPreset {
-        name: "codex",
-        protocol: "chatgpt",
-        model: "gpt-5.3-codex",
-        base_url: "https://chatgpt.com",
-        description: "OpenAI Codex via ChatGPT subscription",
-        api_key_placeholder: "",
-        icon_color: "#10A37F",
-        needs_api_key: false,
-        auth_type: "oauth",
-    },
-];
-
-fn find_preset(name: &str) -> Option<&'static ProviderPreset> {
-    PRESETS.iter().chain(OAUTH_PRESETS.iter()).find(|p| p.name == name)
-}
+use crate::components::model_selector::{ModelSelector, ModelOption};
+use crate::components::probe_indicator::ProbeStatus;
+use crate::components::api_key_input::ApiKeyInput;
+use crate::preset_data::{PRESETS, OAUTH_PRESETS, find_preset};
 
 /// Map OAuth preset name to the canonical name used in config (e.g. "codex" → "chatgpt").
 fn canonical_oauth_name(name: &str) -> &'static str {
@@ -467,11 +301,25 @@ fn PresetGrid(
                             }
                         >
                             <div class="flex items-center gap-3">
-                                <div
-                                    class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold shrink-0"
-                                    style=format!("background-color: {}", icon_color)
-                                >
-                                    {first_char}
+                                <div class="relative shrink-0">
+                                    <div
+                                        class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold"
+                                        style=format!("background-color: {}", icon_color)
+                                    >
+                                        {first_char}
+                                    </div>
+                                    {move || {
+                                        let list = providers.get();
+                                        let provider = list.iter().find(|p| p.name == name);
+                                        let is_verified = provider.map_or(false, |p| p.verified);
+                                        if is_verified {
+                                            view! {
+                                                <span class="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-success border-2 border-surface-raised" />
+                                            }.into_any()
+                                        } else {
+                                            view! { <span /> }.into_any()
+                                        }
+                                    }}
                                 </div>
                                 <div class="min-w-0">
                                     <div class="flex items-center gap-2">
@@ -572,11 +420,18 @@ fn CustomProvidersList(
                                         }
                                     >
                                         <div class="flex items-center gap-3">
-                                            <div
-                                                class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold shrink-0"
-                                                style=format!("background-color: {}", color)
-                                            >
-                                                {first_char}
+                                            <div class="relative shrink-0">
+                                                <div
+                                                    class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold"
+                                                    style=format!("background-color: {}", color)
+                                                >
+                                                    {first_char}
+                                                </div>
+                                                <span class=if verified {
+                                                    "absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-success border-2 border-surface-raised"
+                                                } else {
+                                                    "absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-text-tertiary/30 border-2 border-surface-raised"
+                                                } />
                                             </div>
                                             <div class="min-w-0">
                                                 <div class="flex items-center gap-2">
@@ -643,6 +498,25 @@ fn ProviderDetailPanel(
     let test_result = RwSignal::new(Option::<TestResult>::None);
     let oauth_status = RwSignal::new(Option::<OAuthStatus>::None);
     let oauth_loading = RwSignal::new(false);
+
+    // Model discovery signals
+    let models_list = RwSignal::new(Vec::<ModelOption>::new());
+    let probe_status = RwSignal::new(ProbeStatus::Idle);
+    let is_refreshing = RwSignal::new(false);
+
+    // Sync form_model <-> selected_model for ModelSelector
+    let selected_model = RwSignal::new(None::<String>);
+    Effect::new(move || {
+        let m = form_model.get();
+        if !m.is_empty() {
+            selected_model.set(Some(m));
+        }
+    });
+    Effect::new(move || {
+        if let Some(m) = selected_model.get() {
+            form_model.set(m);
+        }
+    });
 
     let is_new = move || {
         let sel = selected.get();
@@ -837,6 +711,66 @@ fn ProviderDetailPanel(
         }
     };
 
+    // Trigger probe: test API key and discover models
+    let trigger_probe = move |api_key: String| {
+        let protocol = form_protocol.get();
+        let base_url = form_base_url.get();
+        let base_url_opt = if base_url.is_empty() { None } else { Some(base_url) };
+        let api_key_opt = if api_key.is_empty() { None } else { Some(api_key) };
+
+        probe_status.set(ProbeStatus::Loading);
+        is_refreshing.set(true);
+
+        spawn_local(async move {
+            let state = expect_context::<DashboardState>();
+            match ProvidersApi::probe(
+                &state,
+                &protocol,
+                api_key_opt.as_deref(),
+                base_url_opt.as_deref(),
+            ).await {
+                Ok(result) => {
+                    if result.success {
+                        let latency = result.latency_ms.unwrap_or(0);
+                        probe_status.set(ProbeStatus::Success { latency_ms: latency });
+                        // Convert ProbeModelInfo -> ModelOption
+                        let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
+                            ModelOption {
+                                id: m.id.clone(),
+                                name: m.name.clone(),
+                                capabilities: m.capabilities.clone(),
+                                source: result.model_source.clone(),
+                            }
+                        }).collect();
+                        models_list.set(options);
+                    } else {
+                        let msg = result.error.unwrap_or_else(|| "Connection failed".to_string());
+                        probe_status.set(ProbeStatus::Error { message: msg });
+                        models_list.set(Vec::new());
+                    }
+                }
+                Err(e) => {
+                    probe_status.set(ProbeStatus::Error { message: e });
+                    models_list.set(Vec::new());
+                }
+            }
+            is_refreshing.set(false);
+        });
+    };
+
+    // Refresh callback for ModelSelector
+    let trigger_probe_refresh = trigger_probe.clone();
+    let on_refresh_models = Callback::new(move |_: ()| {
+        let key = form_api_key.get();
+        trigger_probe_refresh(key);
+    });
+
+    // API key change callback for ApiKeyInput
+    let trigger_probe_key = trigger_probe.clone();
+    let on_api_key_change = Callback::new(move |key: String| {
+        trigger_probe_key(key);
+    });
+
     view! {
         <div class="flex flex-col h-full">
             {move || {
@@ -1030,17 +964,14 @@ fn ProviderDetailPanel(
                                         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
                                             <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Configuration"</h3>
                                             <div>
-                                                <label class="block text-sm text-text-secondary mb-1">"Model"</label>
-                                                <input
-                                                    type="text"
-                                                    prop:value=move || form_model.get()
-                                                    on:input=move |ev| form_model.set(event_target_value(&ev))
-                                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                                    placeholder="gpt-5.3-codex"
+                                                <ModelSelector
+                                                    models=Signal::derive(move || models_list.get())
+                                                    selected=selected_model
+                                                    show_refresh=true
+                                                    on_refresh=on_refresh_models.clone()
+                                                    refreshing=Signal::derive(move || is_refreshing.get())
+                                                    allow_custom=true
                                                 />
-                                                <p class="mt-1 text-xs text-text-tertiary">
-                                                    "Available: gpt-5.3-codex, gpt-5.2-codex, codex-mini-latest"
-                                                </p>
                                             </div>
                                             <div>
                                                 <label class="block text-sm text-text-secondary mb-1">"Timeout (s)"</label>
@@ -1134,28 +1065,26 @@ fn ProviderDetailPanel(
                                                 </select>
                                             </div>
 
-                                            // Model
+                                            // Model (grouped dropdown with refresh)
                                             <div>
-                                                <label class="block text-sm text-text-secondary mb-1">"Model"</label>
-                                                <input
-                                                    type="text"
-                                                    prop:value=move || form_model.get()
-                                                    on:input=move |ev| form_model.set(event_target_value(&ev))
-                                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                                    placeholder=move || {
-                                                        preset_info.map(|p| format!("Default: {}", p.model)).unwrap_or_else(|| "model-name".to_string())
-                                                    }
+                                                <ModelSelector
+                                                    models=Signal::derive(move || models_list.get())
+                                                    selected=selected_model
+                                                    show_refresh=true
+                                                    on_refresh=on_refresh_models.clone()
+                                                    refreshing=Signal::derive(move || is_refreshing.get())
+                                                    allow_custom=true
                                                 />
                                             </div>
 
-                                            // API Key
+                                            // API Key (with auto-probe)
                                             <div>
                                                 <label class="block text-sm text-text-secondary mb-1">"API Key"</label>
-                                                <SecretInput
-                                                    value=Signal::derive(move || form_api_key.get())
-                                                    on_change=move |v| form_api_key.set(v)
+                                                <ApiKeyInput
+                                                    value=form_api_key
                                                     placeholder=preset_info.map(|p| p.api_key_placeholder).unwrap_or("sk-...")
-                                                    monospace=true
+                                                    probe_status=Signal::derive(move || probe_status.get())
+                                                    on_key_change=on_api_key_change.clone()
                                                 />
                                                 {move || if preset_info.map(|p| !p.needs_api_key).unwrap_or(false) {
                                                     view! {

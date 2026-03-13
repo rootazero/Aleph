@@ -21,13 +21,13 @@ use crate::config::Config;
 // ============================================================================
 
 /// Adapter that wraps OllamaProvider::list_models() for ModelRegistry caching
-struct OllamaDiscoveryAdapter {
+pub(super) struct OllamaDiscoveryAdapter {
     name: String,
     config: crate::config::ProviderConfig,
 }
 
 impl OllamaDiscoveryAdapter {
-    fn new(name: String, config: crate::config::ProviderConfig) -> Self {
+    pub(super) fn new(name: String, config: crate::config::ProviderConfig) -> Self {
         Self { name, config }
     }
 }

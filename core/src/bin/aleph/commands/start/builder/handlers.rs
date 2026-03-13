@@ -550,6 +550,8 @@ pub(in crate::commands::start) fn register_config_handlers(
         register_handler!(server, "providers.setDefault", providers::handle_set_default_config_only, config, event_bus);
     }
     register_handler!(server, "providers.test", providers::handle_test, config);
+    register_handler!(server, "providers.needsSetup", providers::handle_needs_setup, config);
+    register_handler!(server, "providers.probe", providers::handle_probe, config);
 
     // Routing rules
     register_handler!(server, "routing_rules.list", routing_rules::handle_list, config);
