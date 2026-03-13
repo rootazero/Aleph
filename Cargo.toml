@@ -11,6 +11,7 @@ members = [
     "shared/ui_logic",
     "shared_ui_logic",
     "apps/cli",
+    "apps/tui",
     "apps/shared",
     "apps/desktop/src-tauri",
     "apps/panel",

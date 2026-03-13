@@ -240,6 +240,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "aleph-tui"
+version = "0.1.0"
+dependencies = [
+ "aleph-logging",
+ "aleph-protocol",
+ "anyhow",
+ "chrono",
+ "clap",
+ "crossterm 0.28.1",
+ "dirs 5.0.1",
+ "futures-util",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "textwrap",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+ "tui-textarea",
+ "unicode-width 0.2.0",
+ "uuid",
+]
+
+[[package]]
 name = "aleph-ui-logic"
 version = "0.1.0"
 dependencies = [
