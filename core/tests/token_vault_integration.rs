@@ -486,10 +486,8 @@ fn tampered_vault_file_detected() {
         match result {
             Err(_) => {} // Expected: decryption error
             Ok(None) => {} // Vault may have failed to parse the entry
-            Ok(Some(s)) => {
-                // If by extreme chance it decrypted, it should not be the original
-                // (practically impossible with AES-GCM, but handle gracefully)
-                let _ = s.expose();
+            Ok(Some(_)) => {
+                panic!("Tampered ciphertext should never decrypt successfully with AES-GCM");
             }
         }
     }
