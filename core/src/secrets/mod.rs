@@ -19,14 +19,7 @@ pub use injection::{render_with_secrets, InjectedSecret};
 pub use leak_detector::{LeakDecision, LeakDetector};
 pub use placeholder::{extract_secret_refs, SecretRef};
 pub use types::{DecryptedSecret, EntryMetadata, SecretError};
-pub use vault::{
-    resolve_master_key, SecretVault,
-    get_master_key_from_keyring, store_master_key_to_keyring, delete_master_key_from_keyring,
-    vault_status, VaultStatus,
-};
-pub use provider::{ProviderStatus, SecretMetadata, SecretProvider};
-pub use provider::local_vault::LocalVaultProvider;
-pub use router::{AsyncSecretResolver, SecretRouter};
+pub use vault::SecretVault;
 pub use web3_signer::{EvmSigner, SignIntent, SignedResult};
 
 // Re-export config types used in routing (so integration tests can access them)
