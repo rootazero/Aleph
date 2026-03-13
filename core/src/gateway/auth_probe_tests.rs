@@ -47,7 +47,7 @@ mod tests {
             })
             .unwrap();
 
-        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone()));
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone(), "/tmp/aleph_test.vault"));
 
         let ctx = Arc::new(AuthContext {
             token_manager: Arc::new(TokenManager::new(store.clone())),
@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn probe_full_login_session_lifecycle() {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
-        let shared_mgr = SharedTokenManager::new(store.clone());
+        let shared_mgr = SharedTokenManager::new(store.clone(), "/tmp/aleph_test.vault");
         let session_mgr = HttpSessionManager::new(store.clone(), 72);
 
         // 1. Generate shared token
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn probe_token_rotation_invalidates_old() {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
-        let mgr = SharedTokenManager::new(store.clone());
+        let mgr = SharedTokenManager::new(store.clone(), "/tmp/aleph_test.vault");
         let session_mgr = HttpSessionManager::new(store.clone(), 72);
 
         // Generate first token, create a session
@@ -277,7 +277,7 @@ mod tests {
             guest_session_manager: Arc::new(GuestSessionManager::new()),
             event_bus: Arc::new(GatewayEventBus::new()),
             auth_mode: AuthMode::None,
-            shared_token_mgr: Arc::new(SharedTokenManager::new(store)),
+            shared_token_mgr: Arc::new(SharedTokenManager::new(store, "/tmp/aleph_test.vault")),
         });
 
         // Connect with no credentials at all
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn probe_bearer_token_validation_flow() {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
-        let mgr = SharedTokenManager::new(store.clone());
+        let mgr = SharedTokenManager::new(store.clone(), "/tmp/aleph_test.vault");
         let token = mgr.generate_token().unwrap();
 
         // Valid: extract from "Bearer <token>" and validate
@@ -482,15 +482,15 @@ mod tests {
         let secret_b = generate_secret();
         assert_ne!(secret_a, secret_b);
 
-        let mgr_a = SharedTokenManager::with_secret(store.clone(), secret_a);
+        let mgr_a = SharedTokenManager::with_secret(store.clone(), secret_a, "/tmp/aleph_test.vault");
         let token = mgr_a.generate_token().unwrap();
 
         // Same store, different secret — MUST fail
-        let mgr_b = SharedTokenManager::with_secret(store.clone(), secret_b);
+        let mgr_b = SharedTokenManager::with_secret(store.clone(), secret_b, "/tmp/aleph_test.vault");
         assert!(!mgr_b.validate(&token).unwrap());
 
         // Same store, same secret — MUST pass
-        let mgr_a2 = SharedTokenManager::with_secret(store, secret_a);
+        let mgr_a2 = SharedTokenManager::with_secret(store, secret_a, "/tmp/aleph_test.vault");
         assert!(mgr_a2.validate(&token).unwrap());
     }
 
@@ -884,7 +884,7 @@ model = "test"
     #[test]
     fn probe_token_format_invariants() {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
-        let mgr = SharedTokenManager::new(store);
+        let mgr = SharedTokenManager::new(store, "/tmp/aleph_test.vault");
 
         // Generate 50 tokens — all must follow format
         for _ in 0..50 {

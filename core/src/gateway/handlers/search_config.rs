@@ -5,8 +5,6 @@
 use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::secrets::{resolve_master_key, SecretVault};
-use crate::secrets::types::EntryMetadata;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use crate::sync_primitives::Arc;
@@ -25,40 +23,6 @@ pub struct SearchBackendDto {
     pub engine_id: Option<String>,
     #[serde(default)]
     pub verified: bool,
-}
-
-/// Store a search backend API key in the secret vault.
-fn store_search_api_key(
-    backend_name: &str,
-    api_key: &str,
-    requested_secret_name: Option<&str>,
-) -> Result<String, String> {
-    let master_key = resolve_master_key().map_err(|e| {
-        format!("Cannot persist API key securely: {}", e)
-    })?;
-
-    let mut vault = SecretVault::open(SecretVault::default_path(), &master_key)
-        .map_err(|e| format!("Failed to open secret vault: {}", e))?;
-
-    let secret_name = requested_secret_name
-        .and_then(|s| {
-            let trimmed = s.trim();
-            if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
-        })
-        .unwrap_or_else(|| format!("search_{}_api_key", backend_name.replace('-', "_")));
-
-    vault
-        .set(
-            &secret_name,
-            api_key,
-            EntryMetadata {
-                description: Some(format!("API key for search backend '{}'", backend_name)),
-                provider: Some(backend_name.to_string()),
-            },
-        )
-        .map_err(|e| format!("Failed to store API key in secret vault: {}", e))?;
-
-    Ok(secret_name)
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -217,34 +181,8 @@ pub async fn handle_update(
                         verified: false,
                     });
 
-                let api_key = normalize_optional_string(backend_dto.api_key.clone());
-                let requested_secret_name = normalize_optional_string(backend_dto.secret_name.clone());
-
-                // Only use SecretVault when user explicitly provides a secret_name.
-                // Otherwise store api_key directly in config.toml (plaintext).
-                if let Some(ref sn) = requested_secret_name {
-                    if let Some(ref key_value) = api_key {
-                        match store_search_api_key(&backend_dto.name, key_value, Some(sn.as_str())) {
-                            Ok(stored_name) => {
-                                entry.api_key = None;
-                                entry.secret_name = Some(stored_name);
-                            }
-                            Err(e) => {
-                                return JsonRpcResponse::error(
-                                    request.id,
-                                    INVALID_PARAMS,
-                                    format!("Invalid search backend credentials: {}", e),
-                                );
-                            }
-                        }
-                    } else {
-                        entry.api_key = None;
-                        entry.secret_name = Some(sn.clone());
-                    }
-                } else {
-                    entry.api_key = api_key;
-                    entry.secret_name = None;
-                }
+                entry.api_key = normalize_optional_string(backend_dto.api_key.clone());
+                entry.secret_name = normalize_optional_string(backend_dto.secret_name.clone());
 
                 entry.base_url = backend_dto.base_url.clone();
                 entry.engine_id = backend_dto.engine_id.clone();

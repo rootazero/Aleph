@@ -65,7 +65,6 @@ pub fn create_claude_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
     let config = ProviderConfig {
         protocol: Some("anthropic".to_string()),
         api_key: Some(api_key),
-        secret_name: None,
         model,
         base_url,
         color: CLAUDE_COLOR.to_string(),
@@ -128,7 +127,6 @@ pub fn create_openai_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
     let config = ProviderConfig {
         protocol: Some("openai".to_string()),
         api_key: Some(api_key),
-        secret_name: None,
         model,
         base_url,
         color: OPENAI_COLOR.to_string(),

@@ -8,8 +8,6 @@ use crate::config::Config;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::event_bus::GatewayEventBus;
 use crate::generation::GenerationType;
-use crate::secrets::types::EntryMetadata;
-use crate::secrets::{resolve_master_key, SecretVault};
 use serde::{Deserialize, Serialize};
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
@@ -44,88 +42,15 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
     })
 }
 
-fn save_config_with_secret_redaction(cfg: &Config) -> Result<(), String> {
-    let mut sanitized = cfg.clone();
-    redact_secret_backed_api_keys(&mut sanitized);
-    sanitized.save().map_err(|e| e.to_string())
-}
-
-fn redact_secret_backed_api_keys(cfg: &mut Config) {
-    for provider in cfg.generation.providers.values_mut() {
-        if provider.secret_name.is_some() {
-            provider.api_key = None;
-        }
-    }
-}
-
-fn store_generation_provider_api_key(
-    provider_name: &str,
-    api_key: &str,
-    requested_secret_name: Option<&str>,
-) -> Result<String, String> {
-    let master_key = resolve_master_key().map_err(|e| {
-        format!(
-            "Cannot persist API key securely: {}. Set ALEPH_MASTER_KEY or provide secret_name only",
-            e
-        )
-    })?;
-
-    let mut vault = SecretVault::open(SecretVault::default_path(), &master_key)
-        .map_err(|e| format!("Failed to open secret vault: {}", e))?;
-
-    let secret_name = requested_secret_name
-        .and_then(|s| {
-            let trimmed = s.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        })
-        .unwrap_or_else(|| format!("generation_{}_api_key", provider_name.replace('-', "_")));
-
-    vault
-        .set(
-            &secret_name,
-            api_key,
-            EntryMetadata {
-                description: Some(format!(
-                    "API key for generation provider '{}'",
-                    provider_name
-                )),
-                provider: Some(provider_name.to_string()),
-            },
-        )
-        .map_err(|e| format!("Failed to store API key in secret vault: {}", e))?;
-
-    Ok(secret_name)
+fn save_config(cfg: &Config) -> Result<(), String> {
+    cfg.save().map_err(|e| e.to_string())
 }
 
 fn build_generation_provider_for_persistence(
     provider_name: &str,
     config: GenerationProviderConfig,
     generation_overrides: &crate::config::presets_override::GenerationPresetsOverride,
-) -> Result<GenerationProviderConfig, String> {
-    let api_key = normalize_optional_string(config.api_key.clone());
-    let requested_secret_name = normalize_optional_string(config.secret_name.clone());
-
-    // Only use SecretVault when user explicitly provides a secret_name.
-    // Otherwise store api_key directly in config.toml (plaintext).
-    let (persisted_api_key, secret_name) = if let Some(ref sn) = requested_secret_name {
-        if let Some(ref api_key_value) = api_key {
-            let stored_name = store_generation_provider_api_key(
-                provider_name,
-                api_key_value,
-                Some(sn.as_str()),
-            )?;
-            (None, Some(stored_name))
-        } else {
-            (None, Some(sn.clone()))
-        }
-    } else {
-        (api_key, None)
-    };
-
+) -> GenerationProviderConfig {
     // Restore preset defaults for empty base_url / model (merged with user overrides)
     let preset = get_merged_generation_preset(
         provider_name,
@@ -146,36 +71,11 @@ fn build_generation_provider_for_persistence(
             .map(|p| p.default_model.clone()),
     };
 
-    Ok(GenerationProviderConfig {
-        secret_name,
-        api_key: persisted_api_key,
+    GenerationProviderConfig {
         base_url,
         model,
         ..config
-    })
-}
-
-fn resolve_test_api_key(
-    api_key: Option<String>,
-    secret_name: Option<String>,
-) -> Result<Option<String>, String> {
-    if let Some(api_key) = normalize_optional_string(api_key) {
-        return Ok(Some(api_key));
     }
-
-    let Some(secret_name) = normalize_optional_string(secret_name) else {
-        return Ok(None);
-    };
-
-    let master_key = resolve_master_key()
-        .map_err(|e| format!("Cannot resolve secret '{}': {}", secret_name, e))?;
-    let vault = SecretVault::open(SecretVault::default_path(), &master_key)
-        .map_err(|e| format!("Failed to open secret vault: {}", e))?;
-    let secret = vault
-        .get(&secret_name)
-        .map_err(|e| format!("Failed to read secret '{}': {}", secret_name, e))?;
-
-    Ok(Some(secret.expose().to_string()))
 }
 
 // =============================================================================
@@ -302,20 +202,11 @@ pub async fn handle_create(
             );
         }
 
-        let provider_config = match build_generation_provider_for_persistence(
+        let provider_config = build_generation_provider_for_persistence(
             &params.name,
             params.config,
             &cfg.presets_override.generation,
-        ) {
-            Ok(config) => config,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid provider credentials: {}", e),
-                )
-            }
-        };
+        );
 
         // Validate provider config
         if let Err(e) = provider_config.validate(&params.name) {
@@ -326,7 +217,7 @@ pub async fn handle_create(
         cfg.generation.providers.insert(params.name.clone(), provider_config);
 
         // Save to file
-        if let Err(e) = save_config_with_secret_redaction(&cfg) {
+        if let Err(e) = save_config(&cfg) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -374,20 +265,11 @@ pub async fn handle_update(
             );
         }
 
-        let provider_config = match build_generation_provider_for_persistence(
+        let provider_config = build_generation_provider_for_persistence(
             &params.name,
             params.config,
             &cfg.presets_override.generation,
-        ) {
-            Ok(config) => config,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid provider credentials: {}", e),
-                )
-            }
-        };
+        );
 
         // Validate provider config
         if let Err(e) = provider_config.validate(&params.name) {
@@ -400,7 +282,7 @@ pub async fn handle_update(
         cfg.generation.providers.insert(params.name.clone(), provider_config);
 
         // Save to file
-        if let Err(e) = save_config_with_secret_redaction(&cfg) {
+        if let Err(e) = save_config(&cfg) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -599,7 +481,6 @@ pub async fn handle_test_connection(
         name: Option<String>,
         provider_type: String,
         api_key: Option<String>,
-        secret_name: Option<String>,
         #[allow(dead_code)] // Deserialized from RPC params; reserved for actual connection test
         base_url: Option<String>,
         model: Option<String>,
@@ -612,12 +493,7 @@ pub async fn handle_test_connection(
 
     let provider_name = params.name;
 
-    let api_key = match resolve_test_api_key(params.api_key, params.secret_name) {
-        Ok(value) => value,
-        Err(e) => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, e);
-        }
-    };
+    let api_key = normalize_optional_string(params.api_key);
 
     // TODO: Implement actual connection testing
     // For now, just validate that required fields are present
@@ -637,7 +513,7 @@ pub async fn handle_test_connection(
             let mut cfg = config.write().await;
             if let Some(p) = cfg.generation.providers.get_mut(name) {
                 p.verified = true;
-                if let Err(e) = save_config_with_secret_redaction(&cfg) {
+                if let Err(e) = save_config(&cfg) {
                     tracing::error!(error = %e, "Failed to save config after generation test");
                 }
             }
@@ -657,49 +533,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_generation_provider_secret_name_only_is_valid() {
-        let mut cfg = GenerationProviderConfig::new("openai");
-        cfg.api_key = None;
-        cfg.secret_name = Some("gen_openai_key".to_string());
-        assert!(cfg.validate("openai").is_ok());
-    }
-
-    #[test]
-    fn test_build_generation_provider_with_secret_name_only() {
-        let mut cfg = GenerationProviderConfig::new("openai");
-        cfg.api_key = None;
-        cfg.secret_name = Some("gen_openai_key".to_string());
-
+    fn test_build_generation_provider_applies_preset_defaults() {
+        let cfg = GenerationProviderConfig::new("openai");
         let overrides = crate::config::presets_override::GenerationPresetsOverride::default();
-        let persisted = build_generation_provider_for_persistence("dalle_main", cfg, &overrides).unwrap();
-        assert!(persisted.api_key.is_none());
-        assert_eq!(persisted.secret_name.as_deref(), Some("gen_openai_key"));
-    }
-
-    #[test]
-    fn test_redact_secret_backed_generation_api_keys_only() {
-        let mut cfg = Config::default();
-
-        let mut secret_backed = GenerationProviderConfig::new("openai");
-        secret_backed.api_key = Some("should-be-redacted".to_string());
-        secret_backed.secret_name = Some("gen_openai_key".to_string());
-        cfg.generation
-            .providers
-            .insert("dalle".to_string(), secret_backed);
-
-        let mut plaintext = GenerationProviderConfig::new("mock");
-        plaintext.api_key = Some("inline-key".to_string());
-        plaintext.secret_name = None;
-        cfg.generation
-            .providers
-            .insert("mock".to_string(), plaintext);
-
-        redact_secret_backed_api_keys(&mut cfg);
-
-        assert!(cfg.generation.providers.get("dalle").unwrap().api_key.is_none());
-        assert_eq!(
-            cfg.generation.providers.get("mock").unwrap().api_key.as_deref(),
-            Some("inline-key")
-        );
+        let _persisted = build_generation_provider_for_persistence("dalle_main", cfg, &overrides);
     }
 }

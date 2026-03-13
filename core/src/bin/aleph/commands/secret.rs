@@ -1,15 +1,19 @@
 //! Secret management command handlers.
+//!
+//! All secret operations go through SharedTokenManager, which uses the
+//! auth token as master key for AES-256-GCM encryption.
 
 use std::error::Error;
 use std::io::Write;
+use std::path::PathBuf;
 
-use alephcore::secrets::types::EntryMetadata;
-use alephcore::secrets::{resolve_master_key, SecretVault};
+use alephcore::gateway::security::{SharedTokenManager, store::SecurityStore};
+use alephcore::utils::paths;
+use std::sync::Arc;
 
 use crate::cli::SecretAction;
 
 const SECRET_NAME_MAX_LEN: usize = 128;
-const INIT_SENTINEL: &str = "__aleph_secret_init_probe__";
 
 /// Validate and normalize a secret name.
 pub fn validate_secret_name(name: &str) -> Result<String, String> {
@@ -38,9 +42,33 @@ pub fn validate_secret_name(name: &str) -> Result<String, String> {
     Ok(normalized.to_string())
 }
 
-fn open_vault() -> Result<SecretVault, Box<dyn Error>> {
-    let master_key = resolve_master_key()?;
-    Ok(SecretVault::open(SecretVault::default_path(), &master_key)?)
+/// Build a SharedTokenManager and load the existing token from file.
+/// Returns an error if no token exists (server must be started at least once).
+fn open_token_manager() -> Result<(SharedTokenManager, PathBuf), Box<dyn Error>> {
+    let security_store_path = paths::get_security_db_path()
+        .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
+    let security_store = Arc::new(
+        SecurityStore::open(&security_store_path)
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to load security store from {:?}: {}. Using in-memory.", security_store_path, e);
+                SecurityStore::in_memory().expect("Failed to create in-memory security store")
+            })
+    );
+
+    let data_dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".aleph/data");
+    let vault_path = data_dir.join("secrets.vault");
+    let token_file = data_dir.join(".shared_token");
+
+    let manager = SharedTokenManager::new(security_store, vault_path);
+
+    // Load existing token from file
+    if manager.try_load_token_from_file(&token_file).is_none() {
+        return Err("No valid token found. Start the server at least once to generate one.".into());
+    }
+
+    Ok((manager, token_file))
 }
 
 fn resolve_secret_value(value: Option<String>) -> Result<String, Box<dyn Error>> {
@@ -58,17 +86,11 @@ fn resolve_secret_value(value: Option<String>) -> Result<String, Box<dyn Error>>
 }
 
 fn handle_secret_init() -> Result<(), Box<dyn Error>> {
-    let path = SecretVault::default_path();
-    let existed = path.exists();
-
-    let mut vault = open_vault()?;
-    if !existed {
-        // Force the vault file to materialize on disk.
-        vault.set(INIT_SENTINEL, "", EntryMetadata::default())?;
-        let _ = vault.delete(INIT_SENTINEL)?;
-    }
-
-    println!("Secret vault ready at {}", path.display());
+    let (manager, _) = open_token_manager()?;
+    let count = manager.list_secret_names()
+        .map(|names| names.len())
+        .unwrap_or(0);
+    println!("Secret vault ready ({} entries)", count);
     Ok(())
 }
 
@@ -76,37 +98,40 @@ fn handle_secret_set(name: String, value: Option<String>) -> Result<(), Box<dyn 
     let name = validate_secret_name(&name)?;
     let value = resolve_secret_value(value)?;
 
-    let mut vault = open_vault()?;
-    vault.set(&name, &value, EntryMetadata::default())?;
+    let (manager, _) = open_token_manager()?;
+    manager.store_secret(&name, &value)
+        .map_err(|e| format!("Failed to store secret: {}", e))?;
 
     println!("Stored secret '{}'", name);
     Ok(())
 }
 
 fn handle_secret_list() -> Result<(), Box<dyn Error>> {
-    let vault = open_vault()?;
-    let mut entries = vault.list();
-    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let (manager, _) = open_token_manager()?;
+    let mut names = manager.list_secret_names()
+        .map_err(|e| format!("Failed to list secrets: {}", e))?;
+    names.sort();
 
-    if entries.is_empty() {
+    if names.is_empty() {
         println!("No secrets found");
         return Ok(());
     }
 
-    println!("{:<40} {:<20}", "NAME", "PROVIDER");
-    println!("{}", "-".repeat(62));
-    for (name, metadata) in entries {
-        let provider = metadata.provider.as_deref().unwrap_or("-");
-        println!("{:<40} {:<20}", name, provider);
+    println!("{:<40}", "NAME");
+    println!("{}", "-".repeat(40));
+    for name in names {
+        println!("{:<40}", name);
     }
     Ok(())
 }
 
 fn handle_secret_delete(name: String) -> Result<(), Box<dyn Error>> {
     let name = validate_secret_name(&name)?;
-    let mut vault = open_vault()?;
+    let (manager, _) = open_token_manager()?;
 
-    if vault.delete(&name)? {
+    let deleted = manager.delete_secret(&name)
+        .map_err(|e| format!("Failed to delete secret: {}", e))?;
+    if deleted {
         println!("Deleted secret '{}'", name);
     } else {
         eprintln!("Secret '{}' not found", name);
@@ -117,14 +142,24 @@ fn handle_secret_delete(name: String) -> Result<(), Box<dyn Error>> {
 
 fn handle_secret_verify(name: String) -> Result<(), Box<dyn Error>> {
     let name = validate_secret_name(&name)?;
-    let vault = open_vault()?;
+    let (manager, _) = open_token_manager()?;
 
-    let secret = vault.get(&name)?;
-    println!(
-        "Secret '{}' is available ({} bytes, value redacted)",
-        name,
-        secret.len()
-    );
+    match manager.get_secret(&name) {
+        Ok(Some(secret)) => {
+            println!(
+                "Secret '{}' is available ({} bytes, value redacted)",
+                name,
+                secret.expose().len()
+            );
+        }
+        Ok(None) => {
+            eprintln!("Secret '{}' not found", name);
+            std::process::exit(1);
+        }
+        Err(e) => {
+            return Err(format!("Failed to verify secret: {}", e).into());
+        }
+    }
     Ok(())
 }
 

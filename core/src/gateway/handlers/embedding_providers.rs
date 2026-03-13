@@ -18,8 +18,6 @@ use crate::config::Config;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::memory::embedding_provider::RemoteEmbeddingProvider;
-use crate::secrets::{resolve_master_key, SecretVault};
-use crate::secrets::types::EntryMetadata;
 use serde::Deserialize;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
@@ -47,85 +45,8 @@ fn apply_embedding_preset_defaults(config: &mut EmbeddingProviderConfig) {
     }
 }
 
-/// Store an embedding provider API key in the secret vault.
-fn store_embedding_api_key(
-    provider_id: &str,
-    api_key: &str,
-    requested_secret_name: Option<&str>,
-) -> Result<String, String> {
-    let master_key = resolve_master_key().map_err(|e| {
-        format!("Cannot persist API key securely: {}", e)
-    })?;
-
-    let mut vault = SecretVault::open(SecretVault::default_path(), &master_key)
-        .map_err(|e| format!("Failed to open secret vault: {}", e))?;
-
-    let secret_name = requested_secret_name
-        .and_then(|s| {
-            let trimmed = s.trim();
-            if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
-        })
-        .unwrap_or_else(|| format!("embedding_{}_api_key", provider_id.replace('-', "_")));
-
-    vault
-        .set(
-            &secret_name,
-            api_key,
-            EntryMetadata {
-                description: Some(format!("API key for embedding provider '{}'", provider_id)),
-                provider: Some(provider_id.to_string()),
-            },
-        )
-        .map_err(|e| format!("Failed to store API key in secret vault: {}", e))?;
-
-    Ok(secret_name)
-}
-
-/// Prepare an embedding provider config for persistence.
-///
-/// - If `secret_name` is provided: encrypt `api_key` into SecretVault.
-/// - Otherwise: store `api_key` directly in config.toml (plaintext).
-fn prepare_embedding_config_for_persistence(
-    config: &mut EmbeddingProviderConfig,
-) -> Result<(), String> {
-    let api_key = config.api_key.as_ref().and_then(|k| {
-        let trimmed = k.trim();
-        if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
-    });
-    let requested_secret_name = config.secret_name.as_ref().and_then(|s| {
-        let trimmed = s.trim();
-        if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
-    });
-
-    if let Some(ref sn) = requested_secret_name {
-        if let Some(ref key_value) = api_key {
-            let stored_name = store_embedding_api_key(
-                &config.id,
-                key_value,
-                Some(sn.as_str()),
-            )?;
-            config.api_key = None;
-            config.secret_name = Some(stored_name);
-        } else {
-            config.secret_name = Some(sn.clone());
-            config.api_key = None;
-        }
-    } else {
-        // No secret_name — keep api_key as plaintext in config
-        config.api_key = api_key;
-        config.secret_name = None;
-    }
-    Ok(())
-}
-
-fn save_config_with_secret_redaction(cfg: &Config) -> Result<(), String> {
-    let mut sanitized = cfg.clone();
-    for provider in sanitized.memory.embedding.providers.iter_mut() {
-        if provider.secret_name.is_some() {
-            provider.api_key = None;
-        }
-    }
-    sanitized.save().map_err(|e| e.to_string())
+fn save_config(cfg: &Config) -> Result<(), String> {
+    cfg.save().map_err(|e| e.to_string())
 }
 
 /// Serialize a provider config to JSON and inject `is_active` based on the active provider id.
@@ -211,15 +132,6 @@ pub async fn handle_add(
     let mut provider_config = params.config;
     apply_embedding_preset_defaults(&mut provider_config);
 
-    // Handle secret_name-based encryption or plaintext api_key
-    if let Err(e) = prepare_embedding_config_for_persistence(&mut provider_config) {
-        return JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            format!("Invalid provider credentials: {}", e),
-        );
-    }
-
     {
         let mut cfg = config.write().await;
 
@@ -236,7 +148,7 @@ pub async fn handle_add(
         cfg.memory.embedding.providers.push(provider_config.clone());
 
         // Save to file (redact vault-backed api_keys)
-        if let Err(e) = save_config_with_secret_redaction(&cfg) {
+        if let Err(e) = save_config(&cfg) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -284,15 +196,6 @@ pub async fn handle_update(
                 new_config.verified = false;
                 apply_embedding_preset_defaults(&mut new_config);
 
-                // Handle secret_name-based encryption or plaintext api_key
-                if let Err(e) = prepare_embedding_config_for_persistence(&mut new_config) {
-                    return JsonRpcResponse::error(
-                        request.id,
-                        INVALID_PARAMS,
-                        format!("Invalid provider credentials: {}", e),
-                    );
-                }
-
                 *existing = new_config;
             }
             None => {
@@ -305,7 +208,7 @@ pub async fn handle_update(
         }
 
         // Save to file (redact vault-backed api_keys)
-        if let Err(e) = save_config_with_secret_redaction(&cfg) {
+        if let Err(e) = save_config(&cfg) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,

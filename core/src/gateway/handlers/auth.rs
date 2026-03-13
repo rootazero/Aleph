@@ -789,7 +789,7 @@ mod tests {
         let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
         let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
         let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
-        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone()));
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone(), "/tmp/aleph_test.vault"));
 
         Arc::new(AuthContext {
             token_manager: Arc::new(TokenManager::new(store.clone())),
@@ -823,7 +823,7 @@ mod tests {
         let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
         let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
         let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
-        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone()));
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone(), "/tmp/aleph_test.vault"));
 
         let ctx = Arc::new(AuthContext {
             token_manager: Arc::new(TokenManager::new(store.clone())),
@@ -934,7 +934,7 @@ mod tests {
             })
             .unwrap();
 
-        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone()));
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone(), "/tmp/aleph_test.vault"));
         let token = shared_token_mgr.generate_token().unwrap();
 
         let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());

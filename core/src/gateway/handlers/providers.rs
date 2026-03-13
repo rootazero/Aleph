@@ -14,8 +14,6 @@ use super::super::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus}
 use crate::config::{Config, ProviderConfig};
 use crate::config::presets_override::PresetsOverride;
 use crate::providers::presets::get_merged_preset;
-use crate::secrets::types::EntryMetadata;
-use crate::secrets::{resolve_master_key, SecretVault};
 
 /// Provider info for JSON serialization
 #[derive(Debug, Clone, Serialize)]
@@ -147,8 +145,6 @@ pub struct ProviderConfigJson {
     #[serde(default)]
     pub api_key: Option<String>,
     #[serde(default)]
-    pub secret_name: Option<String>,
-    #[serde(default)]
     pub base_url: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
@@ -175,109 +171,19 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
     })
 }
 
-fn save_config_with_secret_redaction(cfg: &Config) -> Result<(), String> {
-    let mut sanitized = cfg.clone();
-    redact_secret_backed_api_keys(&mut sanitized);
-    sanitized.save().map_err(|e| e.to_string())
+fn save_config(cfg: &Config) -> Result<(), String> {
+    // api_key is #[serde(skip)] — never persisted to disk
+    cfg.save().map_err(|e| e.to_string())
 }
 
-fn redact_secret_backed_api_keys(cfg: &mut Config) {
-    for provider in cfg.providers.values_mut() {
-        if provider.secret_name.is_some() {
-            provider.api_key = None;
-        }
-    }
-}
-
-fn store_provider_api_key(
-    provider_name: &str,
-    api_key: &str,
-    requested_secret_name: Option<&str>,
-) -> Result<String, String> {
-    let master_key = resolve_master_key().map_err(|e| {
-        format!(
-            "Cannot persist API key securely: {}. Set ALEPH_MASTER_KEY or provide secret_name only",
-            e
-        )
-    })?;
-
-    let mut vault = SecretVault::open(SecretVault::default_path(), &master_key)
-        .map_err(|e| format!("Failed to open secret vault: {}", e))?;
-
-    let secret_name = requested_secret_name
-        .and_then(|s| {
-            let trimmed = s.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        })
-        .unwrap_or_else(|| format!("{}_api_key", provider_name.replace('-', "_")));
-
-    vault
-        .set(
-            &secret_name,
-            api_key,
-            EntryMetadata {
-                description: Some(format!("API key for provider '{}'", provider_name)),
-                provider: Some(provider_name.to_string()),
-            },
-        )
-        .map_err(|e| format!("Failed to store API key in secret vault: {}", e))?;
-
-    Ok(secret_name)
-}
-
-fn resolve_test_api_key(
-    api_key: Option<String>,
-    secret_name: Option<String>,
-) -> Result<Option<String>, String> {
-    if let Some(api_key) = normalize_optional_string(api_key) {
-        return Ok(Some(api_key));
-    }
-
-    let Some(secret_name) = normalize_optional_string(secret_name) else {
-        return Ok(None);
-    };
-
-    let master_key = resolve_master_key()
-        .map_err(|e| format!("Cannot resolve secret '{}': {}", secret_name, e))?;
-    let vault = SecretVault::open(SecretVault::default_path(), &master_key)
-        .map_err(|e| format!("Failed to open secret vault: {}", e))?;
-    let secret = vault
-        .get(&secret_name)
-        .map_err(|e| format!("Failed to read secret '{}': {}", secret_name, e))?;
-
-    Ok(Some(secret.expose().to_string()))
-}
 
 fn build_provider_config_for_persistence(
     provider_name: &str,
     params: ProviderConfigJson,
     presets_override: &PresetsOverride,
-) -> Result<ProviderConfig, String> {
+) -> ProviderConfig {
+    // api_key is runtime-only (#[serde(skip)]) — kept in memory, never persisted
     let api_key = normalize_optional_string(params.api_key);
-    let requested_secret_name = normalize_optional_string(params.secret_name);
-
-    // Only use SecretVault when user explicitly provides a secret_name.
-    // Otherwise store api_key directly in config.toml (plaintext).
-    let (persisted_api_key, secret_name) = if let Some(ref sn) = requested_secret_name {
-        // User wants encrypted storage — requires ALEPH_MASTER_KEY
-        if let Some(ref api_key_value) = api_key {
-            let stored_name = store_provider_api_key(
-                provider_name,
-                api_key_value,
-                Some(sn.as_str()),
-            )?;
-            (None, Some(stored_name))
-        } else {
-            (None, Some(sn.clone()))
-        }
-    } else {
-        // No secret_name — store api_key directly in config
-        (api_key, None)
-    };
 
     // Restore preset defaults for empty base_url / model (merged with user overrides)
     let preset = get_merged_preset(provider_name, presets_override);
@@ -300,10 +206,9 @@ fn build_provider_config_for_persistence(
         }
     };
 
-    Ok(ProviderConfig {
+    ProviderConfig {
         protocol: params.protocol,
-        api_key: persisted_api_key,
-        secret_name,
+        api_key,
         model,
         base_url,
         color: params.color.unwrap_or_else(|| "#808080".to_string()),
@@ -321,7 +226,7 @@ fn build_provider_config_for_persistence(
         repeat_penalty: None,
         system_prompt_mode: None,
         verified: false,
-    })
+    }
 }
 
 /// Update a provider
@@ -348,27 +253,17 @@ pub async fn handle_update(
             );
         }
 
-        // Convert JSON config to ProviderConfig and move plaintext api_key into vault
-        let mut provider_config = match build_provider_config_for_persistence(
+        // Convert JSON config to ProviderConfig
+        let mut provider_config = build_provider_config_for_persistence(
             &params.name,
             params.config,
             &cfg.presets_override,
-        ) {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid provider credentials: {}", e),
-                );
-            }
-        };
+        );
 
         // If no new credentials were provided, preserve the existing ones
-        if provider_config.api_key.is_none() && provider_config.secret_name.is_none() {
+        if provider_config.api_key.is_none() {
             if let Some(existing) = cfg.providers.get(&params.name) {
                 provider_config.api_key = existing.api_key.clone();
-                provider_config.secret_name = existing.secret_name.clone();
             }
         }
 
@@ -377,7 +272,7 @@ pub async fn handle_update(
         cfg.providers.insert(params.name.clone(), provider_config);
 
         // Save to file
-        if let Err(e) = save_config_with_secret_redaction(&cfg) {
+        if let Err(e) = save_config(&cfg) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
@@ -442,27 +337,18 @@ pub async fn handle_create(
             );
         }
 
-        // Convert JSON config to ProviderConfig and move plaintext api_key into vault
-        let provider_config = match build_provider_config_for_persistence(
+        // Convert JSON config to ProviderConfig
+        let provider_config = build_provider_config_for_persistence(
             &params.name,
             params.config,
             &cfg.presets_override,
-        ) {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("Invalid provider credentials: {}", e),
-                );
-            }
-        };
+        );
 
         // Insert provider
         cfg.providers.insert(params.name.clone(), provider_config);
 
         // Save to file (redact resolved secrets before write)
-        if let Err(e) = save_config_with_secret_redaction(&cfg) {
+        if let Err(e) = save_config(&cfg) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
@@ -539,7 +425,7 @@ pub async fn handle_delete(
         cfg.providers.remove(&params.name);
 
         // Save to file (redact resolved secrets before write)
-        if let Err(e) = save_config_with_secret_redaction(&cfg) {
+        if let Err(e) = save_config(&cfg) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
@@ -592,45 +478,25 @@ pub async fn handle_test(request: JsonRpcRequest, config_store: Arc<RwLock<Confi
     let provider_name = params.name;
     let config = params.config;
 
-    // If no api_key/secret_name in request, fall back to stored credentials
-    let (effective_api_key, effective_secret_name) = {
+    // If no api_key in request, fall back to stored credentials
+    let effective_api_key = {
         let inline_key = normalize_optional_string(config.api_key.clone());
-        let inline_secret = normalize_optional_string(config.secret_name.clone());
-        if inline_key.is_none() && inline_secret.is_none() {
+        if inline_key.is_none() {
             if let Some(ref name) = provider_name {
                 let cfg = config_store.read().await;
-                if let Some(existing) = cfg.providers.get(name) {
-                    (existing.api_key.clone(), existing.secret_name.clone())
-                } else {
-                    (None, None)
-                }
+                cfg.providers.get(name).and_then(|p| p.api_key.clone())
             } else {
-                (None, None)
+                None
             }
         } else {
-            (inline_key, inline_secret)
-        }
-    };
-
-    let test_api_key = match resolve_test_api_key(effective_api_key, effective_secret_name) {
-        Ok(value) => value,
-        Err(e) => {
-            return JsonRpcResponse::success(
-                request.id,
-                json!(TestResult {
-                    success: false,
-                    error: Some(e),
-                    latency_ms: None,
-                }),
-            );
+            inline_key
         }
     };
 
     // Convert JSON config to runtime ProviderConfig
     let provider_config = ProviderConfig {
         protocol: config.protocol,
-        api_key: test_api_key,
-        secret_name: normalize_optional_string(config.secret_name),
+        api_key: effective_api_key,
         model: config.model,
         base_url: config.base_url,
         color: config.color.unwrap_or_else(|| "#808080".to_string()),
@@ -676,7 +542,7 @@ pub async fn handle_test(request: JsonRpcRequest, config_store: Arc<RwLock<Confi
                 let mut cfg = config_store.write().await;
                 if let Some(p) = cfg.providers.get_mut(name) {
                     p.verified = true;
-                    if let Err(e) = save_config_with_secret_redaction(&cfg) {
+                    if let Err(e) = save_config(&cfg) {
                         error!(error = %e, "Failed to save config after test");
                     }
                 }
@@ -938,7 +804,7 @@ async fn set_default_provider_inner(
         }
 
         // Save to file (redact resolved secrets before write)
-        if let Err(e) = save_config_with_secret_redaction(&cfg) {
+        if let Err(e) = save_config(&cfg) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id.clone(),
@@ -1011,77 +877,6 @@ mod tests {
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["success"], true);
         assert_eq!(json["latency_ms"], 150);
-    }
-
-    #[test]
-    fn test_provider_config_json_supports_secret_name() {
-        let json = json!({
-            "protocol": "openai",
-            "enabled": true,
-            "model": "gpt-4o",
-            "secret_name": "openai_main_api_key"
-        });
-
-        let config: ProviderConfigJson = serde_json::from_value(json).unwrap();
-        assert_eq!(config.secret_name.as_deref(), Some("openai_main_api_key"));
-        assert!(config.api_key.is_none());
-    }
-
-    #[test]
-    fn test_build_provider_config_with_secret_name_only() {
-        let params = ProviderConfigJson {
-            protocol: Some("openai".to_string()),
-            enabled: true,
-            model: "gpt-4o".to_string(),
-            api_key: None,
-            secret_name: Some("openai_main_api_key".to_string()),
-            base_url: None,
-            color: None,
-            timeout_seconds: None,
-            max_tokens: None,
-            temperature: None,
-            top_p: None,
-            top_k: None,
-        };
-
-        let overrides = crate::config::presets_override::PresetsOverride::default();
-        let config = build_provider_config_for_persistence("openai-main", params, &overrides).unwrap();
-        assert_eq!(config.secret_name.as_deref(), Some("openai_main_api_key"));
-        assert!(config.api_key.is_none());
-    }
-
-    #[test]
-    fn test_redact_secret_backed_api_keys_only() {
-        let mut config = Config::default();
-
-        let mut secret_backed = ProviderConfig::test_config("gpt-4o");
-        secret_backed.api_key = Some("should-be-redacted".to_string());
-        secret_backed.secret_name = Some("openai_main_api_key".to_string());
-        config.providers.insert("openai".to_string(), secret_backed);
-
-        let mut plaintext = ProviderConfig::test_config("llama3.2");
-        plaintext.secret_name = None;
-        plaintext.api_key = Some("local-key".to_string());
-        config.providers.insert("ollama".to_string(), plaintext);
-
-        redact_secret_backed_api_keys(&mut config);
-
-        assert!(config.providers.get("openai").unwrap().api_key.is_none());
-        assert_eq!(
-            config.providers.get("ollama").unwrap().api_key.as_deref(),
-            Some("local-key")
-        );
-    }
-
-    #[test]
-    fn test_resolve_test_api_key_prefers_inline_key() {
-        let key = resolve_test_api_key(
-            Some("  sk-inline-test  ".to_string()),
-            Some("unused_secret".to_string()),
-        )
-        .unwrap();
-
-        assert_eq!(key.as_deref(), Some("sk-inline-test"));
     }
 
     #[tokio::test]

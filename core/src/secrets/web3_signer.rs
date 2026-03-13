@@ -1,14 +1,20 @@
 //! EVM-compatible signing module.
 //!
 //! Signs messages and transactions using secp256k1 private keys
-//! stored in the SecretVault. Private keys are decrypted only
-//! during the signing operation and never returned to the caller.
+//! stored in the encrypted vault (via SharedTokenManager). Private keys
+//! are decrypted only during the signing operation and never returned
+//! to the caller.
 
 use k256::ecdsa::{SigningKey, VerifyingKey};
 use std::fmt;
 
 use super::types::SecretError;
-use super::vault::SecretVault;
+
+/// Trait for resolving decrypted secrets by name.
+/// Implemented by SharedTokenManager and test mocks.
+pub trait SecretResolver {
+    fn resolve_secret(&self, name: &str) -> Result<String, SecretError>;
+}
 
 /// Intent for what should be signed.
 #[derive(Debug, Clone)]
@@ -76,20 +82,20 @@ impl fmt::Display for SignedResult {
     }
 }
 
-/// EVM signer that reads private keys from the vault.
-pub struct EvmSigner<'a> {
-    vault: &'a SecretVault,
+/// EVM signer that reads private keys from the vault via a SecretResolver.
+pub struct EvmSigner<'a, R: SecretResolver> {
+    resolver: &'a R,
 }
 
-impl<'a> EvmSigner<'a> {
-    pub fn new(vault: &'a SecretVault) -> Self {
-        Self { vault }
+impl<'a, R: SecretResolver> EvmSigner<'a, R> {
+    pub fn new(resolver: &'a R) -> Self {
+        Self { resolver }
     }
 
     /// Get the Ethereum address for a secret.
     pub fn get_address(&self, secret_name: &str) -> Result<[u8; 20], SecretError> {
-        let secret = self.vault.get(secret_name)?;
-        let signing_key = parse_private_key(secret.expose())?;
+        let secret = self.resolver.resolve_secret(secret_name)?;
+        let signing_key = parse_private_key(&secret)?;
         let verifying_key = signing_key.verifying_key();
         Ok(eth_address_from_pubkey(verifying_key))
     }
@@ -100,8 +106,8 @@ impl<'a> EvmSigner<'a> {
         secret_name: &str,
         intent: &SignIntent,
     ) -> Result<SignedResult, SecretError> {
-        let secret = self.vault.get(secret_name)?;
-        let signing_key = parse_private_key(secret.expose())?;
+        let secret = self.resolver.resolve_secret(secret_name)?;
+        let signing_key = parse_private_key(&secret)?;
         let verifying_key = signing_key.verifying_key();
         let address = eth_address_from_pubkey(verifying_key);
 
@@ -194,34 +200,54 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secrets::types::EntryMetadata;
-    use tempfile::TempDir;
+    use std::collections::HashMap;
+    use std::sync::RwLock;
 
     // Hardhat default account #0
     const TEST_PRIVATE_KEY: &str =
         "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
-    fn test_vault_with_key(dir: &TempDir) -> SecretVault {
-        let path = dir.path().join("test.vault");
-        let mut vault = SecretVault::open(&path, "test-master").unwrap();
-        vault
-            .set(
-                "wallet_main",
-                TEST_PRIVATE_KEY,
-                EntryMetadata {
-                    description: Some("Test wallet".into()),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        vault
+    /// Simple in-memory secret resolver for tests.
+    struct MockResolver {
+        secrets: RwLock<HashMap<String, String>>,
+    }
+
+    impl MockResolver {
+        fn new() -> Self {
+            Self {
+                secrets: RwLock::new(HashMap::new()),
+            }
+        }
+
+        fn insert(&self, name: &str, value: &str) {
+            self.secrets
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(name.to_string(), value.to_string());
+        }
+    }
+
+    impl SecretResolver for MockResolver {
+        fn resolve_secret(&self, name: &str) -> Result<String, SecretError> {
+            self.secrets
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(name)
+                .cloned()
+                .ok_or_else(|| SecretError::NotFound(name.to_string()))
+        }
+    }
+
+    fn test_resolver_with_key() -> MockResolver {
+        let resolver = MockResolver::new();
+        resolver.insert("wallet_main", TEST_PRIVATE_KEY);
+        resolver
     }
 
     #[test]
     fn test_get_address() {
-        let dir = TempDir::new().unwrap();
-        let vault = test_vault_with_key(&dir);
-        let signer = EvmSigner::new(&vault);
+        let resolver = test_resolver_with_key();
+        let signer = EvmSigner::new(&resolver);
 
         let address = signer.get_address("wallet_main").unwrap();
         // Hardhat account #0 address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
@@ -231,9 +257,8 @@ mod tests {
 
     #[test]
     fn test_personal_sign() {
-        let dir = TempDir::new().unwrap();
-        let vault = test_vault_with_key(&dir);
-        let signer = EvmSigner::new(&vault);
+        let resolver = test_resolver_with_key();
+        let signer = EvmSigner::new(&resolver);
 
         let intent = SignIntent::PersonalSign {
             message: b"Hello Aleph".to_vec(),
@@ -249,9 +274,8 @@ mod tests {
 
     #[test]
     fn test_typed_data_sign() {
-        let dir = TempDir::new().unwrap();
-        let vault = test_vault_with_key(&dir);
-        let signer = EvmSigner::new(&vault);
+        let resolver = test_resolver_with_key();
+        let signer = EvmSigner::new(&resolver);
 
         let intent = SignIntent::TypedData {
             domain_hash: [0xAA; 32],
@@ -263,9 +287,8 @@ mod tests {
 
     #[test]
     fn test_transaction_sign() {
-        let dir = TempDir::new().unwrap();
-        let vault = test_vault_with_key(&dir);
-        let signer = EvmSigner::new(&vault);
+        let resolver = test_resolver_with_key();
+        let signer = EvmSigner::new(&resolver);
 
         let intent = SignIntent::Transaction {
             chain_id: 1,
@@ -283,9 +306,8 @@ mod tests {
 
     #[test]
     fn test_sign_nonexistent_key_fails() {
-        let dir = TempDir::new().unwrap();
-        let vault = test_vault_with_key(&dir);
-        let signer = EvmSigner::new(&vault);
+        let resolver = test_resolver_with_key();
+        let signer = EvmSigner::new(&resolver);
 
         let intent = SignIntent::PersonalSign {
             message: b"test".to_vec(),
@@ -296,14 +318,10 @@ mod tests {
 
     #[test]
     fn test_sign_invalid_key_fails() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("bad.vault");
-        let mut vault = SecretVault::open(&path, "master").unwrap();
-        vault
-            .set("bad_key", "not-a-valid-hex-key", EntryMetadata::default())
-            .unwrap();
+        let resolver = MockResolver::new();
+        resolver.insert("bad_key", "not-a-valid-hex-key");
 
-        let signer = EvmSigner::new(&vault);
+        let signer = EvmSigner::new(&resolver);
         let intent = SignIntent::PersonalSign {
             message: b"test".to_vec(),
         };
@@ -313,9 +331,8 @@ mod tests {
 
     #[test]
     fn test_debug_never_shows_private_key() {
-        let dir = TempDir::new().unwrap();
-        let vault = test_vault_with_key(&dir);
-        let signer = EvmSigner::new(&vault);
+        let resolver = test_resolver_with_key();
+        let signer = EvmSigner::new(&resolver);
 
         let intent = SignIntent::PersonalSign {
             message: b"test".to_vec(),
@@ -329,9 +346,8 @@ mod tests {
 
     #[test]
     fn test_display_never_shows_private_key() {
-        let dir = TempDir::new().unwrap();
-        let vault = test_vault_with_key(&dir);
-        let signer = EvmSigner::new(&vault);
+        let resolver = test_resolver_with_key();
+        let signer = EvmSigner::new(&resolver);
 
         let intent = SignIntent::PersonalSign {
             message: b"test".to_vec(),

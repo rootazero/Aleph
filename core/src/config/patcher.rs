@@ -6,14 +6,12 @@
 //! - JSON Schema validation via `jsonschema` crate
 //! - Structural validation via `Config::validate()`
 //! - Conflict detection via file mtime
-//! - Secret routing to the encrypted vault
 //! - Atomic backup + save
 
 use crate::config::backup::ConfigBackup;
 use crate::config::schema::generate_config_schema;
 use crate::config::Config;
 use crate::error::{AlephError, Result};
-use crate::secrets::{EntryMetadata, SecretVault};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -98,8 +96,6 @@ pub struct ConfigPatcher {
     config: std::sync::Arc<RwLock<Config>>,
     /// Path to the config.toml file
     config_path: PathBuf,
-    /// Optional encrypted vault for secrets
-    vault: Option<std::sync::Arc<Mutex<SecretVault>>>,
     /// Backup manager for pre-change snapshots
     backup: ConfigBackup,
     /// Last known modification time of the config file (for conflict detection)
@@ -111,13 +107,11 @@ impl ConfigPatcher {
     pub fn new(
         config: std::sync::Arc<RwLock<Config>>,
         config_path: PathBuf,
-        vault: Option<std::sync::Arc<Mutex<SecretVault>>>,
         backup: ConfigBackup,
     ) -> Self {
         Self {
             config,
             config_path,
-            vault,
             backup,
             last_known_mtime: Mutex::new(None),
         }
@@ -237,12 +231,9 @@ impl ConfigPatcher {
         // 10. Check conflict (mtime) — hard error if file was modified externally
         self.check_conflict().await?;
 
-        // 11. Route secrets to vault and sanitize config
-        let mut new_config = new_config;
-        if !request.secret_fields.is_empty() {
-            self.route_secrets(&request.path, &request.secret_fields, &mut new_config)
-                .await?;
-        }
+        let new_config = new_config;
+        // Note: secret_fields are accepted for future use but currently ignored.
+        // Secrets are managed via SharedTokenManager, not the config patcher.
 
         // 12. Backup snapshot
         if self.config_path.exists() {
@@ -329,61 +320,6 @@ impl ConfigPatcher {
         Ok(())
     }
 
-    /// Route secret fields to the encrypted vault and sanitize the config.
-    ///
-    /// For each key in `secret_fields`, the plaintext value is stored in the
-    /// vault under `<path>.<field_name>`, and the corresponding provider config
-    /// is updated to use `secret_name` instead of a plaintext `api_key`.
-    pub async fn route_secrets(
-        &self,
-        path: &str,
-        secret_fields: &HashMap<String, String>,
-        config: &mut Config,
-    ) -> Result<()> {
-        let vault = match &self.vault {
-            Some(v) => v,
-            None => {
-                return Err(AlephError::invalid_config(
-                    "Secret fields specified but no vault is configured",
-                ));
-            }
-        };
-
-        let parts: Vec<&str> = path.split('.').collect();
-        let mut vault_guard = vault.lock().await;
-
-        for (field_name, secret_value) in secret_fields {
-            let vault_key = format!("{}.{}", path, field_name);
-            let metadata = EntryMetadata {
-                description: Some(format!("Auto-stored by config patcher for {}", path)),
-                provider: parts.first().map(|s| s.to_string()),
-            };
-
-            vault_guard.set(&vault_key, secret_value, metadata).map_err(|e| {
-                AlephError::invalid_config(format!(
-                    "Failed to store secret '{}' in vault: {}",
-                    vault_key, e
-                ))
-            })?;
-
-            // Sanitize: replace plaintext api_key with secret_name reference
-            if field_name == "api_key" && parts.first() == Some(&"providers") && parts.len() >= 2 {
-                if let Some(provider) = config.providers.get_mut(parts[1]) {
-                    provider.secret_name = Some(vault_key.clone());
-                    provider.api_key = None;
-                    debug!(
-                        provider = parts[1],
-                        vault_key = %vault_key,
-                        "Replaced plaintext api_key with secret_name reference"
-                    );
-                }
-            }
-
-            debug!(vault_key = %vault_key, "Secret routed to vault");
-        }
-
-        Ok(())
-    }
 }
 
 // =============================================================================
@@ -783,7 +719,7 @@ mod tests {
 
         let config = Arc::new(tokio::sync::RwLock::new(initial_config));
         let backup = ConfigBackup::new(backup_dir.clone(), 10);
-        let patcher = ConfigPatcher::new(config, config_path.clone(), None, backup);
+        let patcher = ConfigPatcher::new(config, config_path.clone(), backup);
 
         (patcher, config_path, backup_dir)
     }

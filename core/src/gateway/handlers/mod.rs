@@ -97,7 +97,6 @@ pub mod system_info;
 pub mod daemon_control;
 pub mod discord_panel;
 pub mod oauth;
-pub mod vault_config;
 pub mod arena;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
@@ -492,14 +491,6 @@ impl HandlerRegistry {
             JsonRpcResponse::error(req.id, INTERNAL_ERROR,
                 "agents.tools_schema requires initialization — wire in Gateway startup".to_string())
         });
-
-        // Vault configuration handlers (stateless — keychain + file I/O)
-        registry.register("vault.status", vault_config::handle_status);
-        registry.register("vault.storeKey", vault_config::handle_store_key);
-        registry.register("vault.deleteKey", vault_config::handle_delete_key);
-        registry.register("vault.verify", vault_config::handle_verify);
-        registry.register("vault.migrateKeys", vault_config::handle_migrate_keys);
-        registry.register("vault.disableVault", vault_config::handle_disable_vault);
 
         registry
     }

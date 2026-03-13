@@ -83,41 +83,46 @@ pub(in crate::commands::start) fn initialize_auth(
         }
     };
 
-    let shared_token_mgr = Arc::new(alephcore::gateway::security::SharedTokenManager::new(security_store.clone()));
+    // Token + vault file paths
+    let data_dir = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join(".aleph/data");
+    let vault_path = data_dir.join("secrets.vault");
+    let shared_token_mgr = Arc::new(alephcore::gateway::security::SharedTokenManager::new(security_store.clone(), vault_path));
+    let token_file = data_dir.join(".shared_token");
 
-    // Auto-generate shared token if auth is required and none exists yet
-    if auth_mode.is_auth_required() && shared_token_mgr.get_current_token().is_none() {
-        match shared_token_mgr.generate_token() {
-            Ok(token) => {
-                info!("========================================");
-                info!("  Access token: {}", token);
-                info!("========================================");
+    if auth_mode.is_auth_required() {
+        // Try to load existing token from file — reuse if it validates
+        if let Some(existing) = shared_token_mgr.try_load_token_from_file(&token_file) {
+            info!("========================================");
+            info!("  Access token (existing): {}", existing);
+            info!("========================================");
+        } else {
+            // No valid token found — generate a new one
+            match shared_token_mgr.generate_token() {
+                Ok(token) => {
+                    info!("========================================");
+                    info!("  Access token (new): {}", token);
+                    info!("========================================");
 
-                // Write to file for reference
-                let data_dir = dirs::home_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-                    .join(".aleph/data");
-
-                // Ensure directory exists
-                let _ = std::fs::create_dir_all(&data_dir);
-
-                let token_file = data_dir.join(".shared_token");
-                if let Err(e) = std::fs::write(&token_file, &token) {
-                    warn!("Failed to write token file: {}", e);
-                } else {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(
-                            &token_file,
-                            std::fs::Permissions::from_mode(0o600),
-                        );
+                    let _ = std::fs::create_dir_all(&data_dir);
+                    if let Err(e) = std::fs::write(&token_file, &token) {
+                        warn!("Failed to write token file: {}", e);
+                    } else {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = std::fs::set_permissions(
+                                &token_file,
+                                std::fs::Permissions::from_mode(0o600),
+                            );
+                        }
+                        info!("  Token saved to: {}", token_file.display());
                     }
-                    info!("  Token saved to: {}", token_file.display());
                 }
-            }
-            Err(e) => {
-                warn!("Failed to generate shared token: {}", e);
+                Err(e) => {
+                    warn!("Failed to generate shared token: {}", e);
+                }
             }
         }
     }
@@ -150,92 +155,15 @@ pub(in crate::commands::start) fn initialize_auth(
 
 // ── load_app_config ──────────────────────────────────────────────────────────
 
-/// Load and return the application config, running secrets vault migration if needed.
-pub(in crate::commands::start) async fn load_app_config() -> alephcore::Config {
-    use tracing::{info, warn, debug};
-    use alephcore::secrets::{SecretVault, resolve_master_key};
-    use alephcore::secrets::migration::{needs_migration, migrate_api_keys, save_migrated_config};
-    use alephcore::secrets::vault::resolve_provider_secrets;
-
-    let mut config = match alephcore::Config::load() {
+/// Load and return the application config.
+pub(in crate::commands::start) fn load_app_config() -> alephcore::Config {
+    match alephcore::Config::load() {
         Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("Error loading application config: {}", e);
             std::process::exit(1);
         }
-    };
-
-    if let Ok(master_key) = resolve_master_key() {
-        let vault_path = SecretVault::default_path();
-        match SecretVault::open(&vault_path, &master_key) {
-            Ok(mut vault) => {
-                if needs_migration(&config) {
-                    match migrate_api_keys(&mut config, &mut vault) {
-                        Ok(result) => {
-                            if result.migrated_count > 0 {
-                                let _ = save_migrated_config(&config);
-                                info!(count = result.migrated_count, "Migrated plaintext API keys to vault");
-                            }
-                        }
-                        Err(e) => warn!(error = %e, "Failed to migrate API keys to vault"),
-                    }
-                }
-                // Build SecretRouter with providers from config
-                use alephcore::secrets::provider::local_vault::LocalVaultProvider;
-                use alephcore::secrets::provider::onepassword::OnePasswordProvider;
-                use alephcore::secrets::provider::SecretProvider;
-                use alephcore::secrets::router::SecretRouter;
-                use std::sync::Arc;
-
-                let mut providers: std::collections::HashMap<String, Arc<dyn SecretProvider>> = std::collections::HashMap::new();
-
-                // Always register local vault as default "local" provider
-                providers.insert(
-                    "local".into(),
-                    Arc::new(LocalVaultProvider::new(vault)) as Arc<dyn SecretProvider>,
-                );
-
-                // Register external providers from config.secret_providers
-                for (key, provider_config) in &config.secret_providers {
-                    match provider_config.provider_type.as_str() {
-                        "local_vault" => {
-                            debug!(key = key.as_str(), "Local vault provider already registered as 'local'");
-                        }
-                        "1password" => {
-                            let token = provider_config
-                                .service_account_token_env
-                                .as_ref()
-                                .and_then(|env_name| std::env::var(env_name).ok());
-                            let op = OnePasswordProvider::new(
-                                provider_config.account.clone(),
-                                token,
-                            );
-                            providers.insert(key.clone(), Arc::new(op) as Arc<dyn SecretProvider>);
-                            info!(key = key.as_str(), "Registered 1Password secret provider");
-                        }
-                        other => {
-                            warn!(key = key.as_str(), provider_type = other, "Unknown secret provider type, skipping");
-                        }
-                    }
-                }
-
-                let router = SecretRouter::new(
-                    config.secrets.clone(),
-                    providers,
-                    config.secrets_config.default_provider.clone(),
-                );
-
-                if let Err(e) = resolve_provider_secrets(&mut config, &router).await {
-                    warn!(error = %e, "Failed to resolve provider secrets");
-                }
-            }
-            Err(e) => warn!(error = %e, "Failed to open secret vault"),
-        }
-    } else {
-        debug!("ALEPH_MASTER_KEY not set, secret vault disabled");
     }
-
-    config
 }
 
 // ── initialize_channels ──────────────────────────────────────────────────────

@@ -56,21 +56,8 @@ impl Config {
         for (name, provider) in &self.providers {
             let protocol = provider.protocol();
 
-            // Check credentials for cloud providers (not required for Ollama)
-            if (protocol == "openai" || protocol == "anthropic" || protocol == "gemini")
-                && provider.api_key.is_none()
-                && provider.secret_name.is_none()
-            {
-                error!(
-                    provider = %name,
-                    protocol = %protocol,
-                    "Provider missing credentials (api_key/secret_name)"
-                );
-                return Err(AlephError::invalid_config(format!(
-                    "Provider '{}' requires an API key or secret_name",
-                    name
-                )));
-            }
+            // Note: api_key is a runtime-only field populated from the encrypted vault
+            // at startup, so we don't validate credentials at config-load time.
 
             // Validate timeout
             if provider.timeout_seconds == 0 {
