@@ -443,6 +443,30 @@ pub struct OAuthStatus {
     pub error: Option<String>,
 }
 
+/// A discovered model from probe
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProbeModelInfo {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
+/// Result of providers.probe RPC call
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProbeResultInfo {
+    pub success: bool,
+    #[serde(default)]
+    pub latency_ms: Option<u64>,
+    #[serde(default)]
+    pub models: Vec<ProbeModelInfo>,
+    #[serde(default)]
+    pub model_source: String,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 pub struct ProvidersApi;
 
 impl ProvidersApi {
@@ -568,6 +592,31 @@ impl ProvidersApi {
         let result = state.rpc_call("providers.oauthStatus", params).await?;
         serde_json::from_value(result)
             .map_err(|e| format!("Failed to parse OAuth status: {}", e))
+    }
+
+    /// Probe a provider: test connection + discover available models
+    pub async fn probe(
+        state: &DashboardState,
+        protocol: &str,
+        api_key: Option<&str>,
+        base_url: Option<&str>,
+    ) -> Result<ProbeResultInfo, String> {
+        let params = serde_json::json!({
+            "protocol": protocol,
+            "api_key": api_key,
+            "base_url": base_url,
+        });
+        let result = state.rpc_call("providers.probe", params).await?;
+        serde_json::from_value(result)
+            .map_err(|e| format!("Failed to parse probe result: {}", e))
+    }
+
+    /// Check if setup is needed (no providers configured)
+    pub async fn needs_setup(state: &DashboardState) -> Result<bool, String> {
+        let result = state.rpc_call("providers.needsSetup", Value::Null).await?;
+        result.get("needs_setup")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| "Invalid response: missing needs_setup".to_string())
     }
 }
 
