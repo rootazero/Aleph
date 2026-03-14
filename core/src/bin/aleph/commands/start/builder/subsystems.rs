@@ -293,6 +293,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
     default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
     dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
+    session_manager: Option<Arc<alephcore::gateway::session_manager::SessionManager>>,
     daemon: bool,
 ) {
     let routing_config = RoutingConfig::default();
@@ -374,6 +375,14 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         inbound_router = inbound_router.with_command_parser(command_parser);
         if !daemon {
             println!("  Inbound router: slash command resolution enabled (unified registry)");
+        }
+    }
+
+    // Wire session manager for /new command and session lifecycle
+    if let Some(sm) = session_manager {
+        inbound_router = inbound_router.with_session_manager(sm);
+        if !daemon {
+            println!("  Inbound router: session management enabled (/new command)");
         }
     }
 
