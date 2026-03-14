@@ -9,7 +9,10 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{MemoryConfigApi, MemoryConfig};
+use crate::api::{
+    MemoryConfigApi, MemoryConfig, FusionStrategy, RerankProviderType,
+    RetrieveWithTraceResponse, TestRerankResponse,
+};
 use crate::context::DashboardState;
 
 #[component]
@@ -79,10 +82,14 @@ pub fn MemoryView() -> impl IntoView {
                                 <BasicSettings config=config />
                                 <AIRetrievalSettings config=config />
                                 <CompressionSettings config=config />
+                                <RetrievalPipelineSettings config=config />
+                                <RerankSettings config=config />
                                 <FactDecaySettings config=config />
                                 <GraphDecaySettings config=config />
                                 <DreamingSettings config=config />
+                                <ReflectionSettings config=config />
                                 <StorageBackupSettings config=config />
+                                <RetrievalDebugPanel />
 
                                 <div class="pt-4 border-t border-border">
                                     <button
@@ -778,6 +785,583 @@ fn StorageBackupSettings(
                     <p class="text-xs text-text-tertiary mt-1">"Maximum number of backup files to retain"</p>
                 </div>
             </div>
+        </div>
+    }
+}
+
+// ============================================================================
+// Section A: Retrieval Pipeline Settings
+// ============================================================================
+
+#[component]
+fn RetrievalPipelineSettings(
+    config: RwSignal<Option<MemoryConfig>>,
+) -> impl IntoView {
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <h2 class="text-lg font-semibold mb-2">"Retrieval Pipeline"</h2>
+            <p class="text-sm text-text-tertiary mb-4">
+                "Configure hybrid retrieval fusion and query expansion"
+            </p>
+
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium mb-1">"Fusion Strategy"</label>
+                    <select
+                        prop:value=move || config.get().map(|c| c.fusion_strategy.as_str().to_string()).unwrap_or_else(|| "rrf".to_string())
+                        on:change=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.fusion_strategy = FusionStrategy::from_str_val(&event_target_value(&ev));
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    >
+                        <option value="rrf">"Reciprocal Rank Fusion (RRF)"</option>
+                        <option value="weighted">"Weighted Linear Combination"</option>
+                    </select>
+                </div>
+
+                {move || {
+                    let is_rrf = config.get().map(|c| c.fusion_strategy == FusionStrategy::Rrf).unwrap_or(true);
+                    if is_rrf {
+                        Some(view! {
+                            <div>
+                                <label class="block text-sm font-medium mb-1">"RRF Constant k"</label>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    prop:value=move || config.get().map(|c| c.rrf_k).unwrap_or(60)
+                                    on:input=move |ev| {
+                                        if let Some(mut cfg) = config.get() {
+                                            if let Ok(val) = event_target_value(&ev).parse() {
+                                                cfg.rrf_k = val;
+                                                config.set(Some(cfg));
+                                            }
+                                        }
+                                    }
+                                    class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                                />
+                                <p class="text-xs text-text-tertiary mt-1">"Higher k reduces the impact of rank differences (default: 60)"</p>
+                            </div>
+                        })
+                    } else {
+                        None
+                    }
+                }}
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">"BM25 Bonus Weight"</label>
+                    <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="1"
+                        prop:value=move || config.get().map(|c| c.bm25_bonus_weight).unwrap_or(0.15)
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                if let Ok(val) = event_target_value(&ev).parse() {
+                                    cfg.bm25_bonus_weight = val;
+                                    config.set(Some(cfg));
+                                }
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">"Extra weight for BM25 full-text matches in fusion"</p>
+                </div>
+
+                <div class="flex items-center">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || config.get().map(|c| c.query_expansion_enabled).unwrap_or(false)
+                        on:change=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.query_expansion_enabled = event_target_checked(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="mr-2"
+                    />
+                    <label class="font-medium">"Enable Query Expansion"</label>
+                </div>
+                <p class="text-xs text-text-tertiary">"Automatically expand queries with Chinese synonyms for broader recall"</p>
+            </div>
+        </div>
+    }
+}
+
+// ============================================================================
+// Section B: Rerank Provider Settings
+// ============================================================================
+
+#[component]
+fn RerankSettings(
+    config: RwSignal<Option<MemoryConfig>>,
+) -> impl IntoView {
+    let test_status = RwSignal::new(Option::<String>::None);
+    let test_loading = RwSignal::new(false);
+
+    let test_connection = move |_| {
+        if let Some(cfg) = config.get() {
+            let state = expect_context::<DashboardState>();
+            let rerank = cfg.rerank.clone();
+            spawn_local(async move {
+                test_loading.set(true);
+                test_status.set(None);
+                let params = serde_json::to_value(&rerank).unwrap_or_default();
+                match state.rpc_call("memory.test_rerank_connection", params).await {
+                    Ok(result) => {
+                        if let Ok(resp) = serde_json::from_value::<TestRerankResponse>(result) {
+                            if resp.success {
+                                test_status.set(Some(format!(
+                                    "Success! {} results, top score: {:.3}",
+                                    resp.results_count, resp.top_score
+                                )));
+                            } else {
+                                test_status.set(Some(format!(
+                                    "Failed: {}",
+                                    resp.error.unwrap_or_else(|| "Unknown error".to_string())
+                                )));
+                            }
+                        } else {
+                            test_status.set(Some("Failed to parse response".to_string()));
+                        }
+                    }
+                    Err(e) => {
+                        test_status.set(Some(format!("RPC error: {}", e)));
+                    }
+                }
+                test_loading.set(false);
+            });
+        }
+    };
+
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <h2 class="text-lg font-semibold mb-2">"Cross-Encoder Reranking"</h2>
+            <p class="text-sm text-text-tertiary mb-4">
+                "Use a cross-encoder model to rerank retrieval results for better precision"
+            </p>
+
+            <div class="space-y-4">
+                <div class="flex items-center">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || config.get().map(|c| c.rerank.enabled).unwrap_or(false)
+                        on:change=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.rerank.enabled = event_target_checked(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="mr-2"
+                    />
+                    <label class="font-medium">"Enable Cross-Encoder Rerank"</label>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">"Provider"</label>
+                    <select
+                        prop:value=move || config.get().map(|c| c.rerank.provider.as_str().to_string()).unwrap_or_else(|| "jina".to_string())
+                        on:change=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.rerank.provider = RerankProviderType::from_str_val(&event_target_value(&ev));
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    >
+                        <option value="jina">"Jina AI"</option>
+                        <option value="siliconflow">"SiliconFlow"</option>
+                        <option value="voyage">"Voyage AI"</option>
+                        <option value="pinecone">"Pinecone"</option>
+                        <option value="vllm">"vLLM"</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">"API Base URL"</label>
+                    <input
+                        type="text"
+                        prop:value=move || config.get().map(|c| c.rerank.api_base.clone()).unwrap_or_default()
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.rerank.api_base = event_target_value(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        placeholder="Leave empty for provider default"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">"API Key"</label>
+                    <input
+                        type="password"
+                        prop:value=move || config.get().map(|c| c.rerank.api_key.clone()).unwrap_or_default()
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.rerank.api_key = event_target_value(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">"Model"</label>
+                    <input
+                        type="text"
+                        prop:value=move || config.get().map(|c| c.rerank.model.clone()).unwrap_or_else(|| "BAAI/bge-reranker-v2-m3".to_string())
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.rerank.model = event_target_value(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-1">"Timeout (ms)"</label>
+                        <input
+                            type="number"
+                            min="100"
+                            prop:value=move || config.get().map(|c| c.rerank.timeout_ms).unwrap_or(5000)
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.rerank.timeout_ms = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-1">"Rerank Weight (0.0-1.0)"</label>
+                        <input
+                            type="number"
+                            step="0.05"
+                            min="0"
+                            max="1"
+                            prop:value=move || config.get().map(|c| c.rerank.rerank_weight).unwrap_or(0.6)
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.rerank.rerank_weight = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                        <p class="text-xs text-text-tertiary mt-1">"Blend: rerank_weight * rerank + (1-w) * original"</p>
+                    </div>
+                </div>
+
+                <div class="pt-2">
+                    <button
+                        on:click=test_connection
+                        prop:disabled=move || test_loading.get()
+                        class="px-4 py-2 bg-surface-sunken text-text-primary rounded hover:bg-surface-raised border border-border disabled:opacity-50"
+                    >
+                        {move || if test_loading.get() { "Testing..." } else { "Test Connection" }}
+                    </button>
+                    {move || test_status.get().map(|msg| {
+                        let is_success = msg.starts_with("Success");
+                        let class = if is_success {
+                            "mt-2 p-2 text-sm bg-success-subtle text-success rounded"
+                        } else {
+                            "mt-2 p-2 text-sm bg-danger-subtle text-danger rounded"
+                        };
+                        view! {
+                            <div class=class>{msg}</div>
+                        }
+                    })}
+                </div>
+            </div>
+        </div>
+    }
+}
+
+// ============================================================================
+// Section D: Reflection Settings (extends Dreaming section)
+// ============================================================================
+
+#[component]
+fn ReflectionSettings(
+    config: RwSignal<Option<MemoryConfig>>,
+) -> impl IntoView {
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <h2 class="text-lg font-semibold mb-2">"Session-End Reflection"</h2>
+            <p class="text-sm text-text-tertiary mb-4">
+                "Automatically extract insights and track open loops at session end"
+            </p>
+
+            <div class="space-y-4">
+                <div class="flex items-center">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || config.get().map(|c| c.reflection.enabled).unwrap_or(false)
+                        on:change=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.reflection.enabled = event_target_checked(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="mr-2"
+                    />
+                    <label class="font-medium">"Enable Session-End Reflection"</label>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-1">"Min Turns"</label>
+                        <input
+                            type="number"
+                            min="1"
+                            prop:value=move || config.get().map(|c| c.reflection.min_turns).unwrap_or(5)
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.reflection.min_turns = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                        <p class="text-xs text-text-tertiary mt-1">"Minimum conversation turns before triggering"</p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-1">"Min User Chars"</label>
+                        <input
+                            type="number"
+                            min="0"
+                            prop:value=move || config.get().map(|c| c.reflection.min_user_chars).unwrap_or(200)
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.reflection.min_user_chars = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                        <p class="text-xs text-text-tertiary mt-1">"Minimum total user characters"</p>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">"Cooldown (minutes)"</label>
+                    <input
+                        type="number"
+                        min="1"
+                        prop:value=move || config.get().map(|c| c.reflection.cooldown_minutes).unwrap_or(30)
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                if let Ok(val) = event_target_value(&ev).parse() {
+                                    cfg.reflection.cooldown_minutes = val;
+                                    config.set(Some(cfg));
+                                }
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">"Minimum minutes between reflections"</p>
+                </div>
+
+                <div class="flex items-center">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || config.get().map(|c| c.reflection.open_loop_tracking).unwrap_or(false)
+                        on:change=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.reflection.open_loop_tracking = event_target_checked(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="mr-2"
+                    />
+                    <label class="font-medium">"Enable Open Loop Tracking"</label>
+                </div>
+                <p class="text-xs text-text-tertiary">"Track unresolved questions and tasks across sessions"</p>
+
+                <div class="flex items-center">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || config.get().map(|c| c.reflection.open_loop_inject_prompt).unwrap_or(false)
+                        on:change=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.reflection.open_loop_inject_prompt = event_target_checked(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="mr-2"
+                    />
+                    <label class="font-medium">"Inject to System Prompt"</label>
+                </div>
+                <p class="text-xs text-text-tertiary">"Inject open loop reminders into the next session's system prompt"</p>
+            </div>
+        </div>
+    }
+}
+
+// ============================================================================
+// Section E: Retrieval Debug Panel
+// ============================================================================
+
+#[component]
+fn RetrievalDebugPanel() -> impl IntoView {
+    let expanded = RwSignal::new(false);
+    let query = RwSignal::new(String::new());
+    let searching = RwSignal::new(false);
+    let trace_result = RwSignal::new(Option::<RetrieveWithTraceResponse>::None);
+    let trace_error = RwSignal::new(Option::<String>::None);
+
+    let do_search = move |_| {
+        let q = query.get();
+        if q.trim().is_empty() {
+            return;
+        }
+        let state = expect_context::<DashboardState>();
+        spawn_local(async move {
+            searching.set(true);
+            trace_error.set(None);
+            trace_result.set(None);
+            let params = serde_json::json!({ "query": q });
+            match state.rpc_call("memory.retrieve_with_trace", params).await {
+                Ok(result) => {
+                    match serde_json::from_value::<RetrieveWithTraceResponse>(result) {
+                        Ok(resp) => {
+                            trace_result.set(Some(resp));
+                        }
+                        Err(e) => {
+                            trace_error.set(Some(format!("Parse error: {}", e)));
+                        }
+                    }
+                }
+                Err(e) => {
+                    trace_error.set(Some(format!("RPC error: {}", e)));
+                }
+            }
+            searching.set(false);
+        });
+    };
+
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <button
+                on:click=move |_| expanded.set(!expanded.get())
+                class="flex items-center w-full text-left"
+            >
+                <span class="text-lg font-semibold">
+                    {move || if expanded.get() { "- Retrieval Debug Panel" } else { "+ Retrieval Debug Panel" }}
+                </span>
+                <span class="ml-2 text-sm text-text-tertiary">"(click to expand)"</span>
+            </button>
+
+            {move || {
+                if !expanded.get() {
+                    return view! { <div></div> }.into_any();
+                }
+
+                view! {
+                    <div class="mt-4 space-y-4">
+                        <div class="flex gap-2">
+                            <input
+                                type="text"
+                                prop:value=move || query.get()
+                                on:input=move |ev| {
+                                    query.set(event_target_value(&ev));
+                                }
+                                placeholder="Enter a test query..."
+                                class="flex-1 px-3 py-2 border border-border rounded bg-surface-raised"
+                            />
+                            <button
+                                on:click=do_search
+                                prop:disabled=move || searching.get()
+                                class="px-4 py-2 bg-info text-white rounded hover:bg-primary-hover disabled:opacity-50"
+                            >
+                                {move || if searching.get() { "Searching..." } else { "Search" }}
+                            </button>
+                        </div>
+
+                        {move || trace_error.get().map(|e| view! {
+                            <div class="p-3 bg-danger-subtle text-danger rounded text-sm">{e}</div>
+                        })}
+
+                        {move || trace_result.get().map(|resp| {
+                            let stages = resp.trace.stages.clone();
+                            let results = resp.results.clone();
+
+                            view! {
+                                <div class="space-y-4">
+                                    // Trace stages table
+                                    <div>
+                                        <h3 class="text-sm font-semibold mb-2">"Pipeline Stages"</h3>
+                                        <div class="overflow-x-auto">
+                                            <table class="w-full text-sm border border-border">
+                                                <thead>
+                                                    <tr class="bg-surface-sunken">
+                                                        <th class="px-3 py-2 text-left border-b border-border">"Stage"</th>
+                                                        <th class="px-3 py-2 text-right border-b border-border">"Duration (ms)"</th>
+                                                        <th class="px-3 py-2 text-right border-b border-border">"Input"</th>
+                                                        <th class="px-3 py-2 text-right border-b border-border">"Output"</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {stages.into_iter().map(|stage| {
+                                                        view! {
+                                                            <tr class="border-b border-border">
+                                                                <td class="px-3 py-2">{stage.name}</td>
+                                                                <td class="px-3 py-2 text-right">{stage.duration_ms}</td>
+                                                                <td class="px-3 py-2 text-right">{stage.input_count}</td>
+                                                                <td class="px-3 py-2 text-right">{stage.output_count}</td>
+                                                            </tr>
+                                                        }
+                                                    }).collect::<Vec<_>>()}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+
+                                    // Results
+                                    <div>
+                                        <h3 class="text-sm font-semibold mb-2">
+                                            {format!("Results ({})", results.len())}
+                                        </h3>
+                                        <div class="space-y-2">
+                                            {results.into_iter().map(|r| {
+                                                view! {
+                                                    <div class="p-3 bg-surface-sunken rounded border border-border">
+                                                        <div class="flex justify-between items-center mb-1">
+                                                            <span class="text-xs text-text-tertiary font-mono">{r.id}</span>
+                                                            <span class="text-xs font-medium">{format!("score: {:.4}", r.score)}</span>
+                                                        </div>
+                                                        <p class="text-sm">{r.content}</p>
+                                                    </div>
+                                                }
+                                            }).collect::<Vec<_>>()}
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        })}
+                    </div>
+                }.into_any()
+            }}
         </div>
     }
 }
