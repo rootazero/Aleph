@@ -613,6 +613,95 @@ pub async fn handle_create_db(
     }
 }
 
+/// Handle sessions.new RPC request — close current session and create a new epoch
+///
+/// Params:
+///   - session_key (required): current session key string
+///   - topic (optional): topic for the closing session (if omitted, no topic is stored)
+///
+/// Returns:
+///   - old_session_key: the closed session key
+///   - new_session_key: the newly created session key (epoch incremented)
+///   - topic: the topic stored (if any)
+pub async fn handle_new_session_db(
+    request: JsonRpcRequest,
+    manager: Arc<SessionManager>,
+) -> JsonRpcResponse {
+    use crate::routing::session_key::SessionKey as RoutingKey;
+
+    let session_key_str = match request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("session_key"))
+        .and_then(|v| v.as_str())
+    {
+        Some(k) => k.to_string(),
+        None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key"),
+    };
+
+    let topic = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("topic"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Parse with legacy key for close_session compatibility
+    let legacy_key = match SessionKey::from_key_string(&session_key_str) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
+        }
+    };
+
+    // Close old session
+    if let Err(e) = manager.close_session(&legacy_key, topic.clone()).await {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to close session: {}", e),
+        );
+    }
+
+    // Parse with routing key for epoch support
+    let routing_key = match RoutingKey::parse(&session_key_str) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Cannot parse session key for epoch",
+            );
+        }
+    };
+
+    // Create new epoch key
+    let new_routing_key = routing_key.with_next_epoch();
+    let new_key_str = new_routing_key.to_key_string();
+    let new_legacy_key = SessionKey::from_new(&new_routing_key);
+
+    // Create the new session
+    match manager.get_or_create(&new_legacy_key).await {
+        Ok(_meta) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "old_session_key": session_key_str,
+                "new_session_key": new_key_str,
+                "topic": topic,
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to create new session: {}", e),
+        ),
+    }
+}
+
 /// Handle session.compact RPC request with database backend
 pub async fn handle_compact_db(
     request: JsonRpcRequest,
