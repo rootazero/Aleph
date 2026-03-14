@@ -131,6 +131,7 @@ pub(in crate::commands::start) fn register_session_handlers(
     register_handler!(server, "session.create", session_handlers::handle_create_db, session_manager);
     register_handler!(server, "session.usage", session_handlers::handle_usage_db, session_manager);
     register_handler!(server, "session.compact", session_handlers::handle_compact_db, session_manager);
+    register_handler!(server, "sessions.new", session_handlers::handle_new_session_db, session_manager);
 
     if !daemon {
         println!("Session methods:");
@@ -138,6 +139,7 @@ pub(in crate::commands::start) fn register_session_handlers(
         println!("  - sessions.history: Get session message history");
         println!("  - sessions.reset  : Clear session messages");
         println!("  - sessions.delete : Delete a session");
+        println!("  - sessions.new    : Close current session and start new one");
         println!("  - session.create  : Create a new session");
         println!("  - session.usage   : Get session token/message stats");
         println!("  - session.compact : Compact session history");
