@@ -170,6 +170,17 @@ pub enum RunStatus {
     Timeout,
 }
 
+impl std::fmt::Display for RunStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunStatus::Ok => write!(f, "ok"),
+            RunStatus::Error => write!(f, "error"),
+            RunStatus::Skipped => write!(f, "skipped"),
+            RunStatus::Timeout => write!(f, "timeout"),
+        }
+    }
+}
+
 // ── ErrorReason ─────────────────────────────────────────────────────────
 
 /// Categorized error reason for job failures

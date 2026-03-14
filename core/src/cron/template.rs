@@ -2,6 +2,7 @@
 
 use std::sync::LazyLock;
 
+use crate::cron::clock::Clock;
 use crate::cron::config::{CronJob, JobRun};
 
 static ENV_RE: LazyLock<regex::Regex> =
@@ -21,8 +22,9 @@ pub fn render_template(
     job: &CronJob,
     last_run: Option<&JobRun>,
     run_count: u64,
+    clock: &dyn Clock,
 ) -> String {
-    let now = chrono::Utc::now();
+    let now = clock.now_utc();
     let mut result = template.to_string();
 
     if result.contains("{{now}}") {
@@ -57,56 +59,91 @@ pub fn render_template(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cron::clock::SystemClock;
+    use crate::cron::config::ScheduleKind;
+
+    fn make_job(name: &str) -> CronJob {
+        CronJob::new(
+            name,
+            "main",
+            "unused",
+            ScheduleKind::Cron {
+                expr: "0 0 * * * *".to_string(),
+                tz: None,
+                stagger_ms: None,
+            },
+        )
+    }
 
     #[test]
     fn test_render_basic_variables() {
-        let job = CronJob::new("Daily News", "0 0 9 * * *", "main", "unused");
-        let result = render_template("Hello {{job_name}}, run #{{run_count}}", &job, None, 5);
+        let clock = SystemClock;
+        let job = make_job("Daily News");
+        let result =
+            render_template("Hello {{job_name}}, run #{{run_count}}", &job, None, 5, &clock);
         assert_eq!(result, "Hello Daily News, run #5");
     }
 
     #[test]
     fn test_render_now_variables() {
-        let job = CronJob::new("Test", "0 0 * * * *", "main", "unused");
-        let result = render_template("Time: {{now}}", &job, None, 0);
+        let clock = SystemClock;
+        let job = make_job("Test");
+        let result = render_template("Time: {{now}}", &job, None, 0, &clock);
         assert!(result.starts_with("Time: 20"));
     }
 
     #[test]
     fn test_render_last_output_with_run() {
-        let job = CronJob::new("Test", "0 0 * * * *", "main", "unused");
+        let clock = SystemClock;
+        let job = make_job("Test");
         let run = JobRun::new("job-1").success(Some("AI response here".to_string()));
-        let result = render_template("Based on: {{last_output}}", &job, Some(&run), 1);
+        let result =
+            render_template("Based on: {{last_output}}", &job, Some(&run), 1, &clock);
         assert_eq!(result, "Based on: AI response here");
     }
 
     #[test]
     fn test_render_last_output_first_run() {
-        let job = CronJob::new("Test", "0 0 * * * *", "main", "unused");
-        let result = render_template("Prev: {{last_output}}", &job, None, 0);
+        let clock = SystemClock;
+        let job = make_job("Test");
+        let result = render_template("Prev: {{last_output}}", &job, None, 0, &clock);
         assert_eq!(result, "Prev: (first run)");
     }
 
     #[test]
     fn test_render_env_variable() {
+        let clock = SystemClock;
         std::env::set_var("ALEPH_CRON_TEST_VAR", "hello_world");
-        let job = CronJob::new("Test", "0 0 * * * *", "main", "unused");
-        let result = render_template("Val: {{env:ALEPH_CRON_TEST_VAR}}", &job, None, 0);
+        let job = make_job("Test");
+        let result =
+            render_template("Val: {{env:ALEPH_CRON_TEST_VAR}}", &job, None, 0, &clock);
         assert_eq!(result, "Val: hello_world");
         std::env::remove_var("ALEPH_CRON_TEST_VAR");
     }
 
     #[test]
     fn test_render_no_templates() {
-        let job = CronJob::new("Test", "0 0 * * * *", "main", "unused");
-        let result = render_template("Plain text no variables", &job, None, 0);
+        let clock = SystemClock;
+        let job = make_job("Test");
+        let result = render_template("Plain text no variables", &job, None, 0, &clock);
         assert_eq!(result, "Plain text no variables");
     }
 
     #[test]
     fn test_render_unknown_variable_preserved() {
-        let job = CronJob::new("Test", "0 0 * * * *", "main", "unused");
-        let result = render_template("{{unknown_var}}", &job, None, 0);
+        let clock = SystemClock;
+        let job = make_job("Test");
+        let result = render_template("{{unknown_var}}", &job, None, 0, &clock);
         assert_eq!(result, "{{unknown_var}}");
+    }
+
+    #[test]
+    fn test_render_with_fake_clock() {
+        use crate::cron::clock::testing::FakeClock;
+        // 2025-06-15T12:00:00Z
+        let clock = FakeClock::new(1_750_003_200_000);
+        let job = make_job("Test");
+        let result = render_template("Time: {{now}}", &job, None, 0, &clock);
+        assert!(result.contains("2025-06-15"));
     }
 }
