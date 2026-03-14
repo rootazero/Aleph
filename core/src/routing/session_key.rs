@@ -39,6 +39,8 @@ pub enum SessionKey {
         agent_id: String,
         #[serde(default = "default_main_key")]
         main_key: String,
+        #[serde(default)]
+        epoch: u32,
     },
 
     /// Direct message session with scope strategy
@@ -48,6 +50,8 @@ pub enum SessionKey {
         peer_id: String,
         #[serde(default)]
         dm_scope: DmScope,
+        #[serde(default)]
+        epoch: u32,
     },
 
     /// Group/channel session
@@ -95,6 +99,7 @@ impl SessionKey {
         Self::Main {
             agent_id: normalize_agent_id(&agent_id.into()),
             main_key: DEFAULT_MAIN_KEY.to_string(),
+            epoch: 0,
         }
     }
 
@@ -112,12 +117,14 @@ impl SessionKey {
             DmScope::Main => Self::Main {
                 agent_id,
                 main_key: DEFAULT_MAIN_KEY.to_string(),
+                epoch: 0,
             },
             _ => Self::DirectMessage {
                 agent_id,
                 channel: channel.into().trim().to_lowercase(),
                 peer_id: peer_id.into().trim().to_lowercase(),
                 dm_scope,
+                epoch: 0,
             },
         }
     }
@@ -193,27 +200,79 @@ impl SessionKey {
         Self::Main {
             agent_id: self.agent_id().to_string(),
             main_key: DEFAULT_MAIN_KEY.to_string(),
+            epoch: 0,
         }
     }
 
-    /// Serialize to string key for storage/lookup
-    pub fn to_key_string(&self) -> String {
+    /// Get the epoch of this session key (only Main and DirectMessage have epochs)
+    pub fn epoch(&self) -> u32 {
         match self {
-            Self::Main { agent_id, main_key } => {
+            Self::Main { epoch, .. } | Self::DirectMessage { epoch, .. } => *epoch,
+            _ => 0,
+        }
+    }
+
+    /// Return a clone with epoch incremented by 1.
+    /// For non-epoch types (Group, Task, Subagent, Ephemeral), returns clone unchanged.
+    pub fn with_next_epoch(&self) -> Self {
+        match self {
+            Self::Main { agent_id, main_key, epoch } => Self::Main {
+                agent_id: agent_id.clone(),
+                main_key: main_key.clone(),
+                epoch: epoch + 1,
+            },
+            Self::DirectMessage { agent_id, channel, peer_id, dm_scope, epoch } => Self::DirectMessage {
+                agent_id: agent_id.clone(),
+                channel: channel.clone(),
+                peer_id: peer_id.clone(),
+                dm_scope: *dm_scope,
+                epoch: epoch + 1,
+            },
+            other => other.clone(),
+        }
+    }
+
+    /// Return the base key string WITHOUT epoch suffix (for SQL LIKE queries).
+    pub fn base_key_pattern(&self) -> String {
+        match self {
+            Self::Main { agent_id, main_key, .. } => {
                 format!("agent:{}:{}", agent_id, main_key)
             }
-            Self::DirectMessage {
-                agent_id,
-                channel,
-                peer_id,
-                dm_scope,
-            } => match dm_scope {
+            Self::DirectMessage { agent_id, channel, peer_id, dm_scope, .. } => match dm_scope {
                 DmScope::Main => format!("agent:{}:main", agent_id),
                 DmScope::PerPeer => format!("agent:{}:dm:{}", agent_id, peer_id),
                 DmScope::PerChannelPeer => {
                     format!("agent:{}:{}:dm:{}", agent_id, channel, peer_id)
                 }
             },
+            // Non-epoch types: base_key_pattern == to_key_string
+            _ => self.to_key_string(),
+        }
+    }
+
+    /// Serialize to string key for storage/lookup
+    pub fn to_key_string(&self) -> String {
+        match self {
+            Self::Main { agent_id, main_key, epoch } => {
+                let base = format!("agent:{}:{}", agent_id, main_key);
+                if *epoch > 0 { format!("{}:s{}", base, epoch) } else { base }
+            }
+            Self::DirectMessage {
+                agent_id,
+                channel,
+                peer_id,
+                dm_scope,
+                epoch,
+            } => {
+                let base = match dm_scope {
+                    DmScope::Main => format!("agent:{}:main", agent_id),
+                    DmScope::PerPeer => format!("agent:{}:dm:{}", agent_id, peer_id),
+                    DmScope::PerChannelPeer => {
+                        format!("agent:{}:{}:dm:{}", agent_id, channel, peer_id)
+                    }
+                };
+                if *epoch > 0 { format!("{}:s{}", base, epoch) } else { base }
+            }
             Self::Group {
                 agent_id,
                 channel,
@@ -272,6 +331,25 @@ impl SessionKey {
 
         let rest = &parts[2..];
 
+        // Check if the last segment is an epoch suffix (pattern: sN where N is a number)
+        let (rest, epoch) = if let Some(last) = rest.last() {
+            if let Some(n_str) = last.strip_prefix('s') {
+                if let Ok(n) = n_str.parse::<u32>() {
+                    if n > 0 {
+                        (&rest[..rest.len() - 1], n)
+                    } else {
+                        (rest, 0)
+                    }
+                } else {
+                    (rest, 0)
+                }
+            } else {
+                (rest, 0)
+            }
+        } else {
+            (rest, 0)
+        };
+
         match rest {
             // agent:id:dm:peer (per-peer DM)
             ["dm", peer_id] => Some(Self::DirectMessage {
@@ -279,6 +357,7 @@ impl SessionKey {
                 channel: String::new(),
                 peer_id: peer_id.to_string(),
                 dm_scope: DmScope::PerPeer,
+                epoch,
             }),
 
             // agent:id:channel:dm:peer (per-channel-peer DM)
@@ -287,6 +366,7 @@ impl SessionKey {
                 channel: channel.to_string(),
                 peer_id: peer_id.to_string(),
                 dm_scope: DmScope::PerChannelPeer,
+                epoch,
             }),
 
             // agent:id:channel:group:peer:thread:tid
@@ -342,6 +422,7 @@ impl SessionKey {
             [main_key] => Some(Self::Main {
                 agent_id,
                 main_key: main_key.to_string(),
+                epoch,
             }),
 
             _ => None,
@@ -364,6 +445,7 @@ impl SessionKey {
                 channel: String::new(),
                 peer_id: rest.join(":"),
                 dm_scope: DmScope::PerPeer,
+                epoch: 0,
             }),
             Some(&["ephemeral", ephemeral_id]) => Some(Self::Ephemeral {
                 agent_id,
@@ -472,7 +554,7 @@ mod tests {
     fn test_main_session_key_from_any() {
         let dm = SessionKey::dm("work", "telegram", "user1", DmScope::PerPeer);
         let main = dm.main_session_key();
-        assert!(matches!(main, SessionKey::Main { agent_id, main_key } if agent_id == "work" && main_key == "main"));
+        assert!(matches!(main, SessionKey::Main { agent_id, main_key, .. } if agent_id == "work" && main_key == "main"));
     }
 
     // --- Serialization tests ---
@@ -534,7 +616,7 @@ mod tests {
     #[test]
     fn test_parse_main() {
         let key = SessionKey::parse("agent:main:main").unwrap();
-        assert!(matches!(key, SessionKey::Main { agent_id, main_key } if agent_id == "main" && main_key == "main"));
+        assert!(matches!(key, SessionKey::Main { agent_id, main_key, .. } if agent_id == "main" && main_key == "main"));
     }
 
     #[test]
@@ -593,6 +675,88 @@ mod tests {
             let s = key.to_key_string();
             let parsed = SessionKey::parse(&s).unwrap_or_else(|| panic!("Failed to parse: {}", s));
             assert_eq!(parsed.to_key_string(), s, "Roundtrip failed for: {}", s);
+        }
+    }
+
+    // --- Epoch tests ---
+
+    #[test]
+    fn test_main_with_epoch() {
+        let key = SessionKey::Main {
+            agent_id: "main".to_string(),
+            main_key: "main".to_string(),
+            epoch: 2,
+        };
+        assert_eq!(key.to_key_string(), "agent:main:main:s2");
+        assert_eq!(key.epoch(), 2);
+    }
+
+    #[test]
+    fn test_main_epoch_zero_no_suffix() {
+        let key = SessionKey::main("main");
+        assert_eq!(key.to_key_string(), "agent:main:main");
+        assert_eq!(key.epoch(), 0);
+    }
+
+    #[test]
+    fn test_parse_with_epoch() {
+        let key = SessionKey::parse("agent:main:main:s3").unwrap();
+        assert_eq!(key.epoch(), 3);
+    }
+
+    #[test]
+    fn test_parse_without_epoch_defaults_zero() {
+        let key = SessionKey::parse("agent:main:main").unwrap();
+        assert_eq!(key.epoch(), 0);
+    }
+
+    #[test]
+    fn test_dm_with_epoch_roundtrip() {
+        let key = SessionKey::DirectMessage {
+            agent_id: "main".to_string(),
+            channel: String::new(),
+            peer_id: "user123".to_string(),
+            dm_scope: DmScope::PerPeer,
+            epoch: 1,
+        };
+        assert_eq!(key.to_key_string(), "agent:main:dm:user123:s1");
+        let parsed = SessionKey::parse(&key.to_key_string()).unwrap();
+        assert_eq!(parsed.epoch(), 1);
+    }
+
+    #[test]
+    fn test_next_epoch() {
+        let key = SessionKey::main("main");
+        let next = key.with_next_epoch();
+        assert_eq!(next.epoch(), 1);
+        assert_eq!(next.to_key_string(), "agent:main:main:s1");
+        let next2 = next.with_next_epoch();
+        assert_eq!(next2.epoch(), 2);
+    }
+
+    #[test]
+    fn test_base_key_pattern() {
+        let key = SessionKey::Main {
+            agent_id: "main".to_string(),
+            main_key: "main".to_string(),
+            epoch: 3,
+        };
+        assert_eq!(key.base_key_pattern(), "agent:main:main");
+    }
+
+    #[test]
+    fn test_epoch_roundtrip_all_types() {
+        let keys_with_epoch = vec![
+            SessionKey::Main { agent_id: "work".to_string(), main_key: "main".to_string(), epoch: 5 },
+            SessionKey::DirectMessage {
+                agent_id: "main".to_string(), channel: "telegram".to_string(),
+                peer_id: "u1".to_string(), dm_scope: DmScope::PerChannelPeer, epoch: 2,
+            },
+        ];
+        for key in keys_with_epoch {
+            let s = key.to_key_string();
+            let parsed = SessionKey::parse(&s).unwrap_or_else(|| panic!("Failed to parse: {}", s));
+            assert_eq!(parsed.epoch(), key.epoch(), "Epoch roundtrip failed for: {}", s);
         }
     }
 }
