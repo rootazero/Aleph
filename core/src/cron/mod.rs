@@ -50,30 +50,42 @@
 //! service.start().await?;
 //! ```
 
-pub mod chain;
+// NOTE: chain, scheduler, delivery, webhook_target temporarily commented out
+// during CronJob/ScheduleKind rewrite. Will be restored in Tasks 14-18.
+// pub mod chain;
 pub mod clock;
 pub mod config;
-pub mod delivery;
+// pub mod delivery;
 pub mod resource;
-pub mod scheduler;
-pub mod template;
-pub mod webhook_target;
+// pub mod scheduler;
+// pub mod template; // Temporarily disabled during cron rewrite
+// pub mod webhook_target;
 
 pub use config::{
-    CronConfig, CronJob, DeliveryConfig, DeliveryMode, DeliveryOutcome,
-    DeliveryTargetConfig, JobRun, JobStatus, ScheduleKind, TriggerSource,
+    CronConfig, CronJob, CronJobView, DeliveryConfig, DeliveryMode, DeliveryOutcome,
+    DeliveryStatus, DeliveryTargetConfig, ErrorReason, ExecutionResult, FailureAlertConfig,
+    JobRun, JobSnapshot, JobStateV2, RunStatus, ScheduleKind, SessionTarget, TriggerSource,
 };
-pub use delivery::{DeliveryEngine, DeliveryTarget};
-pub use scheduler::{compute_backoff_ms, compute_next_run_at};
+// pub use delivery::{DeliveryEngine, DeliveryTarget};
+// pub use scheduler::{compute_backoff_ms, compute_next_run_at};
 
+// Imports below are used by CronService which is temporarily commented out.
+// They will be restored when CronService is rewritten in later tasks.
+#[allow(unused_imports)]
 use chrono::{DateTime, Utc};
+#[allow(unused_imports)]
 use rusqlite::{params, Connection};
+#[allow(unused_imports)]
 use std::collections::HashMap;
+#[allow(unused_imports)]
 use std::path::{Path, PathBuf};
 use crate::sync_primitives::Arc;
+#[allow(unused_imports)]
 use tokio::sync::{oneshot, RwLock, Semaphore};
 
+#[allow(unused_imports)]
 use cron::Schedule;
+#[allow(unused_imports)]
 use std::str::FromStr;
 
 /// Result type for cron operations
@@ -107,6 +119,15 @@ pub type JobExecutor = Arc<
         + Send
         + Sync,
 >;
+
+// ============================================================================
+// NOTE: CronService and its tests are temporarily disabled during the
+// CronJob/ScheduleKind rewrite (Tasks 2/2b). The entire service will be
+// rewritten in Tasks 6-10. The code below is preserved but not compiled.
+// ============================================================================
+#[cfg(any())]
+mod _disabled_cron_service {
+use super::*;
 
 /// Cron service for scheduled job execution
 pub struct CronService {
@@ -1345,3 +1366,4 @@ mod tests {
         assert!(ret.delete_after_run);
     }
 }
+} // end of #[cfg(any())] mod _disabled_cron_service

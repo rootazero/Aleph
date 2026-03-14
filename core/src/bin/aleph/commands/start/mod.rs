@@ -18,7 +18,7 @@ use alephcore::gateway::{
     SessionManager, SessionManagerConfig,
 };
 use alephcore::gateway::pairing_store::SqlitePairingStore;
-use alephcore::cron::CronService;
+// use alephcore::cron::CronService; // Temporarily disabled during cron rewrite
 use alephcore::group_chat::{GroupChatExecutor, GroupChatOrchestrator};
 use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
@@ -577,39 +577,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // Initialize CronService
-    {
-        let app_cfg = app_config_for_channels.read().await;
-        let cron_config = app_cfg.cron.clone();
-        drop(app_cfg);
-
-        match CronService::new(cron_config) {
-            Ok(mut cron_service) => {
-                // Wire JobExecutor using the provider registry (if available)
-                if can_create_provider_from_env() {
-                    if let Ok(provider_reg) = create_provider_registry_from_env() {
-                        let provider = provider_reg.default_provider();
-                        let executor: alephcore::cron::JobExecutor = Arc::new(move |_job_id, _agent_id, prompt| {
-                            let provider = provider.clone();
-                            Box::pin(async move {
-                                provider.process(&prompt, None).await.map_err(|e| format!("{e}"))
-                            }) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send>>
-                        });
-                        cron_service.set_executor(executor);
-                    }
-                }
-
-                let shared_cron: alephcore::gateway::handlers::cron::SharedCronService =
-                    Arc::new(tokio::sync::Mutex::new(cron_service));
-                register_cron_handlers(&mut server, &shared_cron, args.daemon);
-            }
-            Err(e) => {
-                if !args.daemon {
-                    eprintln!("Warning: Failed to initialize CronService: {}. Cron stubs remain.", e);
-                }
-            }
-        }
-    }
+    // CronService initialization temporarily disabled during cron rewrite (Tasks 2/2b).
+    // Will be restored when CronService is rewritten in Tasks 6-10.
+    // {
+    //     let app_cfg = app_config_for_channels.read().await;
+    //     let cron_config = app_cfg.cron.clone();
+    //     ...
+    // }
 
     // Initialize GroupChat Orchestrator + Executor
     // (shared_orch and gc_executor are kept alive for both RPC handlers and InboundMessageRouter)

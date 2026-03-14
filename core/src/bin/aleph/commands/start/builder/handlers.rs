@@ -20,8 +20,9 @@ use alephcore::gateway::handlers::models as models_handlers;
 use alephcore::gateway::handlers::workspace as workspace_handlers;
 use alephcore::gateway::handlers::identity as identity_handlers;
 use alephcore::gateway::handlers::identity::SharedIdentityResolver;
-use alephcore::gateway::handlers::cron as cron_handlers;
-use alephcore::gateway::handlers::cron::SharedCronService;
+// Temporarily disabled during cron rewrite (Tasks 2/2b)
+// use alephcore::gateway::handlers::cron as cron_handlers;
+// use alephcore::gateway::handlers::cron::SharedCronService;
 use alephcore::gateway::handlers::group_chat as group_chat_handlers;
 use alephcore::gateway::handlers::group_chat::SharedOrchestrator;
 use alephcore::group_chat::GroupChatExecutor;
@@ -692,36 +693,11 @@ pub(in crate::commands::start) fn register_identity_handlers(
 }
 
 // ─── register_cron_handlers ─────────────────────────────────────────────────
-
-pub(in crate::commands::start) fn register_cron_handlers(
-    server: &mut GatewayServer,
-    cron_service: &SharedCronService,
-    daemon: bool,
-) {
-    register_handler!(server, "cron.list", cron_handlers::handle_list, cron_service);
-    register_handler!(server, "cron.get", cron_handlers::handle_get, cron_service);
-    register_handler!(server, "cron.create", cron_handlers::handle_create, cron_service);
-    register_handler!(server, "cron.update", cron_handlers::handle_update, cron_service);
-    register_handler!(server, "cron.delete", cron_handlers::handle_delete, cron_service);
-    register_handler!(server, "cron.status", cron_handlers::handle_status, cron_service);
-    register_handler!(server, "cron.run", cron_handlers::handle_run, cron_service);
-    register_handler!(server, "cron.runs", cron_handlers::handle_runs, cron_service);
-    register_handler!(server, "cron.toggle", cron_handlers::handle_toggle, cron_service);
-
-    if !daemon {
-        println!("Cron methods:");
-        println!("  - cron.list   : List all cron jobs");
-        println!("  - cron.get    : Get cron job details");
-        println!("  - cron.create : Create a new cron job");
-        println!("  - cron.update : Update an existing cron job");
-        println!("  - cron.delete : Delete a cron job");
-        println!("  - cron.status : Get cron service status");
-        println!("  - cron.run    : Manually trigger a cron job");
-        println!("  - cron.runs   : Get job execution history");
-        println!("  - cron.toggle : Enable or disable a cron job");
-        println!();
-    }
-}
+// Temporarily disabled during cron rewrite (Tasks 2/2b).
+// Will be restored when CronService is rewritten in Tasks 6-10.
+//
+// pub(in crate::commands::start) fn register_cron_handlers(...)
+// { ... }
 
 // ─── register_group_chat_handlers ───────────────────────────────────────────
 
