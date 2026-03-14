@@ -266,3 +266,131 @@ mod tests {
         assert!(result.is_err());
     }
 }
+
+// ── Regression tests ──────────────────────────────────────────────────
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    use crate::cron::clock::testing::FakeClock;
+    use crate::cron::config::{CronJob, ScheduleKind};
+    use crate::cron::service::ops::{recompute_next_run_maintenance, recompute_next_run_full};
+
+    fn make_test_job() -> CronJob {
+        let mut job = CronJob::new(
+            "regression-test",
+            "agent-1",
+            "test prompt",
+            ScheduleKind::Every {
+                every_ms: 60_000,
+                anchor_ms: None,
+            },
+        );
+        job.created_at = 100_000;
+        job
+    }
+
+    /// OpenClaw Bug #13992: maintenance recompute must not advance past-due jobs.
+    ///
+    /// If a job is past-due (next_run_at_ms < now), the maintenance recompute
+    /// must leave it alone so the timer loop can pick it up and execute it.
+    /// Advancing it to a future time would silently skip the missed execution.
+    #[test]
+    fn regression_13992_maintenance_recompute_no_advance() {
+        let clock = FakeClock::new(1_000_000_000);
+        let mut job = make_test_job();
+        job.state.next_run_at_ms = Some(500_000_000); // Past due
+
+        recompute_next_run_maintenance(&mut job, &clock);
+        assert_eq!(
+            job.state.next_run_at_ms,
+            Some(500_000_000),
+            "maintenance recompute must NOT advance past-due jobs"
+        );
+    }
+
+    /// OpenClaw Bug #17821: MIN_REFIRE_GAP prevents spin loops.
+    ///
+    /// When a job finishes and the computed next run time is very close to
+    /// the end time, we must enforce a minimum gap to prevent the system
+    /// from spinning (executing the same job hundreds of times per second).
+    #[test]
+    fn regression_17821_min_refire_gap() {
+        let ended_at = 1_000_000;
+        let computed_next = 1_000_500; // 500ms later — too close
+        let safe = apply_min_gap(computed_next, Some(ended_at));
+        assert!(
+            safe >= ended_at + MIN_REFIRE_GAP_MS,
+            "min refire gap not enforced: safe={safe}, min={}",
+            ended_at + MIN_REFIRE_GAP_MS
+        );
+    }
+
+    /// OpenClaw Bug #17821 variant: gap should not affect jobs that are
+    /// already far enough in the future.
+    #[test]
+    fn regression_17821_no_unnecessary_delay() {
+        let ended_at = 1_000_000;
+        let computed_next = ended_at + 60_000; // 60 seconds later — plenty of gap
+        let safe = apply_min_gap(computed_next, Some(ended_at));
+        assert_eq!(
+            safe, computed_next,
+            "min refire gap should not delay jobs already far enough in the future"
+        );
+    }
+
+    /// OpenClaw Bug #13992 complement: full recompute SHOULD advance past-due.
+    ///
+    /// When a user explicitly modifies a job (update/toggle), the full
+    /// recompute must advance to a future time even if currently past-due.
+    #[test]
+    fn regression_13992_full_recompute_does_advance() {
+        let clock = FakeClock::new(1_000_000_000);
+        let mut job = make_test_job();
+        job.state.next_run_at_ms = Some(500_000_000); // Past due
+
+        recompute_next_run_full(&mut job, &clock);
+        let next = job.state.next_run_at_ms.unwrap();
+        assert!(
+            next >= 1_000_000_000,
+            "full recompute should advance past-due to future, got {next}"
+        );
+    }
+
+    /// Backoff tier boundaries: ensure consecutive errors produce
+    /// monotonically increasing delays up to the cap.
+    #[test]
+    fn regression_backoff_monotonic() {
+        let mut prev = 0_i64;
+        for errors in 1..=10 {
+            let delay = compute_backoff_ms(errors);
+            assert!(
+                delay >= prev,
+                "backoff must be monotonically increasing: errors={errors}, delay={delay}, prev={prev}"
+            );
+            prev = delay;
+        }
+    }
+
+    /// Edge case: zero-interval schedules must return None, not divide-by-zero.
+    #[test]
+    fn regression_zero_interval_no_panic() {
+        let result = compute_next_every(1_000_000, 0, 0, None);
+        assert!(result.is_none(), "zero interval must return None");
+    }
+
+    /// Edge case: very large timestamps should not overflow.
+    #[test]
+    fn regression_large_timestamp_no_overflow() {
+        // Year 2100 in ms
+        let now = 4_102_444_800_000_i64;
+        let every = 3_600_000_i64; // 1 hour
+        let anchor = 0_i64;
+        let result = compute_next_every(now, every, anchor, None);
+        assert!(result.is_some(), "large timestamp should not overflow");
+        assert!(
+            result.unwrap() >= now,
+            "result should be at or after now"
+        );
+    }
+}

@@ -33,6 +33,7 @@ pub mod clock;
 pub mod config;
 pub mod delivery;
 pub mod execution;
+pub mod history;
 pub mod schedule;
 pub mod service;
 pub mod stagger;
