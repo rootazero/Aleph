@@ -52,6 +52,7 @@ pub struct AgentPatch {
     pub skills: Option<Vec<String>>,
     pub skills_blacklist: Option<Vec<String>>,
     pub subagents: Option<SubagentPolicy>,
+    pub allowed_links: Option<Vec<String>>,
 }
 
 // =============================================================================
@@ -289,6 +290,19 @@ impl AgentManager {
             }
             t["allow"] = toml_edit::value(arr);
             agent_table["subagents"] = Item::Table(t);
+        }
+
+        if let Some(allowed_links) = &patch.allowed_links {
+            if allowed_links.is_empty() {
+                // Empty list = all allowed, remove the key
+                agent_table.remove("allowed_links");
+            } else {
+                let mut arr = Array::new();
+                for l in allowed_links {
+                    arr.push(l.as_str());
+                }
+                agent_table["allowed_links"] = toml_edit::value(arr);
+            }
         }
 
         self.save_document(&doc)?;
