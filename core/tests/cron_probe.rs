@@ -9,6 +9,9 @@ mod cron_probe {
     pub mod scheduling;
     pub mod concurrency;
     pub mod failure_recovery;
+    pub mod delivery_alert;
+    pub mod chain;
+    pub mod crash;
 }
 
 use cron_probe::harness::CronTestHarness;
