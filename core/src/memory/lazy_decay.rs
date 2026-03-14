@@ -6,7 +6,7 @@
 use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
 use crate::memory::store::{MemoryBackend, MemoryStore};
-use crate::memory::decay::{DecayConfig, MemoryStrength};
+use crate::memory::decay::{DecayConfig, MemoryStrength, TieredDecayConfig};
 use tokio::sync::mpsc;
 
 /// Result of lazy decay evaluation
@@ -28,6 +28,8 @@ struct InvalidationTask {
 /// Lazy decay processor
 pub struct LazyDecayEngine {
     config: DecayConfig,
+    /// Optional tiered config; when present, `evaluate()` uses tier-aware decay.
+    tiered_config: Option<TieredDecayConfig>,
     _db: MemoryBackend,
     /// Channel for async invalidation tasks
     invalidation_tx: mpsc::Sender<InvalidationTask>,
@@ -57,9 +59,19 @@ impl LazyDecayEngine {
 
         Self {
             config,
+            tiered_config: None,
             _db: db,
             invalidation_tx: tx,
         }
+    }
+
+    /// Create a new lazy decay engine with tiered config.
+    ///
+    /// When tiered config is set, `evaluate()` uses per-tier half-lives and
+    /// access-reinforcement instead of the flat `DecayConfig`.
+    pub fn with_tiered_config(mut self, tiered_config: TieredDecayConfig) -> Self {
+        self.tiered_config = Some(tiered_config);
+        self
     }
 
     /// Evaluate decay for a batch of facts
@@ -88,10 +100,16 @@ impl LazyDecayEngine {
                 creation_time: fact.created_at,
             };
 
-            let current_strength =
-                strength.calculate_strength_for_type(&self.config, now, &fact.fact_type);
+            let (current_strength, min_strength) = if let Some(ref tc) = self.tiered_config {
+                let s = strength.calculate_strength_tiered(tc, &fact.tier, &fact.fact_type, now);
+                let ms = tc.params_for_tier(&fact.tier).min_strength;
+                (s, ms)
+            } else {
+                let s = strength.calculate_strength_for_type(&self.config, now, &fact.fact_type);
+                (s, self.config.min_strength)
+            };
 
-            if current_strength < self.config.min_strength {
+            if current_strength < min_strength {
                 // Queue for async invalidation
                 pending_invalidations.push(fact.id.clone());
 
