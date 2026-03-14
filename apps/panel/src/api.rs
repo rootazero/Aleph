@@ -902,6 +902,24 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub memory_decay: MemoryDecayPolicy,
 
+    // Hybrid Retrieval & Reranking
+    #[serde(default)]
+    pub fusion_strategy: FusionStrategy,
+    #[serde(default = "default_rrf_k")]
+    pub rrf_k: u32,
+    #[serde(default = "default_bm25_bonus")]
+    pub bm25_bonus_weight: f32,
+    #[serde(default)]
+    pub query_expansion_enabled: bool,
+
+    // Cross-encoder reranking
+    #[serde(default)]
+    pub rerank: RerankConfig,
+
+    // Reflection
+    #[serde(default)]
+    pub reflection: ReflectionConfig,
+
     // Storage
     #[serde(default = "default_dedup_threshold")]
     pub dedup_similarity_threshold: f32,
@@ -917,6 +935,200 @@ fn default_retention_days() -> u32 { 90 }
 fn default_dedup_threshold() -> f32 { 0.95 }
 fn default_backup_enabled() -> bool { true }
 fn default_backup_max_files() -> u32 { 7 }
+fn default_rrf_k() -> u32 { 60 }
+fn default_bm25_bonus() -> f32 { 0.15 }
+
+/// Fusion strategy for hybrid retrieval
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FusionStrategy {
+    #[default]
+    Rrf,
+    Weighted,
+}
+
+impl FusionStrategy {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Rrf => "rrf",
+            Self::Weighted => "weighted",
+        }
+    }
+
+    pub fn from_str_val(s: &str) -> Self {
+        match s {
+            "weighted" => Self::Weighted,
+            _ => Self::Rrf,
+        }
+    }
+}
+
+/// Available cross-encoder reranking providers
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RerankProviderType {
+    #[default]
+    Jina,
+    SiliconFlow,
+    Voyage,
+    Pinecone,
+    Vllm,
+}
+
+impl RerankProviderType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Jina => "jina",
+            Self::SiliconFlow => "siliconflow",
+            Self::Voyage => "voyage",
+            Self::Pinecone => "pinecone",
+            Self::Vllm => "vllm",
+        }
+    }
+
+    pub fn from_str_val(s: &str) -> Self {
+        match s {
+            "siliconflow" => Self::SiliconFlow,
+            "voyage" => Self::Voyage,
+            "pinecone" => Self::Pinecone,
+            "vllm" => Self::Vllm,
+            _ => Self::Jina,
+        }
+    }
+}
+
+/// Cross-encoder reranking configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RerankConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub provider: RerankProviderType,
+    #[serde(default)]
+    pub api_base: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_rerank_model")]
+    pub model: String,
+    #[serde(default = "default_rerank_timeout")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_rerank_weight")]
+    pub rerank_weight: f32,
+}
+
+fn default_rerank_model() -> String { "BAAI/bge-reranker-v2-m3".to_string() }
+fn default_rerank_timeout() -> u64 { 5000 }
+fn default_rerank_weight() -> f32 { 0.6 }
+
+impl Default for RerankConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: RerankProviderType::default(),
+            api_base: String::new(),
+            api_key: String::new(),
+            model: default_rerank_model(),
+            timeout_ms: default_rerank_timeout(),
+            rerank_weight: default_rerank_weight(),
+        }
+    }
+}
+
+/// Session-end reflection configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReflectionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_reflection_min_turns")]
+    pub min_turns: u32,
+    #[serde(default = "default_reflection_min_chars")]
+    pub min_user_chars: u32,
+    #[serde(default = "default_reflection_cooldown")]
+    pub cooldown_minutes: u32,
+    #[serde(default)]
+    pub open_loop_tracking: bool,
+    #[serde(default)]
+    pub open_loop_inject_prompt: bool,
+}
+
+fn default_reflection_min_turns() -> u32 { 5 }
+fn default_reflection_min_chars() -> u32 { 200 }
+fn default_reflection_cooldown() -> u32 { 30 }
+
+impl Default for ReflectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_turns: default_reflection_min_turns(),
+            min_user_chars: default_reflection_min_chars(),
+            cooldown_minutes: default_reflection_cooldown(),
+            open_loop_tracking: false,
+            open_loop_inject_prompt: false,
+        }
+    }
+}
+
+/// Retrieval trace for debug panel
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RetrievalTrace {
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub timestamp: i64,
+    #[serde(default)]
+    pub stages: Vec<TraceStage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceStage {
+    pub name: String,
+    pub duration_ms: u64,
+    pub input_count: usize,
+    pub output_count: usize,
+    #[serde(default)]
+    pub scores: Vec<ScoreSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoreSnapshot {
+    pub fact_id: String,
+    pub score: f32,
+    pub rank: usize,
+}
+
+/// Response from memory.retrieve_with_trace RPC
+#[derive(Debug, Clone, Deserialize)]
+pub struct RetrieveWithTraceResponse {
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub trace: RetrievalTrace,
+    #[serde(default)]
+    pub results: Vec<TracedResult>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TracedResult {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub score: f32,
+}
+
+/// Response from memory.test_rerank_connection RPC
+#[derive(Debug, Clone, Deserialize)]
+pub struct TestRerankResponse {
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub results_count: usize,
+    #[serde(default)]
+    pub top_score: f32,
+    #[serde(default)]
+    pub error: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DreamingConfig {
