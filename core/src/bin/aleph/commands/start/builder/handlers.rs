@@ -516,6 +516,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     device_store: Arc<alephcore::gateway::device_store::DeviceStore>,
     swappable_registry: Option<Arc<alephcore::SwappableProviderRegistry>>,
+    shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
 ) {
     use alephcore::gateway::handlers::config::{handle_get_full_config, handle_patch_config};
     use alephcore::gateway::handlers::providers;
@@ -536,12 +537,12 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "config.get", handle_get_full_config, config);
     register_handler!(server, "config.patch", handle_patch_config, config_patcher, event_bus);
 
-    // Providers
-    register_handler!(server, "providers.list", providers::handle_list, config);
-    register_handler!(server, "providers.get", providers::handle_get, config);
-    register_handler!(server, "providers.create", providers::handle_create, config, event_bus);
-    register_handler!(server, "providers.update", providers::handle_update, config, event_bus);
-    register_handler!(server, "providers.delete", providers::handle_delete, config, event_bus);
+    // Providers (vault-backed API key storage)
+    register_handler!(server, "providers.list", providers::handle_list, config, shared_token_mgr);
+    register_handler!(server, "providers.get", providers::handle_get, config, shared_token_mgr);
+    register_handler!(server, "providers.create", providers::handle_create, config, event_bus, shared_token_mgr);
+    register_handler!(server, "providers.update", providers::handle_update, config, event_bus, shared_token_mgr);
+    register_handler!(server, "providers.delete", providers::handle_delete, config, event_bus, shared_token_mgr);
     // providers.setDefault needs the swappable registry for hot-switching
     if let Some(ref registry) = swappable_registry {
         register_handler!(server, "providers.setDefault", providers::handle_set_default, config, event_bus, registry);
@@ -549,7 +550,7 @@ pub(in crate::commands::start) fn register_config_handlers(
         // Fallback: config-only update without runtime provider swap
         register_handler!(server, "providers.setDefault", providers::handle_set_default_config_only, config, event_bus);
     }
-    register_handler!(server, "providers.test", providers::handle_test, config);
+    register_handler!(server, "providers.test", providers::handle_test, config, shared_token_mgr);
     register_handler!(server, "providers.needsSetup", providers::handle_needs_setup, config);
     register_handler!(server, "providers.probe", providers::handle_probe, config);
 
@@ -578,23 +579,23 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "security_config.list_devices", security_config::handle_list_devices, device_store);
     register_handler!(server, "security_config.revoke_device", security_config::handle_revoke_device, device_store, event_bus);
 
-    // Generation providers
-    register_handler!(server, "generation_providers.list", generation_providers::handle_list, config);
-    register_handler!(server, "generation_providers.get", generation_providers::handle_get, config);
-    register_handler!(server, "generation_providers.create", generation_providers::handle_create, config, event_bus);
-    register_handler!(server, "generation_providers.update", generation_providers::handle_update, config, event_bus);
-    register_handler!(server, "generation_providers.delete", generation_providers::handle_delete, config, event_bus);
+    // Generation providers (vault-backed API key storage)
+    register_handler!(server, "generation_providers.list", generation_providers::handle_list, config, shared_token_mgr);
+    register_handler!(server, "generation_providers.get", generation_providers::handle_get, config, shared_token_mgr);
+    register_handler!(server, "generation_providers.create", generation_providers::handle_create, config, event_bus, shared_token_mgr);
+    register_handler!(server, "generation_providers.update", generation_providers::handle_update, config, event_bus, shared_token_mgr);
+    register_handler!(server, "generation_providers.delete", generation_providers::handle_delete, config, event_bus, shared_token_mgr);
     register_handler!(server, "generation_providers.setDefault", generation_providers::handle_set_default, config, event_bus);
-    register_handler!(server, "generation_providers.test", generation_providers::handle_test_connection, config);
+    register_handler!(server, "generation_providers.test", generation_providers::handle_test_connection, config, shared_token_mgr);
 
-    // Embedding providers
-    register_handler!(server, "embedding_providers.list", embedding_providers::handle_list, config);
-    register_handler!(server, "embedding_providers.get", embedding_providers::handle_get, config);
-    register_handler!(server, "embedding_providers.add", embedding_providers::handle_add, config, event_bus);
-    register_handler!(server, "embedding_providers.update", embedding_providers::handle_update, config, event_bus);
-    register_handler!(server, "embedding_providers.remove", embedding_providers::handle_remove, config, event_bus);
+    // Embedding providers (vault-backed API key storage)
+    register_handler!(server, "embedding_providers.list", embedding_providers::handle_list, config, shared_token_mgr);
+    register_handler!(server, "embedding_providers.get", embedding_providers::handle_get, config, shared_token_mgr);
+    register_handler!(server, "embedding_providers.add", embedding_providers::handle_add, config, event_bus, shared_token_mgr);
+    register_handler!(server, "embedding_providers.update", embedding_providers::handle_update, config, event_bus, shared_token_mgr);
+    register_handler!(server, "embedding_providers.remove", embedding_providers::handle_remove, config, event_bus, shared_token_mgr);
     register_handler!(server, "embedding_providers.setActive", embedding_providers::handle_set_active, config, event_bus);
-    register_handler!(server, "embedding_providers.test", embedding_providers::handle_test, config);
+    register_handler!(server, "embedding_providers.test", embedding_providers::handle_test, config, shared_token_mgr);
     register_handler!(server, "embedding_providers.presets", embedding_providers::handle_presets);
 
     // Agent config
@@ -621,11 +622,11 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "generation_config.get", generation_config::handle_get, config);
     register_handler!(server, "generation_config.update", generation_config::handle_update, config, event_bus);
 
-    // Search config
-    register_handler!(server, "search_config.get", search_config::handle_get, config);
-    register_handler!(server, "search_config.update", search_config::handle_update, config, event_bus);
-    register_handler!(server, "search_config.test", search_config::handle_test, config);
-    register_handler!(server, "search_config.deleteBackend", search_config::handle_delete_backend, config, event_bus);
+    // Search config (vault-backed API key storage)
+    register_handler!(server, "search_config.get", search_config::handle_get, config, shared_token_mgr);
+    register_handler!(server, "search_config.update", search_config::handle_update, config, event_bus, shared_token_mgr);
+    register_handler!(server, "search_config.test", search_config::handle_test, config, shared_token_mgr);
+    register_handler!(server, "search_config.deleteBackend", search_config::handle_delete_backend, config, event_bus, shared_token_mgr);
 }
 
 // ─── register_daemon_handlers ────────────────────────────────────────────────

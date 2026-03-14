@@ -62,16 +62,8 @@ pub struct RemoteEmbeddingProvider {
 impl RemoteEmbeddingProvider {
     /// Create from EmbeddingProviderConfig
     pub fn from_config(config: &EmbeddingProviderConfig) -> Result<Self, AlephError> {
-        // Resolve API key: direct value > env var > empty
-        let api_key = if let Some(ref key) = config.api_key {
-            if !key.is_empty() {
-                key.clone()
-            } else {
-                Self::resolve_env_key(&config.api_key_env)?
-            }
-        } else {
-            Self::resolve_env_key(&config.api_key_env)?
-        };
+        // API key is populated from vault at runtime
+        let api_key = config.api_key.clone().unwrap_or_default();
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(config.timeout_ms))
@@ -87,17 +79,6 @@ impl RemoteEmbeddingProvider {
             batch_size: config.batch_size as usize,
             provider_id: config.id.clone(),
         })
-    }
-
-    fn resolve_env_key(env_var: &Option<String>) -> Result<String, AlephError> {
-        if let Some(ref var) = env_var {
-            match std::env::var(var) {
-                Ok(val) if !val.is_empty() => Ok(val),
-                _ => Ok(String::new()), // Not set — may be fine for Ollama
-            }
-        } else {
-            Ok(String::new())
-        }
     }
 
     /// Test connectivity by embedding a short text

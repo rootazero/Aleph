@@ -40,13 +40,10 @@ pub struct GenerationProviderConfig {
     /// Provider type identifier (openai, stability, elevenlabs, etc.)
     pub provider_type: String,
 
-    /// API key (optional, can use keychain)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Runtime-only API key (populated from encrypted vault, never persisted to config.toml)
+    #[serde(skip)]
+    #[schemars(skip)]
     pub api_key: Option<String>,
-
-    /// Reference to a secret in the vault (replaces plaintext api_key)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_name: Option<String>,
 
     /// Base URL for API (optional, for self-hosted or proxy)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -102,7 +99,6 @@ impl Default for GenerationProviderConfig {
         Self {
             provider_type: String::new(),
             api_key: None,
-            secret_name: None,
             base_url: None,
             model: None,
             enabled: true,

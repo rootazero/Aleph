@@ -118,15 +118,10 @@ pub struct SearchBackendConfig {
     /// Provider type: "tavily", "searxng", "brave", "google", "bing", "exa"
     pub provider_type: String,
 
-    /// API key (required for most providers except SearXNG)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Runtime-only API key (populated from encrypted vault, never persisted to config.toml)
+    #[serde(skip)]
     #[schemars(skip)]
     pub api_key: Option<String>,
-
-    /// Secret vault name for encrypted API key storage (optional)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub secret_name: Option<String>,
 
     /// Base URL (required for SearXNG, optional for others)
     #[serde(default, skip_serializing_if = "Option::is_none")]

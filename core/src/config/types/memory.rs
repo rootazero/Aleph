@@ -168,16 +168,10 @@ pub struct EmbeddingProviderConfig {
     pub preset: EmbeddingPreset,
     /// API endpoint (e.g., "https://api.siliconflow.cn/v1")
     pub api_base: String,
-    /// Environment variable name for API key
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key_env: Option<String>,
-    /// Direct API key (for settings UI; prefer api_key_env in production)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-    /// Secret vault name for encrypted API key storage (optional)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Runtime-only API key (populated from encrypted vault, never persisted to config.toml)
+    #[serde(skip)]
     #[schemars(skip)]
-    pub secret_name: Option<String>,
+    pub api_key: Option<String>,
     /// Model name (e.g., "BAAI/bge-m3")
     pub model: String,
     /// Output vector dimensions
@@ -201,9 +195,7 @@ impl EmbeddingProviderConfig {
             name: "SiliconFlow".to_string(),
             preset: EmbeddingPreset::SiliconFlow,
             api_base: "https://api.siliconflow.cn/v1".to_string(),
-            api_key_env: Some("SILICONFLOW_API_KEY".to_string()),
             api_key: None,
-            secret_name: None,
             model: "BAAI/bge-m3".to_string(),
             dimensions: 1024,
             batch_size: default_embedding_batch_size(),
@@ -219,9 +211,7 @@ impl EmbeddingProviderConfig {
             name: "OpenAI".to_string(),
             preset: EmbeddingPreset::OpenAi,
             api_base: "https://api.openai.com/v1".to_string(),
-            api_key_env: Some("OPENAI_API_KEY".to_string()),
             api_key: None,
-            secret_name: None,
             model: "text-embedding-3-small".to_string(),
             dimensions: 1536,
             batch_size: default_embedding_batch_size(),
@@ -237,9 +227,7 @@ impl EmbeddingProviderConfig {
             name: "Ollama".to_string(),
             preset: EmbeddingPreset::Ollama,
             api_base: "http://localhost:11434/v1".to_string(),
-            api_key_env: None,
             api_key: None,
-            secret_name: None,
             model: "nomic-embed-text".to_string(),
             dimensions: 768,
             batch_size: default_embedding_batch_size(),

@@ -17,10 +17,12 @@ use crate::config::types::memory::{EmbeddingPreset, EmbeddingProviderConfig};
 use crate::config::Config;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::security::SharedTokenManager;
 use crate::memory::embedding_provider::RemoteEmbeddingProvider;
 use serde::Deserialize;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
+use tracing::{error, warn};
 
 /// Get preset defaults for an embedding provider based on its preset field.
 /// Returns (default_api_base, default_model).
@@ -41,6 +43,23 @@ fn apply_embedding_preset_defaults(config: &mut EmbeddingProviderConfig) {
         }
         if config.model.trim().is_empty() {
             config.model = default_model.to_string();
+        }
+    }
+}
+
+/// Vault key prefix for embedding provider API keys
+fn vault_key(provider_id: &str) -> String {
+    format!("embed:{}", provider_id)
+}
+
+/// Resolve API key from vault for an embedding provider
+fn resolve_api_key(id: &str, vault: &SharedTokenManager) -> Option<String> {
+    match vault.get_secret(&vault_key(id)) {
+        Ok(Some(secret)) => Some(secret.expose().to_string()),
+        Ok(None) => None,
+        Err(e) => {
+            warn!(provider = %id, error = %e, "Failed to read embedding API key from vault");
+            None
         }
     }
 }
@@ -70,6 +89,7 @@ fn inject_is_active(provider: &EmbeddingProviderConfig, active_id: &str) -> serd
 pub async fn handle_list(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let cfg = config.read().await;
     let settings = &cfg.memory.embedding;
@@ -77,7 +97,16 @@ pub async fn handle_list(
     let providers: Vec<serde_json::Value> = settings
         .providers
         .iter()
-        .map(|p| inject_is_active(p, &settings.active_provider_id))
+        .map(|p| {
+            let mut val = inject_is_active(p, &settings.active_provider_id);
+            // Inject vault-resolved API key
+            if let Some(obj) = val.as_object_mut() {
+                if let Some(key) = resolve_api_key(&p.id, &vault) {
+                    obj.insert("api_key".into(), serde_json::json!(key));
+                }
+            }
+            val
+        })
         .collect();
 
     JsonRpcResponse::success(request.id, serde_json::json!(providers))
@@ -87,6 +116,7 @@ pub async fn handle_list(
 pub async fn handle_get(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct Params {
@@ -103,7 +133,13 @@ pub async fn handle_get(
 
     match settings.providers.iter().find(|p| p.id == params.id) {
         Some(provider) => {
-            JsonRpcResponse::success(request.id, inject_is_active(provider, &settings.active_provider_id))
+            let mut val = inject_is_active(provider, &settings.active_provider_id);
+            if let Some(obj) = val.as_object_mut() {
+                if let Some(key) = resolve_api_key(&params.id, &vault) {
+                    obj.insert("api_key".into(), serde_json::json!(key));
+                }
+            }
+            JsonRpcResponse::success(request.id, val)
         }
         None => JsonRpcResponse::error(
             request.id,
@@ -118,6 +154,7 @@ pub async fn handle_add(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct Params {
@@ -131,6 +168,21 @@ pub async fn handle_add(
 
     let mut provider_config = params.config;
     apply_embedding_preset_defaults(&mut provider_config);
+
+    // Store API key in vault
+    if let Some(ref api_key) = provider_config.api_key {
+        if !api_key.is_empty() {
+            if let Err(e) = vault.store_secret(&vault_key(&provider_config.id), api_key) {
+                error!(error = %e, "Failed to store embedding API key in vault");
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to store API key: {}", e),
+                );
+            }
+        }
+    }
+    provider_config.api_key = None;
 
     {
         let mut cfg = config.write().await;
@@ -147,7 +199,7 @@ pub async fn handle_add(
         // Add provider
         cfg.memory.embedding.providers.push(provider_config.clone());
 
-        // Save to file (redact vault-backed api_keys)
+        // Save to file
         if let Err(e) = save_config(&cfg) {
             return JsonRpcResponse::error(
                 request.id,
@@ -172,6 +224,7 @@ pub async fn handle_update(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct Params {
@@ -184,6 +237,20 @@ pub async fn handle_update(
         Err(e) => return e,
     };
 
+    // Store new API key in vault if provided
+    if let Some(ref api_key) = params.config.api_key {
+        if !api_key.is_empty() {
+            if let Err(e) = vault.store_secret(&vault_key(&params.id), api_key) {
+                error!(error = %e, "Failed to store embedding API key in vault");
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to store API key: {}", e),
+                );
+            }
+        }
+    }
+
     {
         let mut cfg = config.write().await;
 
@@ -194,6 +261,7 @@ pub async fn handle_update(
             Some(existing) => {
                 let mut new_config = params.config;
                 new_config.verified = false;
+                new_config.api_key = None; // Never persist to config
                 apply_embedding_preset_defaults(&mut new_config);
 
                 *existing = new_config;
@@ -232,6 +300,7 @@ pub async fn handle_remove(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct Params {
@@ -269,6 +338,11 @@ pub async fn handle_remove(
 
         // Remove provider
         cfg.memory.embedding.providers.retain(|p| p.id != params.id);
+
+        // Delete API key from vault
+        if let Err(e) = vault.delete_secret(&vault_key(&params.id)) {
+            warn!(provider = %params.id, error = %e, "Failed to delete embedding API key from vault");
+        }
 
         // Save to file
         if let Err(e) = cfg.save() {
@@ -364,6 +438,7 @@ pub async fn handle_set_active(
 pub async fn handle_test(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct Params {
@@ -380,12 +455,20 @@ pub async fn handle_test(
     };
 
     // Resolve the provider config to test
-    let provider_config = if let Some(cfg) = params.config {
+    let provider_config = if let Some(mut cfg) = params.config {
+        // If inline config has no api_key, try resolving from vault
+        if cfg.api_key.is_none() || cfg.api_key.as_deref() == Some("") {
+            cfg.api_key = resolve_api_key(&cfg.id, &vault);
+        }
         cfg
     } else if let Some(id) = params.id {
         let cfg = config.read().await;
         match cfg.memory.embedding.providers.iter().find(|p| p.id == id) {
-            Some(p) => p.clone(),
+            Some(p) => {
+                let mut clone = p.clone();
+                clone.api_key = resolve_api_key(&id, &vault);
+                clone
+            }
             None => {
                 return JsonRpcResponse::error(
                     request.id,
@@ -458,7 +541,6 @@ pub async fn handle_presets(request: JsonRpcRequest) -> JsonRpcResponse {
             "id": "siliconflow",
             "name": "SiliconFlow",
             "api_base": "https://api.siliconflow.cn/v1",
-            "api_key_env": "SILICONFLOW_API_KEY",
             "model": "BAAI/bge-m3",
             "dimensions": 1024,
         },
@@ -467,7 +549,6 @@ pub async fn handle_presets(request: JsonRpcRequest) -> JsonRpcResponse {
             "id": "openai",
             "name": "OpenAI",
             "api_base": "https://api.openai.com/v1",
-            "api_key_env": "OPENAI_API_KEY",
             "model": "text-embedding-3-small",
             "dimensions": 1536,
         },
@@ -476,7 +557,6 @@ pub async fn handle_presets(request: JsonRpcRequest) -> JsonRpcResponse {
             "id": "ollama",
             "name": "Ollama",
             "api_base": "http://localhost:11434/v1",
-            "api_key_env": null,
             "model": "nomic-embed-text",
             "dimensions": 768,
         },
@@ -501,6 +581,13 @@ mod tests {
         assert_eq!(presets.len(), 3);
     }
 
+    fn test_vault() -> Arc<SharedTokenManager> {
+        use crate::gateway::security::SecurityStore;
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let tmp = std::env::temp_dir().join(format!("test_vault_{}.vault", std::process::id()));
+        Arc::new(SharedTokenManager::new(store, tmp))
+    }
+
     /// Build a Config with siliconflow added and set as active
     fn config_with_siliconflow() -> Config {
         use crate::config::types::memory::EmbeddingProviderConfig;
@@ -513,8 +600,9 @@ mod tests {
     #[tokio::test]
     async fn test_handle_list_empty_default() {
         let config = Arc::new(RwLock::new(Config::default()));
+        let vault = test_vault();
         let request = JsonRpcRequest::with_id("embedding_providers.list", None, serde_json::json!(1));
-        let response = handle_list(request, config).await;
+        let response = handle_list(request, config, vault).await;
         assert!(response.is_success());
 
         let result = response.result.unwrap();
@@ -525,8 +613,9 @@ mod tests {
     #[tokio::test]
     async fn test_handle_list_with_provider() {
         let config = Arc::new(RwLock::new(config_with_siliconflow()));
+        let vault = test_vault();
         let request = JsonRpcRequest::with_id("embedding_providers.list", None, serde_json::json!(1));
-        let response = handle_list(request, config).await;
+        let response = handle_list(request, config, vault).await;
         assert!(response.is_success());
 
         let result = response.result.unwrap();
@@ -540,12 +629,13 @@ mod tests {
     #[tokio::test]
     async fn test_handle_get_found() {
         let config = Arc::new(RwLock::new(config_with_siliconflow()));
+        let vault = test_vault();
         let request = JsonRpcRequest::with_id(
             "embedding_providers.get",
             Some(serde_json::json!({ "id": "siliconflow" })),
             serde_json::json!(1),
         );
-        let response = handle_get(request, config).await;
+        let response = handle_get(request, config, vault).await;
         assert!(response.is_success());
         let result = response.result.unwrap();
         assert_eq!(result["id"].as_str().unwrap(), "siliconflow");
@@ -555,12 +645,13 @@ mod tests {
     #[tokio::test]
     async fn test_handle_get_not_found() {
         let config = Arc::new(RwLock::new(Config::default()));
+        let vault = test_vault();
         let request = JsonRpcRequest::with_id(
             "embedding_providers.get",
             Some(serde_json::json!({ "id": "nonexistent" })),
             serde_json::json!(1),
         );
-        let response = handle_get(request, config).await;
+        let response = handle_get(request, config, vault).await;
         assert!(response.is_error());
     }
 
@@ -568,12 +659,13 @@ mod tests {
     async fn test_handle_remove_rejects_active() {
         let config = Arc::new(RwLock::new(config_with_siliconflow()));
         let event_bus = Arc::new(GatewayEventBus::new());
+        let vault = test_vault();
         let request = JsonRpcRequest::with_id(
             "embedding_providers.remove",
             Some(serde_json::json!({ "id": "siliconflow" })),
             serde_json::json!(1),
         );
-        let response = handle_remove(request, config, event_bus).await;
+        let response = handle_remove(request, config, event_bus, vault).await;
         assert!(response.is_error());
     }
 }
