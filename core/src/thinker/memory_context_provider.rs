@@ -69,8 +69,9 @@ impl MemoryContextProvider {
 
     /// Fetch relevant memory context for a user query.
     ///
+    /// When `session_id` is provided, memory search is scoped to that session.
     /// Returns empty context on any failure (never blocks LLM calls).
-    pub async fn fetch(&self, query: &str, agent_id: &str) -> MemoryContext {
+    pub async fn fetch(&self, query: &str, agent_id: &str, session_id: Option<&str>) -> MemoryContext {
         if query.trim().is_empty() {
             return MemoryContext::default();
         }
@@ -86,9 +87,9 @@ impl MemoryContextProvider {
 
         let dim = embedding.len() as u32;
 
-        // 2. Search facts and memories in parallel (scoped to agent workspace)
+        // 2. Search facts and memories in parallel (scoped to agent workspace + session)
         let facts_future = self.search_facts(&embedding, dim, agent_id);
-        let memories_future = self.search_memories(&embedding, agent_id);
+        let memories_future = self.search_memories(&embedding, agent_id, session_id);
 
         let (facts, memories) = tokio::join!(facts_future, memories_future);
 
@@ -135,9 +136,11 @@ impl MemoryContextProvider {
         &self,
         embedding: &[f32],
         agent_id: &str,
+        session_id: Option<&str>,
     ) -> Result<Vec<MemorySummary>, ()> {
         let filter = MemoryFilter {
             workspace: Some(WorkspaceFilter::Single(agent_id.to_string())),
+            session_ids: session_id.map(|sid| vec![sid.to_string()]),
             ..Default::default()
         };
         self.memory_db
