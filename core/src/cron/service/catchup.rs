@@ -224,6 +224,101 @@ mod tests {
         }
     }
 
+    /// OpenClaw Bug #17554: stale running markers cleared on startup.
+    ///
+    /// If the server crashes while a job is running, the running_at_ms marker
+    /// becomes stale. On restart, catchup must detect and clear it so the
+    /// job can be rescheduled.
+    #[tokio::test]
+    async fn regression_17554_stale_running_marker() {
+        let (store, _dir) = make_store();
+        let now = 20_000_000_i64;
+        let clock = FakeClock::new(now);
+
+        {
+            let mut guard = store.lock().await;
+            let mut job = make_test_job("stale-runner");
+            job.created_at = 1_000_000;
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("stale-runner").unwrap();
+            // Set running_at 3 hours ago (well past the 2h threshold)
+            j.state.running_at_ms = Some(now - 3 * 3_600_000);
+            j.state.next_run_at_ms = Some(now + 60_000); // future, not missed
+            guard.persist().unwrap();
+        }
+
+        let report = run_startup_catchup(&store, &clock, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            report.stale_markers_cleared, 1,
+            "stale running marker should be cleared"
+        );
+
+        let guard = store.lock().await;
+        let job = guard.get_job("stale-runner").unwrap();
+        assert!(
+            job.state.running_at_ms.is_none(),
+            "running_at_ms should be None after clearing stale marker"
+        );
+    }
+
+    /// OpenClaw Bug #18892: startup catchup respects max_missed limit.
+    ///
+    /// When many jobs are missed during downtime, only max_missed should
+    /// run immediately to prevent thundering herd. The rest must be deferred
+    /// with stagger intervals.
+    #[tokio::test]
+    async fn regression_18892_startup_overload() {
+        let (store, _dir) = make_store();
+        let now = 10_000_000_i64;
+        let clock = FakeClock::new(now);
+
+        // Create 10 missed jobs
+        {
+            let mut guard = store.lock().await;
+            for i in 0..10 {
+                let mut job = make_test_job(&format!("overload-{i}"));
+                job.created_at = 1_000_000;
+                add_job(&mut guard, job, &clock);
+                let j = guard.get_job_mut(&format!("overload-{i}")).unwrap();
+                j.state.next_run_at_ms = Some(now - 10_000 + i as i64 * 100);
+            }
+            guard.persist().unwrap();
+        }
+
+        let max_missed = 3;
+        let report = run_startup_catchup(&store, &clock, Some(max_missed), Some(30_000))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            report.immediate_count, 3,
+            "only max_missed=3 should be immediate"
+        );
+        assert_eq!(
+            report.deferred_count, 7,
+            "remaining 7 should be deferred"
+        );
+
+        // Verify deferred jobs have future next_run times
+        let guard = store.lock().await;
+        let mut deferred_count = 0;
+        for i in 0..10 {
+            let job = guard.get_job(&format!("overload-{i}")).unwrap();
+            if let Some(next) = job.state.next_run_at_ms {
+                if next > now {
+                    deferred_count += 1;
+                }
+            }
+        }
+        assert_eq!(
+            deferred_count, 7,
+            "7 jobs should have deferred (future) next_run times"
+        );
+    }
+
     #[tokio::test]
     async fn no_changes_when_nothing_missed() {
         let (store, _dir) = make_store();
