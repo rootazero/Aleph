@@ -50,8 +50,9 @@
 //! service.start().await?;
 //! ```
 
-pub mod config;
 pub mod chain;
+pub mod clock;
+pub mod config;
 pub mod delivery;
 pub mod resource;
 pub mod scheduler;
