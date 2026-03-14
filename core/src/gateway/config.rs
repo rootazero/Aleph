@@ -202,6 +202,7 @@ impl AgentConfig {
             agent_dir: dirs::home_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
                 .join(format!(".aleph/agents/{}", agent_id)),
+            allowed_links: None,
         }
     }
 }

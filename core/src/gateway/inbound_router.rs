@@ -76,8 +76,33 @@ pub enum RoutingError {
     #[error("Agent not found: {0}")]
     AgentNotFound(String),
 
+    #[error("Link access denied: link \"{link_id}\" is not allowed to access agent \"{agent_id}\"")]
+    LinkNotAllowed { link_id: String, agent_id: String },
+
     #[error("Pairing error: {0}")]
     Pairing(#[from] PairingError),
+}
+
+/// Check if a link (channel) is allowed to access an agent.
+fn check_link_access(
+    allowed_links: &Option<Vec<String>>,
+    link_id: &str,
+    agent_id: &str,
+) -> Result<(), RoutingError> {
+    match allowed_links {
+        None => Ok(()),
+        Some(list) if list.is_empty() => Ok(()),
+        Some(list) => {
+            if list.iter().any(|l| l == link_id) {
+                Ok(())
+            } else {
+                Err(RoutingError::LinkNotAllowed {
+                    link_id: link_id.to_string(),
+                    agent_id: agent_id.to_string(),
+                })
+            }
+        }
+    }
 }
 
 /// Time window for inbound message deduplication (5 minutes)
@@ -541,6 +566,21 @@ impl InboundMessageRouter {
         let sender_id = msg.sender_id.as_str();
         let agent_id = self.resolve_agent_id_async(channel_id, sender_id).await;
 
+        // Check link access control
+        if let Some(ref registry) = self.agent_registry {
+            if let Some(allowed_links) = registry.get_allowed_links(&agent_id).await {
+                if let Err(e) = check_link_access(&allowed_links, channel_id, &agent_id) {
+                    warn!("[Router] {}", e);
+                    let reply = OutboundMessage::text(
+                        msg.conversation_id.as_str(),
+                        format!("\u{26d4} {}", e),
+                    );
+                    let _ = self.channel_registry.send(&msg.channel_id, reply).await;
+                    return Ok(());
+                }
+            }
+        }
+
         // Build context with resolved agent
         let ctx = self.build_context_with_agent(&msg, &agent_id);
 
@@ -651,14 +691,29 @@ impl InboundMessageRouter {
             };
 
             let reply_text = if agent_exists {
-                match manager.set_active_agent(channel_id, sender_id, agent_name) {
-                    Ok(()) => {
-                        info!("[Router] Switched agent for {}:{} -> {}", channel_id, sender_id, agent_name);
-                        format!("✅ Switched to agent: {}", agent_name)
+                // Check link access control before switching
+                let access_denied = if let Some(ref registry) = self.agent_registry {
+                    if let Some(allowed_links) = registry.get_allowed_links(agent_name).await {
+                        check_link_access(&allowed_links, channel_id, agent_name).err()
+                    } else {
+                        None
                     }
-                    Err(e) => {
-                        error!("[Router] Failed to switch agent: {}", e);
-                        format!("❌ Failed to switch agent: {}", e)
+                } else {
+                    None
+                };
+
+                if let Some(e) = access_denied {
+                    format!("\u{26d4} {}", e)
+                } else {
+                    match manager.set_active_agent(channel_id, sender_id, agent_name) {
+                        Ok(()) => {
+                            info!("[Router] Switched agent for {}:{} -> {}", channel_id, sender_id, agent_name);
+                            format!("✅ Switched to agent: {}", agent_name)
+                        }
+                        Err(e) => {
+                            error!("[Router] Failed to switch agent: {}", e);
+                            format!("❌ Failed to switch agent: {}", e)
+                        }
                     }
                 }
             } else {
@@ -783,6 +838,18 @@ impl InboundMessageRouter {
                         let reply = OutboundMessage::text(
                             msg.conversation_id.as_str(),
                             format!("Failed to create agent '{}': {}", id, e),
+                        );
+                        let _ = self.channel_registry.send(&msg.channel_id, reply).await;
+                        return Some(Ok(()));
+                    }
+                }
+
+                // Check link access control before switching
+                if let Some(allowed_links) = registry.get_allowed_links(id).await {
+                    if let Err(e) = check_link_access(&allowed_links, channel_id, id) {
+                        let reply = OutboundMessage::text(
+                            msg.conversation_id.as_str(),
+                            format!("\u{26d4} {}", e),
                         );
                         let _ = self.channel_registry.send(&msg.channel_id, reply).await;
                         return Some(Ok(()));
