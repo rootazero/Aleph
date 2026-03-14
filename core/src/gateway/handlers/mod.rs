@@ -423,6 +423,10 @@ impl HandlerRegistry {
             )
         });
 
+        // Memory utility handlers (stateless — no shared state required)
+        registry.register("memory.test_rerank_connection", memory_config::handle_test_rerank_connection);
+        registry.register("memory.retrieve_with_trace", memory_config::handle_retrieve_with_trace);
+
         // Arena handlers (placeholders - actual handlers wired with ArenaManager)
         registry.register("arena.create", |req| async move {
             JsonRpcResponse::error(
