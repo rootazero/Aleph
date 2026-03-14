@@ -92,6 +92,7 @@ pub fn resolve_route(
         let main_session_key = SessionKey::Main {
             agent_id: agent_id.clone(),
             main_key: DEFAULT_MAIN_KEY.to_string(),
+            epoch: 0,
         };
         ResolvedRoute {
             agent_id,
@@ -174,6 +175,7 @@ fn build_session_key(
         return SessionKey::Main {
             agent_id: agent_id.to_string(),
             main_key: DEFAULT_MAIN_KEY.to_string(),
+            epoch: 0,
         };
     };
 

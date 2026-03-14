@@ -156,12 +156,14 @@ impl SessionKey {
             Self::Main { agent_id, main_key } => crate::routing::SessionKey::Main {
                 agent_id: agent_id.clone(),
                 main_key: main_key.clone(),
+                epoch: 0,
             },
             Self::PerPeer { agent_id, peer_id } => crate::routing::SessionKey::DirectMessage {
                 agent_id: agent_id.clone(),
                 channel: String::new(),
                 peer_id: peer_id.clone(),
                 dm_scope: crate::routing::DmScope::PerPeer,
+                epoch: 0,
             },
             Self::Task { agent_id, task_type, task_id } => crate::routing::SessionKey::Task {
                 agent_id: agent_id.clone(),
@@ -178,7 +180,7 @@ impl SessionKey {
     /// Create legacy SessionKey from new routing SessionKey
     pub fn from_new(key: &crate::routing::SessionKey) -> Self {
         match key {
-            crate::routing::SessionKey::Main { agent_id, main_key } => Self::Main {
+            crate::routing::SessionKey::Main { agent_id, main_key, .. } => Self::Main {
                 agent_id: agent_id.clone(),
                 main_key: main_key.clone(),
             },

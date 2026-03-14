@@ -336,6 +336,7 @@ mod tests {
             channel: String::new(),
             peer_id: "user123".to_string(),
             dm_scope: DmScope::PerPeer,
+            epoch: 0,
         };
         assert_eq!(derive_channel(&key), "unknown");
     }

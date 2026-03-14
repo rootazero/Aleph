@@ -230,6 +230,7 @@ impl Workspace {
         SessionKey::Main {
             agent_id: agent_id.to_string(),
             main_key: format!("ws-{}", self.id),
+            epoch: 0,
         }
     }
 
@@ -1004,6 +1005,7 @@ impl SessionKey {
         Self::Main {
             agent_id: agent_id.into(),
             main_key: format!("ws-{}", workspace_id.into()),
+            epoch: 0,
         }
     }
 
