@@ -5,6 +5,8 @@
 mod cron_probe {
     pub mod harness;
     pub mod mock_executor;
+    pub mod lifecycle;
+    pub mod scheduling;
 }
 
 use cron_probe::harness::CronTestHarness;
