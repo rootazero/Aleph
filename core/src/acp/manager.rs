@@ -1,13 +1,11 @@
 //! AcpHarnessManager — lifecycle management for ACP harness sessions.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use crate::acp::harness::AcpHarness;
+use crate::acp::harness::{AcpHarness, HarnessMode};
 use crate::acp::harnesses::{ClaudeCodeHarness, CodexHarness, GeminiHarness};
 use crate::acp::session::AcpSession;
 use crate::error::{AlephError, Result};
@@ -26,26 +24,19 @@ pub struct AcpManagerConfig {
 }
 
 // =============================================================================
-// Prompt ID generator
-// =============================================================================
-
-static PROMPT_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-fn next_prompt_id() -> String {
-    let id = PROMPT_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("prompt-{}", id)
-}
-
-// =============================================================================
 // AcpHarnessManager
 // =============================================================================
 
 /// Manages ACP harness registrations and active sessions.
 ///
-/// Provides lazy-start semantics: sessions are spawned on first use and
-/// automatically respawned if the child process dies.
+/// Supports two execution modes:
+/// - **NativeAcp**: Persistent subprocess with ACP protocol (Gemini).
+///   Uses lazy-start sessions that are automatically respawned if dead.
+/// - **Oneshot**: Fresh process per prompt (Claude Code, Codex).
+///   No persistent session needed.
 pub struct AcpHarnessManager {
     harnesses: HashMap<String, Box<dyn AcpHarness>>,
+    /// Active sessions for NativeAcp harnesses only.
     sessions: RwLock<HashMap<String, AcpSession>>,
 }
 
@@ -101,6 +92,11 @@ impl AcpHarnessManager {
         self.harnesses.get(id).map(|h| h.display_name())
     }
 
+    /// Get the execution mode for a registered harness.
+    pub fn harness_mode(&self, id: &str) -> Option<HarnessMode> {
+        self.harnesses.get(id).map(|h| h.mode())
+    }
+
     /// Return IDs of harnesses whose executables are available on this system.
     pub async fn available_harnesses(&self) -> Vec<String> {
         let mut available = Vec::new();
@@ -113,12 +109,14 @@ impl AcpHarnessManager {
         available
     }
 
-    /// Ensure a live session exists for the given harness.
+    /// Ensure a live ACP session exists for the given NativeAcp harness.
     ///
     /// - If a session exists and is alive, this is a no-op.
     /// - If a session exists but is dead, it is removed and respawned.
     /// - If no session exists, a new one is spawned.
-    pub async fn get_or_spawn(&self, harness_id: &str, cwd: &str) -> Result<()> {
+    ///
+    /// Only meaningful for NativeAcp harnesses; oneshot harnesses don't need sessions.
+    pub async fn ensure_session(&self, harness_id: &str, cwd: &str) -> Result<()> {
         let harness = self.harnesses.get(harness_id).ok_or_else(|| {
             AlephError::tool(format!("Unknown ACP harness: '{}'", harness_id))
         })?;
@@ -144,34 +142,41 @@ impl AcpHarnessManager {
         Ok(())
     }
 
-    /// Send a prompt to the specified harness, spawning a session if needed.
+    /// Send a prompt to the specified harness, using the appropriate mode.
     ///
-    /// Returns the response text. Notifications are logged but not returned.
+    /// - **NativeAcp**: Ensures session, sends `session/prompt`, collects streaming response.
+    /// - **Oneshot**: Spawns a fresh process, waits for output.
     pub async fn prompt(
         &self,
         harness_id: &str,
         prompt_text: &str,
         cwd: &str,
     ) -> Result<String> {
-        self.get_or_spawn(harness_id, cwd).await?;
-
-        let prompt_id = next_prompt_id();
-        let timeout = self
-            .harnesses
-            .get(harness_id)
-            .map(|h| h.build_config(Some(cwd)).timeout)
-            .unwrap_or(Duration::from_secs(300));
-
-        let mut sessions = self.sessions.write().await;
-        let session = sessions.get_mut(harness_id).ok_or_else(|| {
-            AlephError::tool(format!(
-                "ACP session for '{}' disappeared unexpectedly",
-                harness_id
-            ))
+        let harness = self.harnesses.get(harness_id).ok_or_else(|| {
+            AlephError::tool(format!("Unknown ACP harness: '{}'", harness_id))
         })?;
 
-        let (text, _notifications) = session.prompt(&prompt_id, prompt_text, cwd, timeout).await?;
-        Ok(text)
+        match harness.mode() {
+            HarnessMode::NativeAcp => {
+                self.ensure_session(harness_id, cwd).await?;
+
+                let timeout = harness.build_config(Some(cwd)).timeout;
+
+                let mut sessions = self.sessions.write().await;
+                let session = sessions.get_mut(harness_id).ok_or_else(|| {
+                    AlephError::tool(format!(
+                        "ACP session for '{}' disappeared unexpectedly",
+                        harness_id
+                    ))
+                })?;
+
+                let (text, _notifications) = session.prompt(prompt_text, cwd, timeout).await?;
+                Ok(text)
+            }
+            HarnessMode::Oneshot => {
+                harness.execute_oneshot(prompt_text, cwd).await
+            }
+        }
     }
 
     /// Cancel the current operation on the specified harness.
@@ -241,6 +246,14 @@ mod tests {
     }
 
     #[test]
+    fn test_manager_harness_modes() {
+        let manager = AcpHarnessManager::new();
+        assert_eq!(manager.harness_mode("gemini"), Some(HarnessMode::NativeAcp));
+        assert_eq!(manager.harness_mode("claude-code"), Some(HarnessMode::Oneshot));
+        assert_eq!(manager.harness_mode("codex"), Some(HarnessMode::Oneshot));
+    }
+
+    #[test]
     fn test_manager_executable_override() {
         let mut config = AcpManagerConfig::default();
         config.executables.insert("claude-code".to_string(), "/custom/claude".to_string());
@@ -250,14 +263,5 @@ mod tests {
         let harness = manager.harnesses.get("claude-code").unwrap();
         let cfg = harness.build_config(None);
         assert_eq!(cfg.executable, "/custom/claude");
-    }
-
-    #[test]
-    fn test_prompt_id_generation() {
-        let id1 = next_prompt_id();
-        let id2 = next_prompt_id();
-        assert_ne!(id1, id2);
-        assert!(id1.starts_with("prompt-"));
-        assert!(id2.starts_with("prompt-"));
     }
 }

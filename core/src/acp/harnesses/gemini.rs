@@ -1,13 +1,16 @@
-//! Gemini ACP harness adapter.
+//! Gemini ACP harness adapter — native ACP over stdio.
 
 use async_trait::async_trait;
 
-use crate::acp::harness::AcpHarness;
+use crate::acp::harness::{AcpHarness, HarnessMode};
 use crate::acp::session::HarnessConfig;
 
 const DEFAULT_EXECUTABLE: &str = "gemini";
 
 /// ACP harness for Gemini CLI.
+///
+/// Uses native ACP protocol: `gemini --acp` starts a persistent NDJSON stdio session.
+/// Protocol: initialize → session/new → session/prompt (streaming agent_message_chunk).
 pub struct GeminiHarness {
     executable: String,
 }
@@ -28,6 +31,10 @@ impl AcpHarness for GeminiHarness {
 
     fn display_name(&self) -> &str {
         "Gemini"
+    }
+
+    fn mode(&self) -> HarnessMode {
+        HarnessMode::NativeAcp
     }
 
     fn build_config(&self, cwd: Option<&str>) -> HarnessConfig {

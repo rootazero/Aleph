@@ -28,46 +28,63 @@ pub struct AcpRequest {
 
 impl AcpRequest {
     /// Create an `initialize` request.
+    ///
+    /// Sends `protocolVersion: 1` (number) as required by the ACP spec.
     pub fn initialize() -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
             id: next_id(),
             method: "initialize".to_string(),
-            params: None,
-        }
-    }
-
-    /// Create a `session/new` request.
-    pub fn new_session() -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            id: next_id(),
-            method: "session/new".to_string(),
-            params: None,
-        }
-    }
-
-    /// Create a `prompt` request with session id, text, and working directory.
-    pub fn prompt(session_id: &str, text: &str, cwd: &str) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            id: next_id(),
-            method: "prompt".to_string(),
             params: Some(serde_json::json!({
-                "sessionId": session_id,
-                "text": text,
-                "cwd": cwd,
+                "protocolVersion": 1,
+                "clientInfo": {
+                    "name": "aleph",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+                "capabilities": {},
             })),
         }
     }
 
-    /// Create a `cancel` request.
-    pub fn cancel() -> Self {
+    /// Create a `session/new` request.
+    ///
+    /// Requires `cwd` (working directory) and `mcpServers` (array, can be empty).
+    pub fn new_session(cwd: &str) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
             id: next_id(),
-            method: "cancel".to_string(),
-            params: None,
+            method: "session/new".to_string(),
+            params: Some(serde_json::json!({
+                "cwd": cwd,
+                "mcpServers": [],
+            })),
+        }
+    }
+
+    /// Create a `session/prompt` request.
+    ///
+    /// The `prompt` field must be an array of content parts (e.g. `[{type: "text", text: "..."}]`).
+    pub fn prompt(session_id: &str, text: &str) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: next_id(),
+            method: "session/prompt".to_string(),
+            params: Some(serde_json::json!({
+                "sessionId": session_id,
+                "prompt": [{"type": "text", "text": text}],
+            })),
+        }
+    }
+
+    /// Create a `session/cancel` request.
+    pub fn cancel(session_id: &str) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: next_id(),
+            method: "session/cancel".to_string(),
+            params: Some(serde_json::json!({
+                "sessionId": session_id,
+            })),
         }
     }
 }
@@ -125,6 +142,38 @@ impl AcpResponse {
         // Fall back to stringified result
         Some(result.to_string())
     }
+
+    /// Extract text from a `session/update` notification's `agent_message_chunk`.
+    ///
+    /// Returns `Some(text)` if this is a streaming text chunk, `None` otherwise.
+    pub fn streaming_text(&self) -> Option<String> {
+        if self.method.as_deref() != Some("session/update") {
+            return None;
+        }
+        let params = self.params.as_ref()?;
+        let update = params.get("update")?;
+        if update.get("sessionUpdate")?.as_str()? != "agent_message_chunk" {
+            return None;
+        }
+        let content = update.get("content")?;
+        if content.get("type")?.as_str()? == "text" {
+            return content.get("text")?.as_str().map(String::from);
+        }
+        None
+    }
+
+    /// Check if this notification signals that the agent's turn is complete.
+    pub fn is_turn_complete(&self) -> bool {
+        if self.method.as_deref() != Some("session/update") {
+            return false;
+        }
+        self.params
+            .as_ref()
+            .and_then(|p| p.get("update"))
+            .and_then(|u| u.get("sessionUpdate"))
+            .and_then(|s| s.as_str())
+            == Some("turn_complete")
+    }
 }
 
 // =============================================================================
@@ -174,20 +223,24 @@ mod tests {
         let init = AcpRequest::initialize();
         assert_eq!(init.jsonrpc, "2.0");
         assert_eq!(init.method, "initialize");
-        assert!(init.params.is_none());
+        let params = init.params.unwrap();
+        assert_eq!(params["protocolVersion"], 1);
+        assert!(params["clientInfo"]["name"].as_str().is_some());
 
-        let session = AcpRequest::new_session();
+        let session = AcpRequest::new_session("/tmp");
         assert_eq!(session.method, "session/new");
+        let p = session.params.unwrap();
+        assert_eq!(p["cwd"], "/tmp");
 
-        let prompt = AcpRequest::prompt("sess-1", "hello", "/tmp");
-        assert_eq!(prompt.method, "prompt");
-        let params = prompt.params.unwrap();
-        assert_eq!(params["sessionId"], "sess-1");
-        assert_eq!(params["text"], "hello");
-        assert_eq!(params["cwd"], "/tmp");
+        let prompt = AcpRequest::prompt("sess-1", "hello");
+        assert_eq!(prompt.method, "session/prompt");
+        let p = prompt.params.unwrap();
+        assert_eq!(p["sessionId"], "sess-1");
+        assert!(p["prompt"].is_array());
+        assert_eq!(p["prompt"][0]["text"], "hello");
 
-        let cancel = AcpRequest::cancel();
-        assert_eq!(cancel.method, "cancel");
+        let cancel = AcpRequest::cancel("sess-1");
+        assert_eq!(cancel.method, "session/cancel");
     }
 
     #[test]
@@ -218,8 +271,8 @@ mod tests {
             id: None,
             result: None,
             error: None,
-            method: Some("progress".to_string()),
-            params: Some(serde_json::json!({"percent": 50})),
+            method: Some("session/update".to_string()),
+            params: Some(serde_json::json!({"sessionId": "s1"})),
         };
         assert!(!resp.is_result());
         assert!(resp.is_notification());
@@ -262,6 +315,58 @@ mod tests {
     }
 
     #[test]
+    fn test_streaming_text_extraction() {
+        let notif = AcpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("session/update".to_string()),
+            params: Some(serde_json::json!({
+                "sessionId": "s1",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "hello"}
+                }
+            })),
+        };
+        assert_eq!(notif.streaming_text(), Some("hello".to_string()));
+
+        // Non-text chunk
+        let notif2 = AcpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("session/update".to_string()),
+            params: Some(serde_json::json!({
+                "sessionId": "s1",
+                "update": {
+                    "sessionUpdate": "available_commands_update",
+                    "availableCommands": []
+                }
+            })),
+        };
+        assert_eq!(notif2.streaming_text(), None);
+    }
+
+    #[test]
+    fn test_is_turn_complete() {
+        let notif = AcpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("session/update".to_string()),
+            params: Some(serde_json::json!({
+                "sessionId": "s1",
+                "update": {"sessionUpdate": "turn_complete"}
+            })),
+        };
+        assert!(notif.is_turn_complete());
+    }
+
+    #[test]
     fn test_acp_error_display() {
         let err = AcpError {
             code: -32600,
@@ -283,10 +388,10 @@ mod tests {
 
     #[test]
     fn test_roundtrip_serialization() {
-        let req = AcpRequest::prompt("s1", "test", "/home");
+        let req = AcpRequest::prompt("s1", "test");
         let json = serde_json::to_string(&req).unwrap();
         let parsed: AcpRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.method, "prompt");
+        assert_eq!(parsed.method, "session/prompt");
         assert_eq!(parsed.id, req.id);
     }
 }

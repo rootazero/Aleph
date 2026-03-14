@@ -7,10 +7,23 @@ use tracing::debug;
 use crate::acp::session::{AcpSession, HarnessConfig};
 use crate::error::Result;
 
+/// Execution mode for a harness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HarnessMode {
+    /// Full ACP protocol over persistent stdio (e.g. Gemini CLI `--acp`).
+    NativeAcp,
+    /// Oneshot execution: spawn a new process per prompt (e.g. Claude `--print`, Codex `exec`).
+    Oneshot,
+}
+
 /// Trait for ACP-capable CLI harnesses (Claude Code, Codex, Gemini, etc.).
 ///
 /// Each harness knows how to build a `HarnessConfig` for its CLI tool
 /// and can spawn an initialized `AcpSession`.
+///
+/// Harnesses can operate in two modes:
+/// - `NativeAcp`: Full ACP protocol (initialize → session/new → session/prompt)
+/// - `Oneshot`: Spawn a new process per prompt, read stdout, done
 #[async_trait]
 pub trait AcpHarness: Send + Sync {
     /// Unique identifier (e.g. "claude-code", "codex", "gemini").
@@ -18,6 +31,9 @@ pub trait AcpHarness: Send + Sync {
 
     /// Human-readable display name (e.g. "Claude Code", "Codex", "Gemini").
     fn display_name(&self) -> &str;
+
+    /// Execution mode for this harness.
+    fn mode(&self) -> HarnessMode;
 
     /// Build the spawn configuration for this harness.
     fn build_config(&self, cwd: Option<&str>) -> HarnessConfig;
@@ -57,13 +73,24 @@ pub trait AcpHarness: Send + Sync {
 
     /// Spawn and initialize an ACP session for this harness.
     ///
-    /// Default: builds config via `build_config`, spawns via `AcpSession::spawn`,
-    /// then calls `session.initialize`.
+    /// Only meaningful for `NativeAcp` mode. For `Oneshot` mode, the manager
+    /// calls `execute_oneshot` directly instead.
     async fn spawn_session(&self, cwd: Option<&str>) -> Result<AcpSession> {
         let config = self.build_config(cwd);
         let timeout = config.timeout;
         let mut session = AcpSession::spawn(self.id(), &config).await?;
         session.initialize(timeout).await?;
         Ok(session)
+    }
+
+    /// Execute a oneshot prompt (spawn process, get result, done).
+    ///
+    /// Default implementation returns an error. Oneshot harnesses must override.
+    async fn execute_oneshot(&self, prompt: &str, cwd: &str) -> Result<String> {
+        let _ = (prompt, cwd);
+        Err(crate::error::AlephError::tool(format!(
+            "Harness '{}' does not support oneshot execution",
+            self.id()
+        )))
     }
 }

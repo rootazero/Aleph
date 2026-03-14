@@ -12,9 +12,10 @@ pub mod mock {
     /// and writes responses to `stdout`.
     ///
     /// Supported methods:
-    /// - `initialize` — returns server info
-    /// - `prompt` — echoes back with "[mock] Processed: " prefix
-    /// - `cancel` — returns `{ "cancelled": true }`
+    /// - `initialize` — returns server info with protocolVersion: 1
+    /// - `session/new` — returns a mock session ID
+    /// - `session/prompt` — echoes back with "[mock] Processed: " prefix
+    /// - `session/cancel` — returns `{ "cancelled": true }`
     /// - Unknown method — returns JSON-RPC error -32601
     pub fn run_mock_inline(stdin: impl BufRead, mut stdout: impl Write) {
         for line in stdin.lines() {
@@ -44,13 +45,50 @@ pub mod mock {
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": {
+                        "protocolVersion": 1,
                         "serverInfo": {
                             "name": "mock-acp-server",
                             "version": "0.1.0"
-                        }
+                        },
+                        "agentCapabilities": {}
                     }
                 }),
 
+                "session/new" => serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "sessionId": "mock-session-001"
+                    }
+                }),
+
+                "session/prompt" => {
+                    // Extract text from prompt array: [{type: "text", text: "..."}]
+                    let text = req
+                        .get("params")
+                        .and_then(|p| p.get("prompt"))
+                        .and_then(|arr| arr.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|item| item.get("text"))
+                        .and_then(|t| t.as_str())
+                        // Fallback: try legacy "text" field
+                        .or_else(|| {
+                            req.get("params")
+                                .and_then(|p| p.get("text"))
+                                .and_then(|t| t.as_str())
+                        })
+                        .unwrap_or("");
+                    let reply = format!("[mock] Processed: {}", text);
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "content": reply
+                        }
+                    })
+                }
+
+                // Support legacy method names for backwards compatibility
                 "prompt" => {
                     let text = req
                         .get("params")
@@ -67,7 +105,7 @@ pub mod mock {
                     })
                 }
 
-                "cancel" => serde_json::json!({
+                "session/cancel" | "cancel" => serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": {
