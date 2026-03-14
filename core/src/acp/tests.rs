@@ -1,7 +1,7 @@
 //! Comprehensive ACP module tests.
 //!
 //! Covers protocol serialization/deserialization, NDJSON format,
-//! text_content extraction, and manager configuration.
+//! text_content extraction, streaming_text, and manager configuration.
 
 use super::manager::{AcpHarnessManager, AcpManagerConfig};
 use super::mock_server::mock::run_mock_inline;
@@ -16,46 +16,45 @@ fn request_initialize_has_correct_shape() {
     let req = AcpRequest::initialize();
     assert_eq!(req.jsonrpc, "2.0");
     assert_eq!(req.method, "initialize");
-    assert!(req.params.is_none());
+    let params = req.params.as_ref().unwrap();
+    assert_eq!(params["protocolVersion"], 1);
+    assert!(params["clientInfo"]["name"].as_str().is_some());
     assert!(req.id > 0);
 }
 
 #[test]
 fn request_new_session_has_correct_method() {
-    let req = AcpRequest::new_session();
+    let req = AcpRequest::new_session("/tmp");
     assert_eq!(req.method, "session/new");
-    assert!(req.params.is_none());
+    let params = req.params.as_ref().unwrap();
+    assert_eq!(params["cwd"], "/tmp");
+    assert!(params["mcpServers"].is_array());
 }
 
 #[test]
-fn request_prompt_with_cwd() {
-    let req = AcpRequest::prompt("sess-42", "do something", "/home/user");
-    assert_eq!(req.method, "prompt");
+fn request_prompt_with_session_id() {
+    let req = AcpRequest::prompt("sess-42", "do something");
+    assert_eq!(req.method, "session/prompt");
     let params = req.params.as_ref().unwrap();
     assert_eq!(params["sessionId"], "sess-42");
-    assert_eq!(params["text"], "do something");
-    assert_eq!(params["cwd"], "/home/user");
+    assert!(params["prompt"].is_array());
+    assert_eq!(params["prompt"][0]["type"], "text");
+    assert_eq!(params["prompt"][0]["text"], "do something");
 }
 
 #[test]
-fn request_prompt_with_empty_cwd() {
-    let req = AcpRequest::prompt("s1", "hello", "");
+fn request_cancel_has_session_id() {
+    let req = AcpRequest::cancel("sess-42");
+    assert_eq!(req.method, "session/cancel");
     let params = req.params.as_ref().unwrap();
-    assert_eq!(params["cwd"], "");
-}
-
-#[test]
-fn request_cancel_has_correct_shape() {
-    let req = AcpRequest::cancel();
-    assert_eq!(req.method, "cancel");
-    assert!(req.params.is_none());
+    assert_eq!(params["sessionId"], "sess-42");
 }
 
 #[test]
 fn request_ids_always_increment() {
     let a = AcpRequest::initialize();
-    let b = AcpRequest::cancel();
-    let c = AcpRequest::prompt("s", "t", "/");
+    let b = AcpRequest::cancel("s1");
+    let c = AcpRequest::prompt("s", "t");
     assert!(b.id > a.id);
     assert!(c.id > b.id);
 }
@@ -76,12 +75,11 @@ fn parse_result_response() {
 
 #[test]
 fn parse_notification_response() {
-    let json = r#"{"jsonrpc":"2.0","method":"progress","params":{"percent":75}}"#;
+    let json = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1"}}"#;
     let resp: AcpResponse = serde_json::from_str(json).unwrap();
     assert!(!resp.is_result());
     assert!(resp.is_notification());
-    assert_eq!(resp.method.as_deref(), Some("progress"));
-    assert_eq!(resp.params.as_ref().unwrap()["percent"], 75);
+    assert_eq!(resp.method.as_deref(), Some("session/update"));
 }
 
 #[test]
@@ -100,7 +98,7 @@ fn parse_error_response() {
 
 #[test]
 fn ndjson_no_embedded_newlines_in_request() {
-    let req = AcpRequest::prompt("s1", "line1\nline2\nline3", "/tmp");
+    let req = AcpRequest::prompt("s1", "line1\nline2\nline3");
     let json = serde_json::to_string(&req).unwrap();
     // NDJSON: the serialized JSON itself must not contain raw newlines
     assert!(
@@ -132,11 +130,11 @@ fn ndjson_no_embedded_newlines_in_response() {
 #[test]
 fn ndjson_roundtrip_preserves_newlines_in_text() {
     let original_text = "hello\nworld\n";
-    let req = AcpRequest::prompt("s1", original_text, "/tmp");
+    let req = AcpRequest::prompt("s1", original_text);
     let json = serde_json::to_string(&req).unwrap();
     let parsed: AcpRequest = serde_json::from_str(&json).unwrap();
     let params = parsed.params.unwrap();
-    assert_eq!(params["text"].as_str().unwrap(), original_text);
+    assert_eq!(params["prompt"][0]["text"].as_str().unwrap(), original_text);
 }
 
 // =============================================================================
@@ -207,6 +205,80 @@ fn text_content_none_when_no_result() {
         params: None,
     };
     assert_eq!(resp.text_content(), None);
+}
+
+// =============================================================================
+// Protocol — streaming_text extraction
+// =============================================================================
+
+#[test]
+fn streaming_text_from_agent_message_chunk() {
+    let resp = AcpResponse {
+        jsonrpc: "2.0".to_string(),
+        id: None,
+        result: None,
+        error: None,
+        method: Some("session/update".to_string()),
+        params: Some(serde_json::json!({
+            "sessionId": "s1",
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "streamed text"}
+            }
+        })),
+    };
+    assert_eq!(resp.streaming_text(), Some("streamed text".to_string()));
+}
+
+#[test]
+fn streaming_text_none_for_other_updates() {
+    let resp = AcpResponse {
+        jsonrpc: "2.0".to_string(),
+        id: None,
+        result: None,
+        error: None,
+        method: Some("session/update".to_string()),
+        params: Some(serde_json::json!({
+            "sessionId": "s1",
+            "update": {
+                "sessionUpdate": "available_commands_update",
+                "availableCommands": []
+            }
+        })),
+    };
+    assert_eq!(resp.streaming_text(), None);
+}
+
+#[test]
+fn is_turn_complete_true() {
+    let resp = AcpResponse {
+        jsonrpc: "2.0".to_string(),
+        id: None,
+        result: None,
+        error: None,
+        method: Some("session/update".to_string()),
+        params: Some(serde_json::json!({
+            "sessionId": "s1",
+            "update": {"sessionUpdate": "turn_complete"}
+        })),
+    };
+    assert!(resp.is_turn_complete());
+}
+
+#[test]
+fn is_turn_complete_false_for_other() {
+    let resp = AcpResponse {
+        jsonrpc: "2.0".to_string(),
+        id: None,
+        result: None,
+        error: None,
+        method: Some("session/update".to_string()),
+        params: Some(serde_json::json!({
+            "sessionId": "s1",
+            "update": {"sessionUpdate": "agent_message_chunk"}
+        })),
+    };
+    assert!(!resp.is_turn_complete());
 }
 
 // =============================================================================
@@ -283,6 +355,16 @@ fn manager_display_names_correct() {
     assert_eq!(mgr.display_name("unknown"), None);
 }
 
+#[test]
+fn manager_harness_modes_correct() {
+    use super::harness::HarnessMode;
+    let mgr = AcpHarnessManager::new();
+    assert_eq!(mgr.harness_mode("gemini"), Some(HarnessMode::NativeAcp));
+    assert_eq!(mgr.harness_mode("claude-code"), Some(HarnessMode::Oneshot));
+    assert_eq!(mgr.harness_mode("codex"), Some(HarnessMode::Oneshot));
+    assert_eq!(mgr.harness_mode("unknown"), None);
+}
+
 // =============================================================================
 // Manager — custom configuration
 // =============================================================================
@@ -357,10 +439,9 @@ fn mock_server_initialize() {
 fn mock_server_prompt() {
     let params = serde_json::json!({
         "sessionId": "s1",
-        "text": "hello world",
-        "cwd": "/tmp"
+        "prompt": [{"type": "text", "text": "hello world"}]
     });
-    let input = build_request_line("prompt", 2, Some(params));
+    let input = build_request_line("session/prompt", 2, Some(params));
     let output = run_mock_and_collect(&input);
     let resp: AcpResponse = serde_json::from_str(&output).unwrap();
     assert_eq!(resp.id, Some(2));
@@ -376,7 +457,7 @@ fn mock_server_prompt() {
 
 #[test]
 fn mock_server_cancel() {
-    let input = build_request_line("cancel", 3, None);
+    let input = build_request_line("session/cancel", 3, None);
     let output = run_mock_and_collect(&input);
     let resp: AcpResponse = serde_json::from_str(&output).unwrap();
     assert_eq!(resp.id, Some(3));
@@ -400,7 +481,7 @@ fn mock_server_unknown_method() {
 #[test]
 fn mock_server_multiple_requests() {
     let line1 = build_request_line("initialize", 10, None);
-    let line2 = build_request_line("cancel", 11, None);
+    let line2 = build_request_line("session/cancel", 11, None);
     let input = format!("{}{}", line1, line2);
     let output = run_mock_and_collect(&input);
     let lines: Vec<&str> = output.trim().split('\n').collect();

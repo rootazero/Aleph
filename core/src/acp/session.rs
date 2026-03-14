@@ -53,14 +53,12 @@ pub struct AcpSession {
     transport: StdioTransport,
     state: AcpSessionState,
     initialized: bool,
+    /// ACP session ID returned by `session/new`.
+    acp_session_id: Option<String>,
 }
 
 impl AcpSession {
     /// Spawn a new ACP subprocess from the given config.
-    ///
-    /// Creates a `tokio::process::Command` with stdin/stdout/stderr piped,
-    /// sets working directory and env vars, then wraps stdin/stdout in a
-    /// `StdioTransport`.
     pub async fn spawn(harness_id: &str, config: &HarnessConfig) -> Result<Self> {
         let mut cmd = Command::new(&config.executable);
         cmd.args(&config.args)
@@ -107,6 +105,7 @@ impl AcpSession {
             transport,
             state: AcpSessionState::Idle,
             initialized: false,
+            acp_session_id: None,
         })
     }
 
@@ -133,13 +132,44 @@ impl AcpSession {
         Ok(())
     }
 
-    /// Send a prompt and collect the response text plus any notifications.
+    /// Create an ACP session via `session/new` and store the returned session ID.
     ///
-    /// Sets state to `Busy` while waiting, then back to `Idle` on success
-    /// or `Error` on failure.
+    /// The ACP protocol requires `session/new` after `initialize` before prompts.
+    pub async fn create_acp_session(&mut self, cwd: &str, timeout: Duration) -> Result<String> {
+        if let Some(ref sid) = self.acp_session_id {
+            return Ok(sid.clone());
+        }
+
+        let req = AcpRequest::new_session(cwd);
+        let (resp, _notifications) = self.transport.request(&req, timeout).await?;
+
+        let session_id = resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("sessionId"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                AlephError::tool(format!(
+                    "ACP harness '{}': session/new response missing sessionId",
+                    self.harness_id
+                ))
+            })?
+            .to_string();
+
+        info!(harness_id = %self.harness_id, session_id = %session_id, "ACP session created");
+        self.acp_session_id = Some(session_id.clone());
+        Ok(session_id)
+    }
+
+    /// Send a prompt and collect the full response text from streaming chunks.
+    ///
+    /// For native ACP harnesses (like Gemini), this:
+    /// 1. Ensures an ACP session exists (calls `session/new` if needed)
+    /// 2. Sends `session/prompt` with the text
+    /// 3. Collects streaming `agent_message_chunk` notifications
+    /// 4. Returns the aggregated text when `result` with `stopReason` arrives
     pub async fn prompt(
         &mut self,
-        session_id: &str,
         text: &str,
         cwd: &str,
         timeout: Duration,
@@ -153,14 +183,29 @@ impl AcpSession {
 
         self.state = AcpSessionState::Busy;
 
-        let req = AcpRequest::prompt(session_id, text, cwd);
+        // Ensure we have an ACP session
+        let session_id = self.create_acp_session(cwd, timeout).await?;
+
+        let req = AcpRequest::prompt(&session_id, text);
         match self.transport.request(&req, timeout).await {
             Ok((resp, notifications)) => {
-                let text = resp
-                    .text_content()
-                    .unwrap_or_default();
+                // Collect text from streaming agent_message_chunk notifications
+                let mut text_parts: Vec<String> = Vec::new();
+                for notif in &notifications {
+                    if let Some(chunk) = notif.streaming_text() {
+                        text_parts.push(chunk);
+                    }
+                }
+
+                // If we got streaming chunks, use them; otherwise fall back to result
+                let result_text = if !text_parts.is_empty() {
+                    text_parts.join("")
+                } else {
+                    resp.text_content().unwrap_or_default()
+                };
+
                 self.state = AcpSessionState::Idle;
-                Ok((text, notifications))
+                Ok((result_text, notifications))
             }
             Err(e) => {
                 error!(
@@ -176,7 +221,8 @@ impl AcpSession {
 
     /// Send a cancel request to interrupt the current operation.
     pub async fn cancel(&mut self) -> Result<()> {
-        let req = AcpRequest::cancel();
+        let session_id = self.acp_session_id.as_deref().unwrap_or("unknown");
+        let req = AcpRequest::cancel(session_id);
         self.transport.send(&req).await?;
         self.state = AcpSessionState::Idle;
         debug!(harness_id = %self.harness_id, "ACP cancel sent");
@@ -186,6 +232,11 @@ impl AcpSession {
     /// Get the current session state.
     pub fn state(&self) -> AcpSessionState {
         self.state
+    }
+
+    /// Get the ACP session ID, if one has been created.
+    pub fn acp_session_id(&self) -> Option<&str> {
+        self.acp_session_id.as_deref()
     }
 
     /// Check if the child process is still running.
@@ -294,6 +345,7 @@ mod tests {
         assert!(session.is_alive());
         assert_eq!(session.state(), AcpSessionState::Idle);
         assert_eq!(session.harness_id(), "test-cat");
+        assert!(session.acp_session_id().is_none());
         // Drop will call start_kill
     }
 }

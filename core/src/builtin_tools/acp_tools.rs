@@ -254,9 +254,11 @@ impl AlephTool for AcpSwitchTool {
             return Err(AlephError::tool(err_msg));
         }
 
-        // Pre-spawn session so the switch is immediate
-        let cwd = resolve_cwd(None);
-        self.manager.get_or_spawn(&args.target, &cwd).await?;
+        // Pre-spawn session for NativeAcp harnesses so the switch is immediate
+        if self.manager.harness_mode(&args.target) == Some(crate::acp::harness::HarnessMode::NativeAcp) {
+            let cwd = resolve_cwd(None);
+            self.manager.ensure_session(&args.target, &cwd).await?;
+        }
 
         let display_name = self
             .manager
