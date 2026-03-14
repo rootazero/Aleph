@@ -299,6 +299,8 @@ pub struct MemoryFilter {
     pub workspace: Option<WorkspaceFilter>,
     /// Only memories created at or after this Unix timestamp (seconds).
     pub after_timestamp: Option<i64>,
+    /// Filter to memories from specific sessions.
+    pub session_ids: Option<Vec<String>>,
 }
 
 impl MemoryFilter {
@@ -339,6 +341,15 @@ impl MemoryFilter {
 
         if let Some(ts) = self.after_timestamp {
             clauses.push(format!("created_at >= {}", ts));
+        }
+
+        if let Some(ref ids) = self.session_ids {
+            if !ids.is_empty() {
+                let escaped: Vec<String> = ids.iter()
+                    .map(|id| format!("'{}'", escape_sql_string(id)))
+                    .collect();
+                clauses.push(format!("session_id IN ({})", escaped.join(", ")));
+            }
         }
 
         if clauses.is_empty() {
@@ -515,6 +526,40 @@ mod tests {
         assert!(sql.contains("scope = 'global'"));
         assert!(sql.contains("scope = 'workspace'"));
         assert!(!sql.contains("persona"));
+    }
+
+    #[test]
+    fn memory_filter_with_session_ids() {
+        let f = MemoryFilter {
+            session_ids: Some(vec![
+                "agent:main:main".to_string(),
+                "agent:main:main:s1".to_string(),
+            ]),
+            ..Default::default()
+        };
+        let sql = f.to_lance_filter().unwrap();
+        assert!(sql.contains("session_id IN ("));
+        assert!(sql.contains("'agent:main:main'"));
+        assert!(sql.contains("'agent:main:main:s1'"));
+    }
+
+    #[test]
+    fn memory_filter_empty_session_ids_no_filter() {
+        let f = MemoryFilter {
+            session_ids: Some(vec![]),
+            ..Default::default()
+        };
+        assert!(f.to_lance_filter().is_none());
+    }
+
+    #[test]
+    fn memory_filter_session_ids_escapes_sql() {
+        let f = MemoryFilter {
+            session_ids: Some(vec!["agent:main:O'Brien".to_string()]),
+            ..Default::default()
+        };
+        let sql = f.to_lance_filter().unwrap();
+        assert!(sql.contains("O''Brien"));
     }
 
     #[test]
