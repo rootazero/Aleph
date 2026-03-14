@@ -4,6 +4,7 @@
 //! reranking services (Jina, SiliconFlow, Voyage, Pinecone, vLLM).
 
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::AlephError;
@@ -38,7 +39,7 @@ pub trait RerankProvider: Send + Sync {
 }
 
 /// Available cross-encoder reranking providers
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum RerankProviderType {
     /// Jina AI reranking API
@@ -55,7 +56,7 @@ pub enum RerankProviderType {
 }
 
 /// Configuration for cross-encoder reranking
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RerankConfig {
     /// Whether reranking is enabled
     #[serde(default)]

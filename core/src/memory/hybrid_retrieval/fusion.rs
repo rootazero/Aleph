@@ -5,10 +5,11 @@
 
 use std::collections::HashMap;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Selects the fusion algorithm used to combine ranked lists.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum FusionStrategy {
     /// Reciprocal Rank Fusion — rank-based, parameter-light.

@@ -99,6 +99,29 @@ pub struct MemoryConfig {
     pub memory_decay: MemoryDecayPolicy,
 
     // ========================================
+    // Hybrid Retrieval & Reranking
+    // ========================================
+    /// Fusion strategy for hybrid retrieval (rrf or weighted).
+    #[serde(default)]
+    pub fusion_strategy: crate::memory::hybrid_retrieval::fusion::FusionStrategy,
+
+    /// RRF constant k.
+    #[serde(default = "default_rrf_k")]
+    pub rrf_k: u32,
+
+    /// Extra BM25 bonus weight for RRF fusion.
+    #[serde(default = "default_bm25_bonus")]
+    pub bm25_bonus_weight: f32,
+
+    /// Whether query expansion is enabled.
+    #[serde(default)]
+    pub query_expansion_enabled: bool,
+
+    /// Cross-encoder reranking configuration.
+    #[serde(default)]
+    pub rerank: crate::memory::rerank::RerankConfig,
+
+    // ========================================
     // Scoring, Retrieval Gate & Noise Filter
     // ========================================
     /// Scoring pipeline configuration.
@@ -604,6 +627,10 @@ fn default_reflection_cooldown() -> u32 {
     30
 }
 
+// Hybrid retrieval defaults
+fn default_rrf_k() -> u32 { 60 }
+fn default_bm25_bonus() -> f32 { 0.15 }
+
 // Scoring, retrieval gate, noise filter & backup defaults
 fn default_dedup_similarity_threshold() -> f32 { 0.95 }
 fn default_backup_enabled() -> bool { true }
@@ -636,6 +663,12 @@ impl Default for MemoryConfig {
             dreaming: DreamingConfig::default(),
             graph_decay: GraphDecayPolicy::default(),
             memory_decay: MemoryDecayPolicy::default(),
+            // Hybrid retrieval & reranking
+            fusion_strategy: crate::memory::hybrid_retrieval::fusion::FusionStrategy::default(),
+            rrf_k: default_rrf_k(),
+            bm25_bonus_weight: default_bm25_bonus(),
+            query_expansion_enabled: false,
+            rerank: crate::memory::rerank::RerankConfig::default(),
             // Scoring, retrieval gate & noise filter
             scoring_pipeline: crate::memory::scoring_pipeline::config::ScoringPipelineConfig::default(),
             adaptive_retrieval: crate::memory::adaptive_retrieval::AdaptiveRetrievalConfig::default(),
