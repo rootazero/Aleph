@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use crate::sync_primitives::Arc;
 
 use crate::cron::config::{
-    CronJob, DeliveryConfig, DeliveryMode, DeliveryOutcome, DeliveryTargetConfig, JobRun,
+    CronJob, DeliveryConfig, DeliveryMode, DeliveryOutcome, DeliveryStatus, DeliveryTargetConfig,
+    JobRun,
 };
 
 /// Error type for delivery operations
@@ -130,9 +131,22 @@ impl DeliveryEngine {
     }
 }
 
+/// Check if delivery should be skipped due to agent already sending.
+pub fn should_skip_delivery(agent_already_sent: bool, mode: &DeliveryMode) -> DeliveryStatus {
+    if matches!(mode, DeliveryMode::None) {
+        return DeliveryStatus::NotRequested;
+    }
+    if agent_already_sent {
+        return DeliveryStatus::AlreadySentByAgent;
+    }
+    // Caller proceeds with actual delivery
+    DeliveryStatus::Delivered // placeholder — actual delivery logic returns real status
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::should_skip_delivery;
     use crate::cron::config::*;
     use crate::sync_primitives::{AtomicU32, Ordering};
 
@@ -185,7 +199,7 @@ mod tests {
     #[tokio::test]
     async fn test_delivery_none_mode() {
         let engine = DeliveryEngine::new();
-        let job = CronJob::new("Test", "0 0 * * * *", "main", "prompt");
+        let job = CronJob::new("Test", "main", "prompt", ScheduleKind::default());
         let run = JobRun::new("job-1");
         let config = DeliveryConfig {
             mode: DeliveryMode::None,
@@ -203,7 +217,7 @@ mod tests {
         let mock = Arc::new(MockTarget::new("webhook", false));
         engine.register(mock.clone());
 
-        let job = CronJob::new("Test", "0 0 * * * *", "main", "prompt");
+        let job = CronJob::new("Test", "main", "prompt", ScheduleKind::default());
         let run = JobRun::new("job-1");
         let config = DeliveryConfig {
             mode: DeliveryMode::Primary,
@@ -229,7 +243,7 @@ mod tests {
         engine.register(failing.clone());
         engine.register(fallback.clone());
 
-        let job = CronJob::new("Test", "0 0 * * * *", "main", "prompt");
+        let job = CronJob::new("Test", "main", "prompt", ScheduleKind::default());
         let run = JobRun::new("job-1");
         let config = DeliveryConfig {
             mode: DeliveryMode::Primary,
@@ -261,7 +275,7 @@ mod tests {
         engine.register(webhook.clone());
         engine.register(memory.clone());
 
-        let job = CronJob::new("Test", "0 0 * * * *", "main", "prompt");
+        let job = CronJob::new("Test", "main", "prompt", ScheduleKind::default());
         let run = JobRun::new("job-1");
         let config = DeliveryConfig {
             mode: DeliveryMode::Broadcast,
@@ -289,7 +303,7 @@ mod tests {
     #[tokio::test]
     async fn test_delivery_unregistered_target() {
         let engine = DeliveryEngine::new(); // No targets registered
-        let job = CronJob::new("Test", "0 0 * * * *", "main", "prompt");
+        let job = CronJob::new("Test", "main", "prompt", ScheduleKind::default());
         let run = JobRun::new("job-1");
         let config = DeliveryConfig {
             mode: DeliveryMode::Primary,
@@ -305,5 +319,26 @@ mod tests {
         assert_eq!(outcomes.len(), 1);
         assert!(!outcomes[0].success);
         assert!(outcomes[0].message.as_ref().unwrap().contains("not registered"));
+    }
+
+    #[test]
+    fn should_skip_when_agent_sent() {
+        let status = should_skip_delivery(true, &DeliveryMode::Primary);
+        assert_eq!(status, DeliveryStatus::AlreadySentByAgent);
+    }
+
+    #[test]
+    fn should_not_skip_normally() {
+        let status = should_skip_delivery(false, &DeliveryMode::Primary);
+        assert_eq!(status, DeliveryStatus::Delivered);
+    }
+
+    #[test]
+    fn none_mode_always_skips() {
+        let status = should_skip_delivery(false, &DeliveryMode::None);
+        assert_eq!(status, DeliveryStatus::NotRequested);
+
+        let status = should_skip_delivery(true, &DeliveryMode::None);
+        assert_eq!(status, DeliveryStatus::NotRequested);
     }
 }
