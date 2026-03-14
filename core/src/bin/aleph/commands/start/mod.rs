@@ -684,6 +684,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         workspace_manager,
         agent_result.default_provider,
         agent_result.dispatch_registry,
+        Some(session_manager.clone()),
         args.daemon,
     ).await;
 
