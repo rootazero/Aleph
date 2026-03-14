@@ -7,4 +7,6 @@ mod link_acl_probe {
     pub mod harness;
     pub mod access_control;
     pub mod message_routing;
+    pub mod switch_command;
+    pub mod intent_switch;
 }
