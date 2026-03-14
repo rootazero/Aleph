@@ -18,7 +18,9 @@ pub struct CronJobInfo {
     #[serde(default)]
     pub schedule: String,
     #[serde(default)]
-    pub schedule_kind: String,
+    pub schedule_kind_str: String,
+    #[serde(default)]
+    pub schedule_kind: Option<Value>,
     #[serde(default)]
     pub agent_id: String,
     #[serde(default)]
@@ -33,6 +35,22 @@ pub struct CronJobInfo {
     pub next_run_at: Option<i64>,
     #[serde(default)]
     pub last_run_at: Option<i64>,
+    #[serde(default)]
+    pub anchor_ms: Option<i64>,
+    #[serde(default)]
+    pub stagger_ms: Option<i64>,
+    #[serde(default)]
+    pub running_at_ms: Option<i64>,
+    #[serde(default)]
+    pub consecutive_errors: Option<u32>,
+    #[serde(default)]
+    pub last_error_reason: Option<String>,
+    #[serde(default)]
+    pub last_delivery_status: Option<String>,
+    #[serde(default)]
+    pub session_target: Option<String>,
+    #[serde(default)]
+    pub failure_alert: Option<Value>,
 }
 
 /// Request payload for creating a cron job
@@ -48,6 +66,16 @@ pub struct CreateCronJob {
     pub timezone: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_kind_obj: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stagger_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_alert: Option<Value>,
 }
 
 /// Request payload for updating a cron job (all fields optional except job_id)
@@ -70,6 +98,16 @@ pub struct UpdateCronJob {
     pub timezone: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_kind_obj: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stagger_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_alert: Option<Value>,
 }
 
 /// Job execution run info returned by the backend
@@ -84,6 +122,10 @@ pub struct JobRunInfo {
     pub duration_ms: u64,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub delivery_status: Option<String>,
+    #[serde(default)]
+    pub error_reason: Option<String>,
 }
 
 // ============================================================================
