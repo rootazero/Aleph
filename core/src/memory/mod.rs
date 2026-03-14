@@ -33,6 +33,7 @@ pub mod hybrid_retrieval;
 pub mod ingestion;
 pub mod namespace;
 pub mod noise_filter;
+pub mod rerank;
 pub mod reranker;
 pub mod retrieval;
 pub mod scratchpad;
