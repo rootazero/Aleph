@@ -221,7 +221,7 @@ impl SessionProbeHarness {
             WorkspaceManager::new(ws_config).expect("Failed to create WorkspaceManager"),
         );
 
-        let router = InboundMessageRouter::with_unified_routing(
+        let mut router = InboundMessageRouter::with_unified_routing(
             channel_registry.clone(),
             store,
             config,
@@ -231,6 +231,11 @@ impl SessionProbeHarness {
         )
         .with_workspace_manager(workspace_manager.clone())
         .with_session_manager(session_manager.clone());
+
+        // Wire mock LLM provider to the router for topic generation
+        if let Some(ref llm) = mock_llm {
+            router = router.with_llm_provider(llm.clone());
+        }
 
         let (reply_tx, reply_rx) = mpsc::unbounded_channel();
 
@@ -391,6 +396,57 @@ impl SessionProbeHarness {
             .list_sessions(agent_id)
             .await
             .unwrap_or_default()
+    }
+
+    /// Build the PerPeer session key the router will use for DMs.
+    ///
+    /// With default RoutingConfig (dm_scope = PerPeer), DMs from "user-1"
+    /// produce `SessionKey::PerPeer { agent_id, peer_id: "dm:user-1" }`.
+    pub fn dm_session_key(&self, agent_id: &str) -> SessionKey {
+        SessionKey::PerPeer {
+            agent_id: agent_id.to_string(),
+            peer_id: "dm:user-1".to_string(),
+        }
+    }
+
+    /// Seed messages into the PerPeer session the router will use for DMs.
+    pub async fn seed_dm_messages(&self, agent_id: &str, messages: &[(&str, &str)]) {
+        let key = self.dm_session_key(agent_id);
+        // Ensure session exists first
+        let _ = self.session_manager.get_or_create(&key).await;
+        for (role, content) in messages {
+            self.session_manager
+                .add_message(&key, role, content)
+                .await
+                .expect("Failed to seed DM message");
+        }
+    }
+
+    /// Get topic for the PerPeer DM session.
+    pub async fn get_dm_topic(&self, agent_id: &str) -> Option<String> {
+        let key = self.dm_session_key(agent_id);
+        self.session_manager
+            .get_session_topic(&key)
+            .await
+            .unwrap_or(None)
+    }
+
+    /// Check whether the PerPeer DM session is marked closed.
+    pub async fn is_dm_session_closed(&self, agent_id: &str) -> bool {
+        let sessions = self
+            .session_manager
+            .list_sessions(Some(agent_id))
+            .await
+            .unwrap_or_default();
+        let key_str = self.dm_session_key(agent_id).to_key_string();
+        sessions.iter().any(|s| {
+            s.key == key_str
+                && s.metadata_json
+                    .as_deref()
+                    .and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok())
+                    .and_then(|v| v.get("status")?.as_str().map(|s| s == "closed"))
+                    .unwrap_or(false)
+        })
     }
 
     // -------------------------------------------------------------------------
