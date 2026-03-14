@@ -59,6 +59,7 @@ pub mod config;
 pub mod resource;
 pub mod schedule;
 // pub mod scheduler;
+pub mod stagger;
 // pub mod template; // Temporarily disabled during cron rewrite
 // pub mod webhook_target;
 
