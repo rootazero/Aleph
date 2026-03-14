@@ -32,6 +32,12 @@ pub struct SessionInfo {
     pub created_at: String,
     /// Last activity timestamp (ISO 8601)
     pub last_active_at: String,
+    /// Session topic (extracted from metadata JSON)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+    /// Session status (e.g. "closed")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 /// Session history message
@@ -170,6 +176,8 @@ impl SessionStore {
             message_count: data.messages.len() as u32,
             created_at: data.created_at.to_rfc3339(),
             last_active_at: data.last_active_at.to_rfc3339(),
+            topic: None,
+            status: None,
         }
     }
 }
@@ -308,17 +316,32 @@ pub async fn handle_list_db(
         Ok(sessions) => {
             let infos: Vec<SessionInfo> = sessions
                 .into_iter()
-                .map(|m| SessionInfo {
-                    key: m.key,
-                    agent_id: m.agent_id,
-                    session_type: m.session_type,
-                    message_count: m.message_count as u32,
-                    created_at: chrono::DateTime::from_timestamp(m.created_at, 0)
-                        .map(|dt| dt.to_rfc3339())
-                        .unwrap_or_default(),
-                    last_active_at: chrono::DateTime::from_timestamp(m.last_active_at, 0)
-                        .map(|dt| dt.to_rfc3339())
-                        .unwrap_or_default(),
+                .map(|m| {
+                    // Extract topic and status from metadata JSON
+                    let (topic, status) = m.metadata_json
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                        .map(|v| {
+                            let topic = v.get("topic").and_then(|t| t.as_str()).map(|s| s.to_string());
+                            let status = v.get("status").and_then(|t| t.as_str()).map(|s| s.to_string());
+                            (topic, status)
+                        })
+                        .unwrap_or((None, None));
+
+                    SessionInfo {
+                        key: m.key,
+                        agent_id: m.agent_id,
+                        session_type: m.session_type,
+                        message_count: m.message_count as u32,
+                        created_at: chrono::DateTime::from_timestamp(m.created_at, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_default(),
+                        last_active_at: chrono::DateTime::from_timestamp(m.last_active_at, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_default(),
+                        topic,
+                        status,
+                    }
                 })
                 .collect();
             let count = infos.len();
