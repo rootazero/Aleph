@@ -16,9 +16,11 @@
 //! - `BothLayers`: Deep mode - search both layers simultaneously and merge results
 
 pub mod association;
+pub mod fusion;
 pub mod hybrid;
 pub mod strategy;
 
 pub use association::{AssociationCluster, AssociationConfig, AssociationRetriever};
+pub use fusion::{FusedScore, FusionStrategy, rrf_fuse, weighted_fuse};
 pub use hybrid::{HybridRetrieval, HybridSearchConfig};
 pub use strategy::RetrievalStrategy;
