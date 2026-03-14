@@ -236,6 +236,12 @@ pub struct AgentDefinition {
     /// Sub-agent spawning policy
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagents: Option<SubagentPolicy>,
+
+    /// Link access whitelist.
+    /// None or empty = all links allowed (default).
+    /// Some(list) = only listed link IDs can access this agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_links: Option<Vec<String>>,
 }
 
 // =============================================================================
@@ -485,6 +491,33 @@ mod tests {
             config.defaults.agents_root,
             Some(PathBuf::from("/home/user/agents"))
         );
+    }
+
+    #[test]
+    fn test_allowed_links_deserialize() {
+        let toml_str = r#"
+            [[list]]
+            id = "private"
+            name = "Private Agent"
+            allowed_links = ["telegram-bot-1", "discord-bot"]
+        "#;
+        let config: AgentsConfig = toml::from_str(toml_str).unwrap();
+        let agent = &config.list[0];
+        assert_eq!(
+            agent.allowed_links,
+            Some(vec!["telegram-bot-1".to_string(), "discord-bot".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_allowed_links_none_by_default() {
+        let toml_str = r#"
+            [[list]]
+            id = "open"
+            name = "Open Agent"
+        "#;
+        let config: AgentsConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.list[0].allowed_links.is_none());
     }
 
     #[test]
