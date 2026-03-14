@@ -12,6 +12,9 @@ mod cron_probe {
     pub mod delivery_alert;
     pub mod chain;
     pub mod crash;
+    pub mod gateway;
+    pub mod history_integration;
+    pub mod real_agent;
 }
 
 use cron_probe::harness::CronTestHarness;
