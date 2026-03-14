@@ -4,7 +4,7 @@
 //! Facts that haven't been accessed in a long time decay in strength,
 //! while frequently accessed facts remain strong.
 
-use crate::memory::context::{FactType, MemoryFact, TemporalScope};
+use crate::memory::context::{FactType, MemoryFact, MemoryTier, TemporalScope};
 use serde::{Deserialize, Serialize};
 
 /// Memory strength tracking
@@ -206,6 +206,171 @@ pub fn on_access(fact: &mut MemoryFact, now: i64) {
     fact.last_accessed_at = Some(now);
 }
 
+// ============================================================================
+// Tiered Decay Config + Access Reinforcement
+// ============================================================================
+
+// Serde default functions
+fn default_tier_half_life() -> f32 { 30.0 }
+fn default_tier_min_strength() -> f32 { 0.1 }
+fn default_reinforcement_factor() -> f32 { 0.5 }
+fn default_max_multiplier() -> f32 { 3.0 }
+fn default_access_decay_days() -> f32 { 30.0 }
+
+fn default_core_params() -> TierDecayParams {
+    TierDecayParams {
+        half_life_days: 90.0,
+        min_strength: 0.05,
+        reinforcement: AccessReinforcementConfig::default(),
+    }
+}
+
+fn default_long_term_params() -> TierDecayParams {
+    TierDecayParams {
+        half_life_days: 45.0,
+        min_strength: 0.1,
+        reinforcement: AccessReinforcementConfig::default(),
+    }
+}
+
+fn default_short_term_params() -> TierDecayParams {
+    TierDecayParams {
+        half_life_days: 7.0,
+        min_strength: 0.15,
+        reinforcement: AccessReinforcementConfig::default(),
+    }
+}
+
+fn default_protected_types() -> Vec<FactType> {
+    vec![FactType::Personal]
+}
+
+/// Access-based half-life reinforcement.
+///
+/// Models the spaced-repetition effect: frequent recent access extends
+/// the effective half-life of a memory, while stale access has diminishing
+/// impact.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccessReinforcementConfig {
+    /// Reinforcement scaling factor (default: 0.5)
+    #[serde(default = "default_reinforcement_factor")]
+    pub factor: f32,
+    /// Maximum multiplier on the base half-life (default: 3.0)
+    #[serde(default = "default_max_multiplier")]
+    pub max_multiplier: f32,
+    /// Days after which access counts decay to half relevance (default: 30.0)
+    #[serde(default = "default_access_decay_days")]
+    pub access_decay_days: f32,
+}
+
+impl Default for AccessReinforcementConfig {
+    fn default() -> Self {
+        Self {
+            factor: default_reinforcement_factor(),
+            max_multiplier: default_max_multiplier(),
+            access_decay_days: default_access_decay_days(),
+        }
+    }
+}
+
+/// Per-tier decay parameters.
+///
+/// Each `MemoryTier` can have its own half-life, minimum strength threshold,
+/// and access reinforcement configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TierDecayParams {
+    /// Half-life in days for this tier
+    #[serde(default = "default_tier_half_life")]
+    pub half_life_days: f32,
+    /// Minimum strength before cleanup for this tier
+    #[serde(default = "default_tier_min_strength")]
+    pub min_strength: f32,
+    /// Access reinforcement config
+    #[serde(default)]
+    pub reinforcement: AccessReinforcementConfig,
+}
+
+impl Default for TierDecayParams {
+    fn default() -> Self {
+        Self {
+            half_life_days: default_tier_half_life(),
+            min_strength: default_tier_min_strength(),
+            reinforcement: AccessReinforcementConfig::default(),
+        }
+    }
+}
+
+/// Tiered decay config — different parameters per `MemoryTier`.
+///
+/// Core memories have the longest half-life (90 days), long-term memories
+/// are intermediate (45 days), and short-term memories decay fastest (7 days).
+/// Protected fact types bypass decay entirely.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TieredDecayConfig {
+    /// Params for Core tier (half_life=90)
+    #[serde(default = "default_core_params")]
+    pub core: TierDecayParams,
+    /// Params for LongTerm tier (half_life=45)
+    #[serde(default = "default_long_term_params")]
+    pub long_term: TierDecayParams,
+    /// Params for ShortTerm tier (half_life=7)
+    #[serde(default = "default_short_term_params")]
+    pub short_term: TierDecayParams,
+    /// Fact types that are protected from decay
+    #[serde(default = "default_protected_types")]
+    pub protected_types: Vec<FactType>,
+}
+
+impl Default for TieredDecayConfig {
+    fn default() -> Self {
+        Self {
+            core: default_core_params(),
+            long_term: default_long_term_params(),
+            short_term: default_short_term_params(),
+            protected_types: default_protected_types(),
+        }
+    }
+}
+
+impl TieredDecayConfig {
+    /// Get the decay parameters for a given memory tier.
+    pub fn params_for_tier(&self, tier: &MemoryTier) -> &TierDecayParams {
+        match tier {
+            MemoryTier::Core => &self.core,
+            MemoryTier::LongTerm => &self.long_term,
+            MemoryTier::ShortTerm => &self.short_term,
+        }
+    }
+}
+
+/// Calculate the effective half-life after access-based reinforcement.
+///
+/// Algorithm:
+/// 1. Compute freshness = exp(-days_since_last_access * ln(2) / access_decay_days)
+/// 2. effective_count = access_count * freshness
+/// 3. extension = base * factor * ln(1 + effective_count)
+/// 4. result = min(base + extension, base * max_multiplier)
+///
+/// This models spaced-repetition: recent frequent access extends memory
+/// lifetime, but stale access has diminishing impact.
+pub fn effective_half_life(
+    base: f32,
+    access_count: u32,
+    days_since_last_access: f32,
+    config: &AccessReinforcementConfig,
+) -> f32 {
+    if access_count == 0 {
+        return base;
+    }
+
+    let freshness = (-days_since_last_access * 2.0_f32.ln() / config.access_decay_days).exp();
+    let effective_count = access_count as f32 * freshness;
+    let extension = base * config.factor * (1.0 + effective_count).ln();
+    let result = base + extension;
+
+    result.min(base * config.max_multiplier)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +514,53 @@ mod tests {
         on_access(&mut fact, now + 86400);
         assert_eq!(fact.access_count, 2);
         assert_eq!(fact.last_accessed_at, Some(now + 86400));
+    }
+
+    // ====================================================================
+    // Tiered Decay Config + Access Reinforcement tests
+    // ====================================================================
+
+    #[test]
+    fn effective_half_life_no_access() {
+        let config = AccessReinforcementConfig::default();
+        let result = effective_half_life(7.0, 0, 0.0, &config);
+        assert!((result - 7.0).abs() < 0.001, "No access should return base, got {}", result);
+    }
+
+    #[test]
+    fn effective_half_life_recent_access() {
+        let config = AccessReinforcementConfig::default();
+        let result = effective_half_life(7.0, 3, 1.0, &config);
+        assert!(result > 7.0, "Recent access should extend half-life, got {}", result);
+        assert!(result < 21.0, "Should be below cap (7*3), got {}", result);
+    }
+
+    #[test]
+    fn effective_half_life_stale_access() {
+        let config = AccessReinforcementConfig::default();
+        // 5 accesses 90 days ago: freshness ~0.125, effective_count ~0.625
+        // extension = 7 * 0.5 * ln(1.625) ≈ 1.7 → result ≈ 8.7
+        let result = effective_half_life(7.0, 5, 90.0, &config);
+        assert!(result > 7.0, "Should still extend slightly, got {}", result);
+        assert!(result < 10.0, "Stale access should barely extend, got {}", result);
+    }
+
+    #[test]
+    fn effective_half_life_capped() {
+        let config = AccessReinforcementConfig::default();
+        let result = effective_half_life(7.0, 1000, 0.0, &config);
+        assert!((result - 21.0).abs() < 0.01, "Should be capped at 7*3=21, got {}", result);
+    }
+
+    #[test]
+    fn tiered_config_returns_correct_params() {
+        let config = TieredDecayConfig::default();
+        let core_params = config.params_for_tier(&MemoryTier::Core);
+        assert!((core_params.half_life_days - 90.0).abs() < 0.01);
+        let short_params = config.params_for_tier(&MemoryTier::ShortTerm);
+        assert!((short_params.half_life_days - 7.0).abs() < 0.01);
+        let long_params = config.params_for_tier(&MemoryTier::LongTerm);
+        assert!((long_params.half_life_days - 45.0).abs() < 0.01);
     }
 
     #[test]
