@@ -79,17 +79,40 @@ impl ScoringPipeline {
 
     /// Run all stages sequentially, returning the final candidate list.
     pub fn run(&self, candidates: Vec<ScoredFact>, ctx: &ScoringContext) -> Vec<ScoredFact> {
+        self.run_traced(candidates, ctx, None)
+    }
+
+    /// Run all stages with optional trace recording.
+    ///
+    /// When a [`RetrievalTrace`](crate::memory::retrieval_trace::RetrievalTrace)
+    /// is provided, each stage records a snapshot of candidate IDs and scores
+    /// so that the full scoring trajectory can be inspected after the fact.
+    pub fn run_traced(
+        &self,
+        candidates: Vec<ScoredFact>,
+        ctx: &ScoringContext,
+        mut trace: Option<&mut crate::memory::retrieval_trace::RetrievalTrace>,
+    ) -> Vec<ScoredFact> {
         let mut current = candidates;
 
         for stage in &self.stages {
             let before = current.len();
+            let start = std::time::Instant::now();
             current = stage.apply(current, ctx);
+            let elapsed = start.elapsed().as_millis() as u64;
             debug!(
                 stage = stage.name(),
                 before = before,
                 after = current.len(),
                 "scoring stage applied"
             );
+            if let Some(ref mut t) = trace {
+                let snapshots: Vec<(String, f32)> = current
+                    .iter()
+                    .map(|sf| (sf.fact.id.to_string(), sf.score))
+                    .collect();
+                t.record_stage(stage.name(), elapsed, before, &snapshots);
+            }
         }
 
         current
