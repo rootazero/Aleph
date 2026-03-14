@@ -62,7 +62,7 @@ impl StateDatabase {
                 ai_output TEXT NOT NULL,
                 embedding BLOB NOT NULL,
                 timestamp INTEGER NOT NULL,
-                topic_id TEXT NOT NULL
+                session_id TEXT NOT NULL
             );
 
             -- Index for fast window-title-based filtering
@@ -72,7 +72,7 @@ impl StateDatabase {
             CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp);
 
             -- Index for topic-based queries (multi-turn conversation deletion)
-            CREATE INDEX IF NOT EXISTS idx_topic_id ON memories(topic_id);
+            CREATE INDEX IF NOT EXISTS idx_session_id ON memories(session_id);
 
             -- ================================================================
             -- Memory Compression: Fact Storage Tables

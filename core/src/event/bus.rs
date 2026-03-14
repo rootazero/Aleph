@@ -351,7 +351,7 @@ mod tests {
 
         let event = AlephEvent::InputReceived(InputEvent {
             text: "hello".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: 0,
         });
@@ -376,7 +376,7 @@ mod tests {
         // Publish non-matching event first
         bus.publish(AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: 0,
         }))

@@ -260,7 +260,7 @@ mod tests {
         CapturedContext {
             window_title: Some("Test Note".to_string()),
             attachments: None,
-            topic_id: None,
+            session_id: None,
         }
     }
 

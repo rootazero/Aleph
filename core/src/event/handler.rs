@@ -329,7 +329,7 @@ mod tests {
         // Publish event
         bus.publish(AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: 0,
         }))
@@ -368,7 +368,7 @@ mod tests {
         // Publish input event
         bus.publish(AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: 0,
         }))

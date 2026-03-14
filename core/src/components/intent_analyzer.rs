@@ -298,7 +298,7 @@ mod tests {
     fn create_test_input(text: &str) -> InputEvent {
         InputEvent {
             text: text.to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: chrono::Utc::now().timestamp(),
         }

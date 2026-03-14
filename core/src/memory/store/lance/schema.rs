@@ -119,7 +119,7 @@ pub fn memories_schema() -> Arc<Schema> {
         Field::new("user_input", DataType::Utf8, false),
         Field::new("ai_output", DataType::Utf8, false),
         Field::new("timestamp", DataType::Int64, false),
-        Field::new("topic_id", DataType::Utf8, true),
+        Field::new("session_id", DataType::Utf8, true),
         Field::new("session_key", DataType::Utf8, false),
         Field::new("namespace", DataType::Utf8, false),
         Field::new("workspace", DataType::Utf8, false),

@@ -67,7 +67,7 @@ mod tests {
         // Publish events from each bus
         bus1.publish(AlephEvent::InputReceived(InputEvent {
             text: "Hello from agent 1".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: 1000,
         }))
@@ -75,7 +75,7 @@ mod tests {
 
         bus2.publish(AlephEvent::InputReceived(InputEvent {
             text: "Hello from agent 2".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: 2000,
         }))
@@ -85,7 +85,7 @@ mod tests {
 
         bus3.publish(AlephEvent::InputReceived(InputEvent {
             text: "Hello from agent 3".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: 3000,
         }))
@@ -240,7 +240,7 @@ mod tests {
         bus_match.publish(AlephEvent::LoopStop(StopReason::Completed)).await; // Should match
         bus_match.publish(AlephEvent::InputReceived(InputEvent { // Wrong event type
             text: "test".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: 0,
         })).await;

@@ -1066,7 +1066,7 @@ async fn write_conversation_memory(
 ) {
     use crate::memory::context::{ContextAnchor, MemoryEntry};
 
-    let context = ContextAnchor::with_topic(
+    let context = ContextAnchor::with_session(
         session_key.clone(),
         session_key,
     );

@@ -315,8 +315,8 @@ pub struct ExecutionContext {
     /// Current window title
     pub window_title: Option<String>,
 
-    /// Topic/conversation ID for memory association
-    pub topic_id: Option<String>,
+    /// Session/conversation ID for memory association
+    pub session_id: Option<String>,
 
     /// Whether to stream the response (defaults to true)
     pub stream: bool,
@@ -330,7 +330,7 @@ impl ExecutionContext {
         Self {
             app_context: None,
             window_title: None,
-            topic_id: None,
+            session_id: None,
             stream: true, // Default to streaming
         }
     }
@@ -347,9 +347,9 @@ impl ExecutionContext {
         self
     }
 
-    /// Builder: set topic ID
-    pub fn with_topic_id(mut self, id: impl Into<String>) -> Self {
-        self.topic_id = Some(id.into());
+    /// Builder: set session ID
+    pub fn with_session_id(mut self, id: impl Into<String>) -> Self {
+        self.session_id = Some(id.into());
         self
     }
 
@@ -746,7 +746,7 @@ mod tests {
 
         assert!(ctx.app_context.is_none());
         assert!(ctx.window_title.is_none());
-        assert!(ctx.topic_id.is_none());
+        assert!(ctx.session_id.is_none());
         assert!(ctx.stream); // Default is true
     }
 
@@ -763,12 +763,12 @@ mod tests {
         let ctx = ExecutionContext::new()
             .with_app_context("VSCode")
             .with_window_title("main.rs - Aleph")
-            .with_topic_id("topic_123")
+            .with_session_id("topic_123")
             .with_stream(false);
 
         assert_eq!(ctx.app_context, Some("VSCode".to_string()));
         assert_eq!(ctx.window_title, Some("main.rs - Aleph".to_string()));
-        assert_eq!(ctx.topic_id, Some("topic_123".to_string()));
+        assert_eq!(ctx.session_id, Some("topic_123".to_string()));
         assert!(!ctx.stream);
     }
 
