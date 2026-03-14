@@ -130,6 +130,13 @@ pub struct MemoryConfig {
     /// Maximum number of backup files to retain.
     #[serde(default = "default_backup_max_files")]
     pub backup_max_files: usize,
+
+    // ========================================
+    // Reflection
+    // ========================================
+    /// Session-end reflection configuration.
+    #[serde(default)]
+    pub reflection: ReflectionConfig,
 }
 
 // =============================================================================
@@ -545,6 +552,58 @@ pub fn default_fts_tokenizer() -> String {
 }
 
 
+// =============================================================================
+// ReflectionConfig
+// =============================================================================
+
+/// Session-end reflection configuration
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReflectionConfig {
+    /// Enable/disable session-end reflection
+    #[serde(default)]
+    pub enabled: bool,
+    /// Minimum conversation turns before triggering reflection
+    #[serde(default = "default_reflection_min_turns")]
+    pub min_turns: u32,
+    /// Minimum total user characters before triggering reflection
+    #[serde(default = "default_reflection_min_chars")]
+    pub min_user_chars: u32,
+    /// Cooldown in minutes between reflections
+    #[serde(default = "default_reflection_cooldown")]
+    pub cooldown_minutes: u32,
+    /// Enable open loop tracking
+    #[serde(default)]
+    pub open_loop_tracking: bool,
+    /// Inject open loop prompt into next session
+    #[serde(default)]
+    pub open_loop_inject_prompt: bool,
+}
+
+impl Default for ReflectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_turns: default_reflection_min_turns(),
+            min_user_chars: default_reflection_min_chars(),
+            cooldown_minutes: default_reflection_cooldown(),
+            open_loop_tracking: false,
+            open_loop_inject_prompt: false,
+        }
+    }
+}
+
+fn default_reflection_min_turns() -> u32 {
+    5
+}
+
+fn default_reflection_min_chars() -> u32 {
+    200
+}
+
+fn default_reflection_cooldown() -> u32 {
+    30
+}
+
 // Scoring, retrieval gate, noise filter & backup defaults
 fn default_dedup_similarity_threshold() -> f32 { 0.95 }
 fn default_backup_enabled() -> bool { true }
@@ -586,6 +645,8 @@ impl Default for MemoryConfig {
             // Backup
             backup_enabled: default_backup_enabled(),
             backup_max_files: default_backup_max_files(),
+            // Reflection
+            reflection: ReflectionConfig::default(),
         }
     }
 }
