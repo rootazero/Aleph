@@ -24,6 +24,8 @@ pub enum FactType {
     Personal,
     /// Tool/capability procedural knowledge (for tool-as-resource)
     Tool,
+    /// Lesson learned from experience (symptom → cause → fix).
+    Lesson,
     /// Other facts that don't fit above categories
     #[default]
     Other,
@@ -48,6 +50,7 @@ impl FactType {
             FactType::Project => "project",
             FactType::Personal => "personal",
             FactType::Tool => "tool",
+            FactType::Lesson => "lesson",
             FactType::Other => "other",
             FactType::SubagentRun => "subagent_run",
             FactType::SubagentSession => "subagent_session",
@@ -70,6 +73,7 @@ impl FactType {
             FactType::Learning => "aleph://knowledge/learning/",
             FactType::Project => "aleph://knowledge/projects/",
             FactType::Tool => "aleph://agent/tools/",
+            FactType::Lesson => "aleph://knowledge/lessons/",
             FactType::Other => "aleph://knowledge/",
             FactType::SubagentRun
             | FactType::SubagentSession
@@ -85,6 +89,7 @@ impl FactType {
             FactType::Plan | FactType::Personal => MemoryCategory::Profile,
             FactType::Learning | FactType::Project | FactType::Other => MemoryCategory::Entities,
             FactType::Tool => MemoryCategory::Patterns,
+            FactType::Lesson => MemoryCategory::Cases,
             FactType::SubagentRun | FactType::SubagentSession | FactType::SubagentCheckpoint => {
                 MemoryCategory::Cases
             }
@@ -104,6 +109,7 @@ impl std::str::FromStr for FactType {
             "project" => Ok(FactType::Project),
             "personal" => Ok(FactType::Personal),
             "tool" => Ok(FactType::Tool),
+            "lesson" => Ok(FactType::Lesson),
             "subagent_run" => Ok(FactType::SubagentRun),
             "subagent_session" => Ok(FactType::SubagentSession),
             "subagent_checkpoint" => Ok(FactType::SubagentCheckpoint),
