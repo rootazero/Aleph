@@ -48,10 +48,12 @@ pub mod ripple;
 pub mod evolution;
 pub mod consolidation;
 pub mod performance_monitor;
+pub mod promotion;
 pub mod cortex;
 pub mod store;
 pub mod retrieval_trace;
 pub mod query_expander;
+pub mod reflection;
 pub mod scoring_pipeline;
 pub mod vfs;
 // workspace has been moved to gateway::workspace (WorkspaceManager, SQLite-backed)

@@ -281,6 +281,18 @@ impl MemoryFact {
         self
     }
 
+    /// Set access count (builder pattern, useful for tests)
+    pub fn with_access_count(mut self, count: u32) -> Self {
+        self.access_count = count;
+        self
+    }
+
+    /// Set created_at timestamp (builder pattern, useful for tests)
+    pub fn with_created_at(mut self, ts: i64) -> Self {
+        self.created_at = ts;
+        self
+    }
+
     /// Invalidate this fact with a reason
     pub fn invalidate(mut self, reason: &str) -> Self {
         self.is_valid = false;
