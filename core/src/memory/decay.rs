@@ -48,6 +48,32 @@ impl MemoryStrength {
         (base_decay * (1.0 + access_boost)).min(1.0)
     }
 
+    /// Calculate strength using tiered config + access reinforcement.
+    ///
+    /// Unlike `calculate_strength_for_type` which uses flat `DecayConfig`,
+    /// this method uses per-tier parameters and the spaced-repetition
+    /// `effective_half_life` model for access reinforcement.
+    pub fn calculate_strength_tiered(
+        &self,
+        tiered_config: &TieredDecayConfig,
+        tier: &MemoryTier,
+        fact_type: &FactType,
+        now: i64,
+    ) -> f32 {
+        if tiered_config.protected_types.contains(fact_type) {
+            return 1.0;
+        }
+        let params = tiered_config.params_for_tier(tier);
+        let days_since_access = (now - self.last_accessed) as f32 / 86400.0;
+        let eff_hl = effective_half_life(
+            params.half_life_days,
+            self.access_count,
+            days_since_access,
+            &params.reinforcement,
+        );
+        0.5_f32.powf(days_since_access / eff_hl).min(1.0)
+    }
+
     /// Record an access (increment count, update timestamp)
     pub fn record_access(&mut self, now: i64) {
         self.access_count += 1;
@@ -561,6 +587,40 @@ mod tests {
         assert!((short_params.half_life_days - 7.0).abs() < 0.01);
         let long_params = config.params_for_tier(&MemoryTier::LongTerm);
         assert!((long_params.half_life_days - 45.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn calculate_strength_tiered_short_term_decays_fast() {
+        let config = TieredDecayConfig::default();
+        let ms = MemoryStrength { access_count: 0, last_accessed: 0, creation_time: 0 };
+        let now = 7 * 86400; // 7 days later
+        let strength = ms.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
+        assert!(strength < 0.6, "ShortTerm should decay significantly in 7 days: got {strength}");
+
+        let core_strength = ms.calculate_strength_tiered(&config, &MemoryTier::Core, &FactType::Other, now);
+        assert!(core_strength > strength, "Core should decay slower than ShortTerm");
+    }
+
+    #[test]
+    fn calculate_strength_tiered_protected_type_returns_one() {
+        let config = TieredDecayConfig::default();
+        let ms = MemoryStrength { access_count: 0, last_accessed: 0, creation_time: 0 };
+        let now = 365 * 86400; // 1 year later
+        let strength = ms.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Personal, now);
+        assert!((strength - 1.0).abs() < 0.001, "Protected type should always return 1.0, got {strength}");
+    }
+
+    #[test]
+    fn calculate_strength_tiered_access_extends_life() {
+        let config = TieredDecayConfig::default();
+        let now = 7 * 86400;
+        // No accesses
+        let ms_no = MemoryStrength { access_count: 0, last_accessed: 0, creation_time: 0 };
+        let s_no = ms_no.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
+        // 5 recent accesses (last accessed 1 day ago)
+        let ms_yes = MemoryStrength { access_count: 5, last_accessed: 6 * 86400, creation_time: 0 };
+        let s_yes = ms_yes.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
+        assert!(s_yes > s_no, "Access reinforcement should boost strength: {s_yes} vs {s_no}");
     }
 
     #[test]
