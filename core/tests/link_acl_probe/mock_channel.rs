@@ -1,6 +1,5 @@
 //! Mock channel that captures outbound messages for assertion.
 
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use async_trait::async_trait;
 use chrono::Utc;
