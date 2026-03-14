@@ -83,7 +83,7 @@ pub mod pairing;
 pub mod runs;
 pub mod models;
 pub mod chat;
-// pub mod cron; // Temporarily disabled during CronJob/ScheduleKind rewrite (Tasks 2/2b)
+pub mod cron;
 pub mod exec_approvals;
 pub mod wizard;
 pub mod supervisor;
@@ -215,16 +215,16 @@ impl HandlerRegistry {
             async move { models::handle_refresh(req, config).await }
         });
 
-        // Cron handlers temporarily disabled during CronJob/ScheduleKind rewrite (Tasks 2/2b)
-        // registry.register("cron.list", cron::handle_list_stub);
-        // registry.register("cron.get", cron::handle_get_stub);
-        // registry.register("cron.create", cron::handle_create_stub);
-        // registry.register("cron.update", cron::handle_update_stub);
-        // registry.register("cron.delete", cron::handle_delete_stub);
-        // registry.register("cron.status", cron::handle_status_stub);
-        // registry.register("cron.run", cron::handle_run_stub);
-        // registry.register("cron.runs", cron::handle_runs_stub);
-        // registry.register("cron.toggle", cron::handle_toggle_stub);
+        // Cron handlers (stubs — real handlers wired with CronService in Gateway startup)
+        registry.register("cron.list", cron::handle_list_stub);
+        registry.register("cron.get", cron::handle_get_stub);
+        registry.register("cron.create", cron::handle_create_stub);
+        registry.register("cron.update", cron::handle_update_stub);
+        registry.register("cron.delete", cron::handle_delete_stub);
+        registry.register("cron.status", cron::handle_status_stub);
+        registry.register("cron.run", cron::handle_run_stub);
+        registry.register("cron.runs", cron::handle_runs_stub);
+        registry.register("cron.toggle", cron::handle_toggle_stub);
 
         // Chat handlers (placeholders - actual handlers wired in Gateway::new())
         registry.register("chat.send", |req| async move {
