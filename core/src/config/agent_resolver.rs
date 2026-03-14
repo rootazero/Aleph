@@ -78,6 +78,9 @@ pub struct ResolvedAgent {
 
     /// Sub-agent spawning policy
     pub subagent_policy: Option<SubagentPolicy>,
+
+    /// Link access whitelist (None or empty = all links allowed)
+    pub allowed_links: Option<Vec<String>>,
 }
 
 // =============================================================================
@@ -301,6 +304,7 @@ impl AgentDefinitionResolver {
             .unwrap_or_else(|| agent.id.clone());
 
         let subagent_policy = agent.subagents.clone();
+        let allowed_links = agent.allowed_links.clone();
 
         ResolvedAgent {
             id: agent.id.clone(),
@@ -316,6 +320,7 @@ impl AgentDefinitionResolver {
             skills,
             skills_blacklist,
             subagent_policy,
+            allowed_links,
         }
     }
 }

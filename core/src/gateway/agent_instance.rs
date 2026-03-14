@@ -37,6 +37,8 @@ pub struct AgentInstanceConfig {
     pub tool_blacklist: Vec<String>,
     /// Agent state directory (sessions, runtime state)
     pub agent_dir: PathBuf,
+    /// Link access whitelist (None or empty = all links allowed)
+    pub allowed_links: Option<Vec<String>>,
 }
 
 impl Default for AgentInstanceConfig {
@@ -57,6 +59,7 @@ impl Default for AgentInstanceConfig {
             agent_dir: dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
                 .join(".aleph/agents/main"),
+            allowed_links: None,
         }
     }
 }
@@ -81,6 +84,7 @@ impl AgentInstanceConfig {
             tool_whitelist: agent.skills.clone(),
             tool_blacklist: agent.skills_blacklist.clone(),
             agent_dir: agent.agent_dir.clone(),
+            allowed_links: agent.allowed_links.clone(),
         }
     }
 }
@@ -521,6 +525,12 @@ impl AgentRegistry {
         matched_id
     }
 
+    /// Get the allowed_links for an agent (None = all allowed)
+    pub async fn get_allowed_links(&self, agent_id: &str) -> Option<Option<Vec<String>>> {
+        let agents = self.agents.read().await;
+        agents.get(agent_id).map(|a| a.config().allowed_links.clone())
+    }
+
     /// Remove an agent
     pub async fn remove(&self, agent_id: &str) -> Option<Arc<AgentInstance>> {
         let mut agents = self.agents.write().await;
@@ -761,6 +771,7 @@ mod tests {
             skills: vec!["git_*".to_string(), "fs_*".to_string()],
             skills_blacklist: vec![],
             subagent_policy: None,
+            allowed_links: None,
         };
 
         let config = AgentInstanceConfig::from_resolved(&resolved);
@@ -792,6 +803,7 @@ mod tests {
             skills: vec!["*".to_string()],
             skills_blacklist: vec!["bash".to_string(), "code_exec".to_string()],
             subagent_policy: None,
+            allowed_links: None,
         };
 
         let config = AgentInstanceConfig::from_resolved(&resolved);
