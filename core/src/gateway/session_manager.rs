@@ -34,6 +34,9 @@ pub struct SessionMetadata {
     pub message_count: i64,
     pub total_tokens: i64,
     pub auto_reset_at: Option<i64>,
+    /// Raw metadata JSON string from the sessions table
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_json: Option<String>,
 }
 
 /// Session identity metadata stored in database
@@ -270,6 +273,7 @@ impl SessionManager {
                         message_count: row.get(5)?,
                         total_tokens: row.get(6)?,
                         auto_reset_at: row.get(7)?,
+                        metadata_json: None,
                     })
                 },
             )
@@ -305,6 +309,7 @@ impl SessionManager {
             message_count: 0,
             total_tokens: 0,
             auto_reset_at: None,
+            metadata_json: None,
         })
     }
 
@@ -454,7 +459,7 @@ impl SessionManager {
             let mut stmt = conn
                 .prepare(
                     "SELECT key, agent_id, session_type, created_at, last_active_at,
-                            message_count, total_tokens, auto_reset_at
+                            message_count, total_tokens, auto_reset_at, metadata
                      FROM sessions WHERE agent_id = ? ORDER BY last_active_at DESC",
                 )
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
@@ -470,6 +475,7 @@ impl SessionManager {
                         message_count: row.get(5)?,
                         total_tokens: row.get(6)?,
                         auto_reset_at: row.get(7)?,
+                        metadata_json: row.get(8)?,
                     })
                 })
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
@@ -479,7 +485,7 @@ impl SessionManager {
             let mut stmt = conn
                 .prepare(
                     "SELECT key, agent_id, session_type, created_at, last_active_at,
-                            message_count, total_tokens, auto_reset_at
+                            message_count, total_tokens, auto_reset_at, metadata
                      FROM sessions ORDER BY last_active_at DESC",
                 )
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
@@ -495,6 +501,7 @@ impl SessionManager {
                         message_count: row.get(5)?,
                         total_tokens: row.get(6)?,
                         auto_reset_at: row.get(7)?,
+                        metadata_json: row.get(8)?,
                     })
                 })
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
@@ -612,6 +619,99 @@ impl SessionManager {
         };
 
         Ok(identity)
+    }
+
+    /// Close a session: set status=closed, store topic in metadata JSON
+    pub async fn close_session(
+        &self,
+        key: &SessionKey,
+        topic: Option<String>,
+    ) -> Result<(), SessionManagerError> {
+        let key_str = key.to_key_string();
+        let conn = self.conn.lock().map_err(|e|
+            SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        // Get existing metadata
+        let existing_json: Option<String> = conn
+            .query_row("SELECT metadata FROM sessions WHERE key = ?", params![&key_str], |row| row.get(0))
+            .optional()
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+            .flatten();
+
+        let mut meta: serde_json::Value = existing_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("status".to_string(), serde_json::json!("closed"));
+            if let Some(t) = &topic {
+                obj.insert("topic".to_string(), serde_json::json!(t));
+            }
+        }
+
+        let meta_json = serde_json::to_string(&meta)
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        conn.execute(
+            "UPDATE sessions SET metadata = ? WHERE key = ?",
+            params![&meta_json, &key_str],
+        ).map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Get current epoch for a base key pattern (e.g. "agent:main:main")
+    pub async fn get_current_epoch(
+        &self,
+        base_key_pattern: &str,
+    ) -> Result<u32, SessionManagerError> {
+        let conn = self.conn.lock().map_err(|e|
+            SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        let like_pattern = format!("{}%", base_key_pattern);
+        let latest_key: Option<String> = conn
+            .query_row(
+                "SELECT key FROM sessions WHERE key LIKE ? ORDER BY created_at DESC LIMIT 1",
+                params![&like_pattern],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        match latest_key {
+            Some(key_str) => {
+                if let Some(suffix) = key_str.rsplit(':').next() {
+                    if let Some(n_str) = suffix.strip_prefix('s') {
+                        if let Ok(n) = n_str.parse::<u32>() {
+                            return Ok(n);
+                        }
+                    }
+                }
+                Ok(0)
+            }
+            None => Ok(0),
+        }
+    }
+
+    /// Get the topic string from a session's metadata JSON
+    pub async fn get_session_topic(
+        &self,
+        key: &SessionKey,
+    ) -> Result<Option<String>, SessionManagerError> {
+        let key_str = key.to_key_string();
+        let conn = self.conn.lock().map_err(|e|
+            SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        let metadata_json: Option<String> = conn
+            .query_row("SELECT metadata FROM sessions WHERE key = ?", params![&key_str], |row| row.get(0))
+            .optional()
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+            .flatten();
+
+        Ok(metadata_json
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+            .and_then(|v| v.get("topic")?.as_str().map(|s| s.to_string())))
     }
 
     /// Cleanup expired sessions
@@ -856,6 +956,51 @@ mod tests {
     fn test_session_identity_meta_from_invalid_json() {
         let meta = SessionIdentityMeta::from_json_str(Some("{invalid json}"));
         assert_eq!(meta.role, Role::Owner); // Fallback to default
+    }
+
+    #[tokio::test]
+    async fn test_close_session_with_topic() {
+        let temp = tempdir().unwrap();
+        let config = test_config(temp.path().join("test.db"));
+        let manager = SessionManager::new(config).unwrap();
+
+        let key = SessionKey::main("test");
+        manager.get_or_create(&key).await.unwrap();
+        manager.add_message(&key, "user", "Hello").await.unwrap();
+
+        manager.close_session(&key, Some("测试对话".to_string())).await.unwrap();
+
+        // Verify topic can be retrieved
+        let topic = manager.get_session_topic(&key).await.unwrap();
+        assert_eq!(topic, Some("测试对话".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_close_session_without_topic() {
+        let temp = tempdir().unwrap();
+        let config = test_config(temp.path().join("test.db"));
+        let manager = SessionManager::new(config).unwrap();
+
+        let key = SessionKey::main("test");
+        manager.get_or_create(&key).await.unwrap();
+
+        manager.close_session(&key, None).await.unwrap();
+
+        let topic = manager.get_session_topic(&key).await.unwrap();
+        assert!(topic.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_current_epoch() {
+        let temp = tempdir().unwrap();
+        let config = test_config(temp.path().join("test.db"));
+        let manager = SessionManager::new(config).unwrap();
+
+        // Create epoch 0
+        let key0 = SessionKey::main("test");
+        manager.get_or_create(&key0).await.unwrap();
+        let epoch = manager.get_current_epoch("agent:test:main").await.unwrap();
+        assert_eq!(epoch, 0);
     }
 
     #[test]
