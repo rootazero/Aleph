@@ -4,7 +4,6 @@
 
 #![allow(dead_code)]
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -20,9 +19,8 @@ use alephcore::gateway::{
     RouterChannelConfig, RoutingConfig, RunStatus, SqlitePairingStore, UserId,
     WorkspaceManager, WorkspaceManagerConfig,
 };
-use alephcore::gateway::router::SessionKey;
 use alephcore::gateway::execution_engine::{ExecutionError, RunState};
-use alephcore::gateway::event_emitter::{EventEmitter, EventEmitError, StreamEvent};
+use alephcore::gateway::event_emitter::{EventEmitter, StreamEvent};
 use alephcore::gateway::RunRequest;
 
 use super::mock_channel::{CapturedReply, MockChannel};
