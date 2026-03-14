@@ -171,8 +171,6 @@ fn SettingsRouter() -> impl IntoView {
             "/settings/security" => view! { <SecurityView /> }.into_any(),
             "/settings/auth" => view! { <AuthView /> }.into_any(),
             "/settings/policies" => view! { <PoliciesView /> }.into_any(),
-            "/settings/vault" => view! { <VaultView /> }.into_any(),
-
             // Channels
             "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),
             _ if path.starts_with("/settings/channels/") => {

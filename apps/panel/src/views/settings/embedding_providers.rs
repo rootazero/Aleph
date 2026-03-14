@@ -5,8 +5,73 @@ use crate::api::{
     EmbeddingProvidersApi, EmbeddingProviderEntry, EmbeddingProviderConfig,
     EmbeddingPresetEntry,
 };
+use crate::components::model_selector::{ModelSelector, ModelOption};
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
+
+fn em(id: &str, name: &str) -> ModelOption {
+    ModelOption { id: id.into(), name: Some(name.into()), capabilities: vec!["embedding".into()], source: "preset".into() }
+}
+
+/// Return preset model options for a given embedding provider preset
+fn embedding_models_for_preset(preset: &str) -> Vec<ModelOption> {
+    match preset {
+        "silicon_flow" => vec![
+            em("BAAI/bge-m3", "BGE-M3"),
+            em("BAAI/bge-large-zh-v1.5", "BGE-Large-ZH v1.5"),
+            em("BAAI/bge-large-en-v1.5", "BGE-Large-EN v1.5"),
+            em("BAAI/bge-small-zh-v1.5", "BGE-Small-ZH v1.5"),
+        ],
+        "open_ai" => vec![
+            em("text-embedding-3-small", "Embedding 3 Small"),
+            em("text-embedding-3-large", "Embedding 3 Large"),
+            em("text-embedding-ada-002", "Ada 002"),
+        ],
+        "ollama" => vec![
+            em("nomic-embed-text", "Nomic Embed Text"),
+            em("mxbai-embed-large", "MXBai Embed Large"),
+            em("all-minilm", "All-MiniLM"),
+            em("snowflake-arctic-embed", "Snowflake Arctic Embed"),
+            em("bge-m3", "BGE-M3"),
+            em("bge-large", "BGE-Large"),
+        ],
+        // Custom/unknown providers — show comprehensive list of popular embedding models
+        _ => vec![
+            // OpenAI
+            em("text-embedding-3-small", "OpenAI Embedding 3 Small"),
+            em("text-embedding-3-large", "OpenAI Embedding 3 Large"),
+            em("text-embedding-ada-002", "OpenAI Ada 002"),
+            // BGE (BAAI)
+            em("BAAI/bge-m3", "BGE-M3"),
+            em("BAAI/bge-large-zh-v1.5", "BGE-Large-ZH v1.5"),
+            em("BAAI/bge-large-en-v1.5", "BGE-Large-EN v1.5"),
+            em("BAAI/bge-small-zh-v1.5", "BGE-Small-ZH v1.5"),
+            // Ollama / Local
+            em("nomic-embed-text", "Nomic Embed Text"),
+            em("mxbai-embed-large", "MXBai Embed Large"),
+            em("all-minilm", "All-MiniLM"),
+            em("snowflake-arctic-embed", "Snowflake Arctic Embed"),
+            em("bge-m3", "BGE-M3 (Ollama)"),
+            em("bge-large", "BGE-Large (Ollama)"),
+            // Jina
+            em("jina-embeddings-v3", "Jina Embeddings v3"),
+            em("jina-embeddings-v2-base-en", "Jina Embeddings v2 EN"),
+            em("jina-embeddings-v2-base-zh", "Jina Embeddings v2 ZH"),
+            // Cohere
+            em("embed-multilingual-v3.0", "Cohere Embed Multilingual v3"),
+            em("embed-english-v3.0", "Cohere Embed English v3"),
+            // Voyage
+            em("voyage-3", "Voyage 3"),
+            em("voyage-3-lite", "Voyage 3 Lite"),
+            em("voyage-code-3", "Voyage Code 3"),
+            // Mixedbread
+            em("mxbai-embed-large-v1", "MXBai Embed Large v1"),
+            // GTE (Alibaba)
+            em("gte-large-en-v1.5", "GTE-Large EN v1.5"),
+            em("gte-Qwen2-7B-instruct", "GTE-Qwen2 7B"),
+        ],
+    }
+}
 
 #[component]
 pub fn EmbeddingProvidersView() -> impl IntoView {
@@ -364,7 +429,11 @@ fn ProviderDetailPanel(
     // Editable fields
     let api_base = RwSignal::new(provider.api_base.clone());
     let api_key = RwSignal::new(provider.api_key.clone().unwrap_or_default());
-    let model = RwSignal::new(provider.model.clone());
+    let selected_model = RwSignal::new({
+        let m = provider.model.clone();
+        if m.is_empty() { None } else { Some(m) }
+    });
+    let models_list = RwSignal::new(embedding_models_for_preset(&provider_preset));
     let dimensions = RwSignal::new(provider.dimensions);
 
     // Action states
@@ -393,7 +462,7 @@ fn ProviderDetailPanel(
                     let key = api_key.get();
                     if key.is_empty() { None } else { Some(key) }
                 },
-                model: model.get(),
+                model: selected_model.get().unwrap_or_default(),
                 dimensions: dimensions.get(),
                 batch_size: provider_batch_size,
                 timeout_ms: provider_timeout_ms,
@@ -535,28 +604,6 @@ fn ProviderDetailPanel(
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
                 <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
 
-                // API Base URL
-                <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "API Base URL"
-                    </label>
-                    <input
-                        type="text"
-                        value=move || api_base.get()
-                        on:input=move |ev| api_base.set(event_target_value(&ev))
-                        placeholder={
-                            let default_base = match provider_preset.as_str() {
-                                "silicon_flow" => "Default: https://api.siliconflow.cn/v1",
-                                "open_ai" => "Default: https://api.openai.com/v1",
-                                "ollama" => "Default: http://localhost:11434/v1",
-                                _ => "https://api.example.com/v1",
-                            };
-                            default_base
-                        }
-                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    />
-                </div>
-
                 // API Key
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
@@ -575,23 +622,30 @@ fn ProviderDetailPanel(
                     })}
                 </div>
 
-                // Model Name
+                // Model
+                <ModelSelector
+                    models=Signal::derive(move || models_list.get())
+                    selected=selected_model
+                    allow_custom=true
+                />
+
+                // API Base URL
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Model"
+                        "Base URL"
                     </label>
                     <input
                         type="text"
-                        value=move || model.get()
-                        on:input=move |ev| model.set(event_target_value(&ev))
+                        value=move || api_base.get()
+                        on:input=move |ev| api_base.set(event_target_value(&ev))
                         placeholder={
-                            let default_model = match provider_preset.as_str() {
-                                "silicon_flow" => "Default: BAAI/bge-m3",
-                                "open_ai" => "Default: text-embedding-3-small",
-                                "ollama" => "Default: nomic-embed-text",
-                                _ => "model-name",
+                            let default_base = match provider_preset.as_str() {
+                                "silicon_flow" => "Default: https://api.siliconflow.cn/v1",
+                                "open_ai" => "Default: https://api.openai.com/v1",
+                                "ollama" => "Default: http://localhost:11434/v1",
+                                _ => "https://api.example.com/v1",
                             };
-                            default_model
+                            default_base
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
@@ -722,7 +776,7 @@ fn AddProviderPanel(
     let name = RwSignal::new(String::new());
     let api_base = RwSignal::new(String::new());
     let api_key = RwSignal::new(String::new());
-    let model_name = RwSignal::new(String::new());
+    let selected_model = RwSignal::new(None::<String>);
     let dimensions = RwSignal::new(1024u32);
 
     let (adding, set_adding) = signal(false);
@@ -742,7 +796,7 @@ fn AddProviderPanel(
                 let key = api_key.get();
                 if key.is_empty() { None } else { Some(key) }
             },
-            model: model_name.get(),
+            model: selected_model.get().unwrap_or_default(),
             dimensions: dimensions.get(),
             batch_size: 32,
             timeout_ms: 10000,
@@ -844,18 +898,6 @@ fn AddProviderPanel(
                     />
                 </div>
 
-                // API Base URL
-                <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"API Base URL"</label>
-                    <input
-                        type="text"
-                        value=move || api_base.get()
-                        on:input=move |ev| api_base.set(event_target_value(&ev))
-                        placeholder="https://api.openai.com/v1"
-                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    />
-                </div>
-
                 // API Key
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">"API Key"</label>
@@ -868,13 +910,20 @@ fn AddProviderPanel(
                 </div>
 
                 // Model
+                <ModelSelector
+                    models=Signal::derive(|| vec![])
+                    selected=selected_model
+                    allow_custom=true
+                />
+
+                // Base URL
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Model"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"Base URL"</label>
                     <input
                         type="text"
-                        value=move || model_name.get()
-                        on:input=move |ev| model_name.set(event_target_value(&ev))
-                        placeholder="text-embedding-3-small"
+                        value=move || api_base.get()
+                        on:input=move |ev| api_base.set(event_target_value(&ev))
+                        placeholder="https://api.openai.com/v1"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>

@@ -55,6 +55,7 @@ pub fn SetupWizard(
                 match ProvidersApi::probe(
                     &state,
                     &protocol,
+                    None,
                     key.as_deref(),
                     url.as_deref(),
                 ).await {

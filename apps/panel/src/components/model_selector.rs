@@ -17,9 +17,13 @@ pub struct ModelOption {
 /// Group models by capability
 fn group_models(models: &[ModelOption]) -> Vec<(&'static str, Vec<&ModelOption>)> {
     let groups = [
+        ("Embedding", "embedding"),
         ("Chat", "chat"),
         ("Vision", "vision"),
         ("Tools", "tools"),
+        ("Image", "image"),
+        ("Video", "video"),
+        ("Speech", "speech"),
     ];
 
     let mut result: Vec<(&'static str, Vec<&ModelOption>)> = Vec::new();

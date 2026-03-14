@@ -647,7 +647,10 @@ pub async fn handle_needs_setup(request: JsonRpcRequest, config_store: Arc<RwLoc
 pub struct ProbeParams {
     /// Protocol type: "openai", "anthropic", "gemini", "ollama"
     pub protocol: String,
-    /// API key (not needed for Ollama)
+    /// Provider name — used to resolve API key from vault when api_key is not provided
+    #[serde(default)]
+    pub name: Option<String>,
+    /// API key (not needed for Ollama; resolved from vault if omitted)
     #[serde(default)]
     pub api_key: Option<String>,
     /// Custom base URL (None = protocol default)
@@ -671,7 +674,7 @@ pub struct ProbeResult {
 ///
 /// Combines connection verification and model discovery in a single call.
 /// Used by the setup wizard and enhanced settings form.
-pub async fn handle_probe(request: JsonRpcRequest, _config_store: Arc<RwLock<Config>>) -> JsonRpcResponse {
+pub async fn handle_probe(request: JsonRpcRequest, config_store: Arc<RwLock<Config>>, vault: Arc<SharedTokenManager>) -> JsonRpcResponse {
     let params: ProbeParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -682,11 +685,33 @@ pub async fn handle_probe(request: JsonRpcRequest, _config_store: Arc<RwLock<Con
     // Build temporary config for probing
     let mut probe_config = ProviderConfig::test_config("probe-placeholder");
     probe_config.protocol = Some(protocol.clone());
-    if let Some(api_key) = params.api_key {
-        probe_config.api_key = Some(api_key);
+
+    // Resolve API key: explicit param > vault > existing config
+    let api_key = params.api_key.or_else(|| {
+        params.name.as_deref().and_then(|name| {
+            let key = resolve_api_key(name, &vault);
+            info!(provider = %name, has_key = key.is_some(), "Probe: resolved API key from vault");
+            key
+        })
+    });
+    if let Some(ref key) = api_key {
+        info!(protocol = %protocol, key_len = key.len(), "Probe: using API key");
+        probe_config.api_key = Some(key.clone());
+    } else {
+        info!(protocol = %protocol, "Probe: no API key available");
     }
-    if let Some(base_url) = params.base_url {
-        probe_config.base_url = Some(base_url);
+
+    // Resolve base_url: explicit param > existing config
+    let base_url = if params.base_url.is_some() {
+        params.base_url
+    } else if let Some(name) = params.name.as_deref() {
+        let config = config_store.read().await;
+        config.providers.get(name).and_then(|c| c.base_url.clone())
+    } else {
+        None
+    };
+    if let Some(url) = base_url {
+        probe_config.base_url = Some(url);
     }
 
     let registry = &crate::providers::model_registry::MODEL_REGISTRY;
@@ -953,24 +978,34 @@ mod tests {
     #[tokio::test]
     async fn test_probe_needs_protocol() {
         let config = Arc::new(RwLock::new(Config::default()));
+        let store = Arc::new(
+            crate::gateway::security::store::SecurityStore::in_memory()
+                .expect("in-memory security store"),
+        );
+        let vault = Arc::new(SharedTokenManager::new(store, "/tmp/aleph_probe_test.vault"));
         let request = JsonRpcRequest::with_id(
             "providers.probe",
             Some(json!({})),
             serde_json::json!(1),
         );
-        let response = handle_probe(request, config).await;
+        let response = handle_probe(request, config, vault).await;
         assert!(response.error.is_some(), "Should fail without protocol");
     }
 
     #[tokio::test]
     async fn test_probe_unknown_protocol() {
         let config = Arc::new(RwLock::new(Config::default()));
+        let store = Arc::new(
+            crate::gateway::security::store::SecurityStore::in_memory()
+                .expect("in-memory security store"),
+        );
+        let vault = Arc::new(SharedTokenManager::new(store, "/tmp/aleph_probe_test2.vault"));
         let request = JsonRpcRequest::with_id(
             "providers.probe",
             Some(json!({"protocol": "nonexistent"})),
             serde_json::json!(1),
         );
-        let response = handle_probe(request, config).await;
+        let response = handle_probe(request, config, vault).await;
         let result: serde_json::Value = serde_json::from_value(response.result.unwrap()).unwrap();
         assert_eq!(result["success"], false);
     }
