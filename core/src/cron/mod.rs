@@ -50,12 +50,14 @@
 //! service.start().await?;
 //! ```
 
-// NOTE: chain, scheduler, delivery, webhook_target temporarily commented out
+// NOTE: chain, scheduler, webhook_target temporarily commented out
 // during CronJob/ScheduleKind rewrite. Will be restored in Tasks 14-18.
 // pub mod chain;
+pub mod alert;
 pub mod clock;
 pub mod config;
-// pub mod delivery;
+pub mod delivery;
+pub mod execution;
 pub mod resource;
 pub mod schedule;
 // pub mod scheduler;
