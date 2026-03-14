@@ -186,6 +186,14 @@ pub const SLASH_COMMAND_MODE_KEY: &str = "slash_command_mode";
 /// In Telegram groups, commands are sent as `/command@botname args`.
 /// This function normalizes to `/command args` so downstream parsers
 /// can resolve the command name correctly.
+/// Truncate a string to max_chars at a char boundary
+fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
 fn strip_bot_mention(input: &str) -> String {
     if !input.starts_with('/') {
         return input.to_string();
@@ -270,6 +278,8 @@ pub struct InboundMessageRouter {
     command_parser: Option<Arc<CommandParser>>,
     /// Debounce buffer for message merging (new pipeline path)
     debounce_buffer: Option<Arc<crate::gateway::pipeline::DebounceBuffer>>,
+    /// Session manager for session lifecycle (close/create with epochs)
+    session_manager: Option<Arc<super::session_manager::SessionManager>>,
 }
 
 /// Unified channel config for permission checking
@@ -369,6 +379,7 @@ impl InboundMessageRouter {
 
             command_parser: None,
             debounce_buffer: None,
+            session_manager: None,
         }
     }
 
@@ -401,6 +412,7 @@ impl InboundMessageRouter {
 
             command_parser: None,
             debounce_buffer: None,
+            session_manager: None,
         }
     }
 
@@ -435,6 +447,7 @@ impl InboundMessageRouter {
 
             command_parser: None,
             debounce_buffer: None,
+            session_manager: None,
         }
     }
 
@@ -491,6 +504,15 @@ impl InboundMessageRouter {
     /// (/screenshot, /ocr, /search, /webfetch, /gen) are recognized.
     pub fn with_command_parser(mut self, parser: Arc<CommandParser>) -> Self {
         self.command_parser = Some(parser);
+        self
+    }
+
+    /// Set the session manager for session lifecycle operations
+    ///
+    /// When set, enables `/new` command to close the current session
+    /// (with LLM-generated topic) and start a new epoch.
+    pub fn with_session_manager(mut self, sm: Arc<super::session_manager::SessionManager>) -> Self {
+        self.session_manager = Some(sm);
         self
     }
 
@@ -617,6 +639,10 @@ impl InboundMessageRouter {
                     if parsed.command_name == "groupchat" {
                         return self.handle_groupchat_command(&msg).await;
                     }
+                    // Handle /new command — start new session
+                    if parsed.command_name == "new" {
+                        return self.handle_new_session(&msg, &ctx).await;
+                    }
                     // All other commands → execution engine via metadata
                     let result = self.parsed_command_to_intent_result(parsed);
                     if let Some(mode_json) = serialize_intent_result(&result) {
@@ -640,6 +666,11 @@ impl InboundMessageRouter {
             // Fallback: /groupchat without unified registry
             if slash_text.starts_with("/groupchat") && self.group_chat_orch.is_some() {
                 return self.handle_groupchat_command(&msg).await;
+            }
+
+            // Fallback: /new without unified registry
+            if slash_text.trim() == "/new" {
+                return self.handle_new_session(&msg, &ctx).await;
             }
 
             // Unrecognized slash command — fall through to normal message handling
@@ -705,6 +736,14 @@ impl InboundMessageRouter {
                 if let Some(e) = access_denied {
                     format!("\u{26d4} {}", e)
                 } else {
+                    // Close current session before switching
+                    let topic = self.generate_session_topic(&ctx.session_key).await;
+                    if let Some(ref sm) = self.session_manager {
+                        if let Err(e) = sm.close_session(&ctx.session_key, topic).await {
+                            warn!("[Router] Failed to close session on switch: {}", e);
+                        }
+                    }
+
                     match manager.set_active_agent(channel_id, sender_id, agent_name) {
                         Ok(()) => {
                             info!("[Router] Switched agent for {}:{} -> {}", channel_id, sender_id, agent_name);
@@ -754,6 +793,85 @@ impl InboundMessageRouter {
             }
         }
         Ok(())
+    }
+
+    /// Handle /new command: close current session with topic, create new epoch
+    async fn handle_new_session(
+        &self,
+        msg: &InboundMessage,
+        ctx: &InboundContext,
+    ) -> Result<(), RoutingError> {
+        let old_key = &ctx.session_key;
+
+        // Generate topic from recent history via LLM
+        let topic = self.generate_session_topic(old_key).await;
+
+        // Close old session in database
+        if let Some(ref sm) = self.session_manager {
+            if let Err(e) = sm.close_session(old_key, topic.clone()).await {
+                warn!("[Router] Failed to close session: {}", e);
+            }
+        }
+
+        // Create new session with next epoch
+        let new_key = old_key.to_new().with_next_epoch();
+        if let Some(ref sm) = self.session_manager {
+            let legacy_new = SessionKey::from_new(&new_key);
+            if let Err(e) = sm.get_or_create(&legacy_new).await {
+                warn!("[Router] Failed to create new session: {}", e);
+            }
+        }
+
+        // Send confirmation reply
+        let topic_suffix = topic.map(|t| format!(" ({})", t)).unwrap_or_default();
+        let reply_text = format!("新对话已开始{}", topic_suffix);
+        let reply = OutboundMessage::text(msg.conversation_id.as_str(), &reply_text);
+        if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
+            error!("[Router] Failed to send /new reply: {}", e);
+        }
+
+        info!("[Router] New session created: {}", new_key.to_key_string());
+        Ok(())
+    }
+
+    /// Generate a topic summary for the current session using LLM
+    async fn generate_session_topic(
+        &self,
+        session_key: &SessionKey,
+    ) -> Option<String> {
+        let sm = self.session_manager.as_ref()?;
+        let llm = self.llm_provider.as_ref()?;
+
+        // Get recent history
+        let history = sm.get_history(session_key, Some(20)).await.ok()?;
+        if history.len() < 2 {
+            return None;
+        }
+
+        // Build conversation excerpt for LLM
+        let conversation: String = history.iter()
+            .map(|m| {
+                let content = truncate_for_topic(&m.content, 100);
+                format!("{}: {}", m.role, content)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let prompt = format!(
+            "用一句简短的中文概括以下对话的主题（10字以内，不要标点符号）：\n\n{}",
+            conversation
+        );
+
+        match llm.process(&prompt, None).await {
+            Ok(topic) => {
+                let topic = topic.trim().to_string();
+                if topic.is_empty() { None } else { Some(topic) }
+            }
+            Err(e) => {
+                warn!("[Router] Failed to generate session topic: {}", e);
+                None
+            }
+        }
     }
 
     /// Convert a ParsedCommand to IntentResult
