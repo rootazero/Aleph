@@ -143,7 +143,7 @@ mod tests {
         // Trigger the flow with an input event
         bus.publish(AlephEvent::InputReceived(InputEvent {
             text: "search for rust async".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: chrono::Utc::now().timestamp_millis(),
         }))

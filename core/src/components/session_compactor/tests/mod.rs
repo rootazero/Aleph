@@ -554,7 +554,7 @@ use serde_json::json;
         // InputReceived event should be ignored
         let event = AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: 0,
         });

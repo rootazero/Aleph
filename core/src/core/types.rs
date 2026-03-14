@@ -30,7 +30,7 @@ pub struct MediaAttachment {
 pub struct CapturedContext {
     pub window_title: Option<String>,
     pub attachments: Option<Vec<MediaAttachment>>, // Multimodal content support
-    pub topic_id: Option<String>,                  // Topic ID for multi-turn conversations
+    pub session_id: Option<String>,                  // Session ID for multi-turn conversations
 }
 
 /// Statistics about memory compression state

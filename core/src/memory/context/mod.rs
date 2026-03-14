@@ -29,31 +29,34 @@ pub struct ContextAnchor {
     pub window_title: String,
     /// Unix timestamp when interaction occurred
     pub timestamp: i64,
-    /// Topic ID for associating memories with conversation topics
-    /// For multi-turn: specific topic UUID; For single-turn: "single-turn" constant
-    pub topic_id: String,
+    /// Session ID for associating memories with conversation sessions
+    /// For multi-turn: specific session UUID; For sessionless: "none" constant
+    pub session_id: String,
 }
 
-/// Default topic ID for single-turn interactions
-pub const SINGLE_TURN_TOPIC_ID: &str = "single-turn";
+/// Default session ID for sessionless (single-turn) interactions
+pub const NO_SESSION: &str = "none";
+
+/// Deprecated alias — kept for Arrow backward compatibility with old LanceDB data
+pub const SINGLE_TURN_TOPIC_ID: &str = NO_SESSION;
 
 impl ContextAnchor {
-    /// Create a new context anchor with current timestamp (for single-turn)
+    /// Create a new context anchor with current timestamp (sessionless)
     pub fn now(window_title: String) -> Self {
-        Self::with_topic(window_title, SINGLE_TURN_TOPIC_ID.to_string())
+        Self::with_session(window_title, NO_SESSION.to_string())
     }
 
-    /// Create context anchor with specific timestamp (for single-turn)
+    /// Create context anchor with specific timestamp (sessionless)
     pub fn with_timestamp(window_title: String, timestamp: i64) -> Self {
         Self {
             window_title,
             timestamp,
-            topic_id: SINGLE_TURN_TOPIC_ID.to_string(),
+            session_id: NO_SESSION.to_string(),
         }
     }
 
-    /// Create context anchor with topic ID (for multi-turn conversations)
-    pub fn with_topic(window_title: String, topic_id: String) -> Self {
+    /// Create context anchor with session ID (for multi-turn conversations)
+    pub fn with_session(window_title: String, session_id: String) -> Self {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -62,7 +65,7 @@ impl ContextAnchor {
         Self {
             window_title,
             timestamp,
-            topic_id,
+            session_id,
         }
     }
 }

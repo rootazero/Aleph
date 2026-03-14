@@ -232,7 +232,7 @@ impl AlephEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputEvent {
     pub text: String,
-    pub topic_id: Option<String>,
+    pub session_id: Option<String>,
     pub context: Option<InputContext>,
     pub timestamp: i64,
 }
@@ -522,7 +522,7 @@ mod tests {
     fn test_event_type_mapping() {
         let event = AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: 0,
         });

@@ -874,7 +874,7 @@ mod tests {
         // InputReceived event should be ignored
         let event = AlephEvent::InputReceived(crate::event::InputEvent {
             text: "test".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: 0,
         });

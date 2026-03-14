@@ -426,7 +426,7 @@ mod tests {
     fn make_input_event() -> AlephEvent {
         AlephEvent::InputReceived(InputEvent {
             text: "test".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: 0,
         })

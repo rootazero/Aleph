@@ -758,7 +758,7 @@ mod tests {
     fn test_event_to_part_input() {
         let event = AlephEvent::InputReceived(InputEvent {
             text: "Hello".to_string(),
-            topic_id: Some("topic-1".to_string()),
+            session_id: Some("topic-1".to_string()),
             context: Some(InputContext {
                 app_name: Some("Terminal".to_string()),
                 window_title: Some("bash".to_string()),
@@ -970,7 +970,7 @@ mod tests {
         // Handle input event
         let event = AlephEvent::InputReceived(InputEvent {
             text: "Test input".to_string(),
-            topic_id: None,
+            session_id: None,
             context: None,
             timestamp: chrono::Utc::now().timestamp(),
         });

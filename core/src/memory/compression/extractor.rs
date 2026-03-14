@@ -266,7 +266,7 @@ mod tests {
             context: ContextAnchor {
                 window_title: String::new(),
                 timestamp: 0,
-                topic_id: "single-turn".to_string(),
+                session_id: "none".to_string(),
             },
             embedding: None,
             namespace: "owner".to_string(),

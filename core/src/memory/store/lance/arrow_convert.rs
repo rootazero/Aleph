@@ -644,10 +644,10 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
     let ai_output_arr =
         StringArray::from_iter_values(memories.iter().map(|m| m.ai_output.as_str()));
     let timestamp_arr = Int64Array::from_iter_values(memories.iter().map(|m| m.context.timestamp));
-    let topic_id_arr = StringArray::from(
+    let session_id_arr = StringArray::from(
         memories
             .iter()
-            .map(|m| Some(m.context.topic_id.as_str()))
+            .map(|m| Some(m.context.session_id.as_str()))
             .collect::<Vec<_>>(),
     );
     let session_key_arr = StringArray::from_iter_values(memories.iter().map(|_| "default"));
@@ -686,7 +686,7 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
             Arc::new(user_input_arr),   // 2 user_input
             Arc::new(ai_output_arr),    // 3 ai_output
             Arc::new(timestamp_arr),    // 4 timestamp
-            Arc::new(topic_id_arr),     // 5 topic_id
+            Arc::new(session_id_arr),   // 5 session_id
             Arc::new(session_key_arr),  // 6 session_key
             Arc::new(namespace_arr),    // 7 namespace
             Arc::new(workspace_arr),    // 8 workspace
@@ -712,7 +712,9 @@ pub fn record_batch_to_memories(batch: &RecordBatch) -> Result<Vec<MemoryEntry>,
     let user_input_col = col::<StringArray>(batch, "user_input")?;
     let ai_output_col = col::<StringArray>(batch, "ai_output")?;
     let timestamp_col = col::<Int64Array>(batch, "timestamp")?;
-    let topic_id_col = col::<StringArray>(batch, "topic_id").ok();
+    let session_id_col = col::<StringArray>(batch, "session_id")
+        .or_else(|_| col::<StringArray>(batch, "topic_id"))
+        .ok();
     // namespace and workspace columns (with fallback for backward compatibility)
     let namespace_col = col::<StringArray>(batch, "namespace").ok();
     let workspace_col = col::<StringArray>(batch, "workspace").ok();
@@ -722,14 +724,14 @@ pub fn record_batch_to_memories(batch: &RecordBatch) -> Result<Vec<MemoryEntry>,
 
     let mut entries = Vec::with_capacity(n);
     for i in 0..n {
-        let topic_id = topic_id_col
+        let session_id = session_id_col
             .and_then(|c| read_nullable_string(c, i))
-            .unwrap_or_else(|| crate::memory::context::SINGLE_TURN_TOPIC_ID.to_string());
+            .unwrap_or_else(|| crate::memory::context::NO_SESSION.to_string());
 
         let context = ContextAnchor {
             window_title: window_col.value(i).to_string(),
             timestamp: timestamp_col.value(i),
-            topic_id,
+            session_id,
         };
 
         // Prefer vec_768, then 1024, then 1536 (same priority as facts)
@@ -1000,7 +1002,7 @@ mod tests {
         let context = ContextAnchor {
             window_title: "Project Plan".to_string(),
             timestamp: 1700000000,
-            topic_id: "topic-abc".to_string(),
+            session_id: "topic-abc".to_string(),
         };
         let entry = MemoryEntry {
             id: "mem-test-001".to_string(),
@@ -1023,7 +1025,7 @@ mod tests {
         assert_eq!(m.id, entry.id);
         assert_eq!(m.context.window_title, entry.context.window_title);
         assert_eq!(m.context.timestamp, entry.context.timestamp);
-        assert_eq!(m.context.topic_id, "topic-abc");
+        assert_eq!(m.context.session_id, "topic-abc");
         assert_eq!(m.user_input, entry.user_input);
         assert_eq!(m.ai_output, entry.ai_output);
 
@@ -1037,7 +1039,7 @@ mod tests {
         let context = ContextAnchor {
             window_title: "Window".to_string(),
             timestamp: 1700000500,
-            topic_id: crate::memory::context::SINGLE_TURN_TOPIC_ID.to_string(),
+            session_id: crate::memory::context::NO_SESSION.to_string(),
         };
         let entry = MemoryEntry {
             id: "mem-test-002".to_string(),
@@ -1054,7 +1056,7 @@ mod tests {
         let recovered = record_batch_to_memories(&batch).expect("from_batch");
         assert_eq!(recovered.len(), 1);
         assert!(recovered[0].embedding.is_none());
-        assert_eq!(recovered[0].context.topic_id, "single-turn");
+        assert_eq!(recovered[0].context.session_id, "none");
     }
 
     #[test]
