@@ -1,15 +1,8 @@
 name: Tauri Release
 
+# Version is read from the VERSION file in the repo root.
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to release (e.g., 0.1.0)'
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -23,25 +16,25 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.create_release.outputs.id }}
-      version: ${{ steps.get_version.outputs.version }}
+      version: ${{ steps.version.outputs.value }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Get version
-        id: get_version
+      - name: Read version from VERSION file
+        id: version
+        run: echo "value=$(cat VERSION | tr -d '[:space:]')" >> $GITHUB_OUTPUT
+
+      - name: Tag release
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-          fi
+          git tag "v${{ steps.version.outputs.value }}" || true
+          git push origin "v${{ steps.version.outputs.value }}" || true
 
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.get_version.outputs.version }}
-          name: Aleph v${{ steps.get_version.outputs.version }}
+          tag_name: v${{ steps.version.outputs.value }}
+          name: Aleph v${{ steps.version.outputs.value }}
           draft: true
           prerelease: false
           generate_release_notes: true
