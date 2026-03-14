@@ -59,6 +59,7 @@ pub mod config;
 pub mod resource;
 pub mod schedule;
 // pub mod scheduler;
+pub mod service;
 pub mod store;
 pub mod stagger;
 // pub mod template; // Temporarily disabled during cron rewrite
