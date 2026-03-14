@@ -5,4 +5,6 @@
 mod link_acl_probe {
     pub mod mock_channel;
     pub mod harness;
+    pub mod access_control;
+    pub mod message_routing;
 }
