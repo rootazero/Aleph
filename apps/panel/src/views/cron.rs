@@ -16,11 +16,43 @@ use crate::api::cron::{CronApi, CronJobInfo, CreateCronJob, UpdateCronJob, JobRu
 // ============================================================================
 
 /// Format a schedule into a human-readable summary.
-/// e.g. "every 5min", "every 2h", or the raw cron expression.
-fn format_schedule_summary(kind: &str, schedule: &str) -> String {
+/// Prefers the structured `schedule_kind` JSON object when available,
+/// falling back to legacy `kind` + `schedule` string fields.
+fn format_schedule_summary(
+    schedule_kind_obj: &Option<serde_json::Value>,
+    kind: &str,
+    schedule: &str,
+) -> String {
+    // Try structured schedule_kind JSON first
+    if let Some(obj) = schedule_kind_obj {
+        if let Some(k) = obj.get("kind").and_then(|v| v.as_str()) {
+            match k {
+                "every" => {
+                    if let Some(ms) = obj.get("every_ms").and_then(|v| v.as_u64()) {
+                        return format_ms_interval(ms);
+                    }
+                }
+                "cron" => {
+                    if let Some(expr) = obj.get("expression").and_then(|v| v.as_str()) {
+                        return expr.to_string();
+                    }
+                }
+                "at" => {
+                    if let Some(dt) = obj.get("datetime").and_then(|v| v.as_str()) {
+                        return format!("At {}", dt);
+                    }
+                    if let Some(ts) = obj.get("at_ms").and_then(|v| v.as_i64()) {
+                        return format!("At {}", format_timestamp(ts / 1000));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Fallback to legacy string fields
     match kind {
         "every" => {
-            // Parse simple interval strings like "5m", "2h", "30s"
             let trimmed = schedule.trim();
             if let Some(rest) = trimmed.strip_suffix('m') {
                 format!("Every {}min", rest)
@@ -33,7 +65,20 @@ fn format_schedule_summary(kind: &str, schedule: &str) -> String {
             }
         }
         "at" => format!("At {}", schedule),
-        _ => schedule.to_string(), // cron expression shown as-is
+        _ => schedule.to_string(),
+    }
+}
+
+/// Format milliseconds into a human-readable interval string.
+fn format_ms_interval(ms: u64) -> String {
+    if ms < 60_000 {
+        format!("Every {}s", ms / 1000)
+    } else if ms < 3_600_000 {
+        format!("Every {}min", ms / 60_000)
+    } else if ms < 86_400_000 {
+        format!("Every {}h", ms / 3_600_000)
+    } else {
+        format!("Every {}d", ms / 86_400_000)
     }
 }
 
@@ -85,6 +130,80 @@ fn format_duration(ms: u64) -> String {
         format!("{:.1}s", ms as f64 / 1000.0)
     } else {
         format!("{:.1}min", ms as f64 / 60_000.0)
+    }
+}
+
+/// Parse a string into an optional i64, returning None if empty or invalid.
+fn parse_optional_i64(s: &str) -> Option<i64> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        trimmed.parse().ok()
+    }
+}
+
+/// Build a `schedule_kind` JSON object from form fields.
+/// Returns the tagged JSON like `{"kind":"every","every_ms":60000}`.
+fn build_schedule_kind_json(
+    kind: &str,
+    schedule: &str,
+    anchor_ms_str: &str,
+    stagger_ms_str: &str,
+) -> Option<serde_json::Value> {
+    match kind {
+        "every" => {
+            // Try to parse schedule as milliseconds directly, or as interval string
+            let every_ms = parse_interval_to_ms(schedule)?;
+            let mut obj = serde_json::json!({
+                "kind": "every",
+                "every_ms": every_ms,
+            });
+            if let Some(anchor) = parse_optional_i64(anchor_ms_str) {
+                obj["anchor_ms"] = serde_json::json!(anchor);
+            }
+            Some(obj)
+        }
+        "cron" => {
+            let mut obj = serde_json::json!({
+                "kind": "cron",
+                "expression": schedule,
+            });
+            if let Some(stagger) = parse_optional_i64(stagger_ms_str) {
+                obj["stagger_ms"] = serde_json::json!(stagger);
+            }
+            Some(obj)
+        }
+        "at" => {
+            Some(serde_json::json!({
+                "kind": "at",
+                "datetime": schedule,
+            }))
+        }
+        _ => None,
+    }
+}
+
+/// Parse a human interval string (e.g. "5m", "2h", "30s") to milliseconds.
+fn parse_interval_to_ms(s: &str) -> Option<u64> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Try direct number (assume ms)
+    if let Ok(ms) = trimmed.parse::<u64>() {
+        return Some(ms);
+    }
+    if let Some(rest) = trimmed.strip_suffix('s') {
+        rest.parse::<u64>().ok().map(|v| v * 1000)
+    } else if let Some(rest) = trimmed.strip_suffix('m') {
+        rest.parse::<u64>().ok().map(|v| v * 60_000)
+    } else if let Some(rest) = trimmed.strip_suffix('h') {
+        rest.parse::<u64>().ok().map(|v| v * 3_600_000)
+    } else if let Some(rest) = trimmed.strip_suffix('d') {
+        rest.parse::<u64>().ok().map(|v| v * 86_400_000)
+    } else {
+        None
     }
 }
 
@@ -212,11 +331,14 @@ fn JobListItem(
 ) -> impl IntoView {
     let name = job.name.clone();
     let enabled = job.enabled;
-    let schedule_kind = job.schedule_kind.clone();
+    let schedule_kind_str = job.schedule_kind_str.clone();
+    let schedule_kind_obj = job.schedule_kind.clone();
     let schedule = job.schedule.clone();
     let next_run_at = job.next_run_at;
+    let is_running = job.running_at_ms.is_some();
+    let has_errors = job.consecutive_errors.unwrap_or(0) > 0;
 
-    let summary = format_schedule_summary(&schedule_kind, &schedule);
+    let summary = format_schedule_summary(&schedule_kind_obj, &schedule_kind_str, &schedule);
 
     view! {
         <button
@@ -230,9 +352,11 @@ fn JobListItem(
             }
         >
             <div class="flex items-center gap-2 mb-1">
-                // Status dot
+                // Status dot: blue pulsing = running, green = enabled, gray = disabled
                 <span class=move || {
-                    if enabled {
+                    if is_running {
+                        "w-2 h-2 rounded-full bg-blue-500 animate-pulse flex-shrink-0"
+                    } else if enabled {
                         "w-2 h-2 rounded-full bg-success flex-shrink-0"
                     } else {
                         "w-2 h-2 rounded-full bg-text-tertiary flex-shrink-0"
@@ -241,12 +365,27 @@ fn JobListItem(
                 <span class="text-sm font-medium text-text-primary truncate">
                     {name}
                 </span>
+                // Error badge
+                {if has_errors {
+                    view! {
+                        <span class="ml-auto w-2 h-2 rounded-full bg-danger flex-shrink-0"
+                              title="Has consecutive errors"></span>
+                    }.into_any()
+                } else {
+                    view! { <span></span> }.into_any()
+                }}
             </div>
             <div class="ml-4 text-xs text-text-secondary">
                 {summary}
             </div>
             {move || {
-                if let Some(ts) = next_run_at {
+                if is_running {
+                    view! {
+                        <div class="ml-4 mt-1 text-xs text-blue-500">
+                            "running..."
+                        </div>
+                    }.into_any()
+                } else if let Some(ts) = next_run_at {
                     let relative = format_relative_time(ts);
                     view! {
                         <div class="ml-4 mt-1 text-xs text-text-tertiary">
@@ -283,6 +422,15 @@ fn JobEditor(
     let form_timezone = RwSignal::new(String::new());
     let form_tags = RwSignal::new(String::new());
     let form_enabled = RwSignal::new(true);
+    let form_anchor_ms = RwSignal::new(String::new());
+    let form_stagger_ms = RwSignal::new(String::new());
+    let form_session_target = RwSignal::new(String::new());
+    // Failure alert sub-fields
+    let form_alert_after = RwSignal::new(String::from("2"));
+    let form_alert_cooldown = RwSignal::new(String::from("1h"));
+    let form_alert_kind = RwSignal::new(String::from("announce"));
+    let form_alert_channel = RwSignal::new(String::new());
+    let form_alert_expanded = RwSignal::new(false);
 
     // Run history for existing jobs
     let runs = RwSignal::new(Vec::<JobRunInfo>::new());
@@ -303,18 +451,56 @@ fn JobEditor(
                 form_timezone.set(String::new());
                 form_tags.set(String::new());
                 form_enabled.set(true);
+                form_anchor_ms.set(String::new());
+                form_stagger_ms.set(String::new());
+                form_session_target.set(String::new());
+                form_alert_after.set("2".to_string());
+                form_alert_cooldown.set("1h".to_string());
+                form_alert_kind.set("announce".to_string());
+                form_alert_channel.set(String::new());
+                form_alert_expanded.set(false);
                 runs.set(Vec::new());
             } else {
                 // Load existing job data
                 if let Some(job) = jobs.get().get(idx) {
                     form_name.set(job.name.clone());
-                    form_schedule_kind.set(job.schedule_kind.clone());
+                    form_schedule_kind.set(job.schedule_kind_str.clone());
                     form_schedule.set(job.schedule.clone());
                     form_agent_id.set(job.agent_id.clone());
                     form_prompt.set(job.prompt.clone());
                     form_timezone.set(job.timezone.clone().unwrap_or_default());
                     form_tags.set(job.tags.join(", "));
                     form_enabled.set(job.enabled);
+                    form_anchor_ms.set(job.anchor_ms.map(|v| v.to_string()).unwrap_or_default());
+                    form_stagger_ms.set(job.stagger_ms.map(|v| v.to_string()).unwrap_or_default());
+                    form_session_target.set(job.session_target.clone().unwrap_or_default());
+
+                    // Populate failure alert from JSON
+                    if let Some(ref alert) = job.failure_alert {
+                        form_alert_after.set(
+                            alert.get("after_n").and_then(|v| v.as_u64())
+                                .map(|v| v.to_string()).unwrap_or_else(|| "2".to_string())
+                        );
+                        form_alert_cooldown.set(
+                            alert.get("cooldown").and_then(|v| v.as_str())
+                                .unwrap_or("1h").to_string()
+                        );
+                        form_alert_kind.set(
+                            alert.get("kind").and_then(|v| v.as_str())
+                                .unwrap_or("announce").to_string()
+                        );
+                        form_alert_channel.set(
+                            alert.get("channel").and_then(|v| v.as_str())
+                                .unwrap_or("").to_string()
+                        );
+                        form_alert_expanded.set(true);
+                    } else {
+                        form_alert_after.set("2".to_string());
+                        form_alert_cooldown.set("1h".to_string());
+                        form_alert_kind.set("announce".to_string());
+                        form_alert_channel.set(String::new());
+                        form_alert_expanded.set(false);
+                    }
 
                     // Load run history
                     let job_id = job.id.clone();
@@ -355,6 +541,34 @@ fn JobEditor(
             .collect();
         let enabled = form_enabled.get();
 
+        // Build schedule_kind JSON object from form fields
+        let schedule_kind_obj = build_schedule_kind_json(
+            &schedule_kind, &schedule,
+            &form_anchor_ms.get(), &form_stagger_ms.get(),
+        );
+
+        let anchor_ms = parse_optional_i64(&form_anchor_ms.get());
+        let stagger_ms = parse_optional_i64(&form_stagger_ms.get());
+        let session_target = {
+            let s = form_session_target.get();
+            if s.trim().is_empty() { None } else { Some(s) }
+        };
+
+        // Build failure_alert JSON if channel is specified
+        let failure_alert = {
+            let ch = form_alert_channel.get();
+            if ch.trim().is_empty() {
+                None
+            } else {
+                Some(serde_json::json!({
+                    "after_n": form_alert_after.get().parse::<u32>().unwrap_or(2),
+                    "cooldown": form_alert_cooldown.get(),
+                    "kind": form_alert_kind.get(),
+                    "channel": ch,
+                }))
+            }
+        };
+
         if is_new() {
             let create = CreateCronJob {
                 name,
@@ -365,6 +579,11 @@ fn JobEditor(
                 enabled,
                 timezone,
                 tags,
+                schedule_kind_obj,
+                anchor_ms,
+                stagger_ms,
+                session_target,
+                failure_alert,
             };
 
             spawn_local(async move {
@@ -394,6 +613,11 @@ fn JobEditor(
                     enabled: Some(enabled),
                     timezone,
                     tags: Some(tags),
+                    schedule_kind_obj,
+                    anchor_ms,
+                    stagger_ms,
+                    session_target,
+                    failure_alert,
                 };
 
                 spawn_local(async move {
@@ -567,6 +791,42 @@ fn JobEditor(
                                     </div>
                                 </div>
 
+                                // Anchor / Stagger (conditional on schedule type)
+                                {move || {
+                                    let kind = form_schedule_kind.get();
+                                    match kind.as_str() {
+                                        "every" => view! {
+                                            <div>
+                                                <label class="block text-sm font-medium text-text-secondary mb-2">
+                                                    "Anchor (ms)"
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    prop:value=move || form_anchor_ms.get()
+                                                    on:input=move |ev| form_anchor_ms.set(event_target_value(&ev))
+                                                    class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
+                                                    placeholder="Leave empty to use creation time"
+                                                />
+                                            </div>
+                                        }.into_any(),
+                                        "cron" => view! {
+                                            <div>
+                                                <label class="block text-sm font-medium text-text-secondary mb-2">
+                                                    "Stagger (ms)"
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    prop:value=move || form_stagger_ms.get()
+                                                    on:input=move |ev| form_stagger_ms.set(event_target_value(&ev))
+                                                    class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
+                                                    placeholder="Spread window, e.g. 5000"
+                                                />
+                                            </div>
+                                        }.into_any(),
+                                        _ => view! { <div></div> }.into_any(),
+                                    }
+                                }}
+
                                 // Agent
                                 <div>
                                     <label class="block text-sm font-medium text-text-secondary mb-2">
@@ -640,6 +900,94 @@ fn JobEditor(
                                     >
                                         {move || if form_enabled.get() { "Enabled" } else { "Disabled" }}
                                     </button>
+                                </div>
+
+                                // Session Target
+                                <div>
+                                    <label class="block text-sm font-medium text-text-secondary mb-2">
+                                        "Session Target"
+                                    </label>
+                                    <input
+                                        type="text"
+                                        prop:value=move || form_session_target.get()
+                                        on:input=move |ev| form_session_target.set(event_target_value(&ev))
+                                        class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
+                                        placeholder="e.g. new, reuse, reuse:session-id"
+                                    />
+                                </div>
+
+                                // Failure Alert (collapsible)
+                                <div class="border border-border rounded-lg">
+                                    <button
+                                        on:click=move |_| form_alert_expanded.set(!form_alert_expanded.get())
+                                        class="w-full px-4 py-3 flex items-center gap-2 text-sm font-medium text-text-secondary hover:text-text-primary transition-colors"
+                                    >
+                                        <span>{move || if form_alert_expanded.get() { "\u{25BC}" } else { "\u{25B6}" }}</span>
+                                        "Failure Alert"
+                                    </button>
+                                    {move || {
+                                        if form_alert_expanded.get() {
+                                            view! {
+                                                <div class="px-4 pb-4 space-y-4 border-t border-border pt-3">
+                                                    <div class="grid grid-cols-2 gap-4">
+                                                        <div>
+                                                            <label class="block text-xs font-medium text-text-secondary mb-1">
+                                                                "After N failures"
+                                                            </label>
+                                                            <input
+                                                                type="number"
+                                                                prop:value=move || form_alert_after.get()
+                                                                on:input=move |ev| form_alert_after.set(event_target_value(&ev))
+                                                                class="w-full px-3 py-1.5 bg-surface-sunken border border-border rounded-lg text-text-primary text-sm focus:outline-none focus:border-primary"
+                                                                placeholder="2"
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label class="block text-xs font-medium text-text-secondary mb-1">
+                                                                "Cooldown"
+                                                            </label>
+                                                            <input
+                                                                type="text"
+                                                                prop:value=move || form_alert_cooldown.get()
+                                                                on:input=move |ev| form_alert_cooldown.set(event_target_value(&ev))
+                                                                class="w-full px-3 py-1.5 bg-surface-sunken border border-border rounded-lg text-text-primary text-sm focus:outline-none focus:border-primary"
+                                                                placeholder="1h"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    <div class="grid grid-cols-2 gap-4">
+                                                        <div>
+                                                            <label class="block text-xs font-medium text-text-secondary mb-1">
+                                                                "Alert to"
+                                                            </label>
+                                                            <select
+                                                                prop:value=move || form_alert_kind.get()
+                                                                on:change=move |ev| form_alert_kind.set(event_target_value(&ev))
+                                                                class="w-full px-3 py-1.5 bg-surface-sunken border border-border rounded-lg text-text-primary text-sm focus:outline-none focus:border-primary"
+                                                            >
+                                                                <option value="announce">"Announce"</option>
+                                                                <option value="webhook">"Webhook"</option>
+                                                            </select>
+                                                        </div>
+                                                        <div>
+                                                            <label class="block text-xs font-medium text-text-secondary mb-1">
+                                                                "Channel / URL"
+                                                            </label>
+                                                            <input
+                                                                type="text"
+                                                                prop:value=move || form_alert_channel.get()
+                                                                on:input=move |ev| form_alert_channel.set(event_target_value(&ev))
+                                                                class="w-full px-3 py-1.5 bg-surface-sunken border border-border rounded-lg text-text-primary text-sm focus:outline-none focus:border-primary"
+                                                                placeholder="channel name or webhook URL"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            }.into_any()
+                                        } else {
+                                            view! { <div></div> }.into_any()
+                                        }
+                                    }}
                                 </div>
                             </div>
 
@@ -743,6 +1091,7 @@ fn RunHistory(
                                     <th class="px-4 py-2 text-left font-medium">"Status"</th>
                                     <th class="px-4 py-2 text-left font-medium">"Time"</th>
                                     <th class="px-4 py-2 text-left font-medium">"Duration"</th>
+                                    <th class="px-4 py-2 text-left font-medium">"Delivery"</th>
                                     <th class="px-4 py-2 text-left font-medium">"Error"</th>
                                 </tr>
                             </thead>
@@ -757,7 +1106,23 @@ fn RunHistory(
                                     };
                                     let time_str = format_timestamp(run.started_at);
                                     let duration_str = format_duration(run.duration_ms);
-                                    let error_str = run.error.clone().unwrap_or_default();
+
+                                    // Delivery status with icon
+                                    let delivery_str = run.delivery_status.clone().unwrap_or_default();
+                                    let delivery_icon = match delivery_str.as_str() {
+                                        "delivered" => "\u{2713}",
+                                        "deduped" => "\u{2261}",
+                                        "failed" => "\u{2717}",
+                                        _ => "",
+                                    };
+
+                                    // Combine error_reason prefix with error
+                                    let error_str = match (&run.error_reason, &run.error) {
+                                        (Some(reason), Some(err)) => format!("[{}] {}", reason, err),
+                                        (Some(reason), None) => reason.clone(),
+                                        (None, Some(err)) => err.clone(),
+                                        (None, None) => String::new(),
+                                    };
 
                                     view! {
                                         <tr class="border-b border-border last:border-b-0 hover:bg-surface-sunken/50">
@@ -769,6 +1134,9 @@ fn RunHistory(
                                             </td>
                                             <td class="px-4 py-2 text-text-secondary">
                                                 {duration_str}
+                                            </td>
+                                            <td class="px-4 py-2 text-text-secondary">
+                                                {delivery_icon}" "{delivery_str}
                                             </td>
                                             <td class="px-4 py-2 text-text-tertiary truncate max-w-xs">
                                                 {error_str}
