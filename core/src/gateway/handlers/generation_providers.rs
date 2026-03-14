@@ -8,9 +8,11 @@ use crate::config::Config;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::event_bus::GatewayEventBus;
 use crate::generation::GenerationType;
+use crate::gateway::security::SharedTokenManager;
 use serde::{Deserialize, Serialize};
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
+use tracing::{error, warn};
 
 // =============================================================================
 // Types
@@ -44,6 +46,23 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
 
 fn save_config(cfg: &Config) -> Result<(), String> {
     cfg.save().map_err(|e| e.to_string())
+}
+
+/// Vault key prefix for generation provider API keys
+fn vault_key(provider_name: &str) -> String {
+    format!("gen:{}", provider_name)
+}
+
+/// Resolve API key from vault for a generation provider
+fn resolve_api_key(name: &str, vault: &SharedTokenManager) -> Option<String> {
+    match vault.get_secret(&vault_key(name)) {
+        Ok(Some(secret)) => Some(secret.expose().to_string()),
+        Ok(None) => None,
+        Err(e) => {
+            warn!(provider = %name, error = %e, "Failed to read generation API key from vault");
+            None
+        }
+    }
 }
 
 fn build_generation_provider_for_persistence(
@@ -86,6 +105,7 @@ fn build_generation_provider_for_persistence(
 pub async fn handle_list(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let cfg = config.read().await;
 
@@ -109,9 +129,11 @@ pub async fn handle_list(
                 is_default_for.push(GenerationType::Speech);
             }
 
+            let mut cfg_clone = provider_config.clone();
+            cfg_clone.api_key = resolve_api_key(name, &vault);
             GenerationProviderEntry {
                 name: name.clone(),
-                config: provider_config.clone(),
+                config: cfg_clone,
                 is_default_for,
             }
         })
@@ -127,6 +149,7 @@ pub async fn handle_list(
 pub async fn handle_get(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct Params {
@@ -157,9 +180,11 @@ pub async fn handle_get(
                 is_default_for.push(GenerationType::Speech);
             }
 
+            let mut cfg_clone = provider_config.clone();
+            cfg_clone.api_key = resolve_api_key(&params.name, &vault);
             let entry = GenerationProviderEntry {
                 name: params.name,
-                config: provider_config.clone(),
+                config: cfg_clone,
                 is_default_for,
             };
 
@@ -178,6 +203,7 @@ pub async fn handle_create(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct Params {
@@ -202,7 +228,7 @@ pub async fn handle_create(
             );
         }
 
-        let provider_config = build_generation_provider_for_persistence(
+        let mut provider_config = build_generation_provider_for_persistence(
             &params.name,
             params.config,
             &cfg.presets_override.generation,
@@ -212,6 +238,19 @@ pub async fn handle_create(
         if let Err(e) = provider_config.validate(&params.name) {
             return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Validation failed: {}", e));
         }
+
+        // Store API key in vault
+        if let Some(ref api_key) = provider_config.api_key {
+            if let Err(e) = vault.store_secret(&vault_key(&params.name), api_key) {
+                error!(error = %e, "Failed to store generation API key in vault");
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to store API key: {}", e),
+                );
+            }
+        }
+        provider_config.api_key = None;
 
         // Add provider
         cfg.generation.providers.insert(params.name.clone(), provider_config);
@@ -241,6 +280,7 @@ pub async fn handle_update(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct Params {
@@ -265,7 +305,7 @@ pub async fn handle_update(
             );
         }
 
-        let provider_config = build_generation_provider_for_persistence(
+        let mut provider_config = build_generation_provider_for_persistence(
             &params.name,
             params.config,
             &cfg.presets_override.generation,
@@ -276,8 +316,20 @@ pub async fn handle_update(
             return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Validation failed: {}", e));
         }
 
+        // Store new API key in vault if provided
+        if let Some(ref api_key) = provider_config.api_key {
+            if let Err(e) = vault.store_secret(&vault_key(&params.name), api_key) {
+                error!(error = %e, "Failed to store generation API key in vault");
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to store API key: {}", e),
+                );
+            }
+        }
+        provider_config.api_key = None;
+
         // Update provider — config change resets verified
-        let mut provider_config = provider_config;
         provider_config.verified = false;
         cfg.generation.providers.insert(params.name.clone(), provider_config);
 
@@ -306,6 +358,7 @@ pub async fn handle_delete(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct Params {
@@ -358,6 +411,11 @@ pub async fn handle_delete(
 
         // Remove provider
         cfg.generation.providers.remove(&params.name);
+
+        // Delete API key from vault
+        if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
+            warn!(provider = %params.name, error = %e, "Failed to delete generation API key from vault");
+        }
 
         // Save to file
         if let Err(e) = cfg.save() {
@@ -473,6 +531,7 @@ pub async fn handle_set_default(
 pub async fn handle_test_connection(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct Params {
@@ -493,7 +552,11 @@ pub async fn handle_test_connection(
 
     let provider_name = params.name;
 
-    let api_key = normalize_optional_string(params.api_key);
+    // If no inline api_key, resolve from vault
+    let api_key = match normalize_optional_string(params.api_key) {
+        Some(k) => Some(k),
+        None => provider_name.as_ref().and_then(|name| resolve_api_key(name, &vault)),
+    };
 
     // TODO: Implement actual connection testing
     // For now, just validate that required fields are present

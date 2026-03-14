@@ -5,18 +5,18 @@
 use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::security::SharedTokenManager;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
+use tracing::{error, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchBackendDto {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -30,6 +30,23 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
         let trimmed = v.trim();
         if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
     })
+}
+
+/// Vault key prefix for search provider API keys
+fn vault_key(backend_name: &str) -> String {
+    format!("search:{}", backend_name)
+}
+
+/// Resolve API key from vault for a search backend
+fn resolve_api_key(name: &str, vault: &SharedTokenManager) -> Option<String> {
+    match vault.get_secret(&vault_key(name)) {
+        Ok(Some(secret)) => Some(secret.expose().to_string()),
+        Ok(None) => None,
+        Err(e) => {
+            warn!(backend = %name, error = %e, "Failed to read search API key from vault");
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +68,7 @@ pub struct SearchConfigDto {
 pub async fn handle_get(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let cfg = config.read().await;
 
@@ -61,8 +79,7 @@ pub async fn handle_get(
             .iter()
             .map(|(name, backend)| SearchBackendDto {
                 name: name.clone(),
-                api_key: backend.api_key.clone(),
-                secret_name: backend.secret_name.clone(),
+                api_key: resolve_api_key(name, &vault),
                 base_url: backend.base_url.clone(),
                 engine_id: backend.engine_id.clone(),
                 verified: backend.verified,
@@ -104,6 +121,7 @@ pub async fn handle_update(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let params = match request.params {
         Some(p) => p,
@@ -169,21 +187,31 @@ pub async fn handle_update(
 
             // Update backend configs
             for backend_dto in &dto.backends {
+                // Store API key in vault if provided
+                if let Some(ref api_key) = normalize_optional_string(backend_dto.api_key.clone()) {
+                    if let Err(e) = vault.store_secret(&vault_key(&backend_dto.name), api_key) {
+                        error!(error = %e, "Failed to store search API key in vault");
+                        return JsonRpcResponse::error(
+                            request.id,
+                            INTERNAL_ERROR,
+                            format!("Failed to store API key: {}", e),
+                        );
+                    }
+                }
+
                 let entry = search
                     .backends
                     .entry(backend_dto.name.clone())
                     .or_insert_with(|| crate::config::types::SearchBackendConfig {
                         provider_type: backend_dto.name.clone(),
                         api_key: None,
-                        secret_name: None,
                         base_url: None,
                         engine_id: None,
                         verified: false,
                     });
 
-                entry.api_key = normalize_optional_string(backend_dto.api_key.clone());
-                entry.secret_name = normalize_optional_string(backend_dto.secret_name.clone());
-
+                // api_key stays None in config — vault is the source
+                entry.api_key = None;
                 entry.base_url = backend_dto.base_url.clone();
                 entry.engine_id = backend_dto.engine_id.clone();
                 entry.verified = false; // Config change resets verified
@@ -202,16 +230,8 @@ pub async fn handle_update(
             }
         }
 
-        // Redact vault-backed api_keys before saving
-        let mut sanitized = cfg.clone();
-        if let Some(search) = &mut sanitized.search {
-            for backend in search.backends.values_mut() {
-                if backend.secret_name.is_some() {
-                    backend.api_key = None;
-                }
-            }
-        }
-        if let Err(e) = sanitized.save().map_err(|e| e.to_string()) {
+        // api_key is #[serde(skip)] — never persisted to config.toml
+        if let Err(e) = cfg.save().map_err(|e| e.to_string()) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -245,6 +265,7 @@ pub struct SearchTestResult {
 pub async fn handle_test(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct Params {
@@ -258,10 +279,15 @@ pub async fn handle_test(
         engine_id: Option<String>,
     }
 
-    let params: Params = match super::parse_params(&request) {
+    let mut params: Params = match super::parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    // Resolve API key from vault if not provided inline
+    if params.api_key.is_none() {
+        params.api_key = resolve_api_key(&params.name, &vault);
+    }
 
     // Determine provider type from config or fallback to name
     let provider_type = {
@@ -438,6 +464,7 @@ pub async fn handle_delete_backend(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct Params {
@@ -479,16 +506,13 @@ pub async fn handle_delete_backend(
 
         search.backends.remove(&params.name);
 
-        // Save config
-        let mut sanitized = cfg.clone();
-        if let Some(search) = &mut sanitized.search {
-            for backend in search.backends.values_mut() {
-                if backend.secret_name.is_some() {
-                    backend.api_key = None;
-                }
-            }
+        // Delete API key from vault
+        if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
+            warn!(backend = %params.name, error = %e, "Failed to delete search API key from vault");
         }
-        if let Err(e) = sanitized.save().map_err(|e| e.to_string()) {
+
+        // Save config
+        if let Err(e) = cfg.save().map_err(|e| e.to_string()) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::parse_params;
@@ -14,6 +14,24 @@ use super::super::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus}
 use crate::config::{Config, ProviderConfig};
 use crate::config::presets_override::PresetsOverride;
 use crate::providers::presets::get_merged_preset;
+use crate::gateway::security::SharedTokenManager;
+
+/// Vault key prefix for AI provider API keys
+fn vault_key(provider_name: &str) -> String {
+    format!("ai:{}", provider_name)
+}
+
+/// Resolve API key from vault into a ProviderInfo response
+fn resolve_api_key(name: &str, vault: &SharedTokenManager) -> Option<String> {
+    match vault.get_secret(&vault_key(name)) {
+        Ok(Some(secret)) => Some(secret.expose().to_string()),
+        Ok(None) => None,
+        Err(e) => {
+            warn!(provider = %name, error = %e, "Failed to read API key from vault");
+            None
+        }
+    }
+}
 
 /// Provider info for JSON serialization
 #[derive(Debug, Clone, Serialize)]
@@ -52,7 +70,7 @@ pub struct TestResult {
 // ============================================================================
 
 /// List all providers
-pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
+pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>, vault: Arc<SharedTokenManager>) -> JsonRpcResponse {
     let config = config.read().await;
     let default_provider = config.general.default_provider.clone();
 
@@ -69,7 +87,7 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -
             timeout_seconds: cfg.timeout_seconds,
             max_tokens: cfg.max_tokens,
             temperature: cfg.temperature,
-            api_key: cfg.api_key.clone(),
+            api_key: resolve_api_key(name, &vault),
             is_default: default_provider.as_ref() == Some(name),
             verified: cfg.verified,
         })
@@ -89,7 +107,7 @@ pub struct GetParams {
 }
 
 /// Get a single provider
-pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
+pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>, vault: Arc<SharedTokenManager>) -> JsonRpcResponse {
     let params: GetParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -109,7 +127,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
                 timeout_seconds: cfg.timeout_seconds,
                 max_tokens: cfg.max_tokens,
                 temperature: cfg.temperature,
-                api_key: cfg.api_key.clone(),
+                api_key: resolve_api_key(&params.name, &vault),
                 is_default: default_provider.as_ref() == Some(&params.name),
                 verified: cfg.verified,
             };
@@ -234,6 +252,7 @@ pub async fn handle_update(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let params: UpdateParams = match parse_params(&request) {
         Ok(p) => p,
@@ -260,12 +279,18 @@ pub async fn handle_update(
             &cfg.presets_override,
         );
 
-        // If no new credentials were provided, preserve the existing ones
-        if provider_config.api_key.is_none() {
-            if let Some(existing) = cfg.providers.get(&params.name) {
-                provider_config.api_key = existing.api_key.clone();
+        // Store new API key in vault if provided; otherwise vault retains the old one
+        if let Some(ref api_key) = provider_config.api_key {
+            if let Err(e) = vault.store_secret(&vault_key(&params.name), api_key) {
+                error!(error = %e, "Failed to store API key in vault");
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to store API key: {}", e),
+                );
             }
         }
+        provider_config.api_key = None;
 
         // Update provider — config change resets verified status
         provider_config.verified = false;
@@ -318,6 +343,7 @@ pub async fn handle_create(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let params: CreateParams = match parse_params(&request) {
         Ok(p) => p,
@@ -338,16 +364,29 @@ pub async fn handle_create(
         }
 
         // Convert JSON config to ProviderConfig
-        let provider_config = build_provider_config_for_persistence(
+        let mut provider_config = build_provider_config_for_persistence(
             &params.name,
             params.config,
             &cfg.presets_override,
         );
 
+        // Store API key in vault (then clear from config so it's never persisted)
+        if let Some(ref api_key) = provider_config.api_key {
+            if let Err(e) = vault.store_secret(&vault_key(&params.name), api_key) {
+                error!(error = %e, "Failed to store API key in vault");
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to store API key: {}", e),
+                );
+            }
+        }
+        provider_config.api_key = None;
+
         // Insert provider
         cfg.providers.insert(params.name.clone(), provider_config);
 
-        // Save to file (redact resolved secrets before write)
+        // Save to file
         if let Err(e) = save_config(&cfg) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
@@ -393,6 +432,7 @@ pub async fn handle_delete(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let params: DeleteParams = match parse_params(&request) {
         Ok(p) => p,
@@ -424,7 +464,12 @@ pub async fn handle_delete(
         // Remove provider
         cfg.providers.remove(&params.name);
 
-        // Save to file (redact resolved secrets before write)
+        // Delete API key from vault
+        if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
+            warn!(provider = %params.name, error = %e, "Failed to delete API key from vault");
+        }
+
+        // Save to file
         if let Err(e) = save_config(&cfg) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
@@ -469,7 +514,7 @@ pub struct TestParams {
 }
 
 /// Test a provider connection
-pub async fn handle_test(request: JsonRpcRequest, config_store: Arc<RwLock<Config>>) -> JsonRpcResponse {
+pub async fn handle_test(request: JsonRpcRequest, config_store: Arc<RwLock<Config>>, vault: Arc<SharedTokenManager>) -> JsonRpcResponse {
     let params: TestParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -478,13 +523,12 @@ pub async fn handle_test(request: JsonRpcRequest, config_store: Arc<RwLock<Confi
     let provider_name = params.name;
     let config = params.config;
 
-    // If no api_key in request, fall back to stored credentials
+    // If no api_key in request, fall back to vault
     let effective_api_key = {
         let inline_key = normalize_optional_string(config.api_key.clone());
         if inline_key.is_none() {
             if let Some(ref name) = provider_name {
-                let cfg = config_store.read().await;
-                cfg.providers.get(name).and_then(|p| p.api_key.clone())
+                resolve_api_key(name, &vault)
             } else {
                 None
             }

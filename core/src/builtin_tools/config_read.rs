@@ -270,13 +270,12 @@ mod tests {
         let mut val = serde_json::json!({
             "api_key": "sk-secret-123",
             "model": "gpt-4",
-            "secret_name": "my_secret"
+            "name": "my_provider"
         });
         mask_sensitive_fields(&mut val);
         assert_eq!(val["api_key"], "***");
         assert_eq!(val["model"], "gpt-4");
-        // secret_name is a vault reference, NOT a secret — should NOT be masked
-        assert_eq!(val["secret_name"], "my_secret");
+        assert_eq!(val["name"], "my_provider");
     }
 
     #[test]
