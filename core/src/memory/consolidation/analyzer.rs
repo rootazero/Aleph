@@ -151,6 +151,7 @@ impl ConsolidationAnalyzer {
                 | FactType::SubagentSession
                 | FactType::SubagentCheckpoint
                 | FactType::SubagentTranscript
+                | FactType::Lesson
                 | FactType::Other => "other",
             };
 
@@ -191,6 +192,7 @@ impl ConsolidationAnalyzer {
                 | FactType::SubagentSession
                 | FactType::SubagentCheckpoint
                 | FactType::SubagentTranscript
+                | FactType::Lesson
                 | FactType::Other => "other",
             }
         } else {
