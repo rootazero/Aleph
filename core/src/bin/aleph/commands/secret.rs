@@ -32,10 +32,10 @@ pub fn validate_secret_name(name: &str) -> Result<String, String> {
 
     let valid = normalized
         .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'));
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'));
     if !valid {
         return Err(
-            "Secret name can only contain ASCII letters, digits, '_', '-', and '.'".to_string(),
+            "Secret name can only contain ASCII letters, digits, '_', '-', '.', and ':'".to_string(),
         );
     }
 

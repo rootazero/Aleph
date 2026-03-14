@@ -598,11 +598,13 @@ impl ProvidersApi {
     pub async fn probe(
         state: &DashboardState,
         protocol: &str,
+        name: Option<&str>,
         api_key: Option<&str>,
         base_url: Option<&str>,
     ) -> Result<ProbeResultInfo, String> {
         let params = serde_json::json!({
             "protocol": protocol,
+            "name": name,
             "api_key": api_key,
             "base_url": base_url,
         });
@@ -1106,102 +1108,6 @@ impl AuthTokenApi {
         let params = serde_json::json!({ "session_id": session_id });
         state.rpc_call("auth.revoke_session", params).await?;
         Ok(())
-    }
-}
-
-// ============================================================================
-// Vault Configuration API
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VaultStatus {
-    #[serde(default)]
-    pub vault_exists: bool,
-    #[serde(default)]
-    pub master_key_configured: bool,
-    #[serde(default)]
-    pub master_key_source: Option<String>,
-    #[serde(default)]
-    pub vault_path: String,
-    #[serde(default)]
-    pub keychain_available: bool,
-    #[serde(default)]
-    pub plaintext_key_count: usize,
-    #[serde(default)]
-    pub encrypted_key_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VaultVerifyResult {
-    pub ok: bool,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MigrateKeysResult {
-    pub migrated_count: usize,
-    pub migrated_providers: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DisableVaultResult {
-    pub restored_count: usize,
-    pub restored_providers: Vec<String>,
-    #[serde(default)]
-    pub keychain_removed: bool,
-}
-
-pub struct VaultConfigApi;
-
-impl VaultConfigApi {
-    /// Get vault status (never exposes key values).
-    pub async fn status(state: &DashboardState) -> Result<VaultStatus, String> {
-        let result = state.rpc_call("vault.status", Value::Null).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse vault status: {}", e))
-    }
-
-    /// Store a master key in the OS keychain.
-    pub async fn store_key(state: &DashboardState, master_key: String) -> Result<(), String> {
-        let params = serde_json::json!({ "master_key": master_key });
-        state.rpc_call("vault.storeKey", params).await?;
-        Ok(())
-    }
-
-    /// Delete the master key from the OS keychain.
-    pub async fn delete_key(state: &DashboardState) -> Result<(), String> {
-        state.rpc_call("vault.deleteKey", Value::Null).await?;
-        Ok(())
-    }
-
-    /// Verify the current key can open the vault.
-    pub async fn verify(state: &DashboardState) -> Result<VaultVerifyResult, String> {
-        let result = state.rpc_call("vault.verify", Value::Null).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse verify result: {}", e))
-    }
-
-    /// Migrate all plaintext API keys to the vault.
-    pub async fn migrate_keys(state: &DashboardState, master_key: String) -> Result<MigrateKeysResult, String> {
-        let params = serde_json::json!({ "master_key": master_key });
-        let result = state.rpc_call("vault.migrateKeys", params).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse migration result: {}", e))
-    }
-
-    /// Disable vault encryption — reverse-migrate all keys back to plaintext.
-    pub async fn disable_vault(
-        state: &DashboardState,
-        master_key: String,
-        remove_from_keychain: bool,
-    ) -> Result<DisableVaultResult, String> {
-        let params = serde_json::json!({
-            "master_key": master_key,
-            "remove_from_keychain": remove_from_keychain,
-        });
-        let result = state.rpc_call("vault.disableVault", params).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse disable vault result: {}", e))
     }
 }
 

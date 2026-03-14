@@ -481,58 +481,22 @@ impl Config {
                 }
 
                 // Validate each backend configuration
+                // NOTE: api_key is #[serde(skip)] and injected from vault at runtime,
+                // so we cannot validate it here. API key presence is checked after
+                // vault injection in the startup sequence.
                 for (backend_name, backend_config) in &search_config.backends {
                     let provider_type = backend_config.provider_type.as_str();
 
                     match provider_type {
-                        "tavily" => {
-                            if backend_config.api_key.is_none() {
-                                error!(backend = %backend_name, "Tavily backend requires API key");
-                                return Err(AlephError::invalid_config(format!(
-                                    "Search backend '{}' (Tavily) requires an API key",
-                                    backend_name
-                                )));
-                            }
-                        }
-                        "brave" => {
-                            if backend_config.api_key.is_none() {
-                                error!(backend = %backend_name, "Brave backend requires API key");
-                                return Err(AlephError::invalid_config(format!(
-                                    "Search backend '{}' (Brave) requires an API key",
-                                    backend_name
-                                )));
-                            }
+                        "tavily" | "brave" | "bing" | "exa" => {
+                            // api_key validated after vault injection
                         }
                         "google" => {
-                            if backend_config.api_key.is_none() {
-                                error!(backend = %backend_name, "Google backend requires API key");
-                                return Err(AlephError::invalid_config(format!(
-                                    "Search backend '{}' (Google) requires an API key",
-                                    backend_name
-                                )));
-                            }
+                            // api_key validated after vault injection
                             if backend_config.engine_id.is_none() {
                                 error!(backend = %backend_name, "Google backend requires engine_id");
                                 return Err(AlephError::invalid_config(format!(
                                     "Search backend '{}' (Google) requires an engine_id",
-                                    backend_name
-                                )));
-                            }
-                        }
-                        "bing" => {
-                            if backend_config.api_key.is_none() {
-                                error!(backend = %backend_name, "Bing backend requires API key");
-                                return Err(AlephError::invalid_config(format!(
-                                    "Search backend '{}' (Bing) requires an API key",
-                                    backend_name
-                                )));
-                            }
-                        }
-                        "exa" => {
-                            if backend_config.api_key.is_none() {
-                                error!(backend = %backend_name, "Exa backend requires API key");
-                                return Err(AlephError::invalid_config(format!(
-                                    "Search backend '{}' (Exa) requires an API key",
                                     backend_name
                                 )));
                             }

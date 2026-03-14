@@ -4,10 +4,45 @@ use leptos::task::spawn_local;
 use std::rc::Rc;
 use crate::api::{GenerationProvidersApi, GenerationProviderConfig, GenerationProviderEntry};
 use crate::api::{GenerationConfig, GenerationConfigApi};
+use crate::components::model_selector::{ModelSelector, ModelOption};
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
 use crate::preset_providers::{PresetProvider, PresetProviders};
+
+/// Return preset model options for a given generation provider type
+fn generation_models_for_type(provider_type: &str) -> Vec<ModelOption> {
+    match provider_type {
+        "openai" => vec![
+            ModelOption { id: "dall-e-3".into(), name: Some("DALL-E 3".into()), capabilities: vec!["image".into()], source: "preset".into() },
+            ModelOption { id: "dall-e-2".into(), name: Some("DALL-E 2".into()), capabilities: vec!["image".into()], source: "preset".into() },
+            ModelOption { id: "gpt-image-1".into(), name: Some("GPT Image 1".into()), capabilities: vec!["image".into()], source: "preset".into() },
+        ],
+        "stability" => vec![
+            ModelOption { id: "stable-diffusion-xl-1024-v1-0".into(), name: Some("SDXL 1.0".into()), capabilities: vec!["image".into()], source: "preset".into() },
+            ModelOption { id: "stable-image-ultra-v1".into(), name: Some("Stable Image Ultra".into()), capabilities: vec!["image".into()], source: "preset".into() },
+        ],
+        "google" => vec![
+            ModelOption { id: "imagen-3.0-generate-002".into(), name: Some("Imagen 3.0".into()), capabilities: vec!["image".into()], source: "preset".into() },
+        ],
+        "replicate" => vec![
+            ModelOption { id: "black-forest-labs/flux-schnell".into(), name: Some("FLUX Schnell".into()), capabilities: vec!["image".into()], source: "preset".into() },
+            ModelOption { id: "black-forest-labs/flux-dev".into(), name: Some("FLUX Dev".into()), capabilities: vec!["image".into()], source: "preset".into() },
+        ],
+        "google_veo" => vec![
+            ModelOption { id: "veo-2.0-generate-001".into(), name: Some("Veo 2.0".into()), capabilities: vec!["video".into()], source: "preset".into() },
+        ],
+        "openai_tts" => vec![
+            ModelOption { id: "tts-1-hd".into(), name: Some("TTS-1 HD".into()), capabilities: vec!["speech".into()], source: "preset".into() },
+            ModelOption { id: "tts-1".into(), name: Some("TTS-1".into()), capabilities: vec!["speech".into()], source: "preset".into() },
+        ],
+        "elevenlabs" => vec![
+            ModelOption { id: "eleven_multilingual_v2".into(), name: Some("Multilingual v2".into()), capabilities: vec!["speech".into()], source: "preset".into() },
+            ModelOption { id: "eleven_monolingual_v1".into(), name: Some("Monolingual v1".into()), capabilities: vec!["speech".into()], source: "preset".into() },
+        ],
+        _ => vec![],
+    }
+}
 
 #[component]
 pub fn GenerationProvidersView() -> impl IntoView {
@@ -577,9 +612,9 @@ fn ProviderDetailView(
             // Configuration card
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
                 <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
+                <DetailField label="API Key" value=if provider.config.api_key.is_some() { "••••••••".to_string() } else { "Not set".to_string() } />
                 <DetailField label="Model" value=provider.config.model.clone().unwrap_or_else(|| "N/A".to_string()) />
                 <DetailField label="Base URL" value=provider.config.base_url.clone().unwrap_or_else(|| "N/A".to_string()) />
-                <DetailField label="API Key" value=if provider.config.api_key.is_some() { "••••••••".to_string() } else { "Not set".to_string() } />
                 <DetailField label="Timeout" value=format!("{} seconds", provider.config.timeout_seconds) />
                 <DetailField label="Capabilities" value=capabilities_str.clone() />
             </div>
@@ -715,7 +750,8 @@ fn AddCustomProviderPanel(
     let provider_type = RwSignal::new(String::new());
     let api_key = RwSignal::new(String::new());
     let base_url = RwSignal::new(String::new());
-    let model = RwSignal::new(String::new());
+    let selected_model = RwSignal::new(None::<String>);
+    let gen_models = RwSignal::new(Vec::<ModelOption>::new());
     let timeout = RwSignal::new(60u64);
 
     // Capability checkboxes
@@ -723,6 +759,12 @@ fn AddCustomProviderPanel(
     let cap_video = RwSignal::new(false);
     let cap_audio = RwSignal::new(false);
     let cap_speech = RwSignal::new(false);
+
+    // Update model list when provider type changes
+    Effect::new(move || {
+        let ptype = provider_type.get();
+        gen_models.set(generation_models_for_type(&ptype));
+    });
 
     let (adding, set_adding) = signal(false);
     let (testing, set_testing) = signal(false);
@@ -750,10 +792,7 @@ fn AddCustomProviderPanel(
                 let url = base_url.get();
                 if url.is_empty() { None } else { Some(url) }
             },
-            model: {
-                let m = model.get();
-                if m.is_empty() { None } else { Some(m) }
-            },
+            model: selected_model.get(),
             enabled: true,
             color: "#808080".to_string(),
             capabilities: build_capabilities(),
@@ -875,6 +914,13 @@ fn AddCustomProviderPanel(
                     />
                 </div>
 
+                // Model
+                <ModelSelector
+                    models=Signal::derive(move || gen_models.get())
+                    selected=selected_model
+                    allow_custom=true
+                />
+
                 // Base URL
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">"Base URL"</label>
@@ -883,18 +929,6 @@ fn AddCustomProviderPanel(
                         value=move || base_url.get()
                         on:input=move |ev| base_url.set(event_target_value(&ev))
                         placeholder="https://api.example.com/v1"
-                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    />
-                </div>
-
-                // Model
-                <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Model"</label>
-                    <input
-                        type="text"
-                        value=move || model.get()
-                        on:input=move |ev| model.set(event_target_value(&ev))
-                        placeholder="e.g., dall-e-3"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>

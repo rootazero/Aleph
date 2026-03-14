@@ -566,6 +566,45 @@ fn ProviderDetailPanel(
                     form_timeout.set(provider.timeout_seconds);
                     form_max_tokens.set(provider.max_tokens.map(|v| v.to_string()).unwrap_or_default());
                     form_temperature.set(provider.temperature.map(|v| v.to_string()).unwrap_or_default());
+
+                    // Auto-probe to discover models (API key resolved from vault on server)
+                    let provider_name = provider.name.clone();
+                    let protocol = provider.provider_type.clone().unwrap_or_else(|| "openai".to_string());
+                    probe_status.set(ProbeStatus::Loading);
+                    is_refreshing.set(true);
+                    spawn_local(async move {
+                        match ProvidersApi::probe(
+                            &state,
+                            &protocol,
+                            Some(&provider_name),
+                            None,
+                            None,
+                        ).await {
+                            Ok(result) => {
+                                if result.success {
+                                    let latency = result.latency_ms.unwrap_or(0);
+                                    probe_status.set(ProbeStatus::Success { latency_ms: latency });
+                                    let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
+                                        ModelOption {
+                                            id: m.id.clone(),
+                                            name: m.name.clone(),
+                                            capabilities: m.capabilities.clone(),
+                                            source: result.model_source.clone(),
+                                        }
+                                    }).collect();
+                                    models_list.set(options);
+                                } else {
+                                    probe_status.set(ProbeStatus::Error { message: result.error.unwrap_or_else(|| "Connection failed".to_string()) });
+                                    models_list.set(Vec::new());
+                                }
+                            }
+                            Err(e) => {
+                                probe_status.set(ProbeStatus::Error { message: e });
+                                models_list.set(Vec::new());
+                            }
+                        }
+                        is_refreshing.set(false);
+                    });
                 }
             }
         }
@@ -714,9 +753,11 @@ fn ProviderDetailPanel(
         }
     };
 
-    // Trigger probe: test API key and discover models
+    // Trigger probe: discover models (uses vault key when api_key is empty)
     let trigger_probe = move |api_key: String| {
         let protocol = form_protocol.get();
+        let name = form_name.get();
+        let name_opt = if name.is_empty() { None } else { Some(name) };
         let base_url = form_base_url.get();
         let base_url_opt = if base_url.is_empty() { None } else { Some(base_url) };
         let api_key_opt = if api_key.is_empty() { None } else { Some(api_key) };
@@ -729,6 +770,7 @@ fn ProviderDetailPanel(
             match ProvidersApi::probe(
                 &state,
                 &protocol,
+                name_opt.as_deref(),
                 api_key_opt.as_deref(),
                 base_url_opt.as_deref(),
             ).await {
@@ -736,7 +778,6 @@ fn ProviderDetailPanel(
                     if result.success {
                         let latency = result.latency_ms.unwrap_or(0);
                         probe_status.set(ProbeStatus::Success { latency_ms: latency });
-                        // Convert ProbeModelInfo -> ModelOption
                         let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
                             ModelOption {
                                 id: m.id.clone(),
@@ -1068,18 +1109,6 @@ fn ProviderDetailPanel(
                                                 </select>
                                             </div>
 
-                                            // Model (grouped dropdown with refresh)
-                                            <div>
-                                                <ModelSelector
-                                                    models=Signal::derive(move || models_list.get())
-                                                    selected=selected_model
-                                                    show_refresh=true
-                                                    on_refresh=on_refresh_models.clone()
-                                                    refreshing=Signal::derive(move || is_refreshing.get())
-                                                    allow_custom=true
-                                                />
-                                            </div>
-
                                             // API Key (with auto-probe)
                                             <div>
                                                 <label class="block text-sm text-text-secondary mb-1">"API Key"</label>
@@ -1096,6 +1125,18 @@ fn ProviderDetailPanel(
                                                 } else {
                                                     view! { <span></span> }.into_any()
                                                 }}
+                                            </div>
+
+                                            // Model (grouped dropdown with refresh)
+                                            <div>
+                                                <ModelSelector
+                                                    models=Signal::derive(move || models_list.get())
+                                                    selected=selected_model
+                                                    show_refresh=true
+                                                    on_refresh=on_refresh_models.clone()
+                                                    refreshing=Signal::derive(move || is_refreshing.get())
+                                                    allow_custom=true
+                                                />
                                             </div>
 
                                             // Base URL
