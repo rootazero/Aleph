@@ -2,7 +2,7 @@
 
 ## Summary
 
-Three-layer test pyramid for production-grade validation of the provider configuration architecture after the model→models migration. Layer 1 (Rust logic probes) tests serialization and handler logic directly. Layer 2 (RPC integration probes) tests through real HTTP/WebSocket. Layer 3 (Playwright E2E) tests browser UI interactions.
+Three-layer test pyramid for production-grade validation of the provider configuration architecture after the model→models migration. Layer 1 (Rust logic probes) tests serialization and config manipulation directly. Layer 2 (RPC integration probes) tests through a child-process server via WebSocket. Layer 3 (Playwright E2E) tests browser UI interactions using the same child-process server approach.
 
 ## Motivation
 
@@ -13,13 +13,13 @@ The recent simplify-model-config refactor touched 4 config types, ~70 call sites
 ```
 ┌─────────────────────────────┐
 │  Layer 3: Playwright E2E    │  Browser interaction validation
-│  (4 settings + wizard)      │
+│  (4 settings + wizard)      │  ↕ child-process server
 ├─────────────────────────────┤
-│  Layer 2: RPC Integration   │  Real HTTP/WebSocket network layer
-│  (server + JSON-RPC client) │
+│  Layer 2: RPC Integration   │  WebSocket JSON-RPC validation
+│  (child-process + WS client)│  ↕ child-process server
 ├─────────────────────────────┤
-│  Layer 1: Rust Logic Probes │  Direct handler function calls
-│  (serde / CRUD / defaults)  │
+│  Layer 1: Rust Logic Probes │  Pure logic, no I/O side effects
+│  (serde / Config struct)    │  ↕ direct struct manipulation
 └─────────────────────────────┘
 ```
 
@@ -27,8 +27,8 @@ The recent simplify-model-config refactor touched 4 config types, ~70 call sites
 
 Programmatic construction (builder pattern). No fixture files.
 
-- Rust layers: `ProviderConfig::test_config("model")` and programmatic `Config` building
-- Playwright: RPC calls inject config state before each test
+- Layer 1: direct `Config` struct building + serialization assertions
+- Layers 2 & 3: server launched with a temp config in `TempDir`; state managed via `providers.create` / `providers.delete` / `providers.update` RPC calls
 
 ### External API Strategy
 
@@ -36,29 +36,30 @@ Split into mock and real:
 - Default tests: fully isolated, no network required
 - Optional `#[ignore]` tests: require `OPENAI_API_KEY` env var, test real API connectivity
 
+### Server Startup Strategy (Layers 2 & 3)
+
+Both Layer 2 and Layer 3 use a **child-process model**: spawn the real `aleph` binary with `--config <tempdir>/config.toml --port 0` (random port). This avoids the complexity of programmatically wiring up all server dependencies (token manager, session manager, extension manager, memory backend, etc.).
+
+The child-process approach:
+- Writes a programmatic config to a `TempDir`
+- Spawns `cargo run --bin aleph -- start --config <path> --port <port>`
+- Waits for HTTP health check
+- Connects via WebSocket for RPC calls
+- Kills the process on Drop/teardown
+
+For Layer 2, each test group starts its own server instance. For Layer 3 (Playwright), the global-setup starts one server instance shared across all browser tests.
+
 ---
 
 ## Layer 1: Rust Logic Probes
 
-**File:** `core/tests/provider_config_probe.rs`
+**Directory:** `core/tests/provider_config_probe/` (follow existing `session_probe/` module pattern)
 
-### Test Harness
+### Scope
 
-`ProviderConfigTestHarness` wraps handler dependencies:
+Pure logic tests only — no handler calls, no file I/O, no server startup. Tests validate serialization, deserialization, struct manipulation, and config invariants directly on `Config` and `ProviderConfig` structs.
 
-```rust
-struct ProviderConfigTestHarness {
-    config: Arc<RwLock<Config>>,
-    token_manager: Arc<TokenManager>,
-    // ... other handler dependencies
-}
-
-impl ProviderConfigTestHarness {
-    fn new() -> Self { /* programmatic default config */ }
-    fn with_provider(mut self, name: &str, config: ProviderConfig) -> Self { /* inject */ }
-    async fn call(&self, method: &str, params: Value) -> Value { /* dispatch to handler */ }
-}
-```
+Mutating handler tests (create/update/delete) are deferred to Layer 2 because handlers call `save_config()` which writes to disk — testing them directly would require injecting a temp config path into the handler internals.
 
 ### Scenarios
 
@@ -83,15 +84,15 @@ Test all four config types: `ProviderConfig`, `EmbeddingProviderConfig`, `Rerank
 | Optional models | `models: []` (empty) | valid for generation (model is optional) |
 | default_model() None | empty models vec | returns `None` |
 
-#### 1.3 Provider CRUD via Handlers
+#### 1.3 Config Struct CRUD (no handlers, no I/O)
 
-| Test | Method | Validation |
-|------|--------|------------|
-| Create provider | `providers.create` with `models: ["x","y"]` | `providers.get` returns same models |
-| List providers | `providers.list` | response includes `models: Vec<String>` field |
-| Update models | `providers.update` changing models | get returns new models |
-| Delete provider | `providers.delete` | subsequent list excludes it |
-| Set default | `providers.setDefault` | default provider's `models[0]` is the default model |
+| Test | Operation | Validation |
+|------|-----------|------------|
+| Add provider to config | `config.providers.insert("openai", provider_config)` | config.providers contains "openai" |
+| Multiple models in config | insert provider with `models: ["a","b","c"]` | all_models() returns 3 items |
+| Remove provider from config | `config.providers.remove("openai")` | no longer in providers |
+| Default provider resolution | set default_provider, get its default_model() | returns models[0] of default provider |
+| Full Config round-trip | serialize to TOML string → deserialize back | all providers and models match |
 
 #### 1.4 Edge Cases
 
@@ -107,35 +108,44 @@ Test all four config types: `ProviderConfig`, `EmbeddingProviderConfig`, `Rerank
 
 ## Layer 2: RPC Integration Probes
 
-**File:** `core/tests/provider_rpc_probe.rs`
+**Directory:** `core/tests/provider_rpc_probe/` (follow `session_probe/` pattern)
 
 ### Test Harness
 
-`RpcTestServer` starts a real Aleph HTTP server:
+`AlephTestServer` spawns a child process:
 
 ```rust
-struct RpcTestServer {
-    addr: SocketAddr,
+struct AlephTestServer {
+    child: std::process::Child,
+    port: u16,
     ws_url: String,
-    shutdown_tx: tokio::sync::oneshot::Sender<()>,
+    config_dir: TempDir,
 }
 
-impl RpcTestServer {
-    async fn start(config: Config) -> Self {
-        // Bind to 127.0.0.1:0 (random port)
-        // Start Aleph server with programmatic config
-        // Return server handle
+impl AlephTestServer {
+    async fn start() -> Self {
+        let config_dir = TempDir::new().unwrap();
+        // Write minimal config.toml to config_dir
+        let port = find_available_port();
+        let child = Command::new("cargo")
+            .args(["run", "--bin", "aleph", "--", "start",
+                   "--config", &config_dir.path().join("config.toml").display().to_string(),
+                   "--port", &port.to_string()])
+            .spawn().unwrap();
+        // Wait for health check: GET http://127.0.0.1:{port}/
+        Self { child, port, ws_url: format!("ws://127.0.0.1:{port}/ws"), config_dir }
     }
 
     async fn rpc_call(&self, method: &str, params: Value) -> Value {
-        // Connect via tokio-tungstenite WebSocket
-        // Send JSON-RPC request
-        // Return parsed response
+        // Connect via tokio-tungstenite
+        // Send JSON-RPC request, await response
     }
 }
 
-impl Drop for RpcTestServer {
-    fn drop(&mut self) { /* send shutdown signal */ }
+impl Drop for AlephTestServer {
+    fn drop(&mut self) {
+        self.child.kill().ok();
+    }
 }
 ```
 
@@ -147,24 +157,34 @@ impl Drop for RpcTestServer {
 |------|--------|------------|
 | WebSocket connects | WS handshake | connection established |
 | providers.list | RPC call | valid JSON response with models array |
-| providers.create | create + get | created provider accessible |
-| providers.update | update models | persisted correctly |
+| providers.create | create + get | created provider accessible with correct models |
+| providers.update | update models | get returns new models |
 | providers.delete | delete + list | provider removed |
-| providers.setDefault | set default | response confirms |
-| providers.test (mock) | test with unreachable URL | returns `success: false` with error |
+| providers.setDefault | set default on verified provider | response confirms |
+| providers.test (unreachable) | test with unreachable URL | returns `success: false` with error |
 
 #### 2.2 Deleted Endpoints
 
-| Test | Method | Expected |
-|------|--------|----------|
-| models.list | RPC call | JSON-RPC error: method not found |
-| models.get | RPC call | method not found |
-| models.capabilities | RPC call | method not found |
-| models.refresh | RPC call | method not found |
-| providers.probe | RPC call | method not found |
-| embedding_providers.probe | RPC call | method not found |
+Verify removed RPC methods return "method not found":
 
-#### 2.3 Robustness
+| Test | Method |
+|------|--------|
+| models.list | method not found |
+| providers.probe | method not found |
+| arbitrary.nonexistent | method not found |
+
+(One or two representative examples suffice — no need to test every previously-deleted method individually.)
+
+#### 2.3 Error Paths
+
+| Test | Scenario | Expected |
+|------|----------|----------|
+| Update non-existent provider | `providers.update` with unknown name | error response |
+| Delete non-existent provider | `providers.delete` with unknown name | error response |
+| Create duplicate name | two `providers.create` same name | second fails |
+| setDefault unverified | setDefault on unverified provider | error (requires verified) |
+
+#### 2.4 Robustness
 
 | Test | Scenario | Expected |
 |------|----------|----------|
@@ -172,7 +192,7 @@ impl Drop for RpcTestServer {
 | Large models list | provider with 100 models | serializes over WebSocket correctly |
 | Invalid JSON | malformed RPC request | error response, no crash |
 
-#### 2.4 Optional Real API Tests (`#[ignore]`)
+#### 2.5 Optional Real API Tests (`#[ignore]`)
 
 | Test | Requires | Validation |
 |------|----------|------------|
@@ -188,11 +208,11 @@ impl Drop for RpcTestServer {
 ```
 e2e/
 ├── playwright.config.ts
-├── global-setup.ts           # Start Aleph server process
+├── global-setup.ts           # Start Aleph server child process
 ├── global-teardown.ts        # Kill server process
 ├── helpers/
 │   ├── rpc-client.ts         # WebSocket JSON-RPC helper
-│   └── test-fixtures.ts      # Programmatic config injection via RPC
+│   └── test-fixtures.ts      # Config state management via RPC
 └── tests/
     ├── providers.spec.ts
     ├── embedding-providers.spec.ts
@@ -204,28 +224,33 @@ e2e/
 ### Infrastructure
 
 **global-setup.ts:**
-- Build WASM panel if needed (`just wasm`)
-- Start Aleph server process on a fixed test port (e.g., 18791)
-- Wait for HTTP health check (GET `/` returns 200)
-- Store server PID for teardown
+- Expects WASM panel to be pre-built (CI pipeline runs `just wasm` as a separate step before e2e)
+- Check for existing build: skip `just wasm` if `apps/panel/dist/aleph_panel_bg.wasm` exists
+- Write a minimal test config to a temp directory
+- Start Aleph server process: `cargo run --bin aleph -- start --config <tempdir>/config.toml --port 18791`
+- Wait for HTTP health check (GET `http://127.0.0.1:18791/` returns 200)
+- Store server PID and temp dir path for teardown
 
 **global-teardown.ts:**
 - Kill server process by stored PID
+- Clean up temp directory
 
 **rpc-client.ts:**
 - WebSocket connection to `ws://127.0.0.1:18791/ws`
 - `call(method: string, params: object): Promise<any>` — JSON-RPC request/response
 - Auto-incrementing request IDs
+- Connection pooling / reconnect logic
 
 **test-fixtures.ts:**
-- `resetConfig()` — RPC call to reset config to minimal state
-- `injectProvider(name, config)` — create a provider via RPC
-- `getProviders()` — list providers via RPC for verification
+Test state management via RPC (no `config.reset` endpoint needed):
+- `cleanProviders()` — calls `providers.list`, then `providers.delete` for each existing provider
+- `injectProvider(name, config)` — `providers.create` via RPC
+- `getProviders()` — `providers.list` via RPC for verification
 
 **Each test's beforeEach:**
 ```typescript
 test.beforeEach(async ({ page }) => {
-  await resetConfig();
+  await cleanProviders(); // delete all existing providers
   // Inject test-specific data as needed
 });
 ```
@@ -289,39 +314,47 @@ test.beforeEach(async ({ page }) => {
 
 ### CI Integration
 
-```yaml
+```bash
 # Justfile additions
 test-probes:
   cargo test --test provider_config_probe --test provider_rpc_probe
 
 test-e2e:
-  just wasm
   npx playwright test --project=chromium
 
 test-real-api:
   cargo test --test provider_rpc_probe -- --ignored
 ```
 
+CI pipeline order:
+1. `cargo build --bin aleph` (needed for child-process tests)
+2. `just wasm` (build panel, needed for e2e)
+3. `just test-probes` (Layer 1 + 2)
+4. `just test-e2e` (Layer 3)
+
 ### Local Development
 
 ```bash
-# Layer 1 + 2 (fast, no browser needed)
+# Layer 1 only (fast, no server needed)
+cargo test --test provider_config_probe
+
+# Layer 1 + 2 (needs built binary)
 just test-probes
 
-# Layer 3 (needs browser, slower)
+# Layer 3 (needs browser + built binary + WASM panel)
 just test-e2e
 
 # With real API keys (optional)
 OPENAI_API_KEY=sk-... just test-real-api
 ```
 
-### Dependencies to Add
+### Dependencies
 
 **Rust (core/Cargo.toml dev-dependencies):**
-- `tokio-tungstenite` — WebSocket client for RPC probes
+- `tokio-tungstenite` — already present (v0.26), no action needed
 
 **Node (root package.json):**
-- `@playwright/test` — already have `playwright`, need the test runner
+- `@playwright/test` — test runner (existing `playwright` dependency provides the browser binaries)
 
 ---
 
@@ -332,3 +365,4 @@ OPENAI_API_KEY=sk-... just test-real-api
 - Mobile viewport testing
 - Provider-specific behavior testing (Anthropic thinking, Gemini streaming, etc.)
 - Testing the OpenAI-compatible `/v1/models` endpoint (separate concern)
+- New RPC endpoints for test state management (use existing CRUD endpoints instead)
