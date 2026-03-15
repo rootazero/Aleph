@@ -11,6 +11,7 @@
 //! | embedding_providers.remove | Remove a provider by id |
 //! | embedding_providers.setActive | Set the active provider |
 //! | embedding_providers.test | Test provider connectivity |
+//! | embedding_providers.probe | Probe for available embedding models |
 //! | embedding_providers.presets | Return preset configurations |
 
 use crate::config::types::memory::{EmbeddingPreset, EmbeddingProviderConfig};
@@ -19,7 +20,7 @@ use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
 use crate::memory::embedding_provider::RemoteEmbeddingProvider;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, warn};
@@ -531,6 +532,150 @@ pub async fn handle_test(
             }),
         ),
     }
+}
+
+// =============================================================================
+// Probe
+// =============================================================================
+
+/// Parameters for embedding_providers.probe
+#[derive(Debug, Deserialize)]
+struct EmbeddingProbeParams {
+    /// Protocol type: "openai", "ollama", etc.
+    protocol: String,
+    /// API key (resolved from vault if omitted)
+    #[serde(default)]
+    api_key: Option<String>,
+    /// Custom base URL (None = protocol default)
+    #[serde(default)]
+    base_url: Option<String>,
+}
+
+/// Probe result combining connection test + embedding model discovery
+#[derive(Debug, Serialize)]
+struct EmbeddingProbeResult {
+    success: bool,
+    models: Vec<crate::providers::adapter::DiscoveredModel>,
+    model_source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latency_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Probe an embedding provider: discover available embedding models.
+///
+/// Tries API-based model discovery first, then falls back to preset models
+/// filtered by the "embedding" category.
+pub async fn handle_probe(request: JsonRpcRequest) -> JsonRpcResponse {
+    let params: EmbeddingProbeParams = match super::parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let protocol = params.protocol.clone();
+
+    // Build temporary config for probing
+    let mut probe_config = crate::config::ProviderConfig::test_config("probe-embedding");
+    probe_config.protocol = Some(protocol.clone());
+    if let Some(key) = params.api_key {
+        probe_config.api_key = Some(key);
+    }
+    if let Some(url) = params.base_url {
+        probe_config.base_url = Some(url);
+    }
+
+    let registry = &crate::providers::model_registry::MODEL_REGISTRY;
+    let start = std::time::Instant::now();
+
+    let protocol_registry = crate::providers::protocols::ProtocolRegistry::global();
+    if protocol_registry.list_protocols().is_empty() {
+        protocol_registry.register_builtin();
+    }
+
+    let (models, model_source, error) = match protocol_registry.get(&protocol) {
+        Some(adapter) => {
+            let probe_name = format!("embedding-probe-{}", uuid::Uuid::new_v4());
+            let discovered = registry
+                .list_models(&probe_name, &protocol, adapter.as_ref(), &probe_config)
+                .await;
+
+            if !discovered.is_empty() {
+                // Filter for embedding-capable models if capabilities are tagged
+                let embedding_models: Vec<_> = discovered
+                    .iter()
+                    .filter(|m| {
+                        m.capabilities.is_empty()
+                            || m.capabilities.iter().any(|c| c == "embedding")
+                    })
+                    .cloned()
+                    .collect();
+
+                let final_models = if embedding_models.is_empty() {
+                    // All models had capabilities but none tagged "embedding" — fall back to presets
+                    registry.get_preset_models(&protocol, Some("embedding"))
+                } else {
+                    embedding_models
+                };
+
+                let source = registry
+                    .get_source(&probe_name)
+                    .await
+                    .map(|s| match s {
+                        crate::providers::model_registry::ModelSource::Api => "api".to_string(),
+                        crate::providers::model_registry::ModelSource::Preset => {
+                            "preset".to_string()
+                        }
+                    })
+                    .unwrap_or_else(|| "preset".to_string());
+
+                if final_models.is_empty() {
+                    (final_models, source, Some("No embedding models found".to_string()))
+                } else {
+                    (final_models, source, None)
+                }
+            } else {
+                // API returned nothing — fall back to embedding presets
+                let preset_models = registry.get_preset_models(&protocol, Some("embedding"));
+                if !preset_models.is_empty() {
+                    (preset_models, "preset".to_string(), None)
+                } else {
+                    (
+                        vec![],
+                        "preset".to_string(),
+                        Some("No embedding models found".to_string()),
+                    )
+                }
+            }
+        }
+        None => {
+            // Unknown protocol — try embedding presets directly
+            let preset_models = registry.get_preset_models(&protocol, Some("embedding"));
+            if !preset_models.is_empty() {
+                (preset_models, "preset".to_string(), None)
+            } else {
+                (
+                    vec![],
+                    "preset".to_string(),
+                    Some(format!("Unknown protocol: {}", protocol)),
+                )
+            }
+        }
+    };
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+    let success = error.is_none();
+
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::json!(EmbeddingProbeResult {
+            success,
+            models,
+            model_source,
+            latency_ms: Some(latency_ms),
+            error,
+        }),
+    )
 }
 
 /// Return static list of preset configurations.
