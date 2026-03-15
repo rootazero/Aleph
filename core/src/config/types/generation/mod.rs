@@ -154,7 +154,7 @@ mod tests {
         assert!(config.provider_type.is_empty());
         assert!(config.api_key.is_none());
         assert!(config.base_url.is_none());
-        assert!(config.model.is_none());
+        assert!(config.models.is_empty());
         assert!(config.enabled);
         assert_eq!(config.color, "#808080");
         assert!(config.capabilities.is_empty());
@@ -186,9 +186,9 @@ mod tests {
     #[test]
     fn test_provider_config_resolve_model() {
         let mut config = GenerationProviderConfig::new("openai");
-        config.model = Some("dall-e-3".to_string());
+        config.models = vec!["dall-e-3".to_string()];
         config
-            .models
+            .model_aliases
             .insert("fast".to_string(), "dall-e-2".to_string());
 
         // Use default model
@@ -312,7 +312,7 @@ mod tests {
             "dalle".to_string(),
             GenerationProviderConfig {
                 provider_type: "openai".to_string(),
-                model: Some("dall-e-3".to_string()),
+                models: vec!["dall-e-3".to_string()],
                 enabled: true,
                 color: "#10a37f".to_string(),
                 capabilities: vec![GenerationType::Image],
@@ -356,7 +356,7 @@ mod tests {
         let config: GenerationProviderConfig = toml::from_str(toml_str).unwrap();
 
         assert_eq!(config.provider_type, "openai");
-        assert_eq!(config.model, Some("dall-e-3".to_string()));
+        assert_eq!(config.default_model(), Some("dall-e-3"));
         assert!(config.enabled);
         assert_eq!(config.color, "#10a37f");
         assert!(config.capabilities.contains(&GenerationType::Image));
