@@ -20,8 +20,6 @@ use alephcore::gateway::handlers::models as models_handlers;
 use alephcore::gateway::handlers::workspace as workspace_handlers;
 use alephcore::gateway::handlers::identity as identity_handlers;
 use alephcore::gateway::handlers::identity::SharedIdentityResolver;
-use alephcore::gateway::handlers::cron as cron_handlers;
-use alephcore::cron::SharedCronService;
 use alephcore::gateway::handlers::group_chat as group_chat_handlers;
 use alephcore::gateway::handlers::group_chat::SharedOrchestrator;
 use alephcore::group_chat::GroupChatExecutor;
@@ -525,6 +523,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::routing_rules;
     use alephcore::gateway::handlers::mcp_config;
     use alephcore::gateway::handlers::memory_config;
+    use alephcore::gateway::handlers::rerank_config;
     use alephcore::gateway::handlers::security_config;
     use alephcore::gateway::handlers::generation_providers;
     use alephcore::gateway::handlers::embedding_providers;
@@ -575,6 +574,11 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "memory_config.get", memory_config::handle_get, config);
     register_handler!(server, "memory_config.update", memory_config::handle_update, config, event_bus);
 
+    // Rerank config (dedicated handlers, decoupled from memory_config)
+    register_handler!(server, "rerank_config.get", rerank_config::handle_get, config);
+    register_handler!(server, "rerank_config.update", rerank_config::handle_update, config, event_bus);
+    register_handler!(server, "rerank_config.test", rerank_config::handle_test);
+
     // Security config
     register_handler!(server, "security_config.get", security_config::handle_get);
     register_handler!(server, "security_config.update", security_config::handle_update, event_bus);
@@ -598,6 +602,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "embedding_providers.remove", embedding_providers::handle_remove, config, event_bus, shared_token_mgr);
     register_handler!(server, "embedding_providers.setActive", embedding_providers::handle_set_active, config, event_bus);
     register_handler!(server, "embedding_providers.test", embedding_providers::handle_test, config, shared_token_mgr);
+    register_handler!(server, "embedding_providers.probe", embedding_providers::handle_probe);
     register_handler!(server, "embedding_providers.presets", embedding_providers::handle_presets);
 
     // Agent config
@@ -691,38 +696,6 @@ pub(in crate::commands::start) fn register_identity_handlers(
     register_handler!(server, "identity.set", identity_handlers::handle_set, resolver);
     register_handler!(server, "identity.clear", identity_handlers::handle_clear, resolver);
     register_handler!(server, "identity.list", identity_handlers::handle_list, resolver);
-}
-
-// ─── register_cron_handlers ─────────────────────────────────────────────────
-
-pub(in crate::commands::start) fn register_cron_handlers(
-    server: &mut GatewayServer,
-    cron: &SharedCronService,
-    daemon: bool,
-) {
-    register_handler!(server, "cron.list", cron_handlers::handle_list, cron);
-    register_handler!(server, "cron.get", cron_handlers::handle_get, cron);
-    register_handler!(server, "cron.create", cron_handlers::handle_create, cron);
-    register_handler!(server, "cron.update", cron_handlers::handle_update, cron);
-    register_handler!(server, "cron.delete", cron_handlers::handle_delete, cron);
-    register_handler!(server, "cron.status", cron_handlers::handle_status, cron);
-    register_handler!(server, "cron.run", cron_handlers::handle_run, cron);
-    register_handler!(server, "cron.runs", cron_handlers::handle_runs, cron);
-    register_handler!(server, "cron.toggle", cron_handlers::handle_toggle, cron);
-
-    if !daemon {
-        println!("Cron methods:");
-        println!("  - cron.list   : List all cron jobs");
-        println!("  - cron.get    : Get a cron job by ID");
-        println!("  - cron.create : Create a new cron job");
-        println!("  - cron.update : Update an existing cron job");
-        println!("  - cron.delete : Delete a cron job");
-        println!("  - cron.status : Get cron service status");
-        println!("  - cron.run    : Manually trigger a job");
-        println!("  - cron.runs   : Get job execution history");
-        println!("  - cron.toggle : Toggle job enabled/disabled");
-        println!();
-    }
 }
 
 // ─── register_group_chat_handlers ───────────────────────────────────────────
