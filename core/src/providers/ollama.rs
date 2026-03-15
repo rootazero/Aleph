@@ -153,7 +153,7 @@ impl OllamaProvider {
     /// - Model name is empty
     /// - Timeout is zero
     pub fn new(name: String, config: ProviderConfig) -> Result<Self> {
-        if config.model.is_empty() {
+        if config.default_model().is_empty() {
             return Err(AlephError::invalid_config("Model name cannot be empty"));
         }
 
@@ -180,7 +180,7 @@ impl OllamaProvider {
         let endpoint = format!("{}/api/generate", base_url);
 
         info!(
-            model = %config.model,
+            model = %config.default_model(),
             endpoint = %endpoint,
             timeout_seconds = config.timeout_seconds,
             "Ollama provider initialized successfully (HTTP API)"
@@ -188,7 +188,7 @@ impl OllamaProvider {
 
         Ok(Self {
             name,
-            model: config.model.clone(),
+            model: config.default_model().to_string(),
             client,
             endpoint,
             color: config.color.clone(),
@@ -604,7 +604,7 @@ mod tests {
     #[test]
     fn test_new_provider_empty_model() {
         let mut config = create_test_config();
-        config.model = "".to_string();
+        config.models = vec!["".to_string()];
         let result = OllamaProvider::new("ollama".to_string(), config);
         assert!(matches!(result, Err(AlephError::InvalidConfig { .. })));
     }
@@ -639,12 +639,12 @@ mod tests {
         assert!(!provider.is_vision_model());
 
         let mut vision_config = create_test_config();
-        vision_config.model = "llava".to_string();
+        vision_config.models = vec!["llava".to_string()];
         let vision_provider = OllamaProvider::new("ollama".to_string(), vision_config).unwrap();
         assert!(vision_provider.is_vision_model());
 
         let mut bak_config = create_test_config();
-        bak_config.model = "bakllava:latest".to_string();
+        bak_config.models = vec!["bakllava:latest".to_string()];
         let bak_provider = OllamaProvider::new("ollama".to_string(), bak_config).unwrap();
         assert!(bak_provider.is_vision_model());
     }
@@ -656,7 +656,7 @@ mod tests {
         assert!(!provider.supports_vision());
 
         let mut vision_config = create_test_config();
-        vision_config.model = "llava".to_string();
+        vision_config.models = vec!["llava".to_string()];
         let vision_provider = OllamaProvider::new("ollama".to_string(), vision_config).unwrap();
         assert!(vision_provider.supports_vision());
     }

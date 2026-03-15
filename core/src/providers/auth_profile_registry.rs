@@ -166,7 +166,7 @@ impl AuthProfileProviderRegistry {
         let provider_config = ProviderConfig {
             protocol: Some(self.config.provider_type.clone()),
             api_key,
-            model: self.config.model.clone(),
+            models: vec![self.config.model.clone()],
             base_url: self.config.base_url.clone(),
             color: "#d97757".to_string(), // Default Claude color
             timeout_seconds: self.config.timeout_seconds,
