@@ -241,7 +241,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         });
 
         let request_body = MessagesRequest {
-            model: config.model.clone(),
+            model: config.default_model().to_string(),
             messages,
             max_tokens,
             system: payload.system_prompt.map(|s| vec![SystemBlock::text(s)]),
@@ -258,7 +258,7 @@ impl ProtocolAdapter for AnthropicProtocol {
 
         debug!(
             endpoint = %endpoint,
-            model = %config.model,
+            model = %config.default_model(),
             streaming = is_streaming,
             "Building Anthropic request"
         );

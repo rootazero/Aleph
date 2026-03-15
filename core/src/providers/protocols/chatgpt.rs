@@ -173,7 +173,7 @@ impl ProtocolAdapter for ChatGptProtocol {
         _is_streaming: bool,
     ) -> Result<reqwest::RequestBuilder> {
         let endpoint = Self::build_endpoint(config);
-        let request = Self::build_responses_request(payload, &config.model);
+        let request = Self::build_responses_request(payload, config.default_model());
 
         let access_token = config.api_key.as_ref().ok_or_else(|| {
             AlephError::invalid_config("Codex access token not set — run OAuth login first")
@@ -181,7 +181,7 @@ impl ProtocolAdapter for ChatGptProtocol {
 
         debug!(
             endpoint = %endpoint,
-            model = %config.model,
+            model = %config.default_model(),
             "Building Codex Responses API request"
         );
 
@@ -486,14 +486,11 @@ mod tests {
         use crate::config::ProviderConfig;
         use crate::providers::create_provider;
 
-        let config = ProviderConfig {
-            protocol: Some("chatgpt".to_string()),
-            model: "codex-mini-latest".to_string(),
-            api_key: Some("test_token".to_string()),
-            base_url: Some("https://chatgpt.com".to_string()),
-            enabled: true,
-            ..ProviderConfig::test_config("codex-mini-latest")
-        };
+        let mut config = ProviderConfig::test_config("codex-mini-latest");
+        config.protocol = Some("chatgpt".to_string());
+        config.api_key = Some("test_token".to_string());
+        config.base_url = Some("https://chatgpt.com".to_string());
+        config.enabled = true;
 
         let provider = create_provider("chatgpt-sub", config);
         assert!(

@@ -57,7 +57,7 @@ impl TemplateContext {
     pub fn with_config(mut self, config: &ProviderConfig) -> Self {
         // Serialize config to JSON value
         let config_value = json!({
-            "model": config.model,
+            "model": config.default_model(),
             "max_tokens": config.max_tokens,
             "temperature": config.temperature,
             "top_p": config.top_p,

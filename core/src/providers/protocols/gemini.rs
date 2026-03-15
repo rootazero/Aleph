@@ -49,12 +49,12 @@ impl GeminiProtocol {
         if is_streaming {
             format!(
                 "{}/v1beta/models/{}:streamGenerateContent",
-                base_url, config.model
+                base_url, config.default_model()
             )
         } else {
             format!(
                 "{}/v1beta/models/{}:generateContent",
-                base_url, config.model
+                base_url, config.default_model()
             )
         }
     }
@@ -278,7 +278,7 @@ impl ProtocolAdapter for GeminiProtocol {
 
         debug!(
             endpoint = %endpoint,
-            model = %config.model,
+            model = %config.default_model(),
             streaming = is_streaming,
             "Building Gemini request"
         );
