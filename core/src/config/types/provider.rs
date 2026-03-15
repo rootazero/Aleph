@@ -34,8 +34,10 @@ pub struct ProviderConfig {
     #[serde(skip)]
     #[schemars(skip)]
     pub api_key: Option<String>,
-    /// Model name (e.g., "gpt-4o", "claude-3-5-sonnet-20241022", "gemini-3-flash", "llama3.2")
-    pub model: String,
+    /// Model names (e.g., ["gpt-4o", "gpt-4o-mini"]). First model is the default.
+    /// Accepts both `model = "xxx"` (backward compat) and `models = ["xxx", ...]`.
+    #[serde(deserialize_with = "crate::config::types::serde_helpers::deserialize_models", alias = "model")]
+    pub models: Vec<String>,
     /// Base URL for API endpoint (optional, defaults to official API)
     #[serde(default)]
     pub base_url: Option<String>,
@@ -127,6 +129,17 @@ impl ProviderConfig {
             .unwrap_or_else(|| "openai".to_string())
     }
 
+    /// Returns the default model (first in the list)
+    pub fn default_model(&self) -> &str {
+        debug_assert!(!self.models.is_empty(), "models should never be empty after deserialization");
+        &self.models[0]
+    }
+
+    /// Returns all configured models
+    pub fn all_models(&self) -> &[String] {
+        &self.models
+    }
+
     /// Create a minimal test configuration with only required fields
     ///
     /// This is a helper for tests to avoid specifying all optional fields.
@@ -135,7 +148,7 @@ impl ProviderConfig {
         Self {
             protocol: None,
             api_key: Some("test-key".to_string()),
-            model: model.into(),
+            models: vec![model.into()],
             base_url: None,
             color: default_provider_color(),
             timeout_seconds: default_timeout_seconds(),
@@ -177,7 +190,7 @@ mod tests {
     fn test_protocol_without_provider_type() {
         let config = ProviderConfig {
             protocol: Some("anthropic".to_string()),
-            model: "claude-3-5-sonnet".to_string(),
+            models: vec!["claude-3-5-sonnet".to_string()],
             api_key: None,
             base_url: None,
             color: default_provider_color(),
@@ -203,7 +216,7 @@ mod tests {
     fn test_protocol_defaults_to_openai() {
         let config = ProviderConfig {
             protocol: None,
-            model: "gpt-4".to_string(),
+            models: vec!["gpt-4".to_string()],
             api_key: None,
             base_url: None,
             color: default_provider_color(),

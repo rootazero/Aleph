@@ -243,6 +243,101 @@ fn test_atomic_write_creates_parent_directory() {
 }
 
 #[test]
+fn test_agents_toml_round_trip() {
+    let mut config = Config::default();
+    config.agents.ensure_default();
+    assert_eq!(config.agents.list.len(), 1);
+
+    let toml_str = toml::to_string_pretty(&config).unwrap();
+    // Verify [[agents.list]] appears
+    assert!(
+        toml_str.contains("[[agents.list]]"),
+        "Expected [[agents.list]] in serialized TOML, got:\n{}",
+        &toml_str[toml_str.find("[agents").unwrap_or(0)..].lines().take(10).collect::<Vec<_>>().join("\n")
+    );
+
+    let deserialized: Config = toml::from_str(&toml_str).unwrap();
+    assert_eq!(deserialized.agents.list.len(), 1);
+    assert_eq!(deserialized.agents.list[0].id, "main");
+}
+
+#[test]
+fn test_real_config_file_parse() {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = format!("{}/.aleph/config.toml", home);
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        // Test 1: Direct parse (should work)
+        match toml::from_str::<Config>(&contents) {
+            Ok(cfg) => {
+                eprintln!("Direct parse OK: {} providers, {} agents",
+                    cfg.providers.len(), cfg.agents.list.len());
+            }
+            Err(e) => {
+                panic!("Direct parse failed: {}", e);
+            }
+        }
+
+        // Test 2: Through migrate_mcp_builtin_in_toml (simulates load_from_file)
+        let migrated = Config::migrate_mcp_builtin_in_toml(&contents).unwrap();
+        eprintln!("migrated == original: {}", migrated == contents);
+        eprintln!("migrated len: {}, original len: {}", migrated.len(), contents.len());
+        match toml::from_str::<Config>(&migrated) {
+            Ok(cfg) => {
+                eprintln!("Post-migration parse OK: {} providers, {} agents",
+                    cfg.providers.len(), cfg.agents.list.len());
+            }
+            Err(e) => {
+                // Show differences
+                if migrated != contents {
+                    for (i, (a, b)) in migrated.lines().zip(contents.lines()).enumerate() {
+                        if a != b {
+                            eprintln!("Line {} differs: '{}' vs '{}'", i+1, a, b);
+                        }
+                    }
+                }
+                panic!("Post-migration parse failed: {}", e);
+            }
+        }
+
+        // Test 3: Full load_from_file
+        match Config::load_from_file(&path) {
+            Ok(cfg) => {
+                eprintln!("load_from_file OK: {} providers, {} agents",
+                    cfg.providers.len(), cfg.agents.list.len());
+            }
+            Err(e) => {
+                panic!("load_from_file failed: {}", e);
+            }
+        }
+    } else {
+        eprintln!("Skipping: no config file at {}", path);
+    }
+}
+
+#[test]
+fn test_provider_config_model_backward_compat() {
+    let toml_str = r#"model = "gpt-4o""#;
+    let config: ProviderConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.default_model(), "gpt-4o");
+    assert_eq!(config.models, vec!["gpt-4o".to_string()]);
+}
+
+#[test]
+fn test_provider_config_models_vec() {
+    let toml_str = r#"models = ["gpt-4o", "gpt-4o-mini", "o1"]"#;
+    let config: ProviderConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.default_model(), "gpt-4o");
+    assert_eq!(config.models.len(), 3);
+}
+
+#[test]
+fn test_provider_config_empty_models_rejected() {
+    let toml_str = r#"models = []"#;
+    let result = toml::from_str::<ProviderConfig>(toml_str);
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_atomic_write_overwrites_existing_file() {
     use tempfile::NamedTempFile;
 
