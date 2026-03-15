@@ -202,8 +202,9 @@ pub struct EmbeddingProviderConfig {
     #[serde(skip)]
     #[schemars(skip)]
     pub api_key: Option<String>,
-    /// Model name (e.g., "BAAI/bge-m3")
-    pub model: String,
+    /// Model names (first entry is the active model)
+    #[serde(deserialize_with = "crate::config::types::serde_helpers::deserialize_models", alias = "model")]
+    pub models: Vec<String>,
     /// Output vector dimensions
     pub dimensions: u32,
     /// Batch size for embedding requests
@@ -215,9 +216,22 @@ pub struct EmbeddingProviderConfig {
     /// Whether this provider has been verified via a successful test connection
     #[serde(default)]
     pub verified: bool,
+    /// Whether this provider is enabled
+    #[serde(default = "default_provider_enabled")]
+    pub enabled: bool,
+}
+
+fn default_provider_enabled() -> bool {
+    true
 }
 
 impl EmbeddingProviderConfig {
+    /// Returns the active model name (first entry in the models list).
+    pub fn default_model(&self) -> &str {
+        debug_assert!(!self.models.is_empty());
+        &self.models[0]
+    }
+
     /// Create a SiliconFlow preset
     pub fn siliconflow() -> Self {
         Self {
@@ -226,11 +240,12 @@ impl EmbeddingProviderConfig {
             preset: EmbeddingPreset::SiliconFlow,
             api_base: "https://api.siliconflow.cn/v1".to_string(),
             api_key: None,
-            model: "BAAI/bge-m3".to_string(),
+            models: vec!["BAAI/bge-m3".to_string()],
             dimensions: 1024,
             batch_size: default_embedding_batch_size(),
             timeout_ms: default_embedding_timeout_ms(),
             verified: false,
+            enabled: true,
         }
     }
 
@@ -242,11 +257,12 @@ impl EmbeddingProviderConfig {
             preset: EmbeddingPreset::OpenAi,
             api_base: "https://api.openai.com/v1".to_string(),
             api_key: None,
-            model: "text-embedding-3-small".to_string(),
+            models: vec!["text-embedding-3-small".to_string()],
             dimensions: 1536,
             batch_size: default_embedding_batch_size(),
             timeout_ms: default_embedding_timeout_ms(),
             verified: false,
+            enabled: true,
         }
     }
 
@@ -258,11 +274,12 @@ impl EmbeddingProviderConfig {
             preset: EmbeddingPreset::Ollama,
             api_base: "http://localhost:11434/v1".to_string(),
             api_key: None,
-            model: "nomic-embed-text".to_string(),
+            models: vec!["nomic-embed-text".to_string()],
             dimensions: 768,
             batch_size: default_embedding_batch_size(),
             timeout_ms: default_embedding_timeout_ms(),
             verified: false,
+            enabled: true,
         }
     }
 }
