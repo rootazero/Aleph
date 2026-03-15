@@ -58,16 +58,21 @@ pub(super) fn build_provider_config_for_persistence(
         None => preset.as_ref().map(|p| p.base_url.clone()),
     };
 
-    let model = {
-        let trimmed = params.model.trim();
-        if trimmed.is_empty() {
+    let models = {
+        // Filter empty models from the input
+        let non_empty: Vec<String> = params.models.iter()
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty())
+            .collect();
+        if non_empty.is_empty() {
+            // Fall back to preset default model
             preset
                 .as_ref()
                 .filter(|p| !p.default_model.is_empty())
-                .map(|p| p.default_model.clone())
+                .map(|p| vec![p.default_model.clone()])
                 .unwrap_or_default()
         } else {
-            trimmed.to_string()
+            non_empty
         }
     };
 
@@ -79,7 +84,7 @@ pub(super) fn build_provider_config_for_persistence(
     ProviderConfig {
         protocol,
         api_key,
-        model,
+        models,
         base_url,
         color: params.color.unwrap_or_else(|| "#808080".to_string()),
         timeout_seconds: params.timeout_seconds.unwrap_or(300),

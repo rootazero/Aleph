@@ -42,8 +42,8 @@ fn apply_embedding_preset_defaults(config: &mut EmbeddingProviderConfig) {
         if config.api_base.trim().is_empty() {
             config.api_base = default_base.to_string();
         }
-        if config.model.trim().is_empty() {
-            config.model = default_model.to_string();
+        if config.default_model().trim().is_empty() {
+            config.models = vec![default_model.to_string()];
         }
     }
 }
@@ -519,7 +519,7 @@ pub async fn handle_test(
                     "success": true,
                     "message": format!(
                         "Connection successful — model '{}', {} dimensions",
-                        provider_config.model, provider_config.dimensions
+                        provider_config.default_model(), provider_config.dimensions
                     ),
                 }),
             )

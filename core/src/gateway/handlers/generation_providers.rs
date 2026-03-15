@@ -82,17 +82,25 @@ fn build_generation_provider_for_persistence(
         None => preset.as_ref().and_then(|p| p.base_url.clone()),
     };
 
-    let model = match normalize_optional_string(config.model) {
-        Some(m) => Some(m),
-        None => preset
-            .as_ref()
-            .filter(|p| !p.default_model.is_empty())
-            .map(|p| p.default_model.clone()),
+    let models = {
+        let non_empty: Vec<String> = config.models.iter()
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty())
+            .collect();
+        if non_empty.is_empty() {
+            preset
+                .as_ref()
+                .filter(|p| !p.default_model.is_empty())
+                .map(|p| vec![p.default_model.clone()])
+                .unwrap_or_default()
+        } else {
+            non_empty
+        }
     };
 
     GenerationProviderConfig {
         base_url,
-        model,
+        models,
         ..config
     }
 }
