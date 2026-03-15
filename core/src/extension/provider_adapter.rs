@@ -46,7 +46,7 @@ use tokio::sync::RwLock;
 
 use super::plugin_loader::PluginLoader;
 use super::registry::ProviderRegistration;
-use super::types::{ProviderChatRequest, ProviderChatResponse, ProviderModelInfo};
+use super::types::{ProviderChatRequest, ProviderChatResponse};
 use super::ExtensionResult;
 
 /// Adapter that wraps a plugin provider to interface with core systems.
@@ -104,67 +104,9 @@ impl PluginProviderAdapter {
         &self.registration.plugin_id
     }
 
-    /// Get the list of static model IDs from the registration.
-    ///
-    /// This returns the models declared in the provider registration.
-    /// For dynamic model discovery, use [`list_models`](#method.list_models).
-    pub fn static_models(&self) -> &[String] {
-        &self.registration.models
-    }
-
     /// Get the provider registration.
     pub fn registration(&self) -> &ProviderRegistration {
         &self.registration
-    }
-
-    /// List available models from the provider.
-    ///
-    /// This method calls the plugin's `listModels` handler to dynamically
-    /// discover available models. If the handler fails or is not implemented,
-    /// it falls back to the static models from the registration.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Vec<ProviderModelInfo>)` - List of available models
-    /// * `Err(ExtensionError)` - If the plugin call fails and no fallback is available
-    pub async fn list_models(&self) -> ExtensionResult<Vec<ProviderModelInfo>> {
-        // Try to call plugin's listModels handler
-        let result = {
-            let mut loader = self.loader.write().await;
-            loader.call_tool(
-                &self.registration.plugin_id,
-                "listModels",
-                serde_json::json!({
-                    "provider_id": self.registration.id
-                }),
-            )
-        };
-
-        match result {
-            Ok(value) => {
-                // Try to parse the response as Vec<ProviderModelInfo>
-                match serde_json::from_value::<Vec<ProviderModelInfo>>(value) {
-                    Ok(models) => Ok(models),
-                    Err(_) => {
-                        // Parse failed, fall back to static models
-                        tracing::warn!(
-                            "Failed to parse listModels response for provider '{}', using static models",
-                            self.registration.id
-                        );
-                        Ok(self.build_static_model_info())
-                    }
-                }
-            }
-            Err(e) => {
-                // Handler failed or not implemented, fall back to static models
-                tracing::debug!(
-                    "listModels handler failed for provider '{}': {}, using static models",
-                    self.registration.id,
-                    e
-                );
-                Ok(self.build_static_model_info())
-            }
-        }
     }
 
     /// Generate a chat completion (non-streaming).
@@ -217,24 +159,6 @@ impl PluginProviderAdapter {
     /// This checks against the static model list from the registration.
     pub fn supports_model(&self, model_id: &str) -> bool {
         self.registration.models.iter().any(|m| m == model_id)
-    }
-
-    /// Build ProviderModelInfo from static model IDs.
-    ///
-    /// This creates basic model info from the model IDs in the registration.
-    /// Dynamic properties (context window, capabilities) are set to defaults.
-    fn build_static_model_info(&self) -> Vec<ProviderModelInfo> {
-        self.registration
-            .models
-            .iter()
-            .map(|model_id: &String| ProviderModelInfo {
-                id: model_id.clone(),
-                display_name: model_id.clone(),
-                context_window: None,
-                supports_tools: false,
-                supports_vision: false,
-            })
-            .collect()
     }
 
     // =========================================================================
@@ -301,7 +225,6 @@ mod tests {
         assert_eq!(adapter.id(), "test-provider");
         assert_eq!(adapter.name(), "Test Provider");
         assert_eq!(adapter.plugin_id(), "test-plugin");
-        assert_eq!(adapter.static_models().len(), 3);
     }
 
     #[test]
@@ -315,23 +238,6 @@ mod tests {
         assert!(adapter.supports_model("model-c"));
         assert!(!adapter.supports_model("model-d"));
         assert!(!adapter.supports_model("nonexistent"));
-    }
-
-    #[test]
-    fn test_provider_adapter_static_model_info() {
-        let registration = create_test_registration();
-        let loader = Arc::new(RwLock::new(PluginLoader::new()));
-        let adapter = PluginProviderAdapter::new(registration, loader);
-
-        let model_info = adapter.build_static_model_info();
-        assert_eq!(model_info.len(), 3);
-
-        // Check first model
-        assert_eq!(model_info[0].id, "model-a");
-        assert_eq!(model_info[0].display_name, "model-a");
-        assert!(model_info[0].context_window.is_none());
-        assert!(!model_info[0].supports_tools);
-        assert!(!model_info[0].supports_vision);
     }
 
     #[test]
@@ -357,20 +263,6 @@ mod tests {
         assert_eq!(reg.name, registration.name);
         assert_eq!(reg.plugin_id, registration.plugin_id);
         assert_eq!(reg.models, registration.models);
-    }
-
-    #[tokio::test]
-    async fn test_provider_adapter_list_models_fallback() {
-        let registration = create_test_registration();
-        let loader = Arc::new(RwLock::new(PluginLoader::new()));
-        let adapter = PluginProviderAdapter::new(registration, loader);
-
-        // Since no plugin is loaded, list_models should fall back to static models
-        let models = adapter.list_models().await.unwrap();
-        assert_eq!(models.len(), 3);
-        assert_eq!(models[0].id, "model-a");
-        assert_eq!(models[1].id, "model-b");
-        assert_eq!(models[2].id, "model-c");
     }
 
     #[tokio::test]

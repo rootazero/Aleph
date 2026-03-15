@@ -7,7 +7,7 @@ use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{
-    DiscoveredModel, NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason,
+    NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason,
     TokenUsage,
 };
 use crate::providers::anthropic::{
@@ -391,12 +391,6 @@ impl ProtocolAdapter for AnthropicProtocol {
 
     fn name(&self) -> &'static str {
         "anthropic"
-    }
-
-    async fn list_models(&self, _config: &ProviderConfig) -> Result<Option<Vec<DiscoveredModel>>> {
-        // Anthropic does not provide a public models API endpoint.
-        // Model discovery uses presets from model-presets.toml.
-        Ok(None)
     }
 }
 
