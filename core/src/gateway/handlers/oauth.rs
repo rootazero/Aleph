@@ -113,9 +113,9 @@ fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
     ProviderConfig {
         protocol: preset.map(|p| p.protocol.to_string()),
         api_key: None,
-        model: preset
+        models: vec![preset
             .map(|p| p.default_model.to_string())
-            .unwrap_or_else(|| "gpt-5.3-codex".to_string()),
+            .unwrap_or_else(|| "gpt-5.3-codex".to_string())],
         base_url: preset.map(|p| p.base_url.to_string()),
         color: preset
             .map(|p| p.color.to_string())
