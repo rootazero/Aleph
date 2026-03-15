@@ -9,8 +9,6 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::context::DashboardState;
 use crate::api::{ProvidersApi, ProviderInfo, ProviderConfig, TestResult, OAuthStatus};
-use crate::components::model_selector::{ModelSelector, ModelOption};
-use crate::components::probe_indicator::ProbeStatus;
 use crate::components::api_key_input::ApiKeyInput;
 use crate::preset_data::{PRESETS, OAUTH_PRESETS, find_preset};
 
@@ -499,28 +497,6 @@ fn ProviderDetailPanel(
     let oauth_status = RwSignal::new(Option::<OAuthStatus>::None);
     let oauth_loading = RwSignal::new(false);
 
-    // Model discovery signals
-    let models_list = RwSignal::new(Vec::<ModelOption>::new());
-    let probe_status = RwSignal::new(ProbeStatus::Idle);
-    let is_refreshing = RwSignal::new(false);
-
-    // Sync form_model <-> selected_model for ModelSelector.
-    // Guard with get_untracked() to prevent infinite reactive loop.
-    let selected_model = RwSignal::new(None::<String>);
-    Effect::new(move || {
-        let m = form_model.get();
-        if !m.is_empty() && selected_model.get_untracked() != Some(m.clone()) {
-            selected_model.set(Some(m));
-        }
-    });
-    Effect::new(move || {
-        if let Some(m) = selected_model.get() {
-            if form_model.get_untracked() != m {
-                form_model.set(m);
-            }
-        }
-    });
-
     let is_new = move || {
         let sel = selected.get();
         sel.as_deref() == Some("__new__") || sel.as_ref().map(|s| s.starts_with("__preset__")).unwrap_or(false)
@@ -566,58 +542,6 @@ fn ProviderDetailPanel(
                     form_timeout.set(provider.timeout_seconds);
                     form_max_tokens.set(provider.max_tokens.map(|v| v.to_string()).unwrap_or_default());
                     form_temperature.set(provider.temperature.map(|v| v.to_string()).unwrap_or_default());
-
-                    // Auto-probe to discover models (API key resolved from vault on server)
-                    let provider_name = provider.name.clone();
-                    let protocol = provider.provider_type.clone().unwrap_or_else(|| provider.name.clone());
-                    probe_status.set(ProbeStatus::Loading);
-                    is_refreshing.set(true);
-                    spawn_local(async move {
-                        match ProvidersApi::probe(
-                            &state,
-                            &protocol,
-                            Some(&provider_name),
-                            None,
-                            None,
-                        ).await {
-                            Ok(result) => {
-                                if result.success {
-                                    let latency = result.latency_ms.unwrap_or(0);
-                                    probe_status.set(ProbeStatus::Success { latency_ms: latency });
-                                    let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
-                                        ModelOption {
-                                            id: m.id.clone(),
-                                            name: m.name.clone(),
-                                            capabilities: m.capabilities.clone(),
-                                            source: result.model_source.clone(),
-                                        }
-                                    }).collect();
-                                    models_list.set(options);
-                                } else {
-                                    let msg = result.error.unwrap_or_else(|| "Connection failed".to_string());
-                                    probe_status.set(ProbeStatus::Error { message: msg });
-                                    // Keep preset models if backend returned them, even on "failure"
-                                    if !result.models.is_empty() {
-                                        let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
-                                            ModelOption {
-                                                id: m.id.clone(),
-                                                name: m.name.clone(),
-                                                capabilities: m.capabilities.clone(),
-                                                source: result.model_source.clone(),
-                                            }
-                                        }).collect();
-                                        models_list.set(options);
-                                    }
-                                    // If result.models is empty, don't clear — keep any existing models
-                                }
-                            }
-                            Err(e) => {
-                                probe_status.set(ProbeStatus::Error { message: e });
-                                models_list.set(Vec::new());
-                            }
-                        }
-                        is_refreshing.set(false);
-                    });
                 }
             }
         }
@@ -765,80 +689,6 @@ fn ProviderDetailPanel(
             });
         }
     };
-
-    // Trigger probe: discover models (uses vault key when api_key is empty)
-    let trigger_probe = move |api_key: String| {
-        let protocol = form_protocol.get();
-        let name = form_name.get();
-        let name_opt = if name.is_empty() { None } else { Some(name) };
-        let base_url = form_base_url.get();
-        let base_url_opt = if base_url.is_empty() { None } else { Some(base_url) };
-        let api_key_opt = if api_key.is_empty() { None } else { Some(api_key) };
-
-        probe_status.set(ProbeStatus::Loading);
-        is_refreshing.set(true);
-
-        spawn_local(async move {
-            let state = expect_context::<DashboardState>();
-            match ProvidersApi::probe(
-                &state,
-                &protocol,
-                name_opt.as_deref(),
-                api_key_opt.as_deref(),
-                base_url_opt.as_deref(),
-            ).await {
-                Ok(result) => {
-                    if result.success {
-                        let latency = result.latency_ms.unwrap_or(0);
-                        probe_status.set(ProbeStatus::Success { latency_ms: latency });
-                        let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
-                            ModelOption {
-                                id: m.id.clone(),
-                                name: m.name.clone(),
-                                capabilities: m.capabilities.clone(),
-                                source: result.model_source.clone(),
-                            }
-                        }).collect();
-                        models_list.set(options);
-                    } else {
-                        let msg = result.error.unwrap_or_else(|| "Connection failed".to_string());
-                        probe_status.set(ProbeStatus::Error { message: msg });
-                        // Keep preset models if backend returned them, even on "failure"
-                        if !result.models.is_empty() {
-                            let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
-                                ModelOption {
-                                    id: m.id.clone(),
-                                    name: m.name.clone(),
-                                    capabilities: m.capabilities.clone(),
-                                    source: result.model_source.clone(),
-                                }
-                            }).collect();
-                            models_list.set(options);
-                        }
-                        // If result.models is empty, don't clear — keep any existing models
-                    }
-                }
-                Err(e) => {
-                    probe_status.set(ProbeStatus::Error { message: e });
-                    models_list.set(Vec::new());
-                }
-            }
-            is_refreshing.set(false);
-        });
-    };
-
-    // Refresh callback for ModelSelector
-    let trigger_probe_refresh = trigger_probe.clone();
-    let on_refresh_models = Callback::new(move |_: ()| {
-        let key = form_api_key.get();
-        trigger_probe_refresh(key);
-    });
-
-    // API key change callback for ApiKeyInput
-    let trigger_probe_key = trigger_probe.clone();
-    let on_api_key_change = Callback::new(move |key: String| {
-        trigger_probe_key(key);
-    });
 
     view! {
         <div class="flex flex-col h-full">
@@ -1033,14 +883,15 @@ fn ProviderDetailPanel(
                                         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
                                             <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Configuration"</h3>
                                             <div>
-                                                <ModelSelector
-                                                    models=Signal::derive(move || models_list.get())
-                                                    selected=selected_model
-                                                    show_refresh=true
-                                                    on_refresh=on_refresh_models.clone()
-                                                    refreshing=Signal::derive(move || is_refreshing.get())
-                                                    allow_custom=true
+                                                <label class="block text-sm text-text-secondary mb-1">"Model"</label>
+                                                <input
+                                                    type="text"
+                                                    prop:value=move || form_model.get()
+                                                    on:input=move |ev| form_model.set(event_target_value(&ev))
+                                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                                    placeholder="e.g. gpt-4o, gpt-4o-mini"
                                                 />
+                                                <p class="mt-1 text-xs text-text-tertiary">"Enter a model name"</p>
                                             </div>
                                             <div>
                                                 <label class="block text-sm text-text-secondary mb-1">"Timeout (s)"</label>
@@ -1134,14 +985,12 @@ fn ProviderDetailPanel(
                                                 </select>
                                             </div>
 
-                                            // API Key (with auto-probe)
+                                            // API Key
                                             <div>
                                                 <label class="block text-sm text-text-secondary mb-1">"API Key"</label>
                                                 <ApiKeyInput
                                                     value=form_api_key
                                                     placeholder=preset_info.map(|p| p.api_key_placeholder).unwrap_or("sk-...")
-                                                    probe_status=Signal::derive(move || probe_status.get())
-                                                    on_key_change=on_api_key_change.clone()
                                                 />
                                                 {move || if preset_info.map(|p| !p.needs_api_key).unwrap_or(false) {
                                                     view! {
@@ -1152,16 +1001,17 @@ fn ProviderDetailPanel(
                                                 }}
                                             </div>
 
-                                            // Model (grouped dropdown with refresh)
+                                            // Model
                                             <div>
-                                                <ModelSelector
-                                                    models=Signal::derive(move || models_list.get())
-                                                    selected=selected_model
-                                                    show_refresh=true
-                                                    on_refresh=on_refresh_models.clone()
-                                                    refreshing=Signal::derive(move || is_refreshing.get())
-                                                    allow_custom=true
+                                                <label class="block text-sm text-text-secondary mb-1">"Model"</label>
+                                                <input
+                                                    type="text"
+                                                    prop:value=move || form_model.get()
+                                                    on:input=move |ev| form_model.set(event_target_value(&ev))
+                                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                                    placeholder="e.g. gpt-4o, claude-sonnet-4-20250514"
                                                 />
+                                                <p class="mt-1 text-xs text-text-tertiary">"Enter a model name"</p>
                                             </div>
 
                                             // Base URL
