@@ -5,7 +5,7 @@
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{DiscoveredModel, NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason};
+use crate::providers::adapter::{NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::chatgpt::types::{
     FunctionToolDef, InputItem, ReasoningConfig, ResponseResource, ResponsesRequest, StreamEvent,
 };
@@ -341,12 +341,6 @@ impl ProtocolAdapter for ChatGptProtocol {
 
     fn name(&self) -> &'static str {
         "chatgpt"
-    }
-
-    async fn list_models(&self, _config: &ProviderConfig) -> Result<Option<Vec<DiscoveredModel>>> {
-        // ChatGPT Codex backend does not expose a standard models API endpoint.
-        // Model discovery uses presets from model-presets.toml.
-        Ok(None)
     }
 }
 

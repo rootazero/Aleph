@@ -96,34 +96,6 @@ pub struct TestParams {
     pub config: ProviderConfigJson,
 }
 
-/// Parameters for providers.probe
-#[derive(Debug, Deserialize)]
-pub struct ProbeParams {
-    /// Protocol type: "openai", "anthropic", "gemini", "ollama"
-    pub protocol: String,
-    /// Provider name — used to resolve API key from vault when api_key is not provided
-    #[serde(default)]
-    pub name: Option<String>,
-    /// API key (not needed for Ollama; resolved from vault if omitted)
-    #[serde(default)]
-    pub api_key: Option<String>,
-    /// Custom base URL (None = protocol default)
-    #[serde(default)]
-    pub base_url: Option<String>,
-}
-
-/// Probe result combining connection test + model discovery
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ProbeResult {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latency_ms: Option<u64>,
-    pub models: Vec<crate::providers::adapter::DiscoveredModel>,
-    pub model_source: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
 /// Parameters for providers.setDefault
 #[derive(Debug, Deserialize)]
 pub struct SetDefaultParams {

@@ -30,7 +30,6 @@
 //! | channel | Channel status |
 //! | events | Event subscription |
 //! | memory | Memory search |
-//! | models | Model discovery |
 //! | chat | Chat control |
 //! | cron | Cron job management |
 //! | exec_approvals | Exec approval management |
@@ -77,11 +76,11 @@ pub mod security_config;
 pub mod profiles;
 pub mod generation;
 pub mod embedding_providers;
+pub mod rerank_config;
 pub mod generation_providers;
 pub mod group_chat;
 pub mod pairing;
 pub mod runs;
-pub mod models;
 pub mod chat;
 pub mod cron;
 pub mod exec_approvals;
@@ -110,7 +109,6 @@ use std::pin::Pin;
 use crate::sync_primitives::Arc;
 
 use super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND};
-use crate::config::Config;
 
 /// Parse and deserialize JSON-RPC request params into a typed struct.
 ///
@@ -191,29 +189,6 @@ impl HandlerRegistry {
         registry.register("services.stop", services::handle_stop);
         registry.register("services.list", services::handle_list);
         registry.register("services.status", services::handle_status);
-
-        // Models handlers (use default config as placeholder)
-        let models_config = Arc::new(Config::default());
-        let cfg = models_config.clone();
-        registry.register("models.list", move |req| {
-            let config = cfg.clone();
-            async move { models::handle_list(req, config).await }
-        });
-        let cfg = models_config.clone();
-        registry.register("models.get", move |req| {
-            let config = cfg.clone();
-            async move { models::handle_get(req, config).await }
-        });
-        let cfg = models_config.clone();
-        registry.register("models.capabilities", move |req| {
-            let config = cfg.clone();
-            async move { models::handle_capabilities(req, config).await }
-        });
-        let cfg = models_config.clone();
-        registry.register("models.refresh", move |req| {
-            let config = cfg.clone();
-            async move { models::handle_refresh(req, config).await }
-        });
 
         // Cron handlers (stubs — real handlers wired with CronService in Gateway startup)
         registry.register("cron.list", cron::handle_list_stub);
@@ -424,7 +399,7 @@ impl HandlerRegistry {
         });
 
         // Memory utility handlers (stateless — no shared state required)
-        registry.register("memory.test_rerank_connection", memory_config::handle_test_rerank_connection);
+        registry.register("memory.test_rerank_connection", rerank_config::handle_test);
         registry.register("memory.retrieve_with_trace", memory_config::handle_retrieve_with_trace);
 
         // Arena handlers (placeholders - actual handlers wired with ArenaManager)
@@ -655,14 +630,6 @@ mod tests {
         assert!(registry.has_method("plugins.unload"));
         assert!(registry.has_method("plugins.callTool"));
         assert!(registry.has_method("plugins.executeCommand"));
-    }
-
-    #[test]
-    fn test_models_handlers_registered() {
-        let registry = HandlerRegistry::new();
-        assert!(registry.has_method("models.list"));
-        assert!(registry.has_method("models.get"));
-        assert!(registry.has_method("models.capabilities"));
     }
 
     #[test]

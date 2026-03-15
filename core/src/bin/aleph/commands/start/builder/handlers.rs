@@ -16,7 +16,6 @@ use alephcore::gateway::handlers::config as config_handlers;
 use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::handlers::auth_tools as auth_tools_handlers;
 use alephcore::gateway::handlers::memory as memory_handlers;
-use alephcore::gateway::handlers::models as models_handlers;
 use alephcore::gateway::handlers::workspace as workspace_handlers;
 use alephcore::gateway::handlers::identity as identity_handlers;
 use alephcore::gateway::handlers::identity::SharedIdentityResolver;
@@ -430,54 +429,6 @@ pub(in crate::commands::start) fn init_memory_context_provider(
     ))
 }
 
-// ─── register_models_handlers ────────────────────────────────────────────────
-
-pub(in crate::commands::start) fn register_models_handlers(
-    server: &mut GatewayServer,
-    config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
-    daemon: bool,
-) {
-    // models.list and models.get need a read-only snapshot; clone the Arc<RwLock<Config>>
-    // and take a read lock inside the closure to get Arc<Config>.
-    let config_for_list = Arc::clone(config);
-    server.handlers_mut().register("models.list", move |req| {
-        let cfg = config_for_list.clone();
-        async move {
-            let snapshot = Arc::new(cfg.read().await.clone());
-            models_handlers::handle_list(req, snapshot).await
-        }
-    });
-
-    let config_for_get = Arc::clone(config);
-    server.handlers_mut().register("models.get", move |req| {
-        let cfg = config_for_get.clone();
-        async move {
-            let snapshot = Arc::new(cfg.read().await.clone());
-            models_handlers::handle_get(req, snapshot).await
-        }
-    });
-
-    let config_for_caps = Arc::clone(config);
-    server.handlers_mut().register("models.capabilities", move |req| {
-        let cfg = config_for_caps.clone();
-        async move {
-            let snapshot = Arc::new(cfg.read().await.clone());
-            models_handlers::handle_capabilities(req, snapshot).await
-        }
-    });
-
-    register_handler!(server, "models.set", models_handlers::handle_set, config);
-
-    if !daemon {
-        println!("Model methods:");
-        println!("  - models.list         : List available models");
-        println!("  - models.get          : Get model details");
-        println!("  - models.capabilities : Get model capabilities");
-        println!("  - models.set          : Set default model");
-        println!();
-    }
-}
-
 // ─── register_workspace_handlers ─────────────────────────────────────────────
 
 pub(in crate::commands::start) fn register_workspace_handlers(
@@ -553,7 +504,6 @@ pub(in crate::commands::start) fn register_config_handlers(
     }
     register_handler!(server, "providers.test", providers::handle_test, config, shared_token_mgr);
     register_handler!(server, "providers.needsSetup", providers::handle_needs_setup, config);
-    register_handler!(server, "providers.probe", providers::handle_probe, config, shared_token_mgr);
 
     // Routing rules
     register_handler!(server, "routing_rules.list", routing_rules::handle_list, config);
@@ -602,8 +552,6 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "embedding_providers.remove", embedding_providers::handle_remove, config, event_bus, shared_token_mgr);
     register_handler!(server, "embedding_providers.setActive", embedding_providers::handle_set_active, config, event_bus);
     register_handler!(server, "embedding_providers.test", embedding_providers::handle_test, config, shared_token_mgr);
-    register_handler!(server, "embedding_providers.probe", embedding_providers::handle_probe);
-    register_handler!(server, "embedding_providers.presets", embedding_providers::handle_presets);
 
     // Agent config
     register_handler!(server, "agent_config.get", agent_config::handle_get, config);

@@ -160,73 +160,6 @@ pub trait ProtocolAdapter: Send + Sync {
 
     /// Get the protocol name for logging
     fn name(&self) -> &'static str;
-
-    /// Fetch available models from the provider API.
-    ///
-    /// Default implementation attempts the OpenAI-compatible `/v1/models` endpoint.
-    /// Override with `Ok(None)` for protocols without model listing API (e.g., Anthropic).
-    /// Override with custom logic for non-OpenAI-compatible APIs (e.g., Gemini).
-    async fn list_models(&self, config: &ProviderConfig) -> Result<Option<Vec<DiscoveredModel>>> {
-        let base_url = match config.base_url.as_ref().filter(|s| !s.is_empty()) {
-            Some(url) => url.trim_end_matches('/').to_string(),
-            None => return Ok(None),
-        };
-
-        let api_key = config.api_key.as_deref().unwrap_or("");
-        if api_key.is_empty() {
-            return Ok(None);
-        }
-
-        let url = if base_url.ends_with("/v1") {
-            format!("{}/models", base_url)
-        } else {
-            format!("{}/v1/models", base_url)
-        };
-
-        let client = reqwest::Client::new();
-        let response = match client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .await
-        {
-            Ok(r) => r,
-            Err(_) => return Ok(None),
-        };
-
-        if !response.status().is_success() {
-            return Ok(None);
-        }
-
-        let body: serde_json::Value = match response.json().await {
-            Ok(v) => v,
-            Err(_) => return Ok(None),
-        };
-
-        let models: Vec<DiscoveredModel> = body["data"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|m| {
-                        let id = m["id"].as_str()?;
-                        Some(DiscoveredModel {
-                            id: id.to_string(),
-                            name: Some(id.to_string()),
-                            owned_by: m["owned_by"].as_str().map(|s| s.to_string()),
-                            capabilities: vec!["chat".to_string()],
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        if models.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(models))
-        }
-    }
 }
 
 // =============================================================================
@@ -298,19 +231,6 @@ pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub cache_read_tokens: Option<u32>,
-}
-
-/// A model discovered via API probe or preset list
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscoveredModel {
-    /// Model ID (e.g., "gpt-4o")
-    pub id: String,
-    /// Display name (e.g., "GPT-4o")
-    pub name: Option<String>,
-    /// Owner/organization
-    pub owned_by: Option<String>,
-    /// Capabilities: "chat", "vision", "tools", "thinking"
-    pub capabilities: Vec<String>,
 }
 
 #[cfg(test)]
@@ -391,28 +311,4 @@ mod tests {
         assert!(payload.tools.is_none());
     }
 
-    #[test]
-    fn test_discovered_model_serialize() {
-        let model = DiscoveredModel {
-            id: "gpt-4o".to_string(),
-            name: Some("GPT-4o".to_string()),
-            owned_by: Some("openai".to_string()),
-            capabilities: vec!["chat".to_string(), "vision".to_string()],
-        };
-        let json = serde_json::to_value(&model).unwrap();
-        assert_eq!(json["id"], "gpt-4o");
-        assert_eq!(json["name"], "GPT-4o");
-        assert_eq!(json["capabilities"].as_array().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn test_discovered_model_default_capabilities() {
-        let model = DiscoveredModel {
-            id: "some-model".to_string(),
-            name: None,
-            owned_by: None,
-            capabilities: vec!["chat".to_string()],
-        };
-        assert_eq!(model.capabilities, vec!["chat"]);
-    }
 }

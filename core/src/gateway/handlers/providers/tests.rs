@@ -62,41 +62,6 @@ async fn test_needs_setup_has_verified_provider() {
 }
 
 #[tokio::test]
-async fn test_probe_needs_protocol() {
-    let config = Arc::new(RwLock::new(Config::default()));
-    let store = Arc::new(
-        crate::gateway::security::store::SecurityStore::in_memory()
-            .expect("in-memory security store"),
-    );
-    let vault = Arc::new(SharedTokenManager::new(store, "/tmp/aleph_probe_test.vault"));
-    let request = JsonRpcRequest::with_id(
-        "providers.probe",
-        Some(json!({})),
-        serde_json::json!(1),
-    );
-    let response = handle_probe(request, config, vault).await;
-    assert!(response.error.is_some(), "Should fail without protocol");
-}
-
-#[tokio::test]
-async fn test_probe_unknown_protocol() {
-    let config = Arc::new(RwLock::new(Config::default()));
-    let store = Arc::new(
-        crate::gateway::security::store::SecurityStore::in_memory()
-            .expect("in-memory security store"),
-    );
-    let vault = Arc::new(SharedTokenManager::new(store, "/tmp/aleph_probe_test2.vault"));
-    let request = JsonRpcRequest::with_id(
-        "providers.probe",
-        Some(json!({"protocol": "nonexistent"})),
-        serde_json::json!(1),
-    );
-    let response = handle_probe(request, config, vault).await;
-    let result: serde_json::Value = serde_json::from_value(response.result.unwrap()).unwrap();
-    assert_eq!(result["success"], false);
-}
-
-#[tokio::test]
 async fn test_needs_setup_has_unverified_provider() {
     let mut config = Config::default();
     let mut provider_cfg = ProviderConfig::test_config("gpt-4o");
