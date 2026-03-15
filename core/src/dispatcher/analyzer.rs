@@ -160,16 +160,16 @@ impl TaskAnalyzer {
 
         for (name, provider_config) in image_providers_from_config {
             debug!(
-                "build_generation_providers: processing image provider '{}', model={:?}, models_keys={:?}",
-                name, provider_config.model, provider_config.models.keys().collect::<Vec<_>>()
+                "build_generation_providers: processing image provider '{}', default_model={:?}, model_aliases_keys={:?}",
+                name, provider_config.default_model(), provider_config.model_aliases.keys().collect::<Vec<_>>()
             );
             let mut models = Vec::new();
             // Add default model if set
-            if let Some(ref model) = provider_config.model {
-                models.push(model.clone());
+            if let Some(model) = provider_config.default_model() {
+                models.push(model.to_string());
             }
             // Add all model aliases
-            models.extend(provider_config.models.keys().cloned());
+            models.extend(provider_config.model_aliases.keys().cloned());
             if !models.is_empty() {
                 debug!(
                     "build_generation_providers: adding image provider '{}' with models {:?}",
@@ -182,10 +182,10 @@ impl TaskAnalyzer {
         // Video providers
         for (name, provider_config) in config.get_providers_for_type(GenerationType::Video) {
             let mut models = Vec::new();
-            if let Some(ref model) = provider_config.model {
-                models.push(model.clone());
+            if let Some(model) = provider_config.default_model() {
+                models.push(model.to_string());
             }
-            models.extend(provider_config.models.keys().cloned());
+            models.extend(provider_config.model_aliases.keys().cloned());
             if !models.is_empty() {
                 providers.video.push((name.to_string(), models));
             }
@@ -194,10 +194,10 @@ impl TaskAnalyzer {
         // Audio providers
         for (name, provider_config) in config.get_providers_for_type(GenerationType::Audio) {
             let mut models = Vec::new();
-            if let Some(ref model) = provider_config.model {
-                models.push(model.clone());
+            if let Some(model) = provider_config.default_model() {
+                models.push(model.to_string());
             }
-            models.extend(provider_config.models.keys().cloned());
+            models.extend(provider_config.model_aliases.keys().cloned());
             if !models.is_empty() {
                 providers.audio.push((name.to_string(), models));
             }
