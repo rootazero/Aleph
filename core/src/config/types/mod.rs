@@ -36,6 +36,7 @@ pub mod provider;
 pub mod routing;
 pub mod search;
 pub mod secrets;
+pub mod serde_helpers;
 pub mod skills;
 pub mod smart_flow;
 pub mod subagent;
