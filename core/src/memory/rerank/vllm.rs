@@ -70,7 +70,7 @@ impl RerankProvider for VllmRerankProvider {
         }
 
         let body = VllmRequest {
-            model: &self.config.model,
+            model: self.config.default_model(),
             query,
             documents,
             top_n,
