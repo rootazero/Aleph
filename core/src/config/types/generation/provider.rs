@@ -49,9 +49,13 @@ pub struct GenerationProviderConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
 
-    /// Default model to use
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    /// Default models to use (first is primary). Accepts a single string or array of strings.
+    #[serde(
+        deserialize_with = "crate::config::types::serde_helpers::deserialize_optional_models",
+        alias = "model",
+        default
+    )]
+    pub models: Vec<String>,
 
     /// Whether this provider is enabled
     #[serde(default = "default_enabled")]
@@ -75,7 +79,7 @@ pub struct GenerationProviderConfig {
 
     /// Model aliases (friendly name -> actual model ID)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub models: HashMap<String, String>,
+    pub model_aliases: HashMap<String, String>,
 
     /// Whether this provider has been verified via a successful test connection
     #[serde(default)]
@@ -100,13 +104,13 @@ impl Default for GenerationProviderConfig {
             provider_type: String::new(),
             api_key: None,
             base_url: None,
-            model: None,
+            models: Vec::new(),
             enabled: true,
             color: default_color(),
             capabilities: Vec::new(),
             timeout_seconds: default_timeout_seconds(),
             defaults: GenerationDefaults::default(),
-            models: HashMap::new(),
+            model_aliases: HashMap::new(),
             verified: false,
         }
     }
@@ -126,11 +130,16 @@ impl GenerationProviderConfig {
         self.capabilities.contains(&gen_type)
     }
 
+    /// Get the primary (default) model for this provider
+    pub fn default_model(&self) -> Option<&str> {
+        self.models.first().map(|s| s.as_str())
+    }
+
     /// Get the model to use, resolving aliases
     pub fn resolve_model<'a>(&'a self, model: Option<&'a str>) -> Option<&'a str> {
         match model {
-            Some(m) => self.models.get(m).map(|s| s.as_str()).or(Some(m)),
-            None => self.model.as_deref(),
+            Some(m) => self.model_aliases.get(m).map(|s| s.as_str()).or(Some(m)),
+            None => self.default_model(),
         }
     }
 
