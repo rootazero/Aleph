@@ -122,6 +122,7 @@ pub use crate::error::{AlephError, AlephException, Result};
 pub use crate::config::{
     Config, FullConfig, ChannelInstanceConfig, ProviderConfig, RoutingRuleConfig,
     MemoryConfig, BehaviorConfig, ShortcutsConfig, GeneralConfig, SmartFlowConfig,
+    EmbeddingProviderConfig, GenerationProviderConfig,
     backup::ConfigBackup,
     patcher::ConfigPatcher,
     agent_resolver::{AgentDefinitionResolver, ResolvedAgent},
