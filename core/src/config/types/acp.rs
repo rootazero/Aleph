@@ -13,7 +13,7 @@ use std::collections::HashMap;
 // =============================================================================
 
 /// ACP harness management configuration
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct AcpConfig {
     /// Enable/disable ACP functionality
     #[serde(default)]
@@ -22,15 +22,6 @@ pub struct AcpConfig {
     /// Registered ACP harnesses keyed by name
     #[serde(default)]
     pub harnesses: HashMap<String, AcpHarnessEntry>,
-}
-
-impl Default for AcpConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            harnesses: HashMap::new(),
-        }
-    }
 }
 
 // =============================================================================

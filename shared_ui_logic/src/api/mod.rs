@@ -72,7 +72,7 @@
 //! // List all providers
 //! let list = providers.list().await?;
 //! for provider in list {
-//!     println!("{}: {} (default: {})", provider.name, provider.model, provider.is_default);
+//!     println!("{}: {:?} (default: {})", provider.name, provider.models, provider.is_default);
 //! }
 //! ```
 
@@ -97,7 +97,6 @@
 pub mod alerts;
 pub mod config;
 pub mod memory;
-pub mod models;
 pub mod plugins;
 pub mod providers;
 
@@ -111,5 +110,4 @@ pub use config::{
 };
 pub use memory::{MemoryApi, MemorySearchItem, MemoryStats};
 pub use plugins::{PluginInfo, PluginsApi};
-pub use models::{ModelInfo, ModelsApi, RefreshModelEntry, RefreshResult};
-pub use providers::{DiscoveredModel, NeedsSetupResult, ProbeResult, ProviderConfig, ProviderInfo, ProvidersApi, TestResult};
+pub use providers::{NeedsSetupResult, ProviderConfig, ProviderInfo, ProvidersApi, TestResult};

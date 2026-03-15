@@ -158,6 +158,7 @@ fn SettingsRouter() -> impl IntoView {
             "/settings/search" => view! { <SearchView /> }.into_any(),
             "/settings/providers" => view! { <ProvidersView /> }.into_any(),
             "/settings/embedding-providers" => view! { <EmbeddingProvidersView /> }.into_any(),
+            "/settings/reranking-providers" => view! { <RerankingProvidersView /> }.into_any(),
             "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
             "/settings/memory" => view! { <MemoryView /> }.into_any(),
 

@@ -1,0 +1,315 @@
+//! Slash command resolution and fast-path execution.
+//!
+//! Extracted from `engine.rs` to keep the main execution engine focused
+//! on lifecycle orchestration.
+
+use tracing::info;
+
+use crate::sync_primitives::Arc;
+
+use super::{ExecutionError, RunRequest};
+use crate::gateway::agent_instance::AgentInstance;
+use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
+
+use crate::executor::ToolRegistry;
+use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
+
+use super::engine::ExecutionEngine;
+
+impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
+    /// Try to resolve a `/command args` input to a slash command mode JSON.
+    ///
+    /// Used for non-router paths (Panel, CLI) where the inbound router's
+    /// command resolution doesn't run. Returns `Some(mode_json)` if the
+    /// command matches a registered tool, `None` otherwise.
+    pub(super) fn try_resolve_slash_command(&self, input: &str) -> Option<String> {
+        let trimmed = input.trim();
+        let without_slash = trimmed.strip_prefix('/')?;
+        if without_slash.is_empty() {
+            return None;
+        }
+
+        let (cmd_name, args) = match without_slash.split_once(char::is_whitespace) {
+            Some((name, rest)) => (name.to_lowercase(), rest.trim().to_string()),
+            None => (without_slash.to_lowercase(), String::new()),
+        };
+
+        // Strip @botname suffix (e.g. "gen@mybot" → "gen")
+        let cmd_name = match cmd_name.split_once('@') {
+            Some((name, _)) => name.to_string(),
+            None => cmd_name,
+        };
+
+        // Map common shorthand commands to their actual tool names
+        let cmd_name = match cmd_name.as_str() {
+            "switch" => "agent_switch".to_string(),
+            other => other.to_string(),
+        };
+
+        // Check if this matches a registered tool
+        if self.tool_registry.get_tool(&cmd_name).is_some() {
+            let mode = serde_json::json!({
+                "type": "direct_tool",
+                "tool_id": cmd_name,
+                "args": args,
+            });
+            let mode_json = serde_json::to_string(&mode).ok()?;
+            info!(
+                "[Engine] Inline slash command resolved: /{}",
+                cmd_name
+            );
+            Some(mode_json)
+        } else {
+            None
+        }
+    }
+
+    /// Execute a slash command directly, bypassing the full agent loop.
+    ///
+    /// This is the L0 fast path: parse the serialized execution mode from metadata,
+    /// call the tool via the tool registry, and stream the result back.
+    /// Falls back to an error if the tool is not found or execution fails.
+    pub(super) async fn execute_slash_command_fast_path<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        mode_json: &str,
+        request: &RunRequest,
+        _agent: Arc<AgentInstance>,
+        emitter: Arc<E>,
+    ) -> Result<String, ExecutionError> {
+        let mode: serde_json::Value = serde_json::from_str(mode_json)
+            .map_err(|e| ExecutionError::Failed(format!("Invalid slash command metadata: {}", e)))?;
+
+        let mode_type = mode["type"].as_str().unwrap_or("");
+
+        info!(
+            run_id = %run_id,
+            mode_type = %mode_type,
+            "Slash command fast path executing"
+        );
+
+        match mode_type {
+            "direct_tool" => {
+                self.execute_direct_tool(run_id, &mode, request, emitter).await
+            }
+
+            "skill" => {
+                // For skills, construct a focused prompt and route through a single-step agent loop
+                let skill_name = mode["display_name"].as_str().unwrap_or("skill");
+                let instructions = mode["instructions"].as_str().unwrap_or("");
+                let args = mode["args"].as_str().unwrap_or("");
+
+                // For skills we fall through to the agent loop with modified input
+                // since skills need LLM processing with injected instructions
+                Err(ExecutionError::Failed(format!(
+                    "SKILL_FALLTHROUGH:{}:{}:{}",
+                    skill_name, instructions, args
+                )))
+            }
+
+            "mcp" => {
+                self.execute_mcp_tool(run_id, &mode, request, emitter).await
+            }
+
+            "custom" => {
+                // Custom commands need LLM with a custom system prompt — fall through
+                Err(ExecutionError::Failed("CUSTOM_FALLTHROUGH".to_string()))
+            }
+
+            _ => {
+                Err(ExecutionError::Failed(format!(
+                    "Unknown slash command type: {}",
+                    mode_type
+                )))
+            }
+        }
+    }
+
+    /// Execute a direct tool slash command (e.g. /agent_switch, /search).
+    async fn execute_direct_tool<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        mode: &serde_json::Value,
+        request: &RunRequest,
+        emitter: Arc<E>,
+    ) -> Result<String, ExecutionError> {
+        let tool_id = mode["tool_id"]
+            .as_str()
+            .ok_or_else(|| ExecutionError::Failed("Missing tool_id".to_string()))?;
+        let args_str = mode["args"].as_str().unwrap_or("");
+
+        // Build tool arguments — map slash command args to the
+        // correct field names for each tool's expected schema.
+        let arguments = build_tool_arguments(tool_id, args_str, &request.input);
+
+        // Emit reasoning event
+        let _ = emitter
+            .emit(StreamEvent::Reasoning {
+                run_id: run_id.to_string(),
+                seq: 0,
+                content: format!("Executing /{} ...", tool_id),
+                is_complete: true,
+            })
+            .await;
+
+        // Execute the tool directly
+        match self.tool_registry.execute_tool(tool_id, arguments).await {
+            Ok(result) => {
+                let response = extract_tool_response(&result);
+
+                // Stream response
+                let _ = emitter
+                    .emit(StreamEvent::ResponseChunk {
+                        run_id: run_id.to_string(),
+                        seq: 1,
+                        content: response.clone(),
+                        chunk_index: 0,
+                        is_final: true,
+                    })
+                    .await;
+
+                Ok(response)
+            }
+            Err(e) => {
+                Err(ExecutionError::Failed(format!(
+                    "Tool '{}' execution failed: {}",
+                    tool_id, e
+                )))
+            }
+        }
+    }
+
+    /// Execute an MCP tool slash command.
+    async fn execute_mcp_tool<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        mode: &serde_json::Value,
+        request: &RunRequest,
+        emitter: Arc<E>,
+    ) -> Result<String, ExecutionError> {
+        let server_name = mode["server_name"].as_str().unwrap_or("");
+        let tool_name = mode["tool_name"].as_str();
+        let mcp_tool_id = if let Some(tn) = tool_name {
+            format!("mcp__{}_{}", server_name, tn)
+        } else {
+            format!("mcp__{}", server_name)
+        };
+        let args_str = mode["args"].as_str().unwrap_or("");
+
+        let arguments = serde_json::json!({
+            "input": args_str,
+            "args": args_str,
+            "input_text": request.input,
+        });
+
+        let _ = emitter
+            .emit(StreamEvent::Reasoning {
+                run_id: run_id.to_string(),
+                seq: 0,
+                content: format!("Executing MCP tool /{} ...", server_name),
+                is_complete: true,
+            })
+            .await;
+
+        match self.tool_registry.execute_tool(&mcp_tool_id, arguments).await {
+            Ok(result) => {
+                let response = if let Some(s) = result.as_str() {
+                    s.to_string()
+                } else {
+                    serde_json::to_string_pretty(&result).unwrap_or_default()
+                };
+
+                let _ = emitter
+                    .emit(StreamEvent::ResponseChunk {
+                        run_id: run_id.to_string(),
+                        seq: 1,
+                        content: response.clone(),
+                        chunk_index: 0,
+                        is_final: true,
+                    })
+                    .await;
+
+                Ok(response)
+            }
+            Err(e) => Err(ExecutionError::Failed(format!(
+                "MCP tool '{}' execution failed: {}",
+                mcp_tool_id, e
+            ))),
+        }
+    }
+}
+
+/// Build tool arguments from slash command args, mapping to the correct field
+/// names for each tool's expected schema.
+fn build_tool_arguments(tool_id: &str, args_str: &str, raw_input: &str) -> serde_json::Value {
+    match tool_id {
+        "agent_switch" | "agent_delete" => serde_json::json!({
+            "agent_id": args_str,
+        }),
+        "agent_create" => serde_json::json!({
+            "input": args_str,
+        }),
+        // URL-based tools
+        "browser_open" | "web_fetch" => serde_json::json!({
+            "url": args_str,
+        }),
+        // Selector-based browser tools
+        "browser_click" | "browser_select" => serde_json::json!({
+            "selector": args_str,
+        }),
+        "browser_type" => {
+            // /browser_type <selector> <text>
+            let (sel, txt) = args_str.split_once(' ')
+                .unwrap_or((args_str, ""));
+            serde_json::json!({
+                "selector": sel,
+                "text": txt,
+            })
+        }
+        "browser_evaluate" => serde_json::json!({
+            "script": args_str,
+        }),
+        // Query-based tools
+        "search" | "memory_search" => serde_json::json!({
+            "query": args_str,
+        }),
+        // Tabs: action is required, default to "list"
+        "browser_tabs" => serde_json::json!({
+            "action": if args_str.is_empty() { "list" } else { args_str },
+        }),
+        // Navigate: action is required, default to "refresh"
+        "browser_navigate" => serde_json::json!({
+            "action": if args_str.is_empty() { "refresh" } else { args_str },
+        }),
+        // Tools with no required args
+        "browser_screenshot" | "browser_snapshot"
+        | "browser_profile" => {
+            if args_str.is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::json!({ "input": args_str })
+            }
+        }
+        _ => serde_json::json!({
+            "input": args_str,
+            "query": args_str,
+            "args": args_str,
+            "input_text": raw_input,
+        }),
+    }
+}
+
+/// Extract a human-readable response from a tool result.
+///
+/// Prefers `_display` field, then `message`, then string value, then JSON.
+fn extract_tool_response(result: &serde_json::Value) -> String {
+    if let Some(display) = result.get("_display").and_then(|v| v.as_str()) {
+        display.to_string()
+    } else if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+        msg.to_string()
+    } else if let Some(s) = result.as_str() {
+        s.to_string()
+    } else {
+        serde_json::to_string_pretty(result).unwrap_or_default()
+    }
+}

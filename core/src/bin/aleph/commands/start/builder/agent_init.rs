@@ -173,7 +173,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Get extension manager for plugin tool execution
         let extension_manager = {
             use alephcore::gateway::handlers::plugins::get_extension_manager;
-            get_extension_manager().ok().map(|em| Arc::clone(em))
+            get_extension_manager().ok().map(Arc::clone)
         };
 
         // Build tool config with memory backend, embedder, search API key, and agent management deps
@@ -311,7 +311,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             provider_registry,
             tool_registry,
             tools,
-            session_manager.clone(),
             Some(memory_db.clone()),
         );
         if let Some(router) = task_router {

@@ -1,17 +1,21 @@
 //! ExecutionEngine — bridges Gateway requests to the AgentLoop.
+//!
+//! This file contains the struct definition, constructor, builder methods,
+//! and the main `execute()` / `get_status()` / `cancel()` public API.
+//!
+//! Slash command handling lives in `slash_command.rs`.
+//! Agent loop execution and streaming live in `run_loop.rs`.
 
 use std::collections::HashMap;
 use crate::sync_primitives::{AtomicU32, AtomicU64};
 use crate::sync_primitives::Arc;
 
-use async_trait::async_trait;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 
 use super::{ActiveRun, ExecutionEngineConfig, ExecutionError, RunRequest, RunState, RunStatus};
 use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
-use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, RunSummary, StreamEvent};
-use crate::gateway::execution_adapter::ExecutionAdapter;
+use crate::gateway::event_emitter::{EventEmitter, RunSummary, StreamEvent};
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::gateway::workspace::WorkspaceManager;
 
@@ -19,30 +23,28 @@ use crate::dispatcher::UnifiedTool;
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 
+use super::run_loop::write_conversation_memory;
+
 /// Execution engine that bridges Gateway to the AgentLoop
 pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> {
-    config: ExecutionEngineConfig,
-    active_runs: Arc<RwLock<HashMap<String, ActiveRun>>>,
+    pub(super) config: ExecutionEngineConfig,
+    pub(super) active_runs: Arc<RwLock<HashMap<String, ActiveRun>>>,
     /// Provider registry for LLM access
-    provider_registry: Arc<P>,
+    pub(super) provider_registry: Arc<P>,
     /// Tool registry for tool execution
-    tool_registry: Arc<R>,
+    pub(super) tool_registry: Arc<R>,
     /// Available tools for all agents
-    tools: Arc<Vec<UnifiedTool>>,
-    /// Session manager for identity context
-    session_manager: Arc<crate::gateway::SessionManager>,
+    pub(super) tools: Arc<Vec<UnifiedTool>>,
     /// Workspace manager for workspace-scoped profile resolution
-    workspace_manager: Option<Arc<WorkspaceManager>>,
+    pub(super) workspace_manager: Option<Arc<WorkspaceManager>>,
     /// Memory backend for auto-memorization of conversations
-    memory_backend: Option<crate::memory::store::MemoryBackend>,
-    /// Workspace file loader for agent-scoped SOUL.md/AGENTS.md/MEMORY.md
-    workspace_loader: std::sync::Mutex<crate::gateway::workspace_loader::WorkspaceFileLoader>,
+    pub(super) memory_backend: Option<crate::memory::store::MemoryBackend>,
     /// Optional task router for pre-classification and escalation handling
-    task_router: Option<Arc<dyn crate::routing::TaskRouter>>,
+    pub(super) task_router: Option<Arc<dyn crate::routing::TaskRouter>>,
     /// Compression service for turn-based fact extraction
-    compression_service: Option<Arc<crate::memory::compression::CompressionService>>,
+    pub(super) compression_service: Option<Arc<crate::memory::compression::CompressionService>>,
     /// Memory context provider for LanceDB-backed prompt augmentation
-    memory_context_provider: Option<Arc<crate::thinker::MemoryContextProvider>>,
+    pub(super) memory_context_provider: Option<Arc<crate::thinker::MemoryContextProvider>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -52,7 +54,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         provider_registry: Arc<P>,
         tool_registry: Arc<R>,
         tools: Vec<UnifiedTool>,
-        session_manager: Arc<crate::gateway::SessionManager>,
         memory_backend: Option<crate::memory::store::MemoryBackend>,
     ) -> Self {
         Self {
@@ -61,12 +62,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             provider_registry,
             tool_registry,
             tools: Arc::new(tools),
-            session_manager,
             workspace_manager: None,
             memory_backend,
-            workspace_loader: std::sync::Mutex::new(
-                crate::gateway::workspace_loader::WorkspaceFileLoader::new(),
-            ),
             task_router: None,
             compression_service: None,
             memory_context_provider: None,
@@ -105,21 +102,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     pub fn with_workspace_manager(mut self, manager: Arc<WorkspaceManager>) -> Self {
         self.workspace_manager = Some(manager);
         self
-    }
-
-    /// Format history for AgentLoop
-    fn format_history(&self, history: &[crate::gateway::agent_instance::SessionMessage]) -> String {
-        let mut formatted = String::new();
-        for msg in history {
-            let role = match msg.role {
-                MessageRole::User => "User",
-                MessageRole::Assistant => "Assistant",
-                MessageRole::System => "System",
-                MessageRole::Tool => "Tool",
-            };
-            formatted.push_str(&format!("{}: {}\n", role, msg.content));
-        }
-        formatted
     }
 
     /// Execute a run request
@@ -254,43 +236,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             match fast_result {
                 Ok(response) => {
-                    // Mark run as completed and finalize
-                    let (started_at, steps_completed, final_seq) = {
-                        let mut runs = self.active_runs.write().await;
-                        if let Some(run) = runs.get_mut(&run_id) {
-                            run.state = RunState::Completed;
-                            run.cancel_tx = None;
-                            (run.started_at, run.steps_completed, run.next_seq())
-                        } else {
-                            (chrono::Utc::now(), 0, 0)
-                        }
-                    };
-
-                    agent.set_state(AgentState::Idle).await;
-                    let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
-
-                    agent
-                        .add_message(&request.session_key, MessageRole::Assistant, &response)
+                    return self
+                        .finalize_fast_path_success(&run_id, &request, &agent, &emitter, response)
                         .await;
-                    let _ = emitter
-                        .emit(StreamEvent::RunComplete {
-                            run_id: run_id.clone(),
-                            seq: final_seq,
-                            summary: RunSummary {
-                                total_tokens: 0,
-                                tool_calls: 1,
-                                loops: steps_completed,
-                                final_response: Some(response),
-                            },
-                            total_duration_ms: duration_ms,
-                        })
-                        .await;
-                    let _ = emitter
-                        .emit(StreamEvent::SessionUpdated {
-                            session_key: request.session_key.to_key_string(),
-                        })
-                        .await;
-                    return Ok(());
                 }
                 Err(ref e) => {
                     let error_msg = e.to_string();
@@ -309,58 +257,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         // Fall through to normal agent loop
                     } else {
                         // Direct tool errors: return error response, do NOT fall through
-                        // to prevent agent loop from processing slash commands as plain text.
-                        let (started_at, final_seq) = {
-                            let mut runs = self.active_runs.write().await;
-                            if let Some(run) = runs.get_mut(&run_id) {
-                                run.state = RunState::Completed;
-                                run.cancel_tx = None;
-                                (run.started_at, run.next_seq())
-                            } else {
-                                (chrono::Utc::now(), 0)
-                            }
-                        };
-
-                        agent.set_state(AgentState::Idle).await;
-                        let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
-                        let error_response = format!("❌ {}", error_msg);
-
-                        agent
-                            .add_message(&request.session_key, MessageRole::Assistant, &error_response)
+                        return self
+                            .finalize_fast_path_error(&run_id, &request, &agent, &emitter, &error_msg)
                             .await;
-                        let _ = emitter
-                            .emit(StreamEvent::ResponseChunk {
-                                run_id: run_id.clone(),
-                                seq: 1,
-                                content: error_response.clone(),
-                                chunk_index: 0,
-                                is_final: true,
-                            })
-                            .await;
-                        let _ = emitter
-                            .emit(StreamEvent::RunComplete {
-                                run_id: run_id.clone(),
-                                seq: final_seq,
-                                summary: RunSummary {
-                                    total_tokens: 0,
-                                    tool_calls: 1,
-                                    loops: 0,
-                                    final_response: Some(error_response),
-                                },
-                                total_duration_ms: duration_ms,
-                            })
-                            .await;
-                        let _ = emitter
-                            .emit(StreamEvent::SessionUpdated {
-                                session_key: request.session_key.to_key_string(),
-                            })
-                            .await;
-                        warn!(
-                            run_id = %run_id,
-                            error = %error_msg,
-                            "Slash command fast path failed, returning error to user"
-                        );
-                        return Ok(());
                     }
                 }
             }
@@ -546,542 +445,116 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         Err(ExecutionError::RunNotFound(run_id.to_string()))
     }
 
-    /// List active runs
+    // ================================================================
+    // Private helpers for fast-path finalization (DRY)
+    // ================================================================
 
-    /// Try to resolve a `/command args` input to a slash command mode JSON.
-    ///
-    /// Used for non-router paths (Panel, CLI) where the inbound router's
-    /// command resolution doesn't run. Returns `Some(mode_json)` if the
-    /// command matches a registered tool, `None` otherwise.
-    fn try_resolve_slash_command(&self, input: &str) -> Option<String> {
-        let trimmed = input.trim();
-        let without_slash = trimmed.strip_prefix('/')?;
-        if without_slash.is_empty() {
-            return None;
-        }
-
-        let (cmd_name, args) = match without_slash.split_once(char::is_whitespace) {
-            Some((name, rest)) => (name.to_lowercase(), rest.trim().to_string()),
-            None => (without_slash.to_lowercase(), String::new()),
-        };
-
-        // Strip @botname suffix (e.g. "gen@mybot" → "gen")
-        let cmd_name = match cmd_name.split_once('@') {
-            Some((name, _)) => name.to_string(),
-            None => cmd_name,
-        };
-
-        // Map common shorthand commands to their actual tool names
-        let cmd_name = match cmd_name.as_str() {
-            "switch" => "agent_switch".to_string(),
-            other => other.to_string(),
-        };
-
-        // Check if this matches a registered tool
-        if self.tool_registry.get_tool(&cmd_name).is_some() {
-            let mode = serde_json::json!({
-                "type": "direct_tool",
-                "tool_id": cmd_name,
-                "args": args,
-            });
-            let mode_json = serde_json::to_string(&mode).ok()?;
-            info!(
-                "[Engine] Inline slash command resolved: /{}",
-                cmd_name
-            );
-            Some(mode_json)
-        } else {
-            None
-        }
-    }
-
-    /// Execute a slash command directly, bypassing the full agent loop.
-    ///
-    /// This is the L0 fast path: parse the serialized execution mode from metadata,
-    /// call the tool via the tool registry, and stream the result back.
-    /// Falls back to an error if the tool is not found or execution fails.
-    async fn execute_slash_command_fast_path<E: EventEmitter + Send + Sync + 'static>(
-        &self,
-        run_id: &str,
-        mode_json: &str,
-        request: &RunRequest,
-        _agent: Arc<AgentInstance>,
-        emitter: Arc<E>,
-    ) -> Result<String, ExecutionError> {
-        let mode: serde_json::Value = serde_json::from_str(mode_json)
-            .map_err(|e| ExecutionError::Failed(format!("Invalid slash command metadata: {}", e)))?;
-
-        let mode_type = mode["type"].as_str().unwrap_or("");
-
-        info!(
-            run_id = %run_id,
-            mode_type = %mode_type,
-            "Slash command fast path executing"
-        );
-
-        match mode_type {
-            "direct_tool" => {
-                let tool_id = mode["tool_id"]
-                    .as_str()
-                    .ok_or_else(|| ExecutionError::Failed("Missing tool_id".to_string()))?;
-                let args_str = mode["args"].as_str().unwrap_or("");
-
-                // Build tool arguments — map slash command args to the
-                // correct field names for each tool's expected schema.
-                let arguments = match tool_id {
-                    "agent_switch" | "agent_delete" => serde_json::json!({
-                        "agent_id": args_str,
-                    }),
-                    "agent_create" => serde_json::json!({
-                        "input": args_str,
-                    }),
-                    // URL-based tools
-                    "browser_open" | "web_fetch" => serde_json::json!({
-                        "url": args_str,
-                    }),
-                    // Selector-based browser tools
-                    "browser_click" | "browser_select" => serde_json::json!({
-                        "selector": args_str,
-                    }),
-                    "browser_type" => {
-                        // /browser_type <selector> <text>
-                        let (sel, txt) = args_str.split_once(' ')
-                            .unwrap_or((args_str, ""));
-                        serde_json::json!({
-                            "selector": sel,
-                            "text": txt,
-                        })
-                    }
-                    "browser_evaluate" => serde_json::json!({
-                        "script": args_str,
-                    }),
-                    // Query-based tools
-                    "search" | "memory_search" => serde_json::json!({
-                        "query": args_str,
-                    }),
-                    // Tabs: action is required, default to "list"
-                    "browser_tabs" => serde_json::json!({
-                        "action": if args_str.is_empty() { "list" } else { args_str },
-                    }),
-                    // Navigate: action is required, default to "refresh"
-                    "browser_navigate" => serde_json::json!({
-                        "action": if args_str.is_empty() { "refresh" } else { args_str },
-                    }),
-                    // Tools with no required args
-                    "browser_screenshot" | "browser_snapshot"
-                    | "browser_profile" => {
-                        if args_str.is_empty() {
-                            serde_json::json!({})
-                        } else {
-                            serde_json::json!({ "input": args_str })
-                        }
-                    }
-                    _ => serde_json::json!({
-                        "input": args_str,
-                        "query": args_str,
-                        "args": args_str,
-                        "input_text": request.input,
-                    }),
-                };
-
-                // Emit reasoning event
-                let _ = emitter
-                    .emit(StreamEvent::Reasoning {
-                        run_id: run_id.to_string(),
-                        seq: 0,
-                        content: format!("Executing /{} ...", tool_id),
-                        is_complete: true,
-                    })
-                    .await;
-
-                // Execute the tool directly
-                match self.tool_registry.execute_tool(tool_id, arguments).await {
-                    Ok(result) => {
-                        // Prefer _display field for human-readable output,
-                        // then message field, then string value, then JSON
-                        let response = if let Some(display) = result.get("_display").and_then(|v| v.as_str()) {
-                            display.to_string()
-                        } else if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
-                            msg.to_string()
-                        } else if let Some(s) = result.as_str() {
-                            s.to_string()
-                        } else {
-                            serde_json::to_string_pretty(&result).unwrap_or_default()
-                        };
-
-                        // Stream response
-                        let _ = emitter
-                            .emit(StreamEvent::ResponseChunk {
-                                run_id: run_id.to_string(),
-                                seq: 1,
-                                content: response.clone(),
-                                chunk_index: 0,
-                                is_final: true,
-                            })
-                            .await;
-
-                        Ok(response)
-                    }
-                    Err(e) => {
-                        Err(ExecutionError::Failed(format!(
-                            "Tool '{}' execution failed: {}",
-                            tool_id, e
-                        )))
-                    }
-                }
-            }
-
-            "skill" => {
-                // For skills, construct a focused prompt and route through a single-step agent loop
-                let skill_name = mode["display_name"].as_str().unwrap_or("skill");
-                let instructions = mode["instructions"].as_str().unwrap_or("");
-                let args = mode["args"].as_str().unwrap_or("");
-
-                // For skills we fall through to the agent loop with modified input
-                // since skills need LLM processing with injected instructions
-                Err(ExecutionError::Failed(format!(
-                    "SKILL_FALLTHROUGH:{}:{}:{}",
-                    skill_name, instructions, args
-                )))
-            }
-
-            "mcp" => {
-                let server_name = mode["server_name"].as_str().unwrap_or("");
-                let tool_name = mode["tool_name"].as_str();
-                let mcp_tool_id = if let Some(tn) = tool_name {
-                    format!("mcp__{}_{}", server_name, tn)
-                } else {
-                    format!("mcp__{}", server_name)
-                };
-                let args_str = mode["args"].as_str().unwrap_or("");
-
-                let arguments = serde_json::json!({
-                    "input": args_str,
-                    "args": args_str,
-                    "input_text": request.input,
-                });
-
-                let _ = emitter
-                    .emit(StreamEvent::Reasoning {
-                        run_id: run_id.to_string(),
-                        seq: 0,
-                        content: format!("Executing MCP tool /{} ...", server_name),
-                        is_complete: true,
-                    })
-                    .await;
-
-                match self.tool_registry.execute_tool(&mcp_tool_id, arguments).await {
-                    Ok(result) => {
-                        let response = if let Some(s) = result.as_str() {
-                            s.to_string()
-                        } else {
-                            serde_json::to_string_pretty(&result).unwrap_or_default()
-                        };
-
-                        let _ = emitter
-                            .emit(StreamEvent::ResponseChunk {
-                                run_id: run_id.to_string(),
-                                seq: 1,
-                                content: response.clone(),
-                                chunk_index: 0,
-                                is_final: true,
-                            })
-                            .await;
-
-                        Ok(response)
-                    }
-                    Err(e) => Err(ExecutionError::Failed(format!(
-                        "MCP tool '{}' execution failed: {}",
-                        mcp_tool_id, e
-                    ))),
-                }
-            }
-
-            "custom" => {
-                // Custom commands need LLM with a custom system prompt — fall through
-                Err(ExecutionError::Failed("CUSTOM_FALLTHROUGH".to_string()))
-            }
-
-            _ => {
-                Err(ExecutionError::Failed(format!(
-                    "Unknown slash command type: {}",
-                    mode_type
-                )))
-            }
-        }
-    }
-    /// Run the agent loop (think→act two-step, Claude Code-inspired).
-    ///
-    /// Uses the flat `LoopToolRegistry` and single-layer `SafetyGuard`.
-    async fn run_agent_loop<E: EventEmitter + Send + Sync + 'static>(
+    /// Finalize a successful slash command fast-path execution.
+    async fn finalize_fast_path_success<E: EventEmitter + Send + Sync + 'static>(
         &self,
         run_id: &str,
         request: &RunRequest,
-        agent: Arc<AgentInstance>,
-        emitter: Arc<E>,
-    ) -> Result<String, ExecutionError> {
-        use crate::agent_loop::{
-            AgentLoop, PromptBuilder, SafetyGuard, LoopConfig,
-            adapters::build_registry_from_tools,
-            provider_bridge::AiProviderBridge,
-        };
-
-        info!(run_id = run_id, "Starting agent loop (think→act)");
-
-        // Get provider
-        let provider = self.provider_registry.default_provider();
-        let bridge = AiProviderBridge::new(provider);
-
-        // Build tool registry from UnifiedTool list (filtered by agent whitelist)
-        let allowed_tools: Vec<UnifiedTool> = self
-            .tools
-            .iter()
-            .filter(|t| agent.is_tool_allowed(&t.name))
-            .cloned()
-            .collect();
-
-        let tool_registry = build_registry_from_tools(
-            self.tool_registry.clone(),
-            &allowed_tools,
-        );
-
-        debug!(
-            run_id = run_id,
-            tool_count = tool_registry.len(),
-            "Agent loop: built tool registry"
-        );
-
-        // Resolve soul for prompt building
-        let identity_resolver = crate::thinker::identity::IdentityResolver::with_defaults();
-        let resolved_soul = identity_resolver.resolve();
-        let prompt_builder = if resolved_soul.is_empty() {
-            PromptBuilder::new()
-        } else {
-            PromptBuilder::from_soul(&resolved_soul)
-        };
-
-        // Safety guard with defaults
-        let safety = SafetyGuard::default_guard();
-
-        // Config from agent
-        let max_loops = agent.config().max_loops as usize;
-        let timeout_secs = request
-            .timeout_secs
-            .unwrap_or(self.config.default_timeout_secs);
-        let loop_config = LoopConfig {
-            max_iterations: max_loops,
-            token_budget: agent.config().max_tokens.unwrap_or(200_000) as usize,
-            timeout_secs,
-        };
-
-        // Create and run the agent loop
-        let agent_loop = AgentLoop::new(
-            bridge,
-            tool_registry,
-            prompt_builder,
-            safety,
-            loop_config,
-        );
-
-        // Load conversation history from session (for multi-turn context)
-        let history = {
-            use crate::agent_loop::LoopMessage;
-            use crate::gateway::agent_instance::MessageRole;
-
-            let session_history = agent.get_history(&request.session_key, Some(50)).await;
-            // Convert SessionMessage to LoopMessage, excluding the current user input
-            // (which was just added above and will be appended by run_with_history)
-            let mut msgs: Vec<LoopMessage> = Vec::new();
-            // Skip the last message if it's the current user input we just stored
-            let history_slice = if session_history.last().map(|m| {
-                m.role == MessageRole::User && m.content == request.input
-            }).unwrap_or(false) {
-                &session_history[..session_history.len() - 1]
-            } else {
-                &session_history
-            };
-            for msg in history_slice {
-                match msg.role {
-                    MessageRole::User => msgs.push(LoopMessage::User(msg.content.clone())),
-                    MessageRole::Assistant => msgs.push(LoopMessage::Assistant(msg.content.clone())),
-                    _ => {}
-                }
-            }
-            msgs
-        };
-
-        // Create a streaming callback that emits events
-        let mut callback = StreamCallback::new(emitter.clone(), run_id.to_string());
-
-        match agent_loop.run_with_history(&request.input, history, &mut callback).await {
-            Ok(result) => {
-                info!(
-                    run_id = run_id,
-                    iterations = result.iterations,
-                    tool_calls = result.tool_calls_made,
-                    tokens = result.total_tokens,
-                    "Agent loop completed"
-                );
-                Ok(result.final_text.unwrap_or_default())
-            }
-            Err(e) => {
-                error!(run_id = run_id, error = %e, "Agent loop failed");
-                Err(ExecutionError::Failed(e.to_string()))
-            }
-        }
-    }
-}
-
-/// Callback adapter that bridges AgentLoop events to Gateway StreamEvents.
-struct StreamCallback<E: EventEmitter + Send + Sync + 'static> {
-    emitter: Arc<E>,
-    run_id: String,
-    seq: u64,
-    chunk_index: u32,
-}
-
-impl<E: EventEmitter + Send + Sync + 'static> StreamCallback<E> {
-    fn new(emitter: Arc<E>, run_id: String) -> Self {
-        Self {
-            emitter,
-            run_id,
-            seq: 0,
-            chunk_index: 0,
-        }
-    }
-}
-
-impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
-    for StreamCallback<E>
-{
-    fn on_text(&mut self, text: &str) {
-        self.seq += 1;
-        let chunk_index = self.chunk_index;
-        self.chunk_index += 1;
-
-        let event = StreamEvent::ResponseChunk {
-            run_id: self.run_id.clone(),
-            seq: self.seq,
-            content: text.to_string(),
-            chunk_index,
-            is_final: false,
-        };
-
-        // Fire-and-forget emit (LoopCallback is sync, emitter is async)
-        let emitter = self.emitter.clone();
-        tokio::spawn(async move {
-            let _ = emitter.emit(event).await;
-        });
-    }
-
-    fn on_tool_start(&mut self, name: &str, input: &serde_json::Value) {
-        self.seq += 1;
-        let event = StreamEvent::ToolStart {
-            run_id: self.run_id.clone(),
-            seq: self.seq,
-            tool_name: name.to_string(),
-            tool_id: name.to_string(),
-            params: input.clone(),
-        };
-        let emitter = self.emitter.clone();
-        tokio::spawn(async move {
-            let _ = emitter.emit(event).await;
-        });
-    }
-
-    fn on_tool_done(&mut self, name: &str, result: &crate::agent_loop::ToolResult) {
-        use crate::gateway::event_emitter::ToolResult as EmitterToolResult;
-        self.seq += 1;
-        let tool_result = match result {
-            crate::agent_loop::ToolResult::Success { output } => {
-                EmitterToolResult::success(output.to_string())
-            }
-            crate::agent_loop::ToolResult::Error { error, .. } => {
-                EmitterToolResult::error(error.clone())
-            }
-        };
-        let event = StreamEvent::ToolEnd {
-            run_id: self.run_id.clone(),
-            seq: self.seq,
-            tool_id: name.to_string(),
-            result: tool_result,
-            duration_ms: 0,
-        };
-        let emitter = self.emitter.clone();
-        tokio::spawn(async move {
-            let _ = emitter.emit(event).await;
-        });
-    }
-}
-
-
-// ============================================================================
-// ExecutionAdapter trait implementation
-// ============================================================================
-
-/// Implement ExecutionAdapter for the ExecutionEngine.
-///
-/// This allows InboundMessageRouter to use ExecutionEngine via a trait object,
-/// enabling routing without being generic over provider and tool registry types.
-#[async_trait]
-impl<P, R> ExecutionAdapter for ExecutionEngine<P, R>
-where
-    P: ThinkerProviderRegistry + Send + Sync + 'static,
-    R: ToolRegistry + Send + Sync + 'static,
-{
-    async fn execute(
-        &self,
-        request: RunRequest,
-        agent: Arc<AgentInstance>,
-        emitter: Arc<dyn EventEmitter + Send + Sync>,
+        agent: &AgentInstance,
+        emitter: &Arc<E>,
+        response: String,
     ) -> Result<(), ExecutionError> {
-        // Wrap the dyn trait object in DynEventEmitter to make it Sized,
-        // then delegate to the existing generic execute method
-        let wrapper = Arc::new(DynEventEmitter::new(emitter));
-        ExecutionEngine::execute(self, request, agent, wrapper).await
+        let (started_at, steps_completed, final_seq) = {
+            let mut runs = self.active_runs.write().await;
+            if let Some(run) = runs.get_mut(run_id) {
+                run.state = RunState::Completed;
+                run.cancel_tx = None;
+                (run.started_at, run.steps_completed, run.next_seq())
+            } else {
+                (chrono::Utc::now(), 0, 0)
+            }
+        };
+
+        agent.set_state(AgentState::Idle).await;
+        let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
+
+        agent
+            .add_message(&request.session_key, MessageRole::Assistant, &response)
+            .await;
+        let _ = emitter
+            .emit(StreamEvent::RunComplete {
+                run_id: run_id.to_string(),
+                seq: final_seq,
+                summary: RunSummary {
+                    total_tokens: 0,
+                    tool_calls: 1,
+                    loops: steps_completed,
+                    final_response: Some(response),
+                },
+                total_duration_ms: duration_ms,
+            })
+            .await;
+        let _ = emitter
+            .emit(StreamEvent::SessionUpdated {
+                session_key: request.session_key.to_key_string(),
+            })
+            .await;
+        Ok(())
     }
 
-    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
-        ExecutionEngine::cancel(self, run_id).await
-    }
+    /// Finalize a failed slash command fast-path execution (non-fallthrough error).
+    async fn finalize_fast_path_error<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        request: &RunRequest,
+        agent: &AgentInstance,
+        emitter: &Arc<E>,
+        error_msg: &str,
+    ) -> Result<(), ExecutionError> {
+        let (started_at, final_seq) = {
+            let mut runs = self.active_runs.write().await;
+            if let Some(run) = runs.get_mut(run_id) {
+                run.state = RunState::Completed;
+                run.cancel_tx = None;
+                (run.started_at, run.next_seq())
+            } else {
+                (chrono::Utc::now(), 0)
+            }
+        };
 
-    async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
-        ExecutionEngine::get_status(self, run_id).await
-    }
-}
+        agent.set_state(AgentState::Idle).await;
+        let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
+        let error_response = format!("\u{274c} {}", error_msg);
 
-// ============================================================================
-// Background memory persistence
-// ============================================================================
-
-/// Write a conversation turn to the memory system (Layer 1).
-///
-/// Runs in a background task — failures are logged but never block the caller.
-async fn write_conversation_memory(
-    memory_backend: crate::memory::store::MemoryBackend,
-    session_key: String,
-    agent_id: String,
-    user_input: String,
-    ai_output: String,
-) {
-    use crate::memory::context::{ContextAnchor, MemoryEntry};
-
-    let context = ContextAnchor::with_session(
-        session_key.clone(),
-        session_key,
-    );
-    let mut entry = MemoryEntry::new(
-        uuid::Uuid::new_v4().to_string(),
-        context,
-        user_input,
-        ai_output,
-    );
-    entry.workspace = agent_id;
-
-    use crate::memory::store::SessionStore;
-    if let Err(e) = memory_backend.insert_memory(&entry).await {
-        warn!("Failed to write conversation memory: {}", e);
-    } else {
-        debug!("Conversation memory saved to Layer 1");
+        agent
+            .add_message(&request.session_key, MessageRole::Assistant, &error_response)
+            .await;
+        let _ = emitter
+            .emit(StreamEvent::ResponseChunk {
+                run_id: run_id.to_string(),
+                seq: 1,
+                content: error_response.clone(),
+                chunk_index: 0,
+                is_final: true,
+            })
+            .await;
+        let _ = emitter
+            .emit(StreamEvent::RunComplete {
+                run_id: run_id.to_string(),
+                seq: final_seq,
+                summary: RunSummary {
+                    total_tokens: 0,
+                    tool_calls: 1,
+                    loops: 0,
+                    final_response: Some(error_response),
+                },
+                total_duration_ms: duration_ms,
+            })
+            .await;
+        let _ = emitter
+            .emit(StreamEvent::SessionUpdated {
+                session_key: request.session_key.to_key_string(),
+            })
+            .await;
+        warn!(
+            run_id = %run_id,
+            error = %error_msg,
+            "Slash command fast path failed, returning error to user"
+        );
+        Ok(())
     }
 }

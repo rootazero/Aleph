@@ -22,6 +22,7 @@
 //! let executor = SingleStepExecutor::new(Arc::new(registry));
 //! ```
 
+mod builder;
 mod config;
 mod definitions;
 mod executors;
