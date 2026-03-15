@@ -118,7 +118,9 @@ pub fn default_provider_enabled() -> bool {
 impl ProviderConfig {
     /// Get the effective protocol name
     ///
-    /// Priority: protocol field > default "openai"
+    /// Returns the explicit protocol if set, otherwise defaults to "openai".
+    /// WARNING: Callers should ensure protocol is explicitly set before calling this.
+    /// The "openai" default is a legacy fallback — see Task 2 for persistence fix.
     pub fn protocol(&self) -> String {
         self.protocol
             .clone()
