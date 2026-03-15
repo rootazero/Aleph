@@ -1,13 +1,11 @@
 //! Setup Wizard
 //!
 //! First-run wizard that guides users through configuring their first AI provider.
-//! 3-step flow: Select Provider -> Enter Credentials -> Select Model
+//! 3-step flow: Select Provider -> Enter Credentials -> Enter Model
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::preset_data::{ProviderPreset, PRESETS, OAUTH_PRESETS};
-use crate::components::model_selector::{ModelSelector, ModelOption};
-use crate::components::probe_indicator::ProbeStatus;
 use crate::components::api_key_input::ApiKeyInput;
 use crate::context::DashboardState;
 use crate::api::{ProvidersApi, ProviderConfig};
@@ -30,11 +28,8 @@ pub fn SetupWizard(
     let selected_preset_name = RwSignal::new(None::<String>);
     let api_key = RwSignal::new(String::new());
     let base_url = RwSignal::new(String::new());
-    let probe_status = RwSignal::new(ProbeStatus::Idle);
-    let discovered_models = RwSignal::new(Vec::<ModelOption>::new());
-    let selected_model = RwSignal::new(None::<String>);
+    let form_model = RwSignal::new(String::new());
     let is_saving = RwSignal::new(false);
-    let _model_source = RwSignal::new(String::new());
 
     let state = expect_context::<DashboardState>();
 
@@ -43,56 +38,6 @@ pub fn SetupWizard(
         selected_preset_name.get().and_then(|name| {
             PRESETS.iter().chain(OAUTH_PRESETS.iter()).find(|p| p.name == name)
         })
-    };
-
-    // Probe: test connection + discover models
-    let do_probe = {
-        let state = state.clone();
-        move |protocol: String, key: Option<String>, url: Option<String>| {
-            let state = state.clone();
-            probe_status.set(ProbeStatus::Loading);
-            spawn_local(async move {
-                match ProvidersApi::probe(
-                    &state,
-                    &protocol,
-                    None,
-                    key.as_deref(),
-                    url.as_deref(),
-                ).await {
-                    Ok(result) => {
-                        let models: Vec<ModelOption> = result.models.iter().map(|m| ModelOption {
-                            id: m.id.clone(),
-                            name: m.name.clone(),
-                            capabilities: m.capabilities.clone(),
-                            source: result.model_source.clone(),
-                        }).collect();
-
-                        if result.success {
-                            probe_status.set(ProbeStatus::Success {
-                                latency_ms: result.latency_ms.unwrap_or(0),
-                            });
-                            discovered_models.set(models);
-                            _model_source.set(result.model_source);
-                            step.set(WizardStep::SelectModel);
-                        } else {
-                            probe_status.set(ProbeStatus::Error {
-                                message: result.error.unwrap_or_else(|| "Connection failed".to_string()),
-                            });
-                            // Still populate models if any came back (e.g. preset fallback)
-                            if !models.is_empty() {
-                                discovered_models.set(models);
-                                _model_source.set(result.model_source);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        probe_status.set(ProbeStatus::Error {
-                            message: format!("Probe error: {}", e),
-                        });
-                    }
-                }
-            });
-        }
     };
 
     // Save: create provider + set as default
@@ -108,7 +53,7 @@ pub fn SetupWizard(
                     let protocol = preset.map(|p| p.protocol.to_string());
                     let color = preset.map(|p| p.icon_color.to_string());
 
-                    let model = selected_model.get().unwrap_or_default();
+                    let model = form_model.get();
                     let key_val = api_key.get();
                     let url_val = base_url.get();
 
@@ -184,9 +129,8 @@ pub fn SetupWizard(
                                             let description = preset.description;
                                             let color = preset.icon_color;
                                             let needs_key = preset.needs_api_key;
-                                            let protocol = preset.protocol;
                                             let preset_base_url = preset.base_url;
-                                            let do_probe = do_probe.clone();
+                                            let preset_model = preset.model;
                                             let initial = name.chars().next()
                                                 .map(|c| c.to_uppercase().to_string())
                                                 .unwrap_or_default();
@@ -196,15 +140,12 @@ pub fn SetupWizard(
                                                     on:click=move |_| {
                                                         selected_preset_name.set(Some(name.to_string()));
                                                         base_url.set(preset_base_url.to_string());
+                                                        form_model.set(preset_model.to_string());
                                                         if needs_key {
                                                             step.set(WizardStep::EnterCredentials);
                                                         } else {
-                                                            // No key needed (e.g. Ollama): probe directly
-                                                            do_probe(
-                                                                protocol.to_string(),
-                                                                None,
-                                                                Some(preset_base_url.to_string()),
-                                                            );
+                                                            // No key needed (e.g. Ollama): skip to model step
+                                                            step.set(WizardStep::SelectModel);
                                                         }
                                                     }
                                                 >
@@ -221,13 +162,10 @@ pub fn SetupWizard(
                             }.into_any()
                         }
                         WizardStep::EnterCredentials => {
-                            let do_probe = do_probe.clone();
                             view! {
                                 <div class="wizard-step-credentials">
                                     {move || get_preset().map(|preset| {
-                                        let protocol = preset.protocol.to_string();
                                         let placeholder = preset.api_key_placeholder;
-                                        let do_probe = do_probe.clone();
                                         view! {
                                             <p class="wizard-description">
                                                 {format!("Enter your {} API key:", preset.name)}
@@ -235,34 +173,22 @@ pub fn SetupWizard(
                                             <ApiKeyInput
                                                 value=api_key
                                                 placeholder=placeholder
-                                                probe_status=Signal::derive(move || probe_status.get())
-                                                on_key_change=Callback::new({
-                                                    let do_probe = do_probe.clone();
-                                                    move |key: String| {
-                                                        let url = base_url.get();
-                                                        do_probe(
-                                                            protocol.clone(),
-                                                            Some(key),
-                                                            if url.is_empty() { None } else { Some(url) },
-                                                        );
-                                                    }
-                                                })
                                             />
                                             <div class="wizard-actions">
                                                 <button
                                                     class="btn-secondary"
                                                     on:click=move |_| {
                                                         step.set(WizardStep::SelectProvider);
-                                                        probe_status.set(ProbeStatus::Idle);
                                                         api_key.set(String::new());
                                                     }
                                                 >"Back"</button>
                                                 <button
-                                                    class="btn-link"
+                                                    class="btn-primary"
+                                                    disabled=move || api_key.get().is_empty()
                                                     on:click=move |_| {
                                                         step.set(WizardStep::SelectModel);
                                                     }
-                                                >"Skip verification"</button>
+                                                >"Next"</button>
                                             </div>
                                         }
                                     })}
@@ -271,36 +197,21 @@ pub fn SetupWizard(
                         }
                         WizardStep::SelectModel => {
                             let save_provider = save_provider.clone();
-                            let recommended_model = Signal::derive(move || {
-                                get_preset().map(|p| p.model.to_string())
-                            });
                             view! {
                                 <div class="wizard-step-model">
-                                    <p class="wizard-description">"Choose a model:"</p>
-                                    <ModelSelector
-                                        models=Signal::derive(move || discovered_models.get())
-                                        selected=selected_model
-                                        recommended=recommended_model
-                                        show_refresh=true
-                                        on_refresh=Callback::new({
-                                            let do_probe = do_probe.clone();
-                                            move |_: ()| {
-                                                if let Some(preset_name) = selected_preset_name.get() {
-                                                    if let Some(preset) = PRESETS.iter().chain(OAUTH_PRESETS.iter()).find(|p| p.name == preset_name) {
-                                                        let key = api_key.get();
-                                                        let url = base_url.get();
-                                                        do_probe(
-                                                            preset.protocol.to_string(),
-                                                            if key.is_empty() { None } else { Some(key) },
-                                                            if url.is_empty() { None } else { Some(url) },
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        })
-                                        refreshing=Signal::derive(move || probe_status.get() == ProbeStatus::Loading)
-                                        allow_custom=true
-                                    />
+                                    <p class="wizard-description">"Enter a model name:"</p>
+                                    <div>
+                                        <input
+                                            type="text"
+                                            prop:value=move || form_model.get()
+                                            on:input=move |ev| form_model.set(event_target_value(&ev))
+                                            class="input"
+                                            placeholder="e.g. gpt-4o, claude-sonnet-4-20250514"
+                                        />
+                                        <p class="text-xs text-text-tertiary mt-1">
+                                            {move || get_preset().map(|p| format!("Recommended: {}", p.model)).unwrap_or_default()}
+                                        </p>
+                                    </div>
                                     <div class="wizard-actions">
                                         <button
                                             class="btn-secondary"
@@ -314,7 +225,7 @@ pub fn SetupWizard(
                                         >"Back"</button>
                                         <button
                                             class="btn-primary"
-                                            disabled=move || selected_model.get().is_none() || is_saving.get()
+                                            disabled=move || form_model.get().is_empty() || is_saving.get()
                                             on:click={
                                                 let save_provider = save_provider.clone();
                                                 move |_| save_provider()
