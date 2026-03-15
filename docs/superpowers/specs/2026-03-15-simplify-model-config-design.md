@@ -27,9 +27,10 @@ base_url = "https://api.siliconflow.cn/v1"
 ```
 
 - First entry is the default model
-- Backward compatibility: deserialize `model = "xxx"` as `models = ["xxx"]`
+- Backward compatibility: deserialize `model = "xxx"` as `models = ["xxx"]` using custom serde deserializer that accepts both `String` and `Vec<String>`
 - Serialize always uses `models`
 - New convenience method: `ProviderConfig::default_model() -> &str` returns `models[0]`
+- **Validation**: `models` must be non-empty at deserialization time (reject with error). Empty strings within the list are filtered out. `default_model()` includes `debug_assert!(!self.models.is_empty())` as safety net.
 
 ### 2. Default Model Resolution
 
@@ -56,11 +57,15 @@ Resolution chain:
 | OllamaProvider::list_models() | `core/src/providers/ollama.rs` | Remove method |
 | OllamaDiscoveryAdapter | `core/src/gateway/handlers/models/` | Remove |
 | models handlers module | `core/src/gateway/handlers/models/` | Delete entire directory |
-| providers.probe handler | `core/src/gateway/handlers/providers/ | Remove probe handler + types |
+| providers.probe handler | `core/src/gateway/handlers/providers/` | Remove probe handler + types |
 | embedding_providers.probe | `core/src/gateway/handlers/embedding_providers.rs` | Remove probe handler + types |
-| All models.* RPC registrations | Handler registration code | Remove all 9 endpoints |
-| All providers.probe RPC registration | Handler registration code | Remove |
-| All embedding_providers.probe RPC | Handler registration code | Remove |
+| models.* RPC registrations | `core/src/bin/aleph/commands/start/builder/handlers.rs` | Remove 4 endpoints: `models.list`, `models.get`, `models.capabilities`, `models.refresh` |
+| providers.probe RPC registration | `core/src/bin/aleph/commands/start/builder/handlers.rs` | Remove registration |
+| embedding_providers.probe RPC | `core/src/bin/aleph/commands/start/builder/handlers.rs` | Remove registration |
+| Extension provider list_models | `core/src/extension/provider_adapter.rs` | Remove `list_models()` and `static_models()` methods |
+
+**NOT deleted** (intentionally preserved):
+- `core/src/gateway/openai_api/routes.rs` — the OpenAI-compatible `/v1/models` endpoint for external tool integration is unrelated to internal model discovery and remains unchanged.
 
 ### 4. Frontend Deletions
 
@@ -72,6 +77,7 @@ Resolution chain:
 | EmbeddingProvidersApi::probe() | `apps/panel/src/api.rs` | Remove method |
 | Probe logic in providers view | `apps/panel/src/views/settings/providers.rs` | Remove probe flow |
 | Probe logic in embedding view | `apps/panel/src/views/settings/embedding_providers.rs` | Remove probe flow |
+| Probe logic in reranking view | `apps/panel/src/views/settings/reranking_providers.rs` | Remove probe flow |
 | Probe logic in setup wizard | `apps/panel/src/views/wizard/setup_wizard.rs` | Remove probe flow |
 
 ### 5. Frontend UI Adaptation
@@ -86,16 +92,26 @@ All four provider settings pages get the same treatment:
 
 ### 6. Code Reference Updates
 
-All `config.model` references throughout the codebase change to `config.default_model()` (returns `&models[0]`). Key locations:
+All `config.model` references throughout the codebase change to `config.default_model()` (returns `&models[0]`). This is a large mechanical refactor (~114 occurrences across ~58 files). Key areas:
+
 - Provider creation in `core/src/providers/mod.rs`
 - Execution engine in `core/src/gateway/execution_engine/`
-- Any handler that reads provider model
+- Protocol implementations in `core/src/providers/protocols/` (including template.rs)
+- Generation providers in `core/src/generation/providers/`
+- Reranking providers in `core/src/memory/rerank/`
+- Embedding provider in `core/src/memory/embedding_provider.rs`
+- Dispatcher modules in `core/src/dispatcher/`
+- Config presets in `core/src/config/presets_override.rs`
+- Frontend API types in `apps/panel/src/api.rs`
+
+**Template system compatibility**: `core/src/providers/protocols/template.rs` serializes config into a template context as `"model": config.model`. This must be updated to `"model": config.default_model()` so existing custom protocol templates using `{{config.model}}` continue to work.
 
 ### 7. Backward Compatibility
 
-- Deserialization: `model = "xxx"` → `models = ["xxx"]` (custom deserialize)
+- Deserialization: `model = "xxx"` → `models = ["xxx"]` (custom serde deserializer accepting both String and Vec<String>)
 - Serialization: always `models = [...]`
 - `default_model()` method ensures callers don't need to know about the vec
+- Template context: expose `config.model` key as `default_model()` value for backward-compatible templates
 
 ### 8. Out of Scope
 
