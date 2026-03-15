@@ -162,9 +162,70 @@ pub trait ProtocolAdapter: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// Fetch available models from the provider API.
-    /// Returns None if the protocol does not support model listing.
-    async fn list_models(&self, _config: &ProviderConfig) -> Result<Option<Vec<DiscoveredModel>>> {
-        Ok(None)
+    ///
+    /// Default implementation attempts the OpenAI-compatible `/v1/models` endpoint.
+    /// Override with `Ok(None)` for protocols without model listing API (e.g., Anthropic).
+    /// Override with custom logic for non-OpenAI-compatible APIs (e.g., Gemini).
+    async fn list_models(&self, config: &ProviderConfig) -> Result<Option<Vec<DiscoveredModel>>> {
+        let base_url = match config.base_url.as_ref().filter(|s| !s.is_empty()) {
+            Some(url) => url.trim_end_matches('/').to_string(),
+            None => return Ok(None),
+        };
+
+        let api_key = config.api_key.as_deref().unwrap_or("");
+        if api_key.is_empty() {
+            return Ok(None);
+        }
+
+        let url = if base_url.ends_with("/v1") {
+            format!("{}/models", base_url)
+        } else {
+            format!("{}/v1/models", base_url)
+        };
+
+        let client = reqwest::Client::new();
+        let response = match client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => return Ok(None),
+        };
+
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+
+        let body: serde_json::Value = match response.json().await {
+            Ok(v) => v,
+            Err(_) => return Ok(None),
+        };
+
+        let models: Vec<DiscoveredModel> = body["data"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        let id = m["id"].as_str()?;
+                        Some(DiscoveredModel {
+                            id: id.to_string(),
+                            name: Some(id.to_string()),
+                            owned_by: m["owned_by"].as_str().map(|s| s.to_string()),
+                            capabilities: vec!["chat".to_string()],
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if models.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(models))
+        }
     }
 }
 
