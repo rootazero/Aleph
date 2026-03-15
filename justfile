@@ -82,7 +82,7 @@ wasm:
         <noscript>This application requires JavaScript to run.</noscript>
         <script type="module">
           import init from '/aleph_panel.js';
-          await init('/aleph_panel_bg.wasm');
+          await init({ module_or_path: '/aleph_panel_bg.wasm' });
         </script>
       </body>
     </html>
@@ -174,6 +174,16 @@ deps:
         fi
     done
     $ok || { echo ""; echo "Install missing deps before building."; exit 1; }
+
+# ─── Integration Probes ───
+
+# Provider config integration probes (Layer 1 + 2)
+test-probes:
+    cargo test --test provider_config_probe --test provider_rpc_probe -p alephcore -- --test-threads=1
+
+# Playwright E2E tests (Layer 3) — requires `just wasm` for UI tests
+test-e2e:
+    npx playwright test --project=chromium
 
 # ─── Internal ───
 
