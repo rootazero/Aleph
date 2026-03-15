@@ -136,12 +136,12 @@ pub fn create_provider(
         "openai" | "openai_image" | "dalle" => Arc::new(OpenAiImageProvider::new(
             api_key,
             config.base_url.clone(),
-            config.model.clone(),
+            config.default_model().map(|s| s.to_string()),
         )),
         "openai_tts" | "tts" => Arc::new(OpenAiTtsProvider::new(
             api_key,
             config.base_url.clone(),
-            config.model.clone(),
+            config.default_model().map(|s| s.to_string()),
             config.defaults.voice.clone(),
         )?),
         "openai_compat" => {
@@ -154,7 +154,7 @@ pub fn create_provider(
 
             let mut builder = OpenAiCompatProvider::builder(name, &api_key, &base_url);
 
-            if let Some(model) = &config.model {
+            if let Some(model) = config.default_model() {
                 builder = builder.model(model);
             }
 
@@ -170,17 +170,17 @@ pub fn create_provider(
         "stability" | "stability_image" | "sdxl" => Arc::new(StabilityImageProvider::new(
             api_key,
             config.base_url.clone(),
-            config.model.clone(),
+            config.default_model().map(|s| s.to_string()),
         )),
         "google" | "google_imagen" | "imagen" => Arc::new(GoogleImagenProvider::new(
             api_key,
             config.base_url.clone(),
-            config.model.clone(),
+            config.default_model().map(|s| s.to_string()),
         )),
         "google_veo" | "veo" => Arc::new(GoogleVeoProvider::new(
             api_key,
             config.base_url.clone(),
-            config.model.clone(),
+            config.default_model().map(|s| s.to_string()),
         )),
         "replicate" => {
             let mut builder = ReplicateProvider::builder(&api_key);
@@ -190,12 +190,12 @@ pub fn create_provider(
             }
 
             // Add model as "default" alias if specified
-            if let Some(model) = &config.model {
+            if let Some(model) = config.default_model() {
                 builder = builder.add_model("default", model);
             }
 
             // Add model mappings from config
-            for (alias, version) in &config.models {
+            for (alias, version) in &config.model_aliases {
                 builder = builder.add_model(alias, version);
             }
 
@@ -204,7 +204,7 @@ pub fn create_provider(
         "elevenlabs" => Arc::new(ElevenLabsProvider::new(
             api_key,
             config.base_url.clone(),
-            config.model.clone(),
+            config.default_model().map(|s| s.to_string()),
             config.defaults.voice.clone(),
         )?),
         "midjourney" | "mj" => {
@@ -215,7 +215,7 @@ pub fn create_provider(
             }
 
             // Check for mode in extra config or model field
-            if let Some(model) = &config.model {
+            if let Some(model) = config.default_model() {
                 let mode = match model.to_lowercase().as_str() {
                     "fast" | "mj-fast" => MidjourneyMode::Fast,
                     "relax" | "mj-relax" => MidjourneyMode::Relax,
@@ -238,7 +238,7 @@ pub fn create_provider(
 
             let mut builder = T8StarVeoProvider::builder(&api_key, &base_url);
 
-            if let Some(model) = &config.model {
+            if let Some(model) = config.default_model() {
                 builder = builder.model(model);
             }
 
@@ -275,7 +275,7 @@ mod tests {
         let config = GenerationProviderConfig {
             provider_type: "openai".to_string(),
             api_key: Some("sk-test-key".to_string()),
-            model: Some("dall-e-3".to_string()),
+            models: vec!["dall-e-3".to_string()],
             ..Default::default()
         };
 
@@ -318,7 +318,7 @@ mod tests {
         let config = GenerationProviderConfig {
             provider_type: "openai_tts".to_string(),
             api_key: Some("sk-test-key".to_string()),
-            model: Some("tts-1-hd".to_string()),
+            models: vec!["tts-1-hd".to_string()],
             defaults: GenerationDefaults {
                 voice: Some("nova".to_string()),
                 ..Default::default()
@@ -353,7 +353,7 @@ mod tests {
             provider_type: "openai_compat".to_string(),
             api_key: Some("api-key".to_string()),
             base_url: Some("https://api.example.com".to_string()),
-            model: Some("custom-model".to_string()),
+            models: vec!["custom-model".to_string()],
             color: "#ff5500".to_string(),
             capabilities: vec![GenerationType::Image, GenerationType::Video],
             ..Default::default()
@@ -459,7 +459,7 @@ mod tests {
             provider_type: "openai".to_string(),
             api_key: Some("api-key".to_string()),
             base_url: Some("https://custom.openai.azure.com".to_string()),
-            model: Some("dall-e-3".to_string()),
+            models: vec!["dall-e-3".to_string()],
             ..Default::default()
         };
 
@@ -516,7 +516,7 @@ mod tests {
         let config = GenerationProviderConfig {
             provider_type: "stability".to_string(),
             api_key: Some("sk-stability-key".to_string()),
-            model: Some("stable-diffusion-xl-1024-v1-0".to_string()),
+            models: vec!["stable-diffusion-xl-1024-v1-0".to_string()],
             ..Default::default()
         };
 
@@ -564,7 +564,7 @@ mod tests {
         let config = GenerationProviderConfig {
             provider_type: "replicate".to_string(),
             api_key: Some("r8_replicate_key".to_string()),
-            model: Some("black-forest-labs/flux-schnell".to_string()),
+            models: vec!["black-forest-labs/flux-schnell".to_string()],
             ..Default::default()
         };
 
@@ -584,17 +584,17 @@ mod tests {
     fn test_create_replicate_provider_with_model_mappings() {
         use std::collections::HashMap;
 
-        let mut models = HashMap::new();
-        models.insert(
+        let mut model_aliases = HashMap::new();
+        model_aliases.insert(
             "flux".to_string(),
             "black-forest-labs/flux-schnell".to_string(),
         );
-        models.insert("sdxl".to_string(), "stability-ai/sdxl".to_string());
+        model_aliases.insert("sdxl".to_string(), "stability-ai/sdxl".to_string());
 
         let config = GenerationProviderConfig {
             provider_type: "replicate".to_string(),
             api_key: Some("r8_replicate_key".to_string()),
-            models,
+            model_aliases,
             ..Default::default()
         };
 
@@ -624,7 +624,7 @@ mod tests {
         let config = GenerationProviderConfig {
             provider_type: "elevenlabs".to_string(),
             api_key: Some("xi_elevenlabs_key".to_string()),
-            model: Some("eleven_multilingual_v2".to_string()),
+            models: vec!["eleven_multilingual_v2".to_string()],
             defaults: GenerationDefaults {
                 voice: Some("rachel".to_string()),
                 ..Default::default()
@@ -679,7 +679,7 @@ mod tests {
         let config = GenerationProviderConfig {
             provider_type: "google_imagen".to_string(),
             api_key: Some("google-api-key".to_string()),
-            model: Some("imagen-3.0-generate-002".to_string()),
+            models: vec!["imagen-3.0-generate-002".to_string()],
             ..Default::default()
         };
 
@@ -724,7 +724,7 @@ mod tests {
         let config = GenerationProviderConfig {
             provider_type: "google_veo".to_string(),
             api_key: Some("google-api-key".to_string()),
-            model: Some("veo-2.0-generate-001".to_string()),
+            models: vec!["veo-2.0-generate-001".to_string()],
             ..Default::default()
         };
 
@@ -754,7 +754,7 @@ mod tests {
         let config = GenerationProviderConfig {
             provider_type: "google_veo".to_string(),
             api_key: Some("test-key".to_string()),
-            model: Some("veo-3.1-generate-preview".to_string()),
+            models: vec!["veo-3.1-generate-preview".to_string()],
             ..Default::default()
         };
 
@@ -800,7 +800,7 @@ mod tests {
         let config = GenerationProviderConfig {
             provider_type: "midjourney".to_string(),
             api_key: Some("mj-api-key".to_string()),
-            model: Some("fast".to_string()),
+            models: vec!["fast".to_string()],
             ..Default::default()
         };
 
@@ -815,7 +815,7 @@ mod tests {
         let config = GenerationProviderConfig {
             provider_type: "midjourney".to_string(),
             api_key: Some("mj-api-key".to_string()),
-            model: Some("relax".to_string()),
+            models: vec!["relax".to_string()],
             ..Default::default()
         };
 
@@ -889,7 +889,7 @@ mod tests {
         let config = GenerationProviderConfig {
             provider_type: "t8star_veo".to_string(),
             api_key: Some("veo-api-key".to_string()),
-            model: Some("veo3.1-pro".to_string()),
+            models: vec!["veo3.1-pro".to_string()],
             ..Default::default()
         };
 
