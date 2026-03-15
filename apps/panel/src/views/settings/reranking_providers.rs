@@ -1,8 +1,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{RerankConfigApi, RerankConfig, RerankProviderType, ProvidersApi};
-use crate::components::model_selector::{ModelSelector, ModelOption};
+use crate::api::{RerankConfigApi, RerankConfig, RerankProviderType};
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 
@@ -250,63 +249,15 @@ fn ProviderDetailPanel(
     let enabled = RwSignal::new(true);
     let api_base = RwSignal::new(if is_current_provider { rerank_cfg.api_base.clone() } else { String::new() });
     let api_key = RwSignal::new(if is_current_provider { rerank_cfg.api_key.clone() } else { String::new() });
-    let selected_model = RwSignal::new({
+    let form_model = RwSignal::new({
         if is_current_provider && !rerank_cfg.model.is_empty() {
-            Some(rerank_cfg.model.clone())
+            rerank_cfg.model.clone()
         } else {
-            preset.map(|p| p.default_model.to_string())
+            preset.map(|p| p.default_model.to_string()).unwrap_or_default()
         }
     });
-    let models_list = RwSignal::new(Vec::<ModelOption>::new());
-    let (probe_loading, set_probe_loading) = signal(false);
     let timeout_ms = RwSignal::new(if is_current_provider { rerank_cfg.timeout_ms } else { 5000 });
     let rerank_weight = RwSignal::new(if is_current_provider { rerank_cfg.rerank_weight } else { 0.6 });
-
-    // Auto-probe to discover models on mount
-    // Reranking providers (Jina, SiliconFlow, Voyage, vLLM) are OpenAI-compatible,
-    // so we probe with protocol "openai" and the provider's base URL.
-    {
-        let probe_base = if is_current_provider && !rerank_cfg.api_base.is_empty() {
-            rerank_cfg.api_base.clone()
-        } else {
-            default_api_base.clone()
-        };
-        let probe_key = if is_current_provider && !rerank_cfg.api_key.is_empty() {
-            Some(rerank_cfg.api_key.clone())
-        } else {
-            None
-        };
-        set_probe_loading.set(true);
-        spawn_local(async move {
-            let state = expect_context::<DashboardState>();
-            let base_url_opt = if probe_base.is_empty() { None } else { Some(probe_base) };
-            match ProvidersApi::probe(
-                &state,
-                "openai",
-                None,
-                probe_key.as_deref(),
-                base_url_opt.as_deref(),
-            ).await {
-                Ok(result) => {
-                    let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
-                        ModelOption {
-                            id: m.id.clone(),
-                            name: m.name.clone(),
-                            capabilities: m.capabilities.clone(),
-                            source: result.model_source.clone(),
-                        }
-                    }).collect();
-                    if !options.is_empty() {
-                        models_list.set(options);
-                    }
-                }
-                Err(_) => {
-                    // Probe failed — models_list stays empty, user can enter custom model
-                }
-            }
-            set_probe_loading.set(false);
-        });
-    }
 
     // Action states
     let (testing, set_testing) = signal(false);
@@ -323,7 +274,7 @@ fn ProviderDetailPanel(
             provider: RerankProviderType::from_str_val(&preset_key_for_build),
             api_base: api_base.get(),
             api_key: api_key.get(),
-            model: selected_model.get().unwrap_or_default(),
+            model: form_model.get(),
             timeout_ms: timeout_ms.get(),
             rerank_weight: rerank_weight.get(),
         }
@@ -434,20 +385,19 @@ fn ProviderDetailPanel(
                 </div>
 
                 // Model
-                {move || {
-                    if probe_loading.get() {
-                        view! {
-                            <div class="text-xs text-text-tertiary animate-pulse">"Discovering models..."</div>
-                        }.into_any()
-                    } else {
-                        view! { <div></div> }.into_any()
-                    }
-                }}
-                <ModelSelector
-                    models=Signal::derive(move || models_list.get())
-                    selected=selected_model
-                    allow_custom=true
-                />
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">
+                        "Model"
+                    </label>
+                    <input
+                        type="text"
+                        value=move || form_model.get()
+                        on:input=move |ev| form_model.set(event_target_value(&ev))
+                        placeholder="e.g. jina-reranker-v2-base-multilingual"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">"Enter a model name"</p>
+                </div>
 
                 // API Base URL
                 <div>
@@ -591,50 +541,9 @@ fn AddCustomProviderPanel(
     let name = RwSignal::new(String::new());
     let api_base = RwSignal::new(String::new());
     let api_key = RwSignal::new(String::new());
-    let selected_model = RwSignal::new(None::<String>);
-    let models_list = RwSignal::new(Vec::<ModelOption>::new());
-    let (probe_loading, set_probe_loading) = signal(false);
+    let form_model = RwSignal::new(String::new());
     let timeout_ms = RwSignal::new(5000u64);
     let rerank_weight = RwSignal::new(0.6f32);
-
-    // Probe models when base_url is provided
-    let trigger_custom_probe = move || {
-        let base = api_base.get();
-        if base.is_empty() {
-            return;
-        }
-        let key = api_key.get();
-        let key_opt = if key.is_empty() { None } else { Some(key) };
-        set_probe_loading.set(true);
-        spawn_local(async move {
-            let state = expect_context::<DashboardState>();
-            match ProvidersApi::probe(
-                &state,
-                "openai",
-                None,
-                key_opt.as_deref(),
-                Some(&base),
-            ).await {
-                Ok(result) => {
-                    let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
-                        ModelOption {
-                            id: m.id.clone(),
-                            name: m.name.clone(),
-                            capabilities: m.capabilities.clone(),
-                            source: result.model_source.clone(),
-                        }
-                    }).collect();
-                    if !options.is_empty() {
-                        models_list.set(options);
-                    }
-                }
-                Err(_) => {
-                    // Probe failed — keep existing, user can enter custom model
-                }
-            }
-            set_probe_loading.set(false);
-        });
-    };
 
     let (testing, set_testing) = signal(false);
     let (saving, set_saving) = signal(false);
@@ -648,7 +557,7 @@ fn AddCustomProviderPanel(
             provider: RerankProviderType::Vllm, // Custom providers use vLLM-compatible API
             api_base: api_base.get(),
             api_key: api_key.get(),
-            model: selected_model.get().unwrap_or_default(),
+            model: form_model.get(),
             timeout_ms: timeout_ms.get(),
             rerank_weight: rerank_weight.get(),
         }
@@ -694,8 +603,8 @@ fn AddCustomProviderPanel(
             set_action_error.set(Some("API Base URL is required for custom providers".to_string()));
             return;
         }
-        if selected_model.get().map_or(true, |m| m.is_empty()) {
-            set_action_error.set(Some("Please select a model from the dropdown, or choose 'Enter custom model name' to type one manually".to_string()));
+        if form_model.get().is_empty() {
+            set_action_error.set(Some("Model name is required".to_string()));
             return;
         }
 
@@ -781,11 +690,19 @@ fn AddCustomProviderPanel(
                 </div>
 
                 // Model
-                <ModelSelector
-                    models=Signal::derive(move || models_list.get())
-                    selected=selected_model
-                    allow_custom=true
-                />
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">
+                        "Model"
+                    </label>
+                    <input
+                        type="text"
+                        value=move || form_model.get()
+                        on:input=move |ev| form_model.set(event_target_value(&ev))
+                        placeholder="e.g. BAAI/bge-reranker-v2-m3"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">"Enter a model name"</p>
+                </div>
 
                 // API Base URL
                 <div>
@@ -801,15 +718,6 @@ fn AddCustomProviderPanel(
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
-
-                // Discover models button
-                <button
-                    on:click=move |_| trigger_custom_probe()
-                    disabled=move || probe_loading.get() || api_base.get().is_empty()
-                    class="w-full px-4 py-2 border border-border rounded-lg text-sm text-text-secondary hover:text-primary hover:border-primary disabled:opacity-50 transition-colors"
-                >
-                    {move || if probe_loading.get() { "Discovering models..." } else { "Discover Models" }}
-                </button>
             </div>
 
             // Parameters card
