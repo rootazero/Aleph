@@ -1,13 +1,11 @@
-//! API key input with auto-probe
+//! API key input with debounced change callback
 //!
-//! Wraps the existing SecretInput with debounced auto-probe behavior
-//! and a ProbeIndicator next to it.
+//! Wraps the existing SecretInput with debounced on-change behavior.
 
 use leptos::prelude::*;
-use super::probe_indicator::{ProbeIndicator, ProbeStatus};
 use super::ui::secret_input::SecretInput;
 
-/// API key input with auto-probe and status indicator
+/// API key input with debounced change callback
 #[component]
 pub fn ApiKeyInput(
     /// Current API key value
@@ -15,9 +13,7 @@ pub fn ApiKeyInput(
     /// Placeholder text
     #[prop(default = "Enter API key...")]
     placeholder: &'static str,
-    /// Probe status signal (controlled externally)
-    probe_status: Signal<ProbeStatus>,
-    /// Called when key changes (after debounce) — caller triggers probe
+    /// Called when key changes (after debounce)
     #[prop(optional)]
     on_key_change: Option<Callback<String>>,
     /// Debounce delay in milliseconds
@@ -55,14 +51,11 @@ pub fn ApiKeyInput(
 
     view! {
         <div class="api-key-input">
-            <div class="input-with-indicator">
-                <SecretInput
-                    value=value_signal
-                    on_change=on_change
-                    placeholder=placeholder
-                />
-                <ProbeIndicator status=probe_status />
-            </div>
+            <SecretInput
+                value=value_signal
+                on_change=on_change
+                placeholder=placeholder
+            />
         </div>
     }
 }

@@ -443,30 +443,6 @@ pub struct OAuthStatus {
     pub error: Option<String>,
 }
 
-/// A discovered model from probe
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProbeModelInfo {
-    pub id: String,
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub capabilities: Vec<String>,
-}
-
-/// Result of providers.probe RPC call
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProbeResultInfo {
-    pub success: bool,
-    #[serde(default)]
-    pub latency_ms: Option<u64>,
-    #[serde(default)]
-    pub models: Vec<ProbeModelInfo>,
-    #[serde(default)]
-    pub model_source: String,
-    #[serde(default)]
-    pub error: Option<String>,
-}
-
 pub struct ProvidersApi;
 
 impl ProvidersApi {
@@ -592,25 +568,6 @@ impl ProvidersApi {
         let result = state.rpc_call("providers.oauthStatus", params).await?;
         serde_json::from_value(result)
             .map_err(|e| format!("Failed to parse OAuth status: {}", e))
-    }
-
-    /// Probe a provider: test connection + discover available models
-    pub async fn probe(
-        state: &DashboardState,
-        protocol: &str,
-        name: Option<&str>,
-        api_key: Option<&str>,
-        base_url: Option<&str>,
-    ) -> Result<ProbeResultInfo, String> {
-        let params = serde_json::json!({
-            "protocol": protocol,
-            "name": name,
-            "api_key": api_key,
-            "base_url": base_url,
-        });
-        let result = state.rpc_call("providers.probe", params).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse probe result: {}", e))
     }
 
     /// Check if setup is needed (no providers configured)
@@ -1958,24 +1915,6 @@ impl EmbeddingProvidersApi {
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
-    /// Probe an embedding provider: test connection + discover available models
-    pub async fn probe(
-        state: &DashboardState,
-        protocol: &str,
-        api_key: Option<&str>,
-        base_url: Option<&str>,
-    ) -> Result<ProbeResultInfo, String> {
-        let mut params = serde_json::Map::new();
-        params.insert("protocol".to_string(), serde_json::json!(protocol));
-        if let Some(key) = api_key {
-            params.insert("api_key".to_string(), serde_json::json!(key));
-        }
-        if let Some(url) = base_url {
-            params.insert("base_url".to_string(), serde_json::json!(url));
-        }
-        let result = state.rpc_call("embedding_providers.probe", serde_json::json!(params)).await?;
-        serde_json::from_value(result).map_err(|e| e.to_string())
-    }
 }
 
 // ============================================================================
