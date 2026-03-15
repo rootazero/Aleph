@@ -188,6 +188,18 @@ impl ModelRegistry {
         let cache = self.cache.read().await;
         cache.get(provider_name).map(|c| c.fetched_at)
     }
+
+    /// Get preset models for a specific category (embedding, reranking)
+    ///
+    /// Looks up key "{protocol}_{category}" in presets, e.g., "openai_embedding".
+    /// Returns empty vec if no presets found for the combination.
+    pub fn get_preset_models(&self, protocol: &str, category: Option<&str>) -> Vec<DiscoveredModel> {
+        let key = match category {
+            Some(cat) => format!("{}_{}", protocol, cat),
+            None => protocol.to_string(),
+        };
+        self.presets.get(&key).cloned().unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -370,5 +382,64 @@ models = [
         let registry = ModelRegistry::new(None)
             .with_ttl(Duration::from_millis(50));
         assert_eq!(registry.ttl, Duration::from_millis(50));
+    }
+
+    #[tokio::test]
+    async fn test_subcategory_preset_loading() {
+        let toml = r#"
+[openai]
+models = [
+    { id = "gpt-4o", name = "GPT-4o", capabilities = ["chat"] },
+]
+
+[openai_embedding]
+models = [
+    { id = "text-embedding-3-small", name = "Embedding 3 Small", capabilities = ["embedding"] },
+]
+
+[jina_reranking]
+models = [
+    { id = "jina-reranker-v2-base-multilingual", name = "Jina Reranker v2", capabilities = ["reranking"] },
+]
+"#;
+        let registry = ModelRegistry::new(Some(toml));
+        assert!(registry.presets.contains_key("openai"));
+        assert!(registry.presets.contains_key("openai_embedding"));
+        assert!(registry.presets.contains_key("jina_reranking"));
+    }
+
+    #[test]
+    fn test_get_preset_models() {
+        let toml = r#"
+[openai]
+models = [
+    { id = "gpt-4o", name = "GPT-4o", capabilities = ["chat"] },
+]
+
+[openai_embedding]
+models = [
+    { id = "text-embedding-3-small", name = "Embedding 3 Small", capabilities = ["embedding"] },
+]
+"#;
+        let registry = ModelRegistry::new(Some(toml));
+
+        let chat_models = registry.get_preset_models("openai", None);
+        assert_eq!(chat_models.len(), 1);
+        assert_eq!(chat_models[0].id, "gpt-4o");
+
+        let embed_models = registry.get_preset_models("openai", Some("embedding"));
+        assert_eq!(embed_models.len(), 1);
+        assert_eq!(embed_models[0].id, "text-embedding-3-small");
+
+        let missing = registry.get_preset_models("unknown", Some("embedding"));
+        assert!(missing.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_embedded_presets_include_embedding_reranking() {
+        let registry = ModelRegistry::new(Some(PRESET_TOML));
+        assert!(!registry.get_preset_models("openai", Some("embedding")).is_empty());
+        assert!(!registry.get_preset_models("siliconflow", Some("embedding")).is_empty());
+        assert!(!registry.get_preset_models("jina", Some("reranking")).is_empty());
     }
 }
