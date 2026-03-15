@@ -44,7 +44,7 @@ impl HttpProvider {
         debug!(
             name = %name,
             protocol = adapter.name(),
-            model = %config.model,
+            model = %config.default_model(),
             "Creating HttpProvider"
         );
 
@@ -234,7 +234,7 @@ impl AiProvider for HttpProvider {
     }
 
     fn supports_thinking(&self) -> bool {
-        let model_lower = self.config.model.to_lowercase();
+        let model_lower = self.config.default_model().to_lowercase();
         model_lower.contains("o1") || model_lower.contains("o3") || model_lower.contains("gpt-5")
     }
 

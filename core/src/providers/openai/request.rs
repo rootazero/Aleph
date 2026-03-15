@@ -95,7 +95,7 @@ pub fn build_request_with_mode(
     }
 
     ChatCompletionRequest {
-        model: config.model.clone(),
+        model: config.default_model().to_string(),
         messages,
         max_tokens: config.max_tokens,
         temperature: config.temperature,
@@ -233,7 +233,7 @@ pub fn build_multimodal_request(
     // We trust the user's configuration - if they send images to a non-vision model,
     // the API will return an appropriate error.
     ChatCompletionRequest {
-        model: config.model.clone(),
+        model: config.default_model().to_string(),
         messages,
         max_tokens: Some(config.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS)),
         temperature: config.temperature,
