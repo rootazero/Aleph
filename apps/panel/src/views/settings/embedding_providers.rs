@@ -6,72 +6,9 @@ use crate::api::{
     EmbeddingPresetEntry,
 };
 use crate::components::model_selector::{ModelSelector, ModelOption};
+use crate::components::probe_indicator::ProbeStatus;
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
-
-fn em(id: &str, name: &str) -> ModelOption {
-    ModelOption { id: id.into(), name: Some(name.into()), capabilities: vec!["embedding".into()], source: "preset".into() }
-}
-
-/// Return preset model options for a given embedding provider preset
-fn embedding_models_for_preset(preset: &str) -> Vec<ModelOption> {
-    match preset {
-        "silicon_flow" => vec![
-            em("BAAI/bge-m3", "BGE-M3"),
-            em("BAAI/bge-large-zh-v1.5", "BGE-Large-ZH v1.5"),
-            em("BAAI/bge-large-en-v1.5", "BGE-Large-EN v1.5"),
-            em("BAAI/bge-small-zh-v1.5", "BGE-Small-ZH v1.5"),
-        ],
-        "open_ai" => vec![
-            em("text-embedding-3-small", "Embedding 3 Small"),
-            em("text-embedding-3-large", "Embedding 3 Large"),
-            em("text-embedding-ada-002", "Ada 002"),
-        ],
-        "ollama" => vec![
-            em("nomic-embed-text", "Nomic Embed Text"),
-            em("mxbai-embed-large", "MXBai Embed Large"),
-            em("all-minilm", "All-MiniLM"),
-            em("snowflake-arctic-embed", "Snowflake Arctic Embed"),
-            em("bge-m3", "BGE-M3"),
-            em("bge-large", "BGE-Large"),
-        ],
-        // Custom/unknown providers — show comprehensive list of popular embedding models
-        _ => vec![
-            // OpenAI
-            em("text-embedding-3-small", "OpenAI Embedding 3 Small"),
-            em("text-embedding-3-large", "OpenAI Embedding 3 Large"),
-            em("text-embedding-ada-002", "OpenAI Ada 002"),
-            // BGE (BAAI)
-            em("BAAI/bge-m3", "BGE-M3"),
-            em("BAAI/bge-large-zh-v1.5", "BGE-Large-ZH v1.5"),
-            em("BAAI/bge-large-en-v1.5", "BGE-Large-EN v1.5"),
-            em("BAAI/bge-small-zh-v1.5", "BGE-Small-ZH v1.5"),
-            // Ollama / Local
-            em("nomic-embed-text", "Nomic Embed Text"),
-            em("mxbai-embed-large", "MXBai Embed Large"),
-            em("all-minilm", "All-MiniLM"),
-            em("snowflake-arctic-embed", "Snowflake Arctic Embed"),
-            em("bge-m3", "BGE-M3 (Ollama)"),
-            em("bge-large", "BGE-Large (Ollama)"),
-            // Jina
-            em("jina-embeddings-v3", "Jina Embeddings v3"),
-            em("jina-embeddings-v2-base-en", "Jina Embeddings v2 EN"),
-            em("jina-embeddings-v2-base-zh", "Jina Embeddings v2 ZH"),
-            // Cohere
-            em("embed-multilingual-v3.0", "Cohere Embed Multilingual v3"),
-            em("embed-english-v3.0", "Cohere Embed English v3"),
-            // Voyage
-            em("voyage-3", "Voyage 3"),
-            em("voyage-3-lite", "Voyage 3 Lite"),
-            em("voyage-code-3", "Voyage Code 3"),
-            // Mixedbread
-            em("mxbai-embed-large-v1", "MXBai Embed Large v1"),
-            // GTE (Alibaba)
-            em("gte-large-en-v1.5", "GTE-Large EN v1.5"),
-            em("gte-Qwen2-7B-instruct", "GTE-Qwen2 7B"),
-        ],
-    }
-}
 
 #[component]
 pub fn EmbeddingProvidersView() -> impl IntoView {
@@ -433,8 +370,13 @@ fn ProviderDetailPanel(
         let m = provider.model.clone();
         if m.is_empty() { None } else { Some(m) }
     });
-    let models_list = RwSignal::new(embedding_models_for_preset(&provider_preset));
+    let models_list = RwSignal::new(Vec::<ModelOption>::new());
     let dimensions = RwSignal::new(provider.dimensions);
+    let enabled = RwSignal::new(provider.enabled);
+
+    // Model discovery signals
+    let probe_status = RwSignal::new(ProbeStatus::Idle);
+    let is_refreshing = RwSignal::new(false);
 
     // Action states
     let (deleting, set_deleting) = signal(false);
@@ -444,6 +386,68 @@ fn ProviderDetailPanel(
     let (action_error, set_action_error) = signal(Option::<String>::None);
     let (test_result, set_test_result) = signal(Option::<(bool, String)>::None);
     let (save_success, set_save_success) = signal(false);
+
+    // Trigger probe: discover models from the backend
+    let trigger_probe = {
+        let protocol = provider_preset.clone();
+        move |api_key_val: String| {
+            let protocol = protocol.clone();
+            let base_url = api_base.get();
+            let base_url_opt = if base_url.is_empty() { None } else { Some(base_url) };
+            let api_key_opt = if api_key_val.is_empty() { None } else { Some(api_key_val) };
+
+            probe_status.set(ProbeStatus::Loading);
+            is_refreshing.set(true);
+
+            spawn_local(async move {
+                let state = expect_context::<DashboardState>();
+                match EmbeddingProvidersApi::probe(
+                    &state,
+                    &protocol,
+                    api_key_opt.as_deref(),
+                    base_url_opt.as_deref(),
+                ).await {
+                    Ok(result) => {
+                        if result.success || !result.models.is_empty() {
+                            let latency = result.latency_ms.unwrap_or(0);
+                            probe_status.set(ProbeStatus::Success { latency_ms: latency });
+                            let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
+                                ModelOption {
+                                    id: m.id.clone(),
+                                    name: m.name.clone(),
+                                    capabilities: m.capabilities.clone(),
+                                    source: result.model_source.clone(),
+                                }
+                            }).collect();
+                            models_list.set(options);
+                        } else {
+                            let msg = result.error.unwrap_or_else(|| "No models found".to_string());
+                            probe_status.set(ProbeStatus::Error { message: msg });
+                        }
+                    }
+                    Err(e) => {
+                        probe_status.set(ProbeStatus::Error { message: e });
+                        models_list.set(Vec::new());
+                    }
+                }
+                is_refreshing.set(false);
+            });
+        }
+    };
+
+    // Auto-probe on mount to discover models
+    {
+        let trigger = trigger_probe.clone();
+        let initial_key = provider.api_key.clone().unwrap_or_default();
+        trigger(initial_key);
+    }
+
+    // Refresh callback for ModelSelector
+    let trigger_probe_refresh = trigger_probe.clone();
+    let on_refresh_models = Callback::new(move |_: ()| {
+        let key = api_key.get();
+        trigger_probe_refresh(key);
+    });
 
     // Build config from current field values (captured clones, not provider directly)
     let build_config = {
@@ -466,6 +470,7 @@ fn ProviderDetailPanel(
                 dimensions: dimensions.get(),
                 batch_size: provider_batch_size,
                 timeout_ms: provider_timeout_ms,
+                enabled: enabled.get(),
             }
         }
     };
@@ -626,6 +631,9 @@ fn ProviderDetailPanel(
                 <ModelSelector
                     models=Signal::derive(move || models_list.get())
                     selected=selected_model
+                    show_refresh=true
+                    on_refresh=on_refresh_models.clone()
+                    refreshing=Signal::derive(move || is_refreshing.get())
                     allow_custom=true
                 />
 
@@ -640,9 +648,9 @@ fn ProviderDetailPanel(
                         on:input=move |ev| api_base.set(event_target_value(&ev))
                         placeholder={
                             let default_base = match provider_preset.as_str() {
-                                "silicon_flow" => "Default: https://api.siliconflow.cn/v1",
-                                "open_ai" => "Default: https://api.openai.com/v1",
-                                "ollama" => "Default: http://localhost:11434/v1",
+                                "silicon_flow" => "https://api.siliconflow.cn/v1",
+                                "open_ai" => "https://api.openai.com/v1",
+                                "ollama" => "http://localhost:11434/v1",
                                 _ => "https://api.example.com/v1",
                             };
                             default_base
@@ -667,6 +675,20 @@ fn ProviderDetailPanel(
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
+
+                // Enabled
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || enabled.get()
+                        on:change=move |ev| enabled.set(event_target_checked(&ev))
+                        class="w-4 h-4 rounded"
+                    />
+                    <div>
+                        <span class="text-sm text-text-primary">"Enabled"</span>
+                        <p class="text-xs text-text-tertiary">"Include this provider in the available providers list"</p>
+                    </div>
+                </label>
             </div>
 
             // Test result
@@ -779,10 +801,58 @@ fn AddProviderPanel(
     let selected_model = RwSignal::new(None::<String>);
     let dimensions = RwSignal::new(1024u32);
 
+    // Model discovery signals
+    let models_list = RwSignal::new(Vec::<ModelOption>::new());
+    let is_refreshing = RwSignal::new(false);
+
     let (adding, set_adding) = signal(false);
     let (testing, set_testing) = signal(false);
     let (add_error, set_add_error) = signal(Option::<String>::None);
     let (test_result, set_test_result) = signal(Option::<(bool, String)>::None);
+
+    // Trigger probe for custom provider
+    let trigger_probe = move |api_key_val: String| {
+        let base_url = api_base.get();
+        let base_url_opt = if base_url.is_empty() { None } else { Some(base_url) };
+        let api_key_opt = if api_key_val.is_empty() { None } else { Some(api_key_val) };
+
+        is_refreshing.set(true);
+
+        spawn_local(async move {
+            let state = expect_context::<DashboardState>();
+            match EmbeddingProvidersApi::probe(
+                &state,
+                "custom",
+                api_key_opt.as_deref(),
+                base_url_opt.as_deref(),
+            ).await {
+                Ok(result) => {
+                    if result.success || !result.models.is_empty() {
+                        let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
+                            ModelOption {
+                                id: m.id.clone(),
+                                name: m.name.clone(),
+                                capabilities: m.capabilities.clone(),
+                                source: result.model_source.clone(),
+                            }
+                        }).collect();
+                        models_list.set(options);
+                    }
+                }
+                Err(_) => {
+                    // Silently ignore — custom provider may not have a valid base_url yet
+                }
+            }
+            is_refreshing.set(false);
+        });
+    };
+
+    // Refresh callback for ModelSelector
+    let trigger_probe_refresh = trigger_probe.clone();
+    let on_refresh_models = Callback::new(move |_: ()| {
+        let key = api_key.get();
+        trigger_probe_refresh(key);
+    });
 
     // Build config from form
     let build_config = move || -> EmbeddingProviderConfig {
@@ -800,6 +870,7 @@ fn AddProviderPanel(
             dimensions: dimensions.get(),
             batch_size: 32,
             timeout_ms: 10000,
+            enabled: true,
         }
     };
 
@@ -911,8 +982,11 @@ fn AddProviderPanel(
 
                 // Model
                 <ModelSelector
-                    models=Signal::derive(|| vec![])
+                    models=Signal::derive(move || models_list.get())
                     selected=selected_model
+                    show_refresh=true
+                    on_refresh=on_refresh_models.clone()
+                    refreshing=Signal::derive(move || is_refreshing.get())
                     allow_custom=true
                 />
 

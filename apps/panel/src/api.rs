@@ -1206,6 +1206,39 @@ impl MemoryConfigApi {
 
 
 // ============================================================================
+// Rerank Config API (decoupled from MemoryConfig)
+// ============================================================================
+
+pub struct RerankConfigApi;
+
+impl RerankConfigApi {
+    /// Get current rerank configuration
+    pub async fn get(state: &DashboardState) -> Result<RerankConfig, String> {
+        let result = state.rpc_call("rerank_config.get", serde_json::Value::Null).await?;
+        serde_json::from_value(result)
+            .map_err(|e| format!("Failed to parse rerank config: {}", e))
+    }
+
+    /// Update rerank configuration
+    pub async fn update(state: &DashboardState, config: RerankConfig) -> Result<(), String> {
+        let params = serde_json::to_value(&config)
+            .map_err(|e| format!("Failed to serialize rerank config: {}", e))?;
+        state.rpc_call("rerank_config.update", params).await?;
+        Ok(())
+    }
+
+    /// Test rerank provider connectivity
+    pub async fn test(state: &DashboardState, config: RerankConfig) -> Result<TestRerankResponse, String> {
+        let params = serde_json::to_value(&config)
+            .map_err(|e| format!("Failed to serialize rerank config: {}", e))?;
+        let result = state.rpc_call("rerank_config.test", params).await?;
+        serde_json::from_value(result)
+            .map_err(|e| format!("Failed to parse test response: {}", e))
+    }
+}
+
+
+// ============================================================================
 // Security Config API
 // ============================================================================
 
@@ -1806,6 +1839,8 @@ pub struct EmbeddingProviderEntry {
     pub is_active: bool,
     #[serde(default)]
     pub verified: bool,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1824,7 +1859,11 @@ pub struct EmbeddingProviderConfig {
     pub batch_size: u32,
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
 }
+
+fn default_enabled() -> bool { true }
 
 fn default_batch_size() -> u32 { 32 }
 fn default_timeout_ms() -> u64 { 10000 }
@@ -1916,6 +1955,25 @@ impl EmbeddingProvidersApi {
     /// Get preset embedding provider configurations
     pub async fn presets(state: &DashboardState) -> Result<Vec<EmbeddingPresetEntry>, String> {
         let result = state.rpc_call("embedding_providers.presets", Value::Null).await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
+    /// Probe an embedding provider: test connection + discover available models
+    pub async fn probe(
+        state: &DashboardState,
+        protocol: &str,
+        api_key: Option<&str>,
+        base_url: Option<&str>,
+    ) -> Result<ProbeResultInfo, String> {
+        let mut params = serde_json::Map::new();
+        params.insert("protocol".to_string(), serde_json::json!(protocol));
+        if let Some(key) = api_key {
+            params.insert("api_key".to_string(), serde_json::json!(key));
+        }
+        if let Some(url) = base_url {
+            params.insert("base_url".to_string(), serde_json::json!(url));
+        }
+        let result = state.rpc_call("embedding_providers.probe", serde_json::json!(params)).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 }
