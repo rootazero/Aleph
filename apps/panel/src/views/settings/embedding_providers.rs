@@ -5,8 +5,6 @@ use crate::api::{
     EmbeddingProvidersApi, EmbeddingProviderEntry, EmbeddingProviderConfig,
     EmbeddingPresetEntry,
 };
-use crate::components::model_selector::{ModelSelector, ModelOption};
-use crate::components::probe_indicator::ProbeStatus;
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 
@@ -366,17 +364,9 @@ fn ProviderDetailPanel(
     // Editable fields
     let api_base = RwSignal::new(provider.api_base.clone());
     let api_key = RwSignal::new(provider.api_key.clone().unwrap_or_default());
-    let selected_model = RwSignal::new({
-        let m = provider.model.clone();
-        if m.is_empty() { None } else { Some(m) }
-    });
-    let models_list = RwSignal::new(Vec::<ModelOption>::new());
+    let form_model = RwSignal::new(provider.model.clone());
     let dimensions = RwSignal::new(provider.dimensions);
     let enabled = RwSignal::new(provider.enabled);
-
-    // Model discovery signals
-    let probe_status = RwSignal::new(ProbeStatus::Idle);
-    let is_refreshing = RwSignal::new(false);
 
     // Action states
     let (deleting, set_deleting) = signal(false);
@@ -386,68 +376,6 @@ fn ProviderDetailPanel(
     let (action_error, set_action_error) = signal(Option::<String>::None);
     let (test_result, set_test_result) = signal(Option::<(bool, String)>::None);
     let (save_success, set_save_success) = signal(false);
-
-    // Trigger probe: discover models from the backend
-    let trigger_probe = {
-        let protocol = provider_preset.clone();
-        move |api_key_val: String| {
-            let protocol = protocol.clone();
-            let base_url = api_base.get();
-            let base_url_opt = if base_url.is_empty() { None } else { Some(base_url) };
-            let api_key_opt = if api_key_val.is_empty() { None } else { Some(api_key_val) };
-
-            probe_status.set(ProbeStatus::Loading);
-            is_refreshing.set(true);
-
-            spawn_local(async move {
-                let state = expect_context::<DashboardState>();
-                match EmbeddingProvidersApi::probe(
-                    &state,
-                    &protocol,
-                    api_key_opt.as_deref(),
-                    base_url_opt.as_deref(),
-                ).await {
-                    Ok(result) => {
-                        if result.success || !result.models.is_empty() {
-                            let latency = result.latency_ms.unwrap_or(0);
-                            probe_status.set(ProbeStatus::Success { latency_ms: latency });
-                            let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
-                                ModelOption {
-                                    id: m.id.clone(),
-                                    name: m.name.clone(),
-                                    capabilities: m.capabilities.clone(),
-                                    source: result.model_source.clone(),
-                                }
-                            }).collect();
-                            models_list.set(options);
-                        } else {
-                            let msg = result.error.unwrap_or_else(|| "No models found".to_string());
-                            probe_status.set(ProbeStatus::Error { message: msg });
-                        }
-                    }
-                    Err(e) => {
-                        probe_status.set(ProbeStatus::Error { message: e });
-                        models_list.set(Vec::new());
-                    }
-                }
-                is_refreshing.set(false);
-            });
-        }
-    };
-
-    // Auto-probe on mount to discover models
-    {
-        let trigger = trigger_probe.clone();
-        let initial_key = provider.api_key.clone().unwrap_or_default();
-        trigger(initial_key);
-    }
-
-    // Refresh callback for ModelSelector
-    let trigger_probe_refresh = trigger_probe.clone();
-    let on_refresh_models = Callback::new(move |_: ()| {
-        let key = api_key.get();
-        trigger_probe_refresh(key);
-    });
 
     // Build config from current field values (captured clones, not provider directly)
     let build_config = {
@@ -466,7 +394,7 @@ fn ProviderDetailPanel(
                     let key = api_key.get();
                     if key.is_empty() { None } else { Some(key) }
                 },
-                model: selected_model.get().unwrap_or_default(),
+                model: form_model.get(),
                 dimensions: dimensions.get(),
                 batch_size: provider_batch_size,
                 timeout_ms: provider_timeout_ms,
@@ -628,14 +556,19 @@ fn ProviderDetailPanel(
                 </div>
 
                 // Model
-                <ModelSelector
-                    models=Signal::derive(move || models_list.get())
-                    selected=selected_model
-                    show_refresh=true
-                    on_refresh=on_refresh_models.clone()
-                    refreshing=Signal::derive(move || is_refreshing.get())
-                    allow_custom=true
-                />
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">
+                        "Model"
+                    </label>
+                    <input
+                        type="text"
+                        value=move || form_model.get()
+                        on:input=move |ev| form_model.set(event_target_value(&ev))
+                        placeholder="e.g. text-embedding-3-small"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                    <p class="mt-1 text-xs text-text-tertiary">"Enter a model name"</p>
+                </div>
 
                 // API Base URL
                 <div>
@@ -798,61 +731,13 @@ fn AddProviderPanel(
     let name = RwSignal::new(String::new());
     let api_base = RwSignal::new(String::new());
     let api_key = RwSignal::new(String::new());
-    let selected_model = RwSignal::new(None::<String>);
+    let form_model = RwSignal::new(String::new());
     let dimensions = RwSignal::new(1024u32);
-
-    // Model discovery signals
-    let models_list = RwSignal::new(Vec::<ModelOption>::new());
-    let is_refreshing = RwSignal::new(false);
 
     let (adding, set_adding) = signal(false);
     let (testing, set_testing) = signal(false);
     let (add_error, set_add_error) = signal(Option::<String>::None);
     let (test_result, set_test_result) = signal(Option::<(bool, String)>::None);
-
-    // Trigger probe for custom provider
-    let trigger_probe = move |api_key_val: String| {
-        let base_url = api_base.get();
-        let base_url_opt = if base_url.is_empty() { None } else { Some(base_url) };
-        let api_key_opt = if api_key_val.is_empty() { None } else { Some(api_key_val) };
-
-        is_refreshing.set(true);
-
-        spawn_local(async move {
-            let state = expect_context::<DashboardState>();
-            match EmbeddingProvidersApi::probe(
-                &state,
-                "custom",
-                api_key_opt.as_deref(),
-                base_url_opt.as_deref(),
-            ).await {
-                Ok(result) => {
-                    if result.success || !result.models.is_empty() {
-                        let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
-                            ModelOption {
-                                id: m.id.clone(),
-                                name: m.name.clone(),
-                                capabilities: m.capabilities.clone(),
-                                source: result.model_source.clone(),
-                            }
-                        }).collect();
-                        models_list.set(options);
-                    }
-                }
-                Err(_) => {
-                    // Silently ignore — custom provider may not have a valid base_url yet
-                }
-            }
-            is_refreshing.set(false);
-        });
-    };
-
-    // Refresh callback for ModelSelector
-    let trigger_probe_refresh = trigger_probe.clone();
-    let on_refresh_models = Callback::new(move |_: ()| {
-        let key = api_key.get();
-        trigger_probe_refresh(key);
-    });
 
     // Build config from form
     let build_config = move || -> EmbeddingProviderConfig {
@@ -866,7 +751,7 @@ fn AddProviderPanel(
                 let key = api_key.get();
                 if key.is_empty() { None } else { Some(key) }
             },
-            model: selected_model.get().unwrap_or_default(),
+            model: form_model.get(),
             dimensions: dimensions.get(),
             batch_size: 32,
             timeout_ms: 10000,
@@ -981,14 +866,17 @@ fn AddProviderPanel(
                 </div>
 
                 // Model
-                <ModelSelector
-                    models=Signal::derive(move || models_list.get())
-                    selected=selected_model
-                    show_refresh=true
-                    on_refresh=on_refresh_models.clone()
-                    refreshing=Signal::derive(move || is_refreshing.get())
-                    allow_custom=true
-                />
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"Model"</label>
+                    <input
+                        type="text"
+                        value=move || form_model.get()
+                        on:input=move |ev| form_model.set(event_target_value(&ev))
+                        placeholder="e.g. text-embedding-3-small"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                    <p class="mt-1 text-xs text-text-tertiary">"Enter a model name"</p>
+                </div>
 
                 // Base URL
                 <div>
