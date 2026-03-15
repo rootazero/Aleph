@@ -263,7 +263,7 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         // Build request body
         let mut body = json!({
-            "model": &config.model,
+            "model": config.default_model(),
             "messages": messages,
             "stream": is_streaming,
         });
@@ -330,7 +330,7 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         debug!(
             endpoint = %endpoint,
-            model = %config.model,
+            model = %config.default_model(),
             streaming = is_streaming,
             "Building OpenAI request"
         );
