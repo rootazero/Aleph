@@ -74,9 +74,9 @@ pub struct RerankConfig {
     #[serde(default)]
     pub api_key: String,
 
-    /// Model identifier
-    #[serde(default = "default_rerank_model")]
-    pub model: String,
+    /// Model identifiers (first is the active model)
+    #[serde(deserialize_with = "crate::config::types::serde_helpers::deserialize_models", alias = "model", default = "default_rerank_models")]
+    pub models: Vec<String>,
 
     /// Request timeout in milliseconds
     #[serde(default = "default_rerank_timeout")]
@@ -87,8 +87,8 @@ pub struct RerankConfig {
     pub rerank_weight: f32,
 }
 
-fn default_rerank_model() -> String {
-    "BAAI/bge-reranker-v2-m3".to_string()
+fn default_rerank_models() -> Vec<String> {
+    vec!["BAAI/bge-reranker-v2-m3".to_string()]
 }
 
 fn default_rerank_timeout() -> u64 {
@@ -106,9 +106,17 @@ impl Default for RerankConfig {
             provider: RerankProviderType::default(),
             api_base: String::new(),
             api_key: String::new(),
-            model: default_rerank_model(),
+            models: default_rerank_models(),
             timeout_ms: default_rerank_timeout(),
             rerank_weight: default_rerank_weight(),
         }
+    }
+}
+
+impl RerankConfig {
+    /// Returns the active model (first in the list)
+    pub fn default_model(&self) -> &str {
+        debug_assert!(!self.models.is_empty());
+        &self.models[0]
     }
 }
