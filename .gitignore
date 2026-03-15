@@ -71,6 +71,8 @@ core/test.txt
 newinstall*.txt
 *.py
 test-results/
+playwright-report/
+e2e/dist/
 /tests/
 SystemPrompt.md
 CHANGELOG.md
