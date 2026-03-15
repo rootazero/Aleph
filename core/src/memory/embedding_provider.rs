@@ -74,7 +74,7 @@ impl RemoteEmbeddingProvider {
             client,
             api_base: config.api_base.clone(),
             api_key,
-            model: config.model.clone(),
+            model: config.default_model().to_string(),
             dimension: config.dimensions as usize,
             batch_size: config.batch_size as usize,
             provider_id: config.id.clone(),

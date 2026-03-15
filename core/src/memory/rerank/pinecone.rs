@@ -80,7 +80,7 @@ impl RerankProvider for PineconeRerankProvider {
             .collect();
 
         let body = PineconeRequest {
-            model: &self.config.model,
+            model: self.config.default_model(),
             query,
             documents: docs,
             top_n,

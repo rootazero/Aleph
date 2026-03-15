@@ -70,7 +70,7 @@ impl RerankProvider for JinaRerankProvider {
         }
 
         let body = JinaRequest {
-            model: &self.config.model,
+            model: self.config.default_model(),
             query,
             documents,
             top_n,
