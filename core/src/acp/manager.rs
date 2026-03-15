@@ -40,6 +40,12 @@ pub struct AcpHarnessManager {
     sessions: RwLock<HashMap<String, AcpSession>>,
 }
 
+impl Default for AcpHarnessManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AcpHarnessManager {
     /// Create a manager with all default harnesses enabled.
     pub fn new() -> Self {
@@ -53,7 +59,8 @@ impl AcpHarnessManager {
     pub fn with_config(config: AcpManagerConfig) -> Self {
         let mut harnesses: HashMap<String, Box<dyn AcpHarness>> = HashMap::new();
 
-        let candidates: Vec<(&str, Box<dyn FnOnce(Option<String>) -> Box<dyn AcpHarness>>)> = vec![
+        type HarnessFactory = Box<dyn FnOnce(Option<String>) -> Box<dyn AcpHarness>>;
+        let candidates: Vec<(&str, HarnessFactory)> = vec![
             ("claude-code", Box::new(|exe| Box::new(ClaudeCodeHarness::new(exe)))),
             ("codex", Box::new(|exe| Box::new(CodexHarness::new(exe)))),
             ("gemini", Box::new(|exe| Box::new(GeminiHarness::new(exe)))),

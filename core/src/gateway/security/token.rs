@@ -58,11 +58,25 @@ pub struct TokenManager {
 }
 
 impl TokenManager {
-    /// Create a new token manager
+    /// Create a new token manager, restoring persisted HMAC secret if available.
+    ///
+    /// If the store already has a persisted secret, it is reused so that
+    /// existing device tokens remain valid across restarts and updates.
     pub fn new(store: Arc<SecurityStore>) -> Self {
+        let secret = match store.get_token_manager_secret() {
+            Ok(Some(s)) => s,
+            _ => {
+                let s = generate_secret();
+                // Persist the new secret for future restarts
+                if let Err(e) = store.set_token_manager_secret(&s) {
+                    tracing::warn!("Failed to persist token manager secret: {}", e);
+                }
+                s
+            }
+        };
         Self {
             store,
-            secret: generate_secret(),
+            secret,
             default_expiry_ms: DEFAULT_TOKEN_EXPIRY_MS,
         }
     }
@@ -78,9 +92,17 @@ impl TokenManager {
 
     /// Create with custom expiry
     pub fn with_expiry(store: Arc<SecurityStore>, expiry_ms: i64) -> Self {
+        let secret = match store.get_token_manager_secret() {
+            Ok(Some(s)) => s,
+            _ => {
+                let s = generate_secret();
+                let _ = store.set_token_manager_secret(&s);
+                s
+            }
+        };
         Self {
             store,
-            secret: generate_secret(),
+            secret,
             default_expiry_ms: expiry_ms,
         }
     }

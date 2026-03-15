@@ -9,7 +9,9 @@
 //! - `simple` - `SimpleExecutionEngine` for when providers/tools are not available
 
 mod engine;
+mod run_loop;
 mod simple;
+mod slash_command;
 
 #[cfg(test)]
 mod tests;

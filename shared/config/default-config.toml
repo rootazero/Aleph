@@ -123,7 +123,7 @@ pii_scrubbing_enabled = false
 [providers.openai]
 provider_type = "openai"  # Optional, inferred from name
 api_key = "sk-..."        # Get from https://platform.openai.com
-model = "gpt-4o"          # Options: gpt-4o, gpt-4o-mini, gpt-3.5-turbo
+models = ["gpt-4o"]       # First model is default. Options: gpt-4o, gpt-4o-mini, gpt-3.5-turbo
 color = "#10a37f"         # Brand color for UI
 timeout_seconds = 300
 
@@ -142,7 +142,7 @@ presence_penalty = 0.0    # Encourage new topics (-2.0 to 2.0)
 [providers.claude]
 provider_type = "claude"  # Optional, inferred from name
 api_key = "sk-ant-..."    # Get from https://console.anthropic.com
-model = "claude-3-5-sonnet-20241022"  # Options: claude-3-5-sonnet, claude-3-opus, etc.
+models = ["claude-3-5-sonnet-20241022"]  # First model is default
 color = "#d97757"
 timeout_seconds = 300
 
@@ -161,7 +161,7 @@ stop_sequences = "END,STOP"  # Comma-separated stop sequences
 [providers.gemini]
 provider_type = "gemini"  # Optional, inferred from name
 api_key = "..."           # Get from https://makersuite.google.com/app/apikey
-model = "gemini-3-flash"  # Options: gemini-3-flash, gemini-3-pro
+models = ["gemini-3-flash"]  # First model is default
 base_url = "https://generativelanguage.googleapis.com/v1beta"
 color = "#4285F4"         # Google Blue
 timeout_seconds = 300
@@ -183,7 +183,7 @@ stop_sequences = "END"    # Comma-separated stop sequences
 [providers.ollama]
 provider_type = "ollama"  # Optional, inferred from name
 # No API key needed for local Ollama
-model = "llama3.2"        # Options: llama3.2, codellama, mistral, etc.
+models = ["llama3.2"]     # First model is default
 color = "#0000ff"
 timeout_seconds = 60      # Longer timeout for local models
 
@@ -207,7 +207,7 @@ stop_sequences = "END"    # Comma-separated stop sequences
 [providers.deepseek]
 provider_type = "openai"           # Use OpenAI-compatible interface
 api_key = "sk-..."                 # Get from https://platform.deepseek.com
-model = "deepseek-chat"
+models = ["deepseek-chat"]
 base_url = "https://api.deepseek.com"  # Custom API endpoint
 color = "#0066cc"
 timeout_seconds = 300
@@ -220,7 +220,7 @@ temperature = 0.7
 [providers.moonshot]
 provider_type = "openai"           # Use OpenAI-compatible interface
 api_key = "sk-..."                 # Get from https://platform.moonshot.cn
-model = "moonshot-v1-8k"          # Options: moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k
+models = ["moonshot-v1-8k"]       # First model is default
 base_url = "https://api.moonshot.cn/v1"
 color = "#ff6b6b"
 timeout_seconds = 300
@@ -233,7 +233,7 @@ temperature = 0.7
 [providers.azure]
 provider_type = "openai"
 api_key = "your-azure-key"
-model = "gpt-4o"                   # Your deployment name
+models = ["gpt-4o"]                # Your deployment name
 base_url = "https://your-resource.openai.azure.com"
 color = "#0078d4"
 timeout_seconds = 300

@@ -3,10 +3,33 @@
 //! Parses and manages the Gateway configuration from TOML files.
 //! Supports multi-agent setup, channel bindings, and extended features.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::info;
+
+/// Deserialize agents field accepting either:
+/// - Legacy format: `[agents.main]` → HashMap<String, AgentConfig>
+/// - New format: `[agents.defaults]` + `[[agents.list]]` → falls back to empty HashMap
+fn deserialize_agents_compat<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, AgentConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    // Try to deserialize as the expected HashMap<String, AgentConfig>.
+    // If the TOML has the new AgentsConfig format (with "defaults" and "list" keys),
+    // this will fail — in that case, return an empty HashMap with a default "main" agent.
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match serde_json::from_value::<HashMap<String, AgentConfig>>(value) {
+        Ok(map) => Ok(map),
+        Err(_) => {
+            let mut map = HashMap::new();
+            map.insert("main".to_string(), AgentConfig::default());
+            Ok(map)
+        }
+    }
+}
 
 use super::agent_instance::AgentInstanceConfig;
 use crate::config::PrivacyConfig;
@@ -19,7 +42,11 @@ pub struct GatewayConfig {
     pub gateway: GatewayServerConfig,
 
     /// Agent configurations (keyed by agent_id)
-    #[serde(default)]
+    ///
+    /// Accepts either the legacy `[agents.<id>]` table format (HashMap)
+    /// or silently ignores the newer AgentsConfig format (`[[agents.list]]`)
+    /// which is handled by `Config.agents` instead.
+    #[serde(default, deserialize_with = "deserialize_agents_compat")]
     pub agents: HashMap<String, AgentConfig>,
 
     /// Channel bindings (pattern -> agent_id)

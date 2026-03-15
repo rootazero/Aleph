@@ -836,7 +836,7 @@ fn ProviderDetailPanel(
                                             } else {
                                                 view! {
                                                     <p class="mt-1 text-xs text-text-tertiary">
-                                                        "Default: " {default_base_url}
+                                                        {default_base_url}
                                                     </p>
                                                 }.into_any()
                                             }}

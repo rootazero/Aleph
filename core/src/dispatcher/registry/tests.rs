@@ -1,0 +1,779 @@
+use super::*;
+use crate::dispatcher::types::ToolPriority;
+use super::super::types::{ChannelType, ConflictInfo, ConflictResolution, ToolSafetyLevel, ToolSource};
+
+#[tokio::test]
+async fn test_registry_new() {
+    let registry = ToolRegistry::new();
+    assert_eq!(registry.count().await, 0);
+}
+
+#[tokio::test]
+async fn test_register_builtin_tools() {
+    let registry = ToolRegistry::new();
+    registry.register_builtin_tools().await;
+
+    // Should register 7 builtin tools (2 generation + 2 skill reading + snapshot + switch + groupchat)
+    assert_eq!(registry.count().await, 7);
+
+    // Builtins should include generation tools
+    let builtins = registry.list_builtin_tools().await;
+    assert_eq!(builtins.len(), 7);
+
+    // Verify tool names
+    let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains(&"generate_image"));
+    assert!(names.contains(&"generate_speech"));
+    assert!(names.contains(&"read_skill"));
+    assert!(names.contains(&"list_skills"));
+    assert!(names.contains(&"snapshot_capture"));
+}
+
+#[tokio::test]
+async fn test_list_root_commands() {
+    let registry = ToolRegistry::new();
+    registry.register_builtin_tools().await;
+
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/en".to_string(),
+        provider: Some("openai".to_string()),
+        system_prompt: Some("Translate to English".to_string()),
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+
+    let roots = registry.list_root_commands().await;
+    // 7 builtin tools + 1 custom = 8
+    assert_eq!(roots.len(), 8);
+
+    // First should be builtins (sorted by priority)
+    assert!(roots.iter().any(|t| t.name == "generate_image"));
+    assert!(roots.iter().any(|t| t.name == "generate_speech"));
+    assert!(roots.iter().any(|t| t.name == "en"));
+}
+
+#[tokio::test]
+async fn test_register_skills() {
+    let registry = ToolRegistry::new();
+
+    let skills = vec![
+        SkillInfo {
+            id: "refine-text".to_string(),
+            name: "Refine Text".to_string(),
+            description: "Improve and polish writing".to_string(),
+            triggers: vec![],
+            allowed_tools: vec![],
+            ecosystem: "aleph".to_string(),
+        },
+        SkillInfo {
+            id: "code-review".to_string(),
+            name: "Code Review".to_string(),
+            description: "Review code for issues".to_string(),
+            triggers: vec![],
+            allowed_tools: vec![],
+            ecosystem: "aleph".to_string(),
+        },
+    ];
+
+    registry.register_skills(&skills).await;
+
+    assert_eq!(registry.count().await, 2);
+
+    let tool = registry.get_by_id("skill:refine-text").await;
+    assert!(tool.is_some());
+    let tool = tool.unwrap();
+    assert!(matches!(tool.source, ToolSource::Skill { .. }));
+}
+
+#[tokio::test]
+async fn test_register_custom_commands() {
+    let registry = ToolRegistry::new();
+
+    let rules = vec![
+        RoutingRuleConfig {
+            regex: "^/translate".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("You are a translator.".to_string()),
+            ..Default::default()
+        },
+        RoutingRuleConfig {
+            regex: "^/code".to_string(),
+            provider: Some("claude".to_string()),
+            system_prompt: Some("You are a code assistant.".to_string()),
+            ..Default::default()
+        },
+        RoutingRuleConfig {
+            regex: ".*".to_string(), // Catch-all, should not be registered
+            provider: Some("openai".to_string()),
+            system_prompt: None,
+            ..Default::default()
+        },
+    ];
+
+    registry.register_custom_commands(&rules).await;
+
+    assert_eq!(registry.count().await, 2); // Only slash commands
+
+    let translate = registry.get_by_name("translate").await;
+    assert!(translate.is_some());
+    assert!(matches!(
+        translate.unwrap().source,
+        ToolSource::Custom { rule_index: 0 }
+    ));
+}
+
+#[tokio::test]
+async fn test_list_by_source_type() {
+    let registry = ToolRegistry::new();
+    registry.register_builtin_tools().await;
+
+    let skills = vec![SkillInfo {
+        id: "test".to_string(),
+        name: "Test".to_string(),
+        description: "Test skill".to_string(),
+        triggers: vec![],
+        allowed_tools: vec![],
+        ecosystem: "aleph".to_string(),
+    }];
+    registry.register_skills(&skills).await;
+
+    let builtin = registry.list_by_source_type("Builtin").await;
+    assert_eq!(builtin.len(), 7); // 7 builtin tools (2 generation + 2 skill reading + snapshot + switch + groupchat)
+
+    let skill = registry.list_by_source_type("Skill").await;
+    assert_eq!(skill.len(), 1);
+
+    // Native should be empty (reserved for future OS command tools)
+    let native = registry.list_by_source_type("Native").await;
+    assert_eq!(native.len(), 0);
+}
+
+#[tokio::test]
+async fn test_search() {
+    let registry = ToolRegistry::new();
+
+    // Register a custom command to test search
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/search".to_string(),
+        provider: Some("openai".to_string()),
+        system_prompt: Some("Search assistant".to_string()),
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+
+    let results = registry.search("search").await;
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].name, "search");
+}
+
+#[tokio::test]
+async fn test_set_tool_active() {
+    let registry = ToolRegistry::new();
+
+    // Register a custom command to test
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/test".to_string(),
+        provider: Some("openai".to_string()),
+        system_prompt: Some("Test assistant".to_string()),
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+
+    // Deactivate test command
+    let updated = registry.set_tool_active("custom:test", false).await;
+    assert!(updated);
+
+    // Should not appear in active list
+    let all = registry.list_all().await;
+    assert!(!all.iter().any(|t| t.id == "custom:test"));
+
+    // Should appear in full list
+    let all_with_inactive = registry.list_all_with_inactive().await;
+    assert!(all_with_inactive.iter().any(|t| t.id == "custom:test"));
+}
+
+#[tokio::test]
+async fn test_to_prompt_block() {
+    let registry = ToolRegistry::new();
+
+    // Register custom commands to test prompt block
+    let rules = vec![
+        RoutingRuleConfig {
+            regex: "^/translate".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Translate".to_string()),
+            ..Default::default()
+        },
+        RoutingRuleConfig {
+            regex: "^/code".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Code assistant".to_string()),
+            ..Default::default()
+        },
+    ];
+    registry.register_custom_commands(&rules).await;
+
+    let prompt = registry.to_prompt_block().await;
+    assert!(prompt.contains("**translate**"));
+    assert!(prompt.contains("**code**"));
+}
+
+// =========================================================================
+// Conflict Resolution Tests
+// =========================================================================
+
+#[tokio::test]
+async fn test_check_conflict_no_conflict() {
+    let registry = ToolRegistry::new();
+
+    // Register a custom command
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/translate".to_string(),
+        provider: Some("openai".to_string()),
+        system_prompt: Some("Translate".to_string()),
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+
+    // No conflict for a new unique name
+    let conflict = registry.check_conflict("git").await;
+    assert!(conflict.is_none());
+}
+
+#[tokio::test]
+async fn test_check_conflict_exists() {
+    let registry = ToolRegistry::new();
+
+    // Register a custom command
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/search".to_string(),
+        provider: Some("openai".to_string()),
+        system_prompt: Some("Search".to_string()),
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+
+    // Conflict with custom "search"
+    let conflict = registry.check_conflict("search").await;
+    assert!(conflict.is_some());
+
+    let info = conflict.unwrap();
+    assert_eq!(info.existing_name, "search");
+    assert_eq!(info.existing_priority, ToolPriority::Custom);
+}
+
+#[tokio::test]
+async fn test_check_conflict_case_insensitive() {
+    let registry = ToolRegistry::new();
+
+    // Register a custom command
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/search".to_string(),
+        provider: Some("openai".to_string()),
+        system_prompt: Some("Search".to_string()),
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+
+    // Should find conflict even with different case
+    let conflict = registry.check_conflict("SEARCH").await;
+    assert!(conflict.is_some());
+    assert_eq!(conflict.unwrap().existing_name, "search");
+}
+
+#[test]
+fn test_resolve_conflict_new_wins() {
+    let registry = ToolRegistry::new();
+
+    // MCP tool exists, Builtin tries to register
+    let conflict = ConflictInfo {
+        existing_id: "mcp:server:search".to_string(),
+        existing_name: "search".to_string(),
+        existing_source: ToolSource::Mcp {
+            server: "server".into(),
+        },
+        existing_priority: ToolPriority::Mcp,
+    };
+
+    let resolution = registry.resolve_conflict("search", &conflict, &ToolSource::Builtin);
+
+    // Builtin has higher priority, should rename existing
+    match resolution {
+        ConflictResolution::RenameExisting {
+            original_name,
+            new_name,
+        } => {
+            assert_eq!(original_name, "search");
+            assert_eq!(new_name, "search-mcp");
+        }
+        _ => panic!("Expected RenameExisting"),
+    }
+}
+
+#[test]
+fn test_resolve_conflict_existing_wins() {
+    let registry = ToolRegistry::new();
+
+    // Builtin exists, MCP tries to register
+    let conflict = ConflictInfo {
+        existing_id: "builtin:search".to_string(),
+        existing_name: "search".to_string(),
+        existing_source: ToolSource::Builtin,
+        existing_priority: ToolPriority::Builtin,
+    };
+
+    let resolution = registry.resolve_conflict(
+        "search",
+        &conflict,
+        &ToolSource::Mcp {
+            server: "server".into(),
+        },
+    );
+
+    // Builtin has higher priority, should rename new
+    match resolution {
+        ConflictResolution::RenameNew {
+            original_name,
+            new_name,
+        } => {
+            assert_eq!(original_name, "search");
+            assert_eq!(new_name, "search-mcp");
+        }
+        _ => panic!("Expected RenameNew"),
+    }
+}
+
+#[test]
+fn test_resolve_conflict_same_priority() {
+    let registry = ToolRegistry::new();
+
+    // Two MCP tools with same priority
+    let conflict = ConflictInfo {
+        existing_id: "mcp:server1:status".to_string(),
+        existing_name: "status".to_string(),
+        existing_source: ToolSource::Mcp {
+            server: "server1".into(),
+        },
+        existing_priority: ToolPriority::Mcp,
+    };
+
+    let resolution = registry.resolve_conflict(
+        "status",
+        &conflict,
+        &ToolSource::Mcp {
+            server: "server2".into(),
+        },
+    );
+
+    // Same priority - new tool gets renamed (first registered wins)
+    match resolution {
+        ConflictResolution::RenameNew {
+            original_name,
+            new_name,
+        } => {
+            assert_eq!(original_name, "status");
+            assert_eq!(new_name, "status-mcp");
+        }
+        _ => panic!("Expected RenameNew"),
+    }
+}
+
+#[tokio::test]
+async fn test_register_with_conflict_resolution_no_conflict() {
+    let registry = ToolRegistry::new();
+
+    let tool = UnifiedTool::new(
+        "mcp:server:git",
+        "git",
+        "Git operations",
+        ToolSource::Mcp {
+            server: "server".into(),
+        },
+    );
+
+    let id = registry.register_with_conflict_resolution(tool).await;
+
+    // No conflict, original ID used
+    assert_eq!(id, "mcp:server:git");
+
+    let registered = registry.get_by_id(&id).await;
+    assert!(registered.is_some());
+    assert_eq!(registered.unwrap().name, "git");
+}
+
+#[tokio::test]
+async fn test_register_with_conflict_resolution_new_renamed() {
+    let registry = ToolRegistry::new();
+
+    // Register Custom tool first (higher priority than MCP)
+    let custom_tool = UnifiedTool::new(
+        "custom:search",
+        "search",
+        "Custom Search",
+        ToolSource::Custom { rule_index: 0 },
+    );
+    registry
+        .register_with_conflict_resolution(custom_tool)
+        .await;
+
+    // Try to register MCP tool with same name as custom
+    let mcp_tool = UnifiedTool::new(
+        "mcp:server:search",
+        "search",
+        "MCP Search",
+        ToolSource::Mcp {
+            server: "server".into(),
+        },
+    );
+
+    let id = registry.register_with_conflict_resolution(mcp_tool).await;
+
+    // MCP tool should be renamed (Custom has higher priority)
+    assert_eq!(id, "mcp:server:search-mcp");
+
+    let registered = registry.get_by_id(&id).await.unwrap();
+    assert_eq!(registered.name, "search-mcp");
+    assert_eq!(registered.original_name, Some("search".to_string()));
+    assert!(registered.was_renamed);
+
+    // Custom should still have original name
+    let custom = registry.get_by_id("custom:search").await.unwrap();
+    assert_eq!(custom.name, "search");
+    assert!(!custom.was_renamed);
+}
+
+#[tokio::test]
+async fn test_register_with_conflict_resolution_existing_renamed() {
+    let registry = ToolRegistry::new();
+
+    // Register MCP tool first
+    let mcp_tool = UnifiedTool::new(
+        "mcp:server:test",
+        "test",
+        "MCP Test",
+        ToolSource::Mcp {
+            server: "server".into(),
+        },
+    );
+    registry.register_with_conflict_resolution(mcp_tool).await;
+
+    // Register Custom tool with same name (higher priority)
+    let custom_tool = UnifiedTool::new(
+        "custom:test",
+        "test",
+        "Custom Test",
+        ToolSource::Custom { rule_index: 0 },
+    );
+    let id = registry
+        .register_with_conflict_resolution(custom_tool)
+        .await;
+
+    // Custom tool takes the name
+    assert_eq!(id, "custom:test");
+    let custom = registry.get_by_id(&id).await.unwrap();
+    assert_eq!(custom.name, "test");
+    assert!(!custom.was_renamed);
+
+    // MCP tool should be renamed
+    let mcp = registry.get_by_id("mcp:server:test-mcp").await;
+    assert!(mcp.is_some());
+    let mcp = mcp.unwrap();
+    assert_eq!(mcp.name, "test-mcp");
+    assert_eq!(mcp.original_name, Some("test".to_string()));
+    assert!(mcp.was_renamed);
+}
+
+// =========================================================================
+// Atomic Refresh Tests (Phase 3.4)
+// =========================================================================
+
+#[tokio::test]
+async fn test_refresh_atomic_replaces_all_tools() {
+    let registry = ToolRegistry::new();
+
+    // Register some initial tools
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/old".to_string(),
+        provider: Some("openai".to_string()),
+        system_prompt: Some("Old command".to_string()),
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+    let initial_count = registry.count().await;
+    assert_eq!(initial_count, 1);
+
+    // Create new tool list
+    let new_tools = vec![
+        UnifiedTool::new(
+            "test:tool1",
+            "tool1",
+            "Test Tool 1",
+            ToolSource::Custom { rule_index: 0 },
+        ),
+        UnifiedTool::new(
+            "test:tool2",
+            "tool2",
+            "Test Tool 2",
+            ToolSource::Custom { rule_index: 1 },
+        ),
+    ];
+
+    // Atomic refresh should replace all tools
+    registry.refresh_atomic(new_tools).await;
+
+    // Should have exactly 2 tools now
+    assert_eq!(registry.count().await, 2);
+
+    // Old custom tools should be gone
+    assert!(registry.get_by_id("custom:old").await.is_none());
+
+    // New tools should exist
+    assert!(registry.get_by_id("test:tool1").await.is_some());
+    assert!(registry.get_by_id("test:tool2").await.is_some());
+}
+
+#[tokio::test]
+async fn test_refresh_atomic_empty_list() {
+    let registry = ToolRegistry::new();
+
+    // Register some tools first
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/test".to_string(),
+        provider: Some("openai".to_string()),
+        system_prompt: Some("Test".to_string()),
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+    assert!(registry.count().await > 0);
+
+    // Refresh with empty list
+    registry.refresh_atomic(vec![]).await;
+
+    // Should have 0 tools
+    assert_eq!(registry.count().await, 0);
+}
+
+#[tokio::test]
+async fn test_refresh_atomic_preserves_tool_properties() {
+    let registry = ToolRegistry::new();
+
+    // Create tool with all properties
+    let tool = UnifiedTool::new(
+        "custom:mytool",
+        "mytool",
+        "My Tool Description",
+        ToolSource::Custom { rule_index: 0 },
+    )
+    .with_display_name("My Tool")
+    .with_icon("star.fill")
+    .with_usage("/mytool [args]")
+    .with_requires_confirmation(true);
+
+    registry.refresh_atomic(vec![tool]).await;
+
+    let retrieved = registry.get_by_id("custom:mytool").await.unwrap();
+    assert_eq!(retrieved.name, "mytool");
+    assert_eq!(retrieved.display_name, "My Tool");
+    assert_eq!(retrieved.description, "My Tool Description");
+    assert_eq!(retrieved.icon, Some("star.fill".to_string()));
+    assert_eq!(retrieved.usage, Some("/mytool [args]".to_string()));
+    assert!(retrieved.requires_confirmation);
+}
+
+// =========================================================================
+// Channel Filtering Tests (Task 2)
+// =========================================================================
+
+#[tokio::test]
+async fn test_list_for_channel_all_visible() {
+    let registry = ToolRegistry::new();
+    registry.register_builtin_tools().await;
+
+    let panel_tools = registry.list_for_channel(ChannelType::Panel).await;
+    let telegram_tools = registry.list_for_channel(ChannelType::Telegram).await;
+
+    assert_eq!(panel_tools.len(), telegram_tools.len());
+    assert!(!panel_tools.is_empty());
+}
+
+#[tokio::test]
+async fn test_list_for_channel_filtered() {
+    let registry = ToolRegistry::new();
+
+    let tool = UnifiedTool::new(
+        "custom:panel-only",
+        "panel-only",
+        "Panel only tool",
+        ToolSource::Custom { rule_index: 0 },
+    )
+    .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
+
+    registry.register_with_conflict_resolution(tool).await;
+
+    let panel_tools = registry.list_for_channel(ChannelType::Panel).await;
+    assert_eq!(panel_tools.len(), 1);
+
+    let telegram_tools = registry.list_for_channel(ChannelType::Telegram).await;
+    assert_eq!(telegram_tools.len(), 0);
+}
+
+// =========================================================================
+// Command Resolution Tests (Task 3)
+// =========================================================================
+
+#[tokio::test]
+async fn test_resolve_command_found() {
+    let registry = ToolRegistry::new();
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/search".to_string(),
+        provider: Some("openai".to_string()),
+        system_prompt: Some("Search the web".to_string()),
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+
+    let resolved = registry.resolve_command("/search rust async").await;
+    assert!(resolved.is_some());
+    let resolved = resolved.unwrap();
+    assert_eq!(resolved.tool.name, "search");
+    assert_eq!(resolved.arguments, Some("rust async".to_string()));
+}
+
+#[tokio::test]
+async fn test_resolve_command_not_found() {
+    let registry = ToolRegistry::new();
+    let resolved = registry.resolve_command("/nonexistent").await;
+    assert!(resolved.is_none());
+}
+
+#[tokio::test]
+async fn test_resolve_command_not_slash() {
+    let registry = ToolRegistry::new();
+    let resolved = registry.resolve_command("hello world").await;
+    assert!(resolved.is_none());
+}
+
+#[tokio::test]
+async fn test_resolve_command_case_insensitive() {
+    let registry = ToolRegistry::new();
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/search".to_string(),
+        provider: Some("openai".to_string()),
+        system_prompt: Some("Search".to_string()),
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+
+    let resolved = registry.resolve_command("/SEARCH query").await;
+    assert!(resolved.is_some());
+    assert_eq!(resolved.unwrap().tool.name, "search");
+}
+
+#[tokio::test]
+async fn test_resolve_command_no_args() {
+    let registry = ToolRegistry::new();
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/help".to_string(),
+        provider: None,
+        system_prompt: Some("Help".to_string()),
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+
+    let resolved = registry.resolve_command("/help").await;
+    assert!(resolved.is_some());
+    assert!(resolved.unwrap().arguments.is_none());
+}
+
+#[tokio::test]
+async fn test_resolve_command_strips_bot_mention() {
+    let registry = ToolRegistry::new();
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/search".to_string(),
+        provider: Some("openai".to_string()),
+        system_prompt: Some("Search".to_string()),
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+
+    // Telegram group format: /command@botname args
+    let resolved = registry.resolve_command("/search@alephbot weather").await;
+    assert!(resolved.is_some());
+    let resolved = resolved.unwrap();
+    assert_eq!(resolved.tool.name, "search");
+    assert_eq!(resolved.arguments, Some("weather".to_string()));
+
+    // No args variant
+    let resolved = registry.resolve_command("/search@alephbot").await;
+    assert!(resolved.is_some());
+    assert_eq!(resolved.unwrap().tool.name, "search");
+
+    // Without @botname should still work
+    let resolved = registry.resolve_command("/search query").await;
+    assert!(resolved.is_some());
+    assert_eq!(resolved.unwrap().tool.name, "search");
+}
+
+// =========================================================================
+// Prefix Filtering Tests (Task 4)
+// =========================================================================
+
+#[tokio::test]
+async fn test_filter_by_prefix() {
+    let registry = ToolRegistry::new();
+    let rules = vec![
+        RoutingRuleConfig {
+            regex: "^/search".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Search".to_string()),
+            ..Default::default()
+        },
+        RoutingRuleConfig {
+            regex: "^/settings".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Settings".to_string()),
+            ..Default::default()
+        },
+        RoutingRuleConfig {
+            regex: "^/translate".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Translate".to_string()),
+            ..Default::default()
+        },
+    ];
+    registry.register_custom_commands(&rules).await;
+
+    let results = registry.filter_by_prefix("se").await;
+    assert_eq!(results.len(), 2);
+
+    let results = registry.filter_by_prefix("SE").await;
+    assert_eq!(results.len(), 2);
+
+    let results = registry.filter_by_prefix("").await;
+    assert_eq!(results.len(), 3);
+
+    let results = registry.filter_by_prefix("xyz").await;
+    assert_eq!(results.len(), 0);
+}
+
+#[tokio::test]
+async fn test_high_risk_tool_channel_restriction() {
+    let registry = ToolRegistry::new();
+
+    let tool = UnifiedTool::new(
+        "mcp:server:delete_all",
+        "delete_all",
+        "Delete everything",
+        ToolSource::Mcp { server: "server".into() },
+    )
+    .with_safety_level(ToolSafetyLevel::IrreversibleHighRisk)
+    .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
+
+    registry.register_with_conflict_resolution(tool).await;
+
+    let telegram = registry.list_for_channel(ChannelType::Telegram).await;
+    assert!(!telegram.iter().any(|t| t.name == "delete_all"));
+
+    let panel = registry.list_for_channel(ChannelType::Panel).await;
+    assert!(panel.iter().any(|t| t.name == "delete_all"));
+}

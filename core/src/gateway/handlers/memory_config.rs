@@ -3,10 +3,11 @@
 //! RPC handlers for managing memory/RAG configuration:
 //! - memory_config.get: Get current memory configuration
 //! - memory_config.update: Update memory configuration
-//! - memory.test_rerank_connection: Test rerank provider connectivity
 //! - memory.retrieve_with_trace: Retrieve memories with scoring trace (placeholder)
 //!
 //! All modifications are persisted to config file and broadcast as events.
+//!
+//! Note: Rerank configuration has its own dedicated handlers in `rerank_config`.
 
 use serde_json::json;
 
@@ -16,7 +17,6 @@ use tokio::sync::RwLock;
 use crate::config::Config;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, INTERNAL_ERROR};
 use crate::gateway::event_bus::{GatewayEventBus, GatewayEvent, ConfigChangedEvent};
-use crate::memory::rerank::{self, RerankConfig};
 
 /// Handle memory_config.get request
 pub async fn handle_get(
@@ -32,26 +32,41 @@ pub async fn handle_get(
 }
 
 /// Handle memory_config.update request
+///
+/// Uses JSON merge to update only the fields provided by the caller,
+/// preserving any fields not present in the incoming payload (e.g.
+/// embedding, lancedb, scoring_pipeline, adaptive_retrieval, noise_filter).
 pub async fn handle_update(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
-    // Parse params
-    let params = match request.params {
+    // Parse params as raw JSON value
+    let incoming = match request.params {
         Some(p) => p,
         None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params"),
     };
 
-    let memory_config: crate::config::types::memory::MemoryConfig = match serde_json::from_value(params) {
-        Ok(c) => c,
-        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Invalid memory config: {}", e)),
-    };
-
-    // Update config
+    // Merge: read existing config as JSON, overlay incoming fields, deserialize back
     {
         let mut cfg = config.write().await;
-        cfg.memory = memory_config;
+
+        // Serialize existing memory config to JSON
+        let mut base = match serde_json::to_value(&cfg.memory) {
+            Ok(v) => v,
+            Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to serialize existing config: {}", e)),
+        };
+
+        // Merge incoming fields on top of existing (only overwrites keys present in incoming)
+        json_merge(&mut base, &incoming);
+
+        // Deserialize merged JSON back to MemoryConfig
+        let merged: crate::config::types::memory::MemoryConfig = match serde_json::from_value(base) {
+            Ok(c) => c,
+            Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Invalid memory config after merge: {}", e)),
+        };
+
+        cfg.memory = merged;
 
         // Save to file
         if let Err(e) = cfg.save() {
@@ -68,65 +83,6 @@ pub async fn handle_update(
     let _ = event_bus.publish_json(&event);
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
-}
-
-// ============================================================================
-// Rerank Connection Test
-// ============================================================================
-
-/// Handle memory.test_rerank_connection request
-///
-/// Builds a rerank provider from the supplied config and sends a test query
-/// with 3 sample documents. Returns success/failure with score info.
-pub async fn handle_test_rerank_connection(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params = match &request.params {
-        Some(p) => p.clone(),
-        None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params"),
-    };
-
-    let config: RerankConfig = match serde_json::from_value(params) {
-        Ok(c) => c,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("Invalid rerank config: {}", e),
-            )
-        }
-    };
-
-    let provider = rerank::build_provider(&config);
-
-    let test_docs = vec![
-        "The user prefers Rust programming language.".to_string(),
-        "Today's weather is sunny and warm.".to_string(),
-        "Memory optimization is an important task.".to_string(),
-    ];
-
-    match provider
-        .rerank(
-            "What programming language does the user prefer?",
-            &test_docs,
-            3,
-        )
-        .await
-    {
-        Ok(results) => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "success": true,
-                "results_count": results.len(),
-                "top_score": results.first().map(|r| r.relevance_score).unwrap_or(0.0),
-            }),
-        ),
-        Err(e) => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "success": false,
-                "error": e.to_string(),
-            }),
-        ),
-    }
 }
 
 // ============================================================================
@@ -163,4 +119,26 @@ pub async fn handle_retrieve_with_trace(request: JsonRpcRequest) -> JsonRpcRespo
             "status": "placeholder — full wiring pending",
         }),
     )
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Recursively merge `overlay` into `base`.
+/// For objects, overlay keys overwrite base keys; for all other types the
+/// overlay value replaces the base value entirely.
+fn json_merge(base: &mut serde_json::Value, overlay: &serde_json::Value) {
+    use serde_json::Value;
+    match (base, overlay) {
+        (Value::Object(base_map), Value::Object(overlay_map)) => {
+            for (key, overlay_val) in overlay_map {
+                let entry = base_map.entry(key.clone()).or_insert(Value::Null);
+                json_merge(entry, overlay_val);
+            }
+        }
+        (base, overlay) => {
+            *base = overlay.clone();
+        }
+    }
 }

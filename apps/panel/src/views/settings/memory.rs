@@ -10,8 +10,8 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::{
-    MemoryConfigApi, MemoryConfig, FusionStrategy, RerankProviderType,
-    RetrieveWithTraceResponse, TestRerankResponse,
+    MemoryConfigApi, MemoryConfig, FusionStrategy,
+    RetrieveWithTraceResponse,
 };
 use crate::context::DashboardState;
 
@@ -83,7 +83,6 @@ pub fn MemoryView() -> impl IntoView {
                                 <AIRetrievalSettings config=config />
                                 <CompressionSettings config=config />
                                 <RetrievalPipelineSettings config=config />
-                                <RerankSettings config=config />
                                 <FactDecaySettings config=config />
                                 <GraphDecaySettings config=config />
                                 <DreamingSettings config=config />
@@ -886,207 +885,6 @@ fn RetrievalPipelineSettings(
                     <label class="font-medium">"Enable Query Expansion"</label>
                 </div>
                 <p class="text-xs text-text-tertiary">"Automatically expand queries with Chinese synonyms for broader recall"</p>
-            </div>
-        </div>
-    }
-}
-
-// ============================================================================
-// Section B: Rerank Provider Settings
-// ============================================================================
-
-#[component]
-fn RerankSettings(
-    config: RwSignal<Option<MemoryConfig>>,
-) -> impl IntoView {
-    let test_status = RwSignal::new(Option::<String>::None);
-    let test_loading = RwSignal::new(false);
-
-    let test_connection = move |_| {
-        if let Some(cfg) = config.get() {
-            let state = expect_context::<DashboardState>();
-            let rerank = cfg.rerank.clone();
-            spawn_local(async move {
-                test_loading.set(true);
-                test_status.set(None);
-                let params = serde_json::to_value(&rerank).unwrap_or_default();
-                match state.rpc_call("memory.test_rerank_connection", params).await {
-                    Ok(result) => {
-                        if let Ok(resp) = serde_json::from_value::<TestRerankResponse>(result) {
-                            if resp.success {
-                                test_status.set(Some(format!(
-                                    "Success! {} results, top score: {:.3}",
-                                    resp.results_count, resp.top_score
-                                )));
-                            } else {
-                                test_status.set(Some(format!(
-                                    "Failed: {}",
-                                    resp.error.unwrap_or_else(|| "Unknown error".to_string())
-                                )));
-                            }
-                        } else {
-                            test_status.set(Some("Failed to parse response".to_string()));
-                        }
-                    }
-                    Err(e) => {
-                        test_status.set(Some(format!("RPC error: {}", e)));
-                    }
-                }
-                test_loading.set(false);
-            });
-        }
-    };
-
-    view! {
-        <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-2">"Cross-Encoder Reranking"</h2>
-            <p class="text-sm text-text-tertiary mb-4">
-                "Use a cross-encoder model to rerank retrieval results for better precision"
-            </p>
-
-            <div class="space-y-4">
-                <div class="flex items-center">
-                    <input
-                        type="checkbox"
-                        prop:checked=move || config.get().map(|c| c.rerank.enabled).unwrap_or(false)
-                        on:change=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                cfg.rerank.enabled = event_target_checked(&ev);
-                                config.set(Some(cfg));
-                            }
-                        }
-                        class="mr-2"
-                    />
-                    <label class="font-medium">"Enable Cross-Encoder Rerank"</label>
-                </div>
-
-                <div>
-                    <label class="block text-sm font-medium mb-1">"Provider"</label>
-                    <select
-                        prop:value=move || config.get().map(|c| c.rerank.provider.as_str().to_string()).unwrap_or_else(|| "jina".to_string())
-                        on:change=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                cfg.rerank.provider = RerankProviderType::from_str_val(&event_target_value(&ev));
-                                config.set(Some(cfg));
-                            }
-                        }
-                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                    >
-                        <option value="jina">"Jina AI"</option>
-                        <option value="siliconflow">"SiliconFlow"</option>
-                        <option value="voyage">"Voyage AI"</option>
-                        <option value="pinecone">"Pinecone"</option>
-                        <option value="vllm">"vLLM"</option>
-                    </select>
-                </div>
-
-                <div>
-                    <label class="block text-sm font-medium mb-1">"API Base URL"</label>
-                    <input
-                        type="text"
-                        prop:value=move || config.get().map(|c| c.rerank.api_base.clone()).unwrap_or_default()
-                        on:input=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                cfg.rerank.api_base = event_target_value(&ev);
-                                config.set(Some(cfg));
-                            }
-                        }
-                        placeholder="Leave empty for provider default"
-                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                    />
-                </div>
-
-                <div>
-                    <label class="block text-sm font-medium mb-1">"API Key"</label>
-                    <input
-                        type="password"
-                        prop:value=move || config.get().map(|c| c.rerank.api_key.clone()).unwrap_or_default()
-                        on:input=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                cfg.rerank.api_key = event_target_value(&ev);
-                                config.set(Some(cfg));
-                            }
-                        }
-                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                    />
-                </div>
-
-                <div>
-                    <label class="block text-sm font-medium mb-1">"Model"</label>
-                    <input
-                        type="text"
-                        prop:value=move || config.get().map(|c| c.rerank.model.clone()).unwrap_or_else(|| "BAAI/bge-reranker-v2-m3".to_string())
-                        on:input=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                cfg.rerank.model = event_target_value(&ev);
-                                config.set(Some(cfg));
-                            }
-                        }
-                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                    />
-                </div>
-
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium mb-1">"Timeout (ms)"</label>
-                        <input
-                            type="number"
-                            min="100"
-                            prop:value=move || config.get().map(|c| c.rerank.timeout_ms).unwrap_or(5000)
-                            on:input=move |ev| {
-                                if let Some(mut cfg) = config.get() {
-                                    if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.rerank.timeout_ms = val;
-                                        config.set(Some(cfg));
-                                    }
-                                }
-                            }
-                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                        />
-                    </div>
-
-                    <div>
-                        <label class="block text-sm font-medium mb-1">"Rerank Weight (0.0-1.0)"</label>
-                        <input
-                            type="number"
-                            step="0.05"
-                            min="0"
-                            max="1"
-                            prop:value=move || config.get().map(|c| c.rerank.rerank_weight).unwrap_or(0.6)
-                            on:input=move |ev| {
-                                if let Some(mut cfg) = config.get() {
-                                    if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.rerank.rerank_weight = val;
-                                        config.set(Some(cfg));
-                                    }
-                                }
-                            }
-                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                        />
-                        <p class="text-xs text-text-tertiary mt-1">"Blend: rerank_weight * rerank + (1-w) * original"</p>
-                    </div>
-                </div>
-
-                <div class="pt-2">
-                    <button
-                        on:click=test_connection
-                        prop:disabled=move || test_loading.get()
-                        class="px-4 py-2 bg-surface-sunken text-text-primary rounded hover:bg-surface-raised border border-border disabled:opacity-50"
-                    >
-                        {move || if test_loading.get() { "Testing..." } else { "Test Connection" }}
-                    </button>
-                    {move || test_status.get().map(|msg| {
-                        let is_success = msg.starts_with("Success");
-                        let class = if is_success {
-                            "mt-2 p-2 text-sm bg-success-subtle text-success rounded"
-                        } else {
-                            "mt-2 p-2 text-sm bg-danger-subtle text-danger rounded"
-                        };
-                        view! {
-                            <div class=class>{msg}</div>
-                        }
-                    })}
-                </div>
             </div>
         </div>
     }

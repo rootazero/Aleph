@@ -1,0 +1,310 @@
+//! Agent loop execution and streaming callback.
+//!
+//! Contains `run_agent_loop` (the think-act two-step loop), the `StreamCallback`
+//! adapter that bridges `LoopCallback` to Gateway `StreamEvent`s, the
+//! `ExecutionAdapter` trait implementation, and background memory persistence.
+
+use async_trait::async_trait;
+use tracing::{debug, error, info, warn};
+
+use crate::sync_primitives::Arc;
+
+use super::{ExecutionError, RunRequest, RunStatus};
+use crate::gateway::agent_instance::{AgentInstance, MessageRole};
+use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, StreamEvent};
+use crate::gateway::execution_adapter::ExecutionAdapter;
+
+use crate::executor::ToolRegistry;
+use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
+
+use super::engine::ExecutionEngine;
+
+// ============================================================================
+// Agent loop execution
+// ============================================================================
+
+impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
+    /// Run the agent loop (think->act two-step, Claude Code-inspired).
+    ///
+    /// Uses the flat `LoopToolRegistry` and single-layer `SafetyGuard`.
+    pub(super) async fn run_agent_loop<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        request: &RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<E>,
+    ) -> Result<String, ExecutionError> {
+        use crate::agent_loop::{
+            AgentLoop, PromptBuilder, SafetyGuard, LoopConfig,
+            adapters::build_registry_from_tools,
+            provider_bridge::AiProviderBridge,
+        };
+
+        info!(run_id = run_id, "Starting agent loop (think->act)");
+
+        // Get provider
+        let provider = self.provider_registry.default_provider();
+        let bridge = AiProviderBridge::new(provider);
+
+        // Build tool registry from UnifiedTool list (filtered by agent whitelist)
+        let allowed_tools: Vec<crate::dispatcher::UnifiedTool> = self
+            .tools
+            .iter()
+            .filter(|t| agent.is_tool_allowed(&t.name))
+            .cloned()
+            .collect();
+
+        let tool_registry = build_registry_from_tools(
+            self.tool_registry.clone(),
+            &allowed_tools,
+        );
+
+        debug!(
+            run_id = run_id,
+            tool_count = tool_registry.len(),
+            "Agent loop: built tool registry"
+        );
+
+        // Resolve soul for prompt building
+        let identity_resolver = crate::thinker::identity::IdentityResolver::with_defaults();
+        let resolved_soul = identity_resolver.resolve();
+        let prompt_builder = if resolved_soul.is_empty() {
+            PromptBuilder::new()
+        } else {
+            PromptBuilder::from_soul(&resolved_soul)
+        };
+
+        // Safety guard with defaults
+        let safety = SafetyGuard::default_guard();
+
+        // Config from agent
+        let max_loops = agent.config().max_loops as usize;
+        let timeout_secs = request
+            .timeout_secs
+            .unwrap_or(self.config.default_timeout_secs);
+        let loop_config = LoopConfig {
+            max_iterations: max_loops,
+            token_budget: agent.config().max_tokens.unwrap_or(200_000),
+            timeout_secs,
+        };
+
+        // Create and run the agent loop
+        let agent_loop = AgentLoop::new(
+            bridge,
+            tool_registry,
+            prompt_builder,
+            safety,
+            loop_config,
+        );
+
+        // Load conversation history from session (for multi-turn context)
+        let history = build_loop_history(&agent, &request.session_key, &request.input).await;
+
+        // Create a streaming callback that emits events
+        let mut callback = StreamCallback::new(emitter.clone(), run_id.to_string());
+
+        match agent_loop.run_with_history(&request.input, history, &mut callback).await {
+            Ok(result) => {
+                info!(
+                    run_id = run_id,
+                    iterations = result.iterations,
+                    tool_calls = result.tool_calls_made,
+                    tokens = result.total_tokens,
+                    "Agent loop completed"
+                );
+                Ok(result.final_text.unwrap_or_default())
+            }
+            Err(e) => {
+                error!(run_id = run_id, error = %e, "Agent loop failed");
+                Err(ExecutionError::Failed(e.to_string()))
+            }
+        }
+    }
+}
+
+/// Build loop history from the agent's session, excluding the current user input.
+async fn build_loop_history(
+    agent: &AgentInstance,
+    session_key: &crate::gateway::router::SessionKey,
+    current_input: &str,
+) -> Vec<crate::agent_loop::LoopMessage> {
+    use crate::agent_loop::LoopMessage;
+
+    let session_history = agent.get_history(session_key, Some(50)).await;
+    let mut msgs: Vec<LoopMessage> = Vec::new();
+
+    // Skip the last message if it's the current user input we just stored
+    let history_slice = if session_history.last().map(|m| {
+        m.role == MessageRole::User && m.content == current_input
+    }).unwrap_or(false) {
+        &session_history[..session_history.len() - 1]
+    } else {
+        &session_history
+    };
+
+    for msg in history_slice {
+        match msg.role {
+            MessageRole::User => msgs.push(LoopMessage::User(msg.content.clone())),
+            MessageRole::Assistant => msgs.push(LoopMessage::Assistant(msg.content.clone())),
+            _ => {}
+        }
+    }
+    msgs
+}
+
+// ============================================================================
+// StreamCallback — bridges LoopCallback to Gateway StreamEvents
+// ============================================================================
+
+/// Callback adapter that bridges AgentLoop events to Gateway StreamEvents.
+pub(super) struct StreamCallback<E: EventEmitter + Send + Sync + 'static> {
+    emitter: Arc<E>,
+    run_id: String,
+    seq: u64,
+    chunk_index: u32,
+}
+
+impl<E: EventEmitter + Send + Sync + 'static> StreamCallback<E> {
+    pub(super) fn new(emitter: Arc<E>, run_id: String) -> Self {
+        Self {
+            emitter,
+            run_id,
+            seq: 0,
+            chunk_index: 0,
+        }
+    }
+}
+
+impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
+    for StreamCallback<E>
+{
+    fn on_text(&mut self, text: &str) {
+        self.seq += 1;
+        let chunk_index = self.chunk_index;
+        self.chunk_index += 1;
+
+        let event = StreamEvent::ResponseChunk {
+            run_id: self.run_id.clone(),
+            seq: self.seq,
+            content: text.to_string(),
+            chunk_index,
+            is_final: false,
+        };
+
+        // Fire-and-forget emit (LoopCallback is sync, emitter is async)
+        let emitter = self.emitter.clone();
+        tokio::spawn(async move {
+            let _ = emitter.emit(event).await;
+        });
+    }
+
+    fn on_tool_start(&mut self, name: &str, input: &serde_json::Value) {
+        self.seq += 1;
+        let event = StreamEvent::ToolStart {
+            run_id: self.run_id.clone(),
+            seq: self.seq,
+            tool_name: name.to_string(),
+            tool_id: name.to_string(),
+            params: input.clone(),
+        };
+        let emitter = self.emitter.clone();
+        tokio::spawn(async move {
+            let _ = emitter.emit(event).await;
+        });
+    }
+
+    fn on_tool_done(&mut self, name: &str, result: &crate::agent_loop::ToolResult) {
+        use crate::gateway::event_emitter::ToolResult as EmitterToolResult;
+        self.seq += 1;
+        let tool_result = match result {
+            crate::agent_loop::ToolResult::Success { output } => {
+                EmitterToolResult::success(output.to_string())
+            }
+            crate::agent_loop::ToolResult::Error { error, .. } => {
+                EmitterToolResult::error(error.clone())
+            }
+        };
+        let event = StreamEvent::ToolEnd {
+            run_id: self.run_id.clone(),
+            seq: self.seq,
+            tool_id: name.to_string(),
+            result: tool_result,
+            duration_ms: 0,
+        };
+        let emitter = self.emitter.clone();
+        tokio::spawn(async move {
+            let _ = emitter.emit(event).await;
+        });
+    }
+}
+
+// ============================================================================
+// ExecutionAdapter trait implementation
+// ============================================================================
+
+/// Implement ExecutionAdapter for the ExecutionEngine.
+///
+/// This allows InboundMessageRouter to use ExecutionEngine via a trait object,
+/// enabling routing without being generic over provider and tool registry types.
+#[async_trait]
+impl<P, R> ExecutionAdapter for ExecutionEngine<P, R>
+where
+    P: ThinkerProviderRegistry + Send + Sync + 'static,
+    R: ToolRegistry + Send + Sync + 'static,
+{
+    async fn execute(
+        &self,
+        request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), ExecutionError> {
+        // Wrap the dyn trait object in DynEventEmitter to make it Sized,
+        // then delegate to the existing generic execute method
+        let wrapper = Arc::new(DynEventEmitter::new(emitter));
+        ExecutionEngine::execute(self, request, agent, wrapper).await
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        ExecutionEngine::cancel(self, run_id).await
+    }
+
+    async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
+        ExecutionEngine::get_status(self, run_id).await
+    }
+}
+
+// ============================================================================
+// Background memory persistence
+// ============================================================================
+
+/// Write a conversation turn to the memory system (Layer 1).
+///
+/// Runs in a background task — failures are logged but never block the caller.
+pub(super) async fn write_conversation_memory(
+    memory_backend: crate::memory::store::MemoryBackend,
+    session_key: String,
+    agent_id: String,
+    user_input: String,
+    ai_output: String,
+) {
+    use crate::memory::context::{ContextAnchor, MemoryEntry};
+
+    let context = ContextAnchor::with_session(
+        session_key.clone(),
+        session_key,
+    );
+    let mut entry = MemoryEntry::new(
+        uuid::Uuid::new_v4().to_string(),
+        context,
+        user_input,
+        ai_output,
+    );
+    entry.workspace = agent_id;
+
+    use crate::memory::store::SessionStore;
+    if let Err(e) = memory_backend.insert_memory(&entry).await {
+        warn!("Failed to write conversation memory: {}", e);
+    } else {
+        debug!("Conversation memory saved to Layer 1");
+    }
+}

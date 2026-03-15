@@ -10,7 +10,7 @@ use crate::sync_primitives::Mutex;
 use tracing::{debug, info};
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 
 /// Unified security storage backed by SQLite
 pub struct SecurityStore {
@@ -104,6 +104,18 @@ impl SecurityStore {
 
             let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             conn.execute_batch(SCHEMA_V4)?;
+            drop(conn);
+        }
+
+        if version < 5 {
+            info!(
+                from = version,
+                to = 5,
+                "Migrating security schema to v5 (token manager secret persistence)"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute_batch(SCHEMA_V5)?;
             drop(conn);
         }
 
@@ -516,6 +528,41 @@ impl SecurityStore {
         Ok(count > 0)
     }
 
+    // ========== Token Manager Secret Persistence ==========
+
+    /// Store the TokenManager HMAC secret so device tokens survive restarts.
+    pub fn set_token_manager_secret(&self, secret: &[u8; 32]) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT OR REPLACE INTO token_manager_secret (id, hmac_secret, created_at) VALUES (1, ?1, ?2)",
+            params![&secret[..], current_timestamp_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Load the persisted TokenManager HMAC secret (if any).
+    pub fn get_token_manager_secret(&self) -> SqliteResult<Option<[u8; 32]>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let result = conn.query_row(
+            "SELECT hmac_secret FROM token_manager_secret WHERE id = 1",
+            [],
+            |row| {
+                let blob: Vec<u8> = row.get(0)?;
+                Ok(blob)
+            },
+        );
+        match result {
+            Ok(blob) if blob.len() == 32 => {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&blob);
+                Ok(Some(arr))
+            }
+            Ok(_) => Ok(None),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     // ========== Session Operations ==========
 
     /// Insert a new session.
@@ -857,6 +904,14 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 /// Schema v4 SQL — add HMAC secret column to shared_token for persistence across restarts
 const SCHEMA_V4: &str = r#"
 ALTER TABLE shared_token ADD COLUMN hmac_secret BLOB;
+"#;
+
+const SCHEMA_V5: &str = r#"
+CREATE TABLE IF NOT EXISTS token_manager_secret (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    hmac_secret BLOB NOT NULL,
+    created_at  INTEGER NOT NULL
+);
 "#;
 
 #[cfg(test)]

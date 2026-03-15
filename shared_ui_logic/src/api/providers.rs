@@ -12,8 +12,8 @@ pub struct ProviderInfo {
     pub name: String,
     /// Whether the provider is enabled
     pub enabled: bool,
-    /// Model name
-    pub model: String,
+    /// Configured models (first is default)
+    pub models: Vec<String>,
     /// Provider type (e.g., "openai", "anthropic")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_type: Option<String>,
@@ -30,8 +30,8 @@ pub struct ProviderConfig {
     /// Whether the provider is enabled
     #[serde(default)]
     pub enabled: bool,
-    /// Model name
-    pub model: String,
+    /// Configured models (first is default)
+    pub models: Vec<String>,
     /// API key
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
@@ -51,39 +51,6 @@ pub struct TestResult {
     /// Response latency in milliseconds
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latency_ms: Option<u64>,
-}
-
-/// Discovered model from provider API
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscoveredModel {
-    /// Model identifier
-    pub id: String,
-    /// Display name
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Who owns this model
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owned_by: Option<String>,
-    /// Model capabilities
-    #[serde(default)]
-    pub capabilities: Vec<String>,
-}
-
-/// Provider probe result
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProbeResult {
-    /// Whether probe succeeded (models discovered from API)
-    pub success: bool,
-    /// Connection latency in milliseconds
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latency_ms: Option<u64>,
-    /// Discovered models
-    pub models: Vec<DiscoveredModel>,
-    /// Source of models: "api" or "preset"
-    pub model_source: String,
-    /// Error message if probe failed
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
 }
 
 /// Needs-setup check result
@@ -230,29 +197,6 @@ impl<C: crate::connection::AlephConnector> ProvidersApi<C> {
         Ok(())
     }
 
-    /// Probe a provider: test connection + discover models
-    pub async fn probe(
-        &self,
-        protocol: &str,
-        api_key: Option<&str>,
-        base_url: Option<&str>,
-    ) -> Result<ProbeResult, RpcError> {
-        #[derive(Serialize)]
-        struct Params<'a> {
-            protocol: &'a str,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            api_key: Option<&'a str>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            base_url: Option<&'a str>,
-        }
-
-        let result: ProbeResult = self
-            .rpc
-            .call("providers.probe", &Params { protocol, api_key, base_url })
-            .await?;
-        Ok(result)
-    }
-
     /// Check if first-run setup wizard is needed
     pub async fn needs_setup(&self) -> Result<NeedsSetupResult, RpcError> {
         let result: NeedsSetupResult = self.rpc.call("providers.needsSetup", &()).await?;
@@ -269,7 +213,7 @@ mod tests {
         let info = ProviderInfo {
             name: "openai".to_string(),
             enabled: true,
-            model: "gpt-4".to_string(),
+            models: vec!["gpt-4".to_string()],
             provider_type: Some("openai".to_string()),
             is_default: true,
             verified: true,
@@ -277,7 +221,7 @@ mod tests {
 
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["name"], "openai");
-        assert_eq!(json["model"], "gpt-4");
+        assert_eq!(json["models"][0], "gpt-4");
         assert_eq!(json["is_default"], true);
         assert_eq!(json["verified"], true);
     }
@@ -286,14 +230,14 @@ mod tests {
     fn test_provider_config_serialization() {
         let config = ProviderConfig {
             enabled: true,
-            model: "gpt-4".to_string(),
+            models: vec!["gpt-4".to_string()],
             api_key: Some("sk-xxx".to_string()),
             base_url: None,
         };
 
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["enabled"], true);
-        assert_eq!(json["model"], "gpt-4");
+        assert_eq!(json["models"][0], "gpt-4");
         assert_eq!(json["api_key"], "sk-xxx");
         assert!(json.get("base_url").is_none());
     }
@@ -313,22 +257,6 @@ mod tests {
     }
 
     #[test]
-    fn test_probe_result_deserialization() {
-        let json = serde_json::json!({
-            "success": true,
-            "latency_ms": 234,
-            "models": [
-                {"id": "gpt-4o", "name": "GPT-4o", "capabilities": ["chat", "vision"]}
-            ],
-            "model_source": "api"
-        });
-        let result: ProbeResult = serde_json::from_value(json).unwrap();
-        assert!(result.success);
-        assert_eq!(result.models.len(), 1);
-        assert_eq!(result.models[0].id, "gpt-4o");
-    }
-
-    #[test]
     fn test_needs_setup_result_deserialization() {
         let json = serde_json::json!({
             "needs_setup": true,
@@ -338,13 +266,5 @@ mod tests {
         let result: NeedsSetupResult = serde_json::from_value(json).unwrap();
         assert!(result.needs_setup);
         assert_eq!(result.provider_count, 0);
-    }
-
-    #[test]
-    fn test_discovered_model_name_optional() {
-        let json = serde_json::json!({"id": "gpt-4o", "capabilities": ["chat"]});
-        let model: DiscoveredModel = serde_json::from_value(json).unwrap();
-        assert_eq!(model.id, "gpt-4o");
-        assert!(model.name.is_none());
     }
 }
