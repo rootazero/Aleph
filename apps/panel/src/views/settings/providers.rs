@@ -558,7 +558,7 @@ fn ProviderDetailPanel(
                 // Existing provider — populate form with actual values
                 if let Some(provider) = providers.get().iter().find(|p| p.name == sel) {
                     form_name.set(provider.name.clone());
-                    form_protocol.set(provider.provider_type.clone().unwrap_or_else(|| "openai".to_string()));
+                    form_protocol.set(provider.provider_type.clone().unwrap_or_else(|| provider.name.clone()));
                     form_model.set(provider.model.clone());
                     form_api_key.set(provider.api_key.clone().unwrap_or_default());
                     form_enabled.set(provider.enabled);
@@ -569,7 +569,7 @@ fn ProviderDetailPanel(
 
                     // Auto-probe to discover models (API key resolved from vault on server)
                     let provider_name = provider.name.clone();
-                    let protocol = provider.provider_type.clone().unwrap_or_else(|| "openai".to_string());
+                    let protocol = provider.provider_type.clone().unwrap_or_else(|| provider.name.clone());
                     probe_status.set(ProbeStatus::Loading);
                     is_refreshing.set(true);
                     spawn_local(async move {
@@ -594,8 +594,21 @@ fn ProviderDetailPanel(
                                     }).collect();
                                     models_list.set(options);
                                 } else {
-                                    probe_status.set(ProbeStatus::Error { message: result.error.unwrap_or_else(|| "Connection failed".to_string()) });
-                                    models_list.set(Vec::new());
+                                    let msg = result.error.unwrap_or_else(|| "Connection failed".to_string());
+                                    probe_status.set(ProbeStatus::Error { message: msg });
+                                    // Keep preset models if backend returned them, even on "failure"
+                                    if !result.models.is_empty() {
+                                        let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
+                                            ModelOption {
+                                                id: m.id.clone(),
+                                                name: m.name.clone(),
+                                                capabilities: m.capabilities.clone(),
+                                                source: result.model_source.clone(),
+                                            }
+                                        }).collect();
+                                        models_list.set(options);
+                                    }
+                                    // If result.models is empty, don't clear — keep any existing models
                                 }
                             }
                             Err(e) => {
@@ -790,7 +803,19 @@ fn ProviderDetailPanel(
                     } else {
                         let msg = result.error.unwrap_or_else(|| "Connection failed".to_string());
                         probe_status.set(ProbeStatus::Error { message: msg });
-                        models_list.set(Vec::new());
+                        // Keep preset models if backend returned them, even on "failure"
+                        if !result.models.is_empty() {
+                            let options: Vec<ModelOption> = result.models.into_iter().map(|m| {
+                                ModelOption {
+                                    id: m.id.clone(),
+                                    name: m.name.clone(),
+                                    capabilities: m.capabilities.clone(),
+                                    source: result.model_source.clone(),
+                                }
+                            }).collect();
+                            models_list.set(options);
+                        }
+                        // If result.models is empty, don't clear — keep any existing models
                     }
                 }
                 Err(e) => {
@@ -1148,7 +1173,7 @@ fn ProviderDetailPanel(
                                                     on:input=move |ev| form_base_url.set(event_target_value(&ev))
                                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                                     placeholder=move || {
-                                                        preset_info.map(|p| format!("Default: {}", p.base_url)).unwrap_or_else(|| "https://api.example.com/v1".to_string())
+                                                        preset_info.map(|p| p.base_url.to_string()).unwrap_or_else(|| "https://api.example.com/v1".to_string())
                                                     }
                                                 />
                                             </div>
