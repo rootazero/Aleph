@@ -693,4 +693,287 @@ mod tests {
         assert_eq!(p.protocol, "chatgpt");
         assert_eq!(p.default_model, "gpt-5.4");
     }
+
+    // ─── convert_messages tests ─────────────────────────────────────
+
+    #[test]
+    fn test_convert_s1_pure_text_user_message() {
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("hello")];
+        let items = ChatGptProtocol::convert_messages(&msgs);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0],
+            InputItem::Message {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_convert_s2_multi_turn_conversation() {
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [
+            UnifiedMessage::user("What is Rust?"),
+            UnifiedMessage::assistant("Rust is a systems programming language."),
+            UnifiedMessage::user("Tell me more."),
+        ];
+        let items = ChatGptProtocol::convert_messages(&msgs);
+
+        assert_eq!(items.len(), 3);
+        match &items[0] {
+            InputItem::Message { role, content } => {
+                assert_eq!(role, "user");
+                assert_eq!(content, "What is Rust?");
+            }
+            other => panic!("Expected Message, got {:?}", other),
+        }
+        match &items[1] {
+            InputItem::Message { role, content } => {
+                assert_eq!(role, "assistant");
+                assert_eq!(content, "Rust is a systems programming language.");
+            }
+            other => panic!("Expected Message, got {:?}", other),
+        }
+        match &items[2] {
+            InputItem::Message { role, content } => {
+                assert_eq!(role, "user");
+                assert_eq!(content, "Tell me more.");
+            }
+            other => panic!("Expected Message, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_convert_s3_assistant_text_and_tool_call() {
+        use crate::providers::message::{ContentBlock, UnifiedMessage};
+        let msgs = [UnifiedMessage::Assistant {
+            content: vec![
+                ContentBlock::Text {
+                    text: "Let me search for that.".to_string(),
+                },
+                ContentBlock::ToolCall {
+                    id: "call_abc".to_string(),
+                    name: "web_search".to_string(),
+                    arguments: serde_json::json!({"query": "rust lang"}),
+                },
+            ],
+        }];
+        let items = ChatGptProtocol::convert_messages(&msgs);
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0],
+            InputItem::Message {
+                role: "assistant".to_string(),
+                content: "Let me search for that.".to_string(),
+            }
+        );
+        match &items[1] {
+            InputItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            } => {
+                assert_eq!(call_id, "call_abc");
+                assert_eq!(name, "web_search");
+                let parsed: serde_json::Value = serde_json::from_str(arguments).unwrap();
+                assert_eq!(parsed, serde_json::json!({"query": "rust lang"}));
+            }
+            other => panic!("Expected FunctionCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_convert_s4_tool_result() {
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::tool_result(
+            "call_123",
+            "search",
+            "Found 5 results",
+            false,
+        )];
+        let items = ChatGptProtocol::convert_messages(&msgs);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0],
+            InputItem::FunctionCallOutput {
+                call_id: "call_123".to_string(),
+                output: "Found 5 results".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_convert_s5_full_tool_use_cycle() {
+        use crate::providers::message::{ContentBlock, UnifiedMessage};
+        let msgs = [
+            UnifiedMessage::user("Search for Rust tutorials"),
+            UnifiedMessage::Assistant {
+                content: vec![ContentBlock::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "rust tutorials"}),
+                }],
+            },
+            UnifiedMessage::tool_result("call_1", "search", "Tutorial list: ...", false),
+            UnifiedMessage::assistant("Here are some Rust tutorials I found."),
+        ];
+        let items = ChatGptProtocol::convert_messages(&msgs);
+
+        // User(1) + FunctionCall(1) + FunctionCallOutput(1) + Assistant Message(1) = 4
+        // Note: Assistant with only ToolCall has no text, so no Message emitted for it
+        assert_eq!(items.len(), 4);
+        assert_eq!(
+            items[0],
+            InputItem::Message {
+                role: "user".to_string(),
+                content: "Search for Rust tutorials".to_string(),
+            }
+        );
+        match &items[1] {
+            InputItem::FunctionCall { call_id, name, .. } => {
+                assert_eq!(call_id, "call_1");
+                assert_eq!(name, "search");
+            }
+            other => panic!("Expected FunctionCall, got {:?}", other),
+        }
+        assert_eq!(
+            items[2],
+            InputItem::FunctionCallOutput {
+                call_id: "call_1".to_string(),
+                output: "Tutorial list: ...".to_string(),
+            }
+        );
+        assert_eq!(
+            items[3],
+            InputItem::Message {
+                role: "assistant".to_string(),
+                content: "Here are some Rust tutorials I found.".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_convert_s6_multiple_tool_calls_one_turn() {
+        use crate::providers::message::{ContentBlock, UnifiedMessage};
+        let msgs = [UnifiedMessage::Assistant {
+            content: vec![
+                ContentBlock::Text {
+                    text: "Running multiple searches.".to_string(),
+                },
+                ContentBlock::ToolCall {
+                    id: "c1".to_string(),
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "a"}),
+                },
+                ContentBlock::ToolCall {
+                    id: "c2".to_string(),
+                    name: "fetch".to_string(),
+                    arguments: serde_json::json!({"url": "http://example.com"}),
+                },
+                ContentBlock::ToolCall {
+                    id: "c3".to_string(),
+                    name: "calc".to_string(),
+                    arguments: serde_json::json!({"expr": "1+1"}),
+                },
+            ],
+        }];
+        let items = ChatGptProtocol::convert_messages(&msgs);
+
+        // 1 Message (text) + 3 FunctionCalls = 4
+        assert_eq!(items.len(), 4);
+        assert!(matches!(&items[0], InputItem::Message { role, .. } if role == "assistant"));
+        assert!(matches!(&items[1], InputItem::FunctionCall { call_id, .. } if call_id == "c1"));
+        assert!(matches!(&items[2], InputItem::FunctionCall { call_id, .. } if call_id == "c2"));
+        assert!(matches!(&items[3], InputItem::FunctionCall { call_id, .. } if call_id == "c3"));
+    }
+
+    #[test]
+    fn test_convert_s7_error_tool_result() {
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::tool_result(
+            "call_err",
+            "dangerous_tool",
+            "Permission denied",
+            true, // is_error = true
+        )];
+        let items = ChatGptProtocol::convert_messages(&msgs);
+
+        assert_eq!(items.len(), 1);
+        // convert_messages does not distinguish is_error — it just passes content through
+        assert_eq!(
+            items[0],
+            InputItem::FunctionCallOutput {
+                call_id: "call_err".to_string(),
+                output: "Permission denied".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_convert_s8_json_tool_output() {
+        use crate::providers::message::UnifiedMessage;
+        let json_val = serde_json::json!({"results": [1, 2, 3], "total": 3});
+        let msgs = [UnifiedMessage::tool_result_json(
+            "call_json",
+            "api_call",
+            json_val.clone(),
+            false,
+        )];
+        let items = ChatGptProtocol::convert_messages(&msgs);
+
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            InputItem::FunctionCallOutput { call_id, output } => {
+                assert_eq!(call_id, "call_json");
+                let parsed: serde_json::Value = serde_json::from_str(output).unwrap();
+                assert_eq!(parsed, json_val);
+            }
+            other => panic!("Expected FunctionCallOutput, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_convert_s9_completed_event_usage_extraction() {
+        // Test that parse_sse_data + extract on a Completed event with usage works
+        let data = r#"{"type":"response.completed","response":{"id":"resp_u","status":"completed","model":"codex-mini","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}"#;
+        let event = ChatGptProtocol::parse_sse_data(data).unwrap();
+        match event {
+            StreamEvent::Completed { response } => {
+                assert_eq!(response.status, "completed");
+                assert_eq!(
+                    ChatGptProtocol::extract_text(&response),
+                    Some("done".to_string())
+                );
+                let usage = response.usage.as_ref().expect("usage should be present");
+                assert_eq!(usage.input_tokens, 10);
+                assert_eq!(usage.output_tokens, 5);
+                assert_eq!(usage.total_tokens, 15);
+            }
+            other => panic!("Expected Completed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_convert_s10_incomplete_status() {
+        // Test that an "incomplete" status is correctly deserialized from a Completed event
+        // (the protocol maps incomplete → MaxTokens in parse_response, but we verify
+        // the status field is correctly captured here)
+        let data = r#"{"type":"response.completed","response":{"id":"resp_inc","status":"incomplete","model":"codex-mini","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"partial"}]}]}}"#;
+        let event = ChatGptProtocol::parse_sse_data(data).unwrap();
+        match event {
+            StreamEvent::Completed { response } => {
+                assert_eq!(response.status, "incomplete");
+                assert_eq!(
+                    ChatGptProtocol::extract_text(&response),
+                    Some("partial".to_string())
+                );
+            }
+            other => panic!("Expected Completed, got {:?}", other),
+        }
+    }
 }

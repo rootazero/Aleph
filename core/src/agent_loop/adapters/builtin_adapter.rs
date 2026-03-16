@@ -153,7 +153,7 @@ mod tests {
 
         let result = adapter.execute(input).await;
         match result {
-            ToolResult::Success { output } => {
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 assert_eq!(output["result"], "hello");
             }
             ToolResult::Error { error, .. } => panic!("expected success, got error: {}", error),
@@ -174,7 +174,7 @@ mod tests {
                 assert!(error.contains("fake tool error"));
                 assert!(retryable);
             }
-            ToolResult::Success { .. } => panic!("expected error"),
+            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => panic!("expected error"),
         }
     }
 }

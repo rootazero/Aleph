@@ -192,7 +192,7 @@ mod tests {
         let result = tool.execute(input.clone()).await;
 
         match result {
-            ToolResult::Success { output } => {
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 assert_eq!(output, input);
             }
             ToolResult::Error { .. } => panic!("expected success"),
@@ -218,7 +218,7 @@ mod tests {
         // Execute existing tool
         let result = registry.execute("echo", json!({ "message": "hi" })).await;
         match result {
-            ToolResult::Success { output } => {
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 assert_eq!(output, json!({ "message": "hi" }));
             }
             ToolResult::Error { .. } => panic!("expected success"),
@@ -233,7 +233,7 @@ mod tests {
                 assert!(error.contains("unknown tool"));
                 assert!(!retryable);
             }
-            ToolResult::Success { .. } => panic!("expected error"),
+            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => panic!("expected error"),
         }
     }
 

@@ -246,7 +246,7 @@ mod tests {
             .await;
 
         match result {
-            ToolResult::Success { output } => {
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 assert_eq!(output["stored"], true);
                 assert_eq!(output["id"], "mem-1");
             }
@@ -268,7 +268,7 @@ mod tests {
         let result = tool.execute(json!({ "query": "dark mode" })).await;
 
         match result {
-            ToolResult::Success { output } => {
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 assert_eq!(output["count"], 1);
                 let results = output["results"].as_array().unwrap();
                 assert_eq!(results[0]["content"], "User prefers dark mode");
@@ -288,7 +288,7 @@ mod tests {
             .await;
 
         match result {
-            ToolResult::Success { output } => {
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 assert_eq!(output["count"], 0);
                 assert!(output["results"].as_array().unwrap().is_empty());
             }
@@ -309,7 +309,7 @@ mod tests {
             .await;
 
         match result {
-            ToolResult::Success { output } => {
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 assert_eq!(output["stored"], true);
                 assert_eq!(output["id"], "mem-1");
             }
@@ -337,7 +337,7 @@ mod tests {
                 assert!(error.contains("missing required parameter: query"));
                 assert!(!retryable);
             }
-            ToolResult::Success { .. } => panic!("expected error"),
+            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => panic!("expected error"),
         }
     }
 
@@ -354,7 +354,7 @@ mod tests {
                 assert!(error.contains("missing required parameter: content"));
                 assert!(!retryable);
             }
-            ToolResult::Success { .. } => panic!("expected error"),
+            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => panic!("expected error"),
         }
     }
 }
