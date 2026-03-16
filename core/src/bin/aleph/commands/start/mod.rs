@@ -396,18 +396,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let acp_manager = {
         let app_cfg = app_config.read().await;
         if app_cfg.acp.enabled {
-            use alephcore::acp::manager::{AcpHarnessManager, AcpManagerConfig};
+            use alephcore::acp::manager::AcpHarnessManager;
+            use alephcore::AcpHarnessEntry;
 
-            let mut mgr_config = AcpManagerConfig::default();
-            for (id, entry) in &app_cfg.acp.harnesses {
-                mgr_config.enabled.insert(id.clone(), entry.enabled);
-                if let Some(ref exec) = entry.executable {
-                    mgr_config.executables.insert(id.clone(), exec.clone());
-                }
+            // Start with preset defaults, then overlay user config
+            let mut entries: std::collections::HashMap<String, AcpHarnessEntry> =
+                AcpHarnessEntry::all_presets().into_iter().collect();
+            for (id, user_entry) in &app_cfg.acp.harnesses {
+                entries.insert(id.clone(), user_entry.clone());
             }
-            let manager = Arc::new(AcpHarnessManager::with_config(mgr_config));
+
+            let manager = Arc::new(AcpHarnessManager::from_entries(entries));
             if !args.daemon {
-                println!("ACP harness manager initialized ({} harnesses configured)", app_cfg.acp.harnesses.len());
+                println!("ACP harness manager initialized");
             }
             Some(manager)
         } else {
