@@ -529,6 +529,7 @@ pub async fn handle_presets(request: JsonRpcRequest) -> JsonRpcResponse {
 mod tests {
     use super::*;
     use crate::gateway::protocol::JsonRpcRequest;
+    use serial_test::serial;
     use std::collections::HashMap;
 
     fn make_manager() -> Arc<AcpHarnessManager> {
@@ -585,6 +586,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_handle_create_custom() {
         let manager = Arc::new(AcpHarnessManager::from_entries(HashMap::new()));
         let config = make_config();
@@ -644,6 +646,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_handle_delete_custom() {
         let manager = Arc::new(AcpHarnessManager::from_entries(HashMap::new()));
         let config = make_config();
