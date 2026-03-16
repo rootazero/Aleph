@@ -348,7 +348,7 @@ mod tests {
             scope: MemoryScope::Global,
             path: "aleph://user/preferences/language".into(),
             namespace: "owner".into(),
-            workspace: "default".into(),
+            agent: "default".into(),
             confidence: 0.85,
             source: FactSource::Extracted,
             source_memory_ids: vec!["mem-001".into()],

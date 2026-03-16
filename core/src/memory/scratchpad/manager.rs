@@ -45,12 +45,12 @@ pub struct ScratchpadManager {
 }
 
 impl ScratchpadManager {
-    /// Create a new ScratchpadManager for a project
+    /// Create a new ScratchpadManager for an agent workspace
     ///
-    /// Files are stored under `~/.aleph/projects/<project_id>/`.
+    /// Files are stored under `~/.aleph/workspace/<agent_id>/`.
     /// Falls back to a provided base directory for testing.
     pub fn new(project_id: &str, session_id: &str) -> Self {
-        let project_dir = crate::utils::paths::get_project_dir(project_id)
+        let project_dir = crate::utils::paths::get_agent_workspace_dir(project_id)
             .unwrap_or_else(|_| PathBuf::from(".").join(project_id));
 
         Self {

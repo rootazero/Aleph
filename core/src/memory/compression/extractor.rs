@@ -270,7 +270,7 @@ mod tests {
             },
             embedding: None,
             namespace: "owner".to_string(),
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
             similarity_score: None,
         }];
 

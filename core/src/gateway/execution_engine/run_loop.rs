@@ -110,9 +110,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     iterations = result.iterations,
                     tool_calls = result.tool_calls_made,
                     tokens = result.total_tokens,
+                    hit_limit = result.hit_limit,
                     "Agent loop completed"
                 );
-                Ok(result.final_text.unwrap_or_default())
+                let response = if result.hit_limit && result.final_text.as_ref().map(|t| t.is_empty()).unwrap_or(true) {
+                    warn!(
+                        run_id = run_id,
+                        iterations = result.iterations,
+                        tool_calls = result.tool_calls_made,
+                        "Agent hit iteration/token limit without producing a response"
+                    );
+                    format!(
+                        "Sorry, I was unable to complete the task within the allowed limits ({} iterations, {} tool calls). Please try a simpler request.",
+                        result.iterations, result.tool_calls_made
+                    )
+                } else {
+                    result.final_text.unwrap_or_default()
+                };
+                Ok(response)
             }
             Err(e) => {
                 error!(run_id = run_id, error = %e, "Agent loop failed");
@@ -217,7 +232,8 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
         use crate::gateway::event_emitter::ToolResult as EmitterToolResult;
         self.seq += 1;
         let tool_result = match result {
-            crate::agent_loop::ToolResult::Success { output } => {
+            crate::agent_loop::ToolResult::Success { output }
+            | crate::agent_loop::ToolResult::SuccessAndStopLoop { output } => {
                 EmitterToolResult::success(output.to_string())
             }
             crate::agent_loop::ToolResult::Error { error, .. } => {
@@ -299,7 +315,7 @@ pub(super) async fn write_conversation_memory(
         user_input,
         ai_output,
     );
-    entry.workspace = agent_id;
+    entry.agent = agent_id;
 
     use crate::memory::store::SessionStore;
     if let Err(e) = memory_backend.insert_memory(&entry).await {

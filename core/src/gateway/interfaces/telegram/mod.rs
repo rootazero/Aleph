@@ -121,7 +121,7 @@ impl TelegramChannel {
     }
 
     /// Convert Telegram message to InboundMessage
-    fn convert_message(msg: &teloxide::types::Message, config: &TelegramConfig) -> Option<InboundMessage> {
+    fn convert_message(msg: &teloxide::types::Message, config: &TelegramConfig, channel_id: &ChannelId) -> Option<InboundMessage> {
         // Get sender info
         let (sender_id, sender_name) = if let Some(from) = &msg.from {
             (
@@ -185,7 +185,7 @@ impl TelegramChannel {
 
         Some(InboundMessage {
             id: MessageId::new(msg.id.0.to_string()),
-            channel_id: ChannelId::new("telegram"),
+            channel_id: channel_id.clone(),
             conversation_id: ConversationId::new(msg.chat.id.0.to_string()),
             sender_id,
             sender_name,
@@ -398,6 +398,7 @@ impl Channel for TelegramChannel {
         let callback_tx = self.callback_tx.clone();
         let config = self.config.clone();
         let status = self.channel_state.status_handle();
+        let channel_id = self.info.id.clone();
 
         tokio::spawn(async move {
             tracing::info!("Starting Telegram long-polling...");
@@ -408,8 +409,9 @@ impl Channel for TelegramChannel {
                 move |_bot: Bot, msg: teloxide::types::Message| {
                     let inbound_tx = inbound_tx.clone();
                     let config = config.clone();
+                    let channel_id = channel_id.clone();
                     async move {
-                        if let Some(inbound) = TelegramChannel::convert_message(&msg, &config) {
+                        if let Some(inbound) = TelegramChannel::convert_message(&msg, &config, &channel_id) {
                             if let Err(e) = inbound_tx.send(inbound).await {
                                 tracing::error!("Failed to send inbound message: {}", e);
                             }

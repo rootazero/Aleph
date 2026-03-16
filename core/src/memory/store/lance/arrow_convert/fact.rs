@@ -43,7 +43,7 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
     let parent_path_arr =
         StringArray::from_iter_values(facts.iter().map(|f| f.parent_path.as_str()));
     let namespace_arr = StringArray::from_iter_values(facts.iter().map(|f| f.namespace.as_str()));
-    let workspace_arr = StringArray::from_iter_values(facts.iter().map(|f| f.workspace.as_str()));
+    let workspace_arr = StringArray::from_iter_values(facts.iter().map(|f| f.agent.as_str()));
     let content_hash_arr =
         StringArray::from_iter_values(facts.iter().map(|f| f.content_hash.as_str()));
     let embedding_model_arr =
@@ -203,7 +203,7 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
     let embedding_model_col = col::<StringArray>(batch, "embedding_model")?;
     // namespace and workspace columns (with fallback for backward compatibility)
     let namespace_col = col::<StringArray>(batch, "namespace").ok();
-    let workspace_col = col::<StringArray>(batch, "workspace").ok();
+    let workspace_col = col::<StringArray>(batch, "agent").ok();
     let confidence_col = col::<Float32Array>(batch, "confidence")?;
     let is_valid_col = col::<BooleanArray>(batch, "is_valid")?;
     let invalidation_reason_col = col::<StringArray>(batch, "invalidation_reason")?;
@@ -280,7 +280,7 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
             namespace: namespace_col
                 .map(|c| c.value(i).to_string())
                 .unwrap_or_else(|| "owner".to_string()),
-            workspace: workspace_col
+            agent: workspace_col
                 .map(|c| c.value(i).to_string())
                 .unwrap_or_else(|| "default".to_string()),
             embedding,

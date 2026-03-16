@@ -33,7 +33,7 @@ pub fn graph_nodes_to_record_batch(nodes: &[GraphNode]) -> Result<RecordBatch, A
     let decay_score_arr = Float32Array::from_iter_values(nodes.iter().map(|n| n.decay_score));
     let created_at_arr = Int64Array::from_iter_values(nodes.iter().map(|n| n.created_at));
     let updated_at_arr = Int64Array::from_iter_values(nodes.iter().map(|n| n.updated_at));
-    let workspace_arr = StringArray::from_iter_values(nodes.iter().map(|n| n.workspace.as_str()));
+    let workspace_arr = StringArray::from_iter_values(nodes.iter().map(|n| n.agent.as_str()));
 
     // List(Utf8): aliases
     let mut aliases_builder = ListBuilder::new(StringBuilder::new());
@@ -79,7 +79,7 @@ pub fn record_batch_to_graph_nodes(batch: &RecordBatch) -> Result<Vec<GraphNode>
     let decay_score_col = col::<Float32Array>(batch, "decay_score")?;
     let created_at_col = col::<Int64Array>(batch, "created_at")?;
     let updated_at_col = col::<Int64Array>(batch, "updated_at")?;
-    let workspace_col = col::<StringArray>(batch, "workspace").ok();
+    let workspace_col = col::<StringArray>(batch, "agent").ok();
 
     let mut nodes = Vec::with_capacity(n);
     for i in 0..n {
@@ -92,7 +92,7 @@ pub fn record_batch_to_graph_nodes(batch: &RecordBatch) -> Result<Vec<GraphNode>
             decay_score: decay_score_col.value(i),
             created_at: created_at_col.value(i),
             updated_at: updated_at_col.value(i),
-            workspace: workspace_col
+            agent: workspace_col
                 .map(|c| c.value(i).to_string())
                 .unwrap_or_else(|| "default".to_string()),
         });

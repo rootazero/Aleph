@@ -14,6 +14,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 use crate::config::{Config, ProviderConfig};
+use crate::gateway::security::SharedTokenManager;
 use crate::providers::chatgpt::auth::ChatGptAuth;
 use crate::providers::presets::get_preset;
 use crate::sync_primitives::Arc;
@@ -137,21 +138,34 @@ fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
     }
 }
 
-/// Update config.providers["chatgpt"].api_key and save to aleph.toml.
-/// This is the same persistence path as setting an API key via the Settings UI.
+/// Update config and store OAuth token in vault.
+/// Token is stored in vault under "ai:<provider_name>" (same key format as other providers).
 async fn update_config_api_key(
     config: &Arc<RwLock<Config>>,
+    vault: &Arc<SharedTokenManager>,
     provider_name: &str,
     token: Option<&str>,
 ) {
+    // Store/delete token in vault
+    let vault_key = format!("ai:{}", provider_name);
+    if let Some(token) = token {
+        if let Err(e) = vault.store_secret(&vault_key, token) {
+            warn!(error = %e, "Failed to store OAuth token in vault");
+        }
+    } else {
+        if let Err(e) = vault.delete_secret(&vault_key) {
+            warn!(error = %e, "Failed to delete OAuth token from vault");
+        }
+    }
+
     let mut cfg = config.write().await;
 
-    if let Some(token) = token {
+    if token.is_some() {
         let provider = cfg
             .providers
             .entry(provider_name.to_string())
             .or_insert_with(|| new_provider_from_preset(provider_name));
-        provider.api_key = Some(token.to_string());
+        provider.api_key = None; // Never persist to config — vault is the source
         provider.enabled = true;
         provider.verified = true;
     } else if let Some(provider) = cfg.providers.get_mut(provider_name) {
@@ -167,6 +181,7 @@ async fn update_config_api_key(
 async fn try_refresh(
     oauth_state: &SharedOAuthState,
     config: &Arc<RwLock<Config>>,
+    vault: &Arc<SharedTokenManager>,
     provider_name: &str,
 ) -> bool {
     let cache = {
@@ -182,7 +197,7 @@ async fn try_refresh(
         Ok(()) => {
             let new_cache = OAuthTokenCache::from_auth(&auth);
             *oauth_state.write().await = Some(new_cache.clone());
-            update_config_api_key(config, provider_name, Some(&new_cache.access_token)).await;
+            update_config_api_key(config, vault, provider_name, Some(&new_cache.access_token)).await;
             info!("OAuth token refreshed successfully");
             true
         }
@@ -193,23 +208,31 @@ async fn try_refresh(
     }
 }
 
-/// Restore OAuth state from config at startup.
+/// Restore OAuth state from vault at startup.
 ///
-/// If `config.providers["chatgpt"].api_key` is set, we know the user
-/// previously logged in via OAuth (or manually). We build an
-/// OAuthTokenCache with a conservative 1-hour expiry window so that
-/// `oauthStatus` will trigger a refresh if the token is actually stale.
-pub fn restore_from_config(config: &Config) -> Option<OAuthTokenCache> {
-    let provider = config.providers.get("chatgpt")?;
-    let api_key = provider.api_key.as_ref().filter(|k| !k.is_empty())?;
+/// If vault has an access token for "ai:chatgpt", we know the user
+/// previously logged in via OAuth. We build an OAuthTokenCache with
+/// a conservative 1-hour expiry window so that `oauthStatus` will
+/// trigger a refresh if the token is actually stale.
+pub fn restore_from_vault(config: &Config, vault: &SharedTokenManager) -> Option<OAuthTokenCache> {
+    // Check that chatgpt provider exists and is verified
+    let _provider = config.providers.get("chatgpt")?;
 
-    // We don't know the real expiry from config alone, so assume
+    // Read token from vault
+    let api_key = match vault.get_secret("ai:chatgpt") {
+        Ok(Some(secret)) => secret.expose().to_string(),
+        _ => return None,
+    };
+
+    if api_key.is_empty() {
+        return None;
+    }
+
+    // We don't know the real expiry from vault alone, so assume
     // it might be expired — oauthStatus will auto-refresh.
     let cache = OAuthTokenCache {
-        access_token: api_key.clone(),
+        access_token: api_key,
         refresh_token: None,
-        // Set a 1-hour window from now; if the token is actually expired,
-        // the first oauthStatus call will detect and refresh it.
         expires_at_unix: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::ZERO)
@@ -218,7 +241,7 @@ pub fn restore_from_config(config: &Config) -> Option<OAuthTokenCache> {
         session_id: String::new(),
     };
 
-    debug!("Restored OAuth state from config (chatgpt provider)");
+    debug!("Restored OAuth state from vault (chatgpt provider)");
     Some(cache)
 }
 
@@ -229,6 +252,7 @@ pub async fn handle_oauth_login(
     request: JsonRpcRequest,
     oauth_state: Arc<RwLock<Option<OAuthTokenCache>>>,
     config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let params: OAuthParams = match parse_params(&request) {
         Ok(p) => p,
@@ -268,8 +292,8 @@ pub async fn handle_oauth_login(
     // Store in memory (with expiry + refresh token metadata)
     *oauth_state.write().await = Some(cache.clone());
 
-    // Persist access_token to aleph.toml (same as setting API key via Settings UI)
-    update_config_api_key(&config, provider_name, Some(&cache.access_token)).await;
+    // Persist access_token to vault
+    update_config_api_key(&config, &vault, provider_name, Some(&cache.access_token)).await;
 
     info!(provider = provider_name, "OAuth login successful");
 
@@ -289,6 +313,7 @@ pub async fn handle_oauth_logout(
     request: JsonRpcRequest,
     oauth_state: Arc<RwLock<Option<OAuthTokenCache>>>,
     config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let params: OAuthParams = match parse_params(&request) {
         Ok(p) => p,
@@ -311,8 +336,8 @@ pub async fn handle_oauth_logout(
     // Clear memory
     *oauth_state.write().await = None;
 
-    // Clear config api_key + save
-    update_config_api_key(&config, provider_name, None).await;
+    // Clear vault token + config
+    update_config_api_key(&config, &vault, provider_name, None).await;
 
     info!(provider = provider_name, "OAuth logout completed");
 
@@ -324,6 +349,7 @@ pub async fn handle_oauth_status(
     request: JsonRpcRequest,
     oauth_state: Arc<RwLock<Option<OAuthTokenCache>>>,
     config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let params: OAuthParams = match parse_params(&request) {
         Ok(p) => p,
@@ -364,7 +390,7 @@ pub async fn handle_oauth_status(
 
     if is_expired {
         debug!("OAuth token expired, attempting refresh");
-        let refreshed = try_refresh(&oauth_state, &config, provider_name).await;
+        let refreshed = try_refresh(&oauth_state, &config, &vault, provider_name).await;
         if !refreshed {
             *oauth_state.write().await = None;
             return JsonRpcResponse::success(

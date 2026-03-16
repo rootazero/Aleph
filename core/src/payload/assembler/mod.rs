@@ -107,7 +107,7 @@ mod tests {
             ai_output: "Previous answer".to_string(),
             embedding: Some(vec![0.1; 512]),
             namespace: "owner".to_string(),
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
             similarity_score: Some(0.9),
         }];
 
@@ -142,7 +142,7 @@ mod tests {
             ai_output: "Test output".to_string(),
             embedding: Some(vec![0.1; 512]),
             namespace: "owner".to_string(),
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
             similarity_score: Some(0.85),
         }];
 
@@ -347,7 +347,7 @@ mod tests {
             ai_output: "Previous answer".to_string(),
             embedding: Some(vec![0.1; 512]),
             namespace: "owner".to_string(),
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
             similarity_score: Some(0.9),
         }];
 
@@ -465,7 +465,7 @@ mod tests {
             ai_output: "Previous answer".to_string(),
             embedding: None,
             namespace: "owner".to_string(),
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
             similarity_score: Some(0.9),
         }];
 

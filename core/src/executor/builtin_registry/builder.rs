@@ -236,16 +236,26 @@ impl BuiltinToolRegistry {
                     Arc::clone(ar), Arc::clone(wm), config.event_bus.clone(),
                 );
 
-                for (name, desc) in [
-                    ("agent_create", agent_manage::AgentCreateTool::DESCRIPTION),
-                    ("agent_switch", agent_manage::AgentSwitchTool::DESCRIPTION),
-                    ("agent_list", agent_manage::AgentListTool::DESCRIPTION),
-                    ("agent_delete", agent_manage::AgentDeleteTool::DESCRIPTION),
-                ] {
-                    tools.insert(
-                        name.to_string(),
-                        UnifiedTool::new(format!("builtin:{}", name), name, desc, ToolSource::Builtin),
-                    );
+                // Register agent tools WITH their parameter schemas so LLMs
+                // know which arguments to pass (e.g. agent_id for agent_switch).
+                {
+                    use crate::tools::AlephTool;
+                    let tool_defs = [
+                        create.definition(),
+                        switch.definition(),
+                        list.definition(),
+                        delete.definition(),
+                    ];
+                    for td in &tool_defs {
+                        let mut ut = UnifiedTool::new(
+                            format!("builtin:{}", td.name),
+                            &td.name,
+                            &td.description,
+                            ToolSource::Builtin,
+                        );
+                        ut = ut.with_parameters_schema(td.parameters.clone());
+                        tools.insert(td.name.clone(), ut);
+                    }
                 }
 
                 info!("Registered agent management tools (agent_create, agent_switch, agent_list, agent_delete)");

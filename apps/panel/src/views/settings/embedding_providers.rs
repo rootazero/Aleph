@@ -127,11 +127,47 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                                         _ => "#808080",
                                                     };
 
+                                                    let preset_for_add = if !is_configured {
+                                                        Some(EmbeddingProviderConfig {
+                                                            id: preset_id.clone(),
+                                                            name: preset_name.clone(),
+                                                            preset: preset_label.clone(),
+                                                            api_base: preset.api_base.clone(),
+                                                            api_key_env: None,
+                                                            api_key: None,
+                                                            model: model.clone(),
+                                                            dimensions: dims,
+                                                            batch_size: 32,
+                                                            timeout_ms: 10000,
+                                                            enabled: true,
+                                                        })
+                                                    } else {
+                                                        None
+                                                    };
+
                                                     view! {
                                                         <button
                                                             on:click=move |_| {
-                                                                set_selected_provider_id.set(Some(sel_id_click.clone()));
-                                                                set_show_add_form.set(false);
+                                                                if let Some(ref config) = preset_for_add {
+                                                                    let config = config.clone();
+                                                                    let id = config.id.clone();
+                                                                    let state = expect_context::<DashboardState>();
+                                                                    spawn_local(async move {
+                                                                        match EmbeddingProvidersApi::add(&state, config).await {
+                                                                            Ok(_) => {
+                                                                                reload();
+                                                                                set_selected_provider_id.set(Some(id));
+                                                                                set_show_add_form.set(false);
+                                                                            }
+                                                                            Err(e) => {
+                                                                                web_sys::console::error_1(&format!("Failed to add preset: {}", e).into());
+                                                                            }
+                                                                        }
+                                                                    });
+                                                                } else {
+                                                                    set_selected_provider_id.set(Some(sel_id_click.clone()));
+                                                                    set_show_add_form.set(false);
+                                                                }
                                                             }
                                                             class=move || {
                                                                 let base = "text-left p-3 rounded-lg border transition-all";
@@ -567,7 +603,7 @@ fn ProviderDetailPanel(
                         placeholder="e.g. text-embedding-3-small"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"Enter a model name"</p>
+                    <p class="mt-1 text-xs text-text-tertiary">"Enter multiple models, separated by commas"</p>
                 </div>
 
                 // API Base URL
@@ -875,7 +911,7 @@ fn AddProviderPanel(
                         placeholder="e.g. text-embedding-3-small"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"Enter a model name"</p>
+                    <p class="mt-1 text-xs text-text-tertiary">"Enter multiple models, separated by commas"</p>
                 </div>
 
                 // Base URL

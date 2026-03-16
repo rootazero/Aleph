@@ -199,7 +199,7 @@ pub struct EmbeddingProviderConfig {
     /// API endpoint (e.g., "https://api.siliconflow.cn/v1")
     pub api_base: String,
     /// Runtime-only API key (populated from encrypted vault, never persisted to config.toml)
-    #[serde(skip)]
+    #[serde(default, skip_serializing)]
     #[schemars(skip)]
     pub api_key: Option<String>,
     /// Model names (first entry is the active model)

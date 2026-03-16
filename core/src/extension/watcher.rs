@@ -114,9 +114,9 @@ impl ExtensionWatcher {
             }
         }
 
-        // Project-level directory (~/.aleph/projects/<id>/)
+        // Agent config directory (~/.aleph/agents/<id>/)
         if let Some(id) = project_id {
-            if let Ok(project_dir) = crate::utils::paths::get_project_dir(id) {
+            if let Ok(project_dir) = crate::utils::paths::get_agent_config_dir(id) {
                 if project_dir.exists() {
                     watch_dirs.push(project_dir);
                 }

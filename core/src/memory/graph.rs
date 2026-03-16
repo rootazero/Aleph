@@ -106,7 +106,7 @@ impl From<&GraphNode> for store::GraphNode {
             decay_score: n.decay_score,
             created_at: n.created_at,
             updated_at: n.updated_at,
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
         }
     }
 }
@@ -143,7 +143,7 @@ impl From<&GraphEdge> for store::GraphEdge {
             updated_at: e.updated_at,
             last_seen_at: e.last_seen_at,
             decay_score: e.decay_score,
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
         }
     }
 }
@@ -283,7 +283,7 @@ impl GraphStore {
                 decay_score: 1.0,
                 created_at: now,
                 updated_at: now,
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
             });
 
             // Merge aliases
@@ -315,7 +315,7 @@ impl GraphStore {
                 decay_score: 1.0,
                 created_at: now,
                 updated_at: now,
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
             };
 
             StoreGraphStore::upsert_node(self.database.as_ref(), &store_node, "default").await?;
@@ -360,7 +360,7 @@ impl GraphStore {
             created_at: now,
             updated_at: now,
             last_seen_at: now,
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
         };
 
         StoreGraphStore::upsert_edge(self.database.as_ref(), &store_edge, "default").await?;

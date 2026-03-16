@@ -31,7 +31,7 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub protocol: Option<String>,
     /// Runtime-only API key (populated from encrypted vault, never persisted to config.toml)
-    #[serde(skip)]
+    #[serde(default, skip_serializing)]
     #[schemars(skip)]
     pub api_key: Option<String>,
     /// Model names (e.g., ["gpt-4o", "gpt-4o-mini"]). First model is the default.

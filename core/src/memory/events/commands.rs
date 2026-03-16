@@ -14,7 +14,7 @@ pub struct CreateFactCommand {
     pub scope: MemoryScope,
     pub path: String,
     pub namespace: String,
-    pub workspace: String,
+    pub agent: String,
     pub confidence: f32,
     pub source: FactSource,
     pub source_memory_ids: Vec<String>,

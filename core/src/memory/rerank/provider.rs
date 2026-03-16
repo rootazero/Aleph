@@ -88,7 +88,7 @@ pub struct RerankConfig {
 }
 
 fn default_rerank_models() -> Vec<String> {
-    vec!["BAAI/bge-reranker-v2-m3".to_string()]
+    vec!["jina-reranker-v2-base-multilingual".to_string()]
 }
 
 fn default_rerank_timeout() -> u64 {

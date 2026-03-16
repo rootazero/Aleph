@@ -77,12 +77,20 @@ pub async fn handle_get(
         let backends: Vec<SearchBackendDto> = search
             .backends
             .iter()
-            .map(|(name, backend)| SearchBackendDto {
-                name: name.clone(),
-                api_key: resolve_api_key(name, &vault),
-                base_url: backend.base_url.clone(),
-                engine_id: backend.engine_id.clone(),
-                verified: backend.verified,
+            .map(|(name, backend)| {
+                let key = resolve_api_key(name, &vault);
+                tracing::info!(
+                    backend = %name,
+                    has_key = key.is_some(),
+                    "search_config.get: resolved API key"
+                );
+                SearchBackendDto {
+                    name: name.clone(),
+                    api_key: key,
+                    base_url: backend.base_url.clone(),
+                    engine_id: backend.engine_id.clone(),
+                    verified: backend.verified,
+                }
             })
             .collect();
         let dto = SearchConfigDto {

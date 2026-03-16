@@ -8,6 +8,8 @@ pub struct ProviderInfo {
     pub name: String,
     pub enabled: bool,
     pub models: Vec<String>,
+    /// First model name (for panel backward compat)
+    pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

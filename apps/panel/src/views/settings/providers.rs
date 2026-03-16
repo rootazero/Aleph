@@ -186,9 +186,12 @@ fn SubscriptionLoginSection(
                                     || sel.as_deref() == Some(canonical)
                                     || sel.as_deref() == Some(&format!("__preset__{}", name));
                                 let connected = oauth_connected.get().unwrap_or(false);
+                                let is_verified = providers.get().iter()
+                                    .find(|p| p.name == name || p.name == canonical)
+                                    .map_or(false, |p| p.verified);
                                 if is_sel {
                                     format!("{} bg-primary-subtle border-primary", base)
-                                } else if connected {
+                                } else if connected || is_verified {
                                     format!("{} bg-surface-raised border-success/30 hover:border-primary/40", base)
                                 } else {
                                     format!("{} bg-surface-raised border-border hover:border-primary/40", base)
@@ -212,13 +215,14 @@ fn SubscriptionLoginSection(
                                             let list = providers.get();
                                             let provider = list.iter().find(|p| p.name == name || p.name == canonical);
                                             let is_default = provider.map_or(false, |p| p.is_default);
+                                            let is_verified = provider.map_or(false, |p| p.verified);
                                             if is_default {
                                                 view! {
                                                     <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
                                                         "Default"
                                                     </span>
                                                 }.into_any()
-                                            } else if connected {
+                                            } else if connected || is_verified {
                                                 view! {
                                                     <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
                                                         "Connected"
@@ -835,6 +839,10 @@ fn ProviderDetailPanel(
                                                                                 expires_in_seconds: None,
                                                                                 error: None,
                                                                             }));
+                                                                            // Refresh providers list
+                                                                            if let Ok(list) = ProvidersApi::list(&state).await {
+                                                                                providers.set(list);
+                                                                            }
                                                                         }
                                                                         Err(e) => {
                                                                             error.set(Some(format!("Logout failed: {}", e)));
@@ -858,6 +866,17 @@ fn ProviderDetailPanel(
                                                                     match ProvidersApi::oauth_login(&state, provider_name).await {
                                                                         Ok(status) => {
                                                                             oauth_status.set(Some(status));
+                                                                            // Refresh providers list and switch to the actual provider
+                                                                            if let Ok(list) = ProvidersApi::list(&state).await {
+                                                                                // Find the actual provider name (e.g. "chatgpt")
+                                                                                let actual = list.iter()
+                                                                                    .find(|p| p.name == "chatgpt" || p.name == "codex")
+                                                                                    .map(|p| p.name.clone());
+                                                                                providers.set(list);
+                                                                                if let Some(name) = actual {
+                                                                                    selected.set(Some(name));
+                                                                                }
+                                                                            }
                                                                         }
                                                                         Err(e) => {
                                                                             error.set(Some(format!("OAuth login failed: {}", e)));
@@ -891,7 +910,7 @@ fn ProviderDetailPanel(
                                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                                     placeholder="e.g. gpt-4o, gpt-4o-mini"
                                                 />
-                                                <p class="mt-1 text-xs text-text-tertiary">"Enter a model name"</p>
+                                                <p class="mt-1 text-xs text-text-tertiary">"Enter multiple models, separated by commas"</p>
                                             </div>
                                             <div>
                                                 <label class="block text-sm text-text-secondary mb-1">"Timeout (s)"</label>
@@ -919,22 +938,13 @@ fn ProviderDetailPanel(
                                                 let is_existing = s.as_ref().map(|s| !s.starts_with("__")).unwrap_or(false);
                                                 if is_existing {
                                                     view! {
-                                                        <div class="flex gap-2">
-                                                            <button
-                                                                on:click=on_set_default
-                                                                prop:disabled=move || saving.get()
-                                                                class="flex-1 px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
-                                                            >
-                                                                "Set Default"
-                                                            </button>
-                                                            <button
-                                                                on:click=on_delete
-                                                                prop:disabled=move || saving.get()
-                                                                class="px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
-                                                            >
-                                                                "Delete"
-                                                            </button>
-                                                        </div>
+                                                        <button
+                                                            on:click=on_set_default
+                                                            prop:disabled=move || saving.get()
+                                                            class="w-full px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
+                                                        >
+                                                            "Set Default"
+                                                        </button>
                                                     }.into_any()
                                                 } else {
                                                     view! { <div></div> }.into_any()
@@ -1011,7 +1021,7 @@ fn ProviderDetailPanel(
                                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                                     placeholder="e.g. gpt-4o, claude-sonnet-4-20250514"
                                                 />
-                                                <p class="mt-1 text-xs text-text-tertiary">"Enter a model name"</p>
+                                                <p class="mt-1 text-xs text-text-tertiary">"Enter multiple models, separated by commas"</p>
                                             </div>
 
                                             // Base URL
@@ -1100,6 +1110,7 @@ fn ProviderDetailPanel(
                                             {move || {
                                                 let s = selected.get();
                                                 let is_existing = s.as_ref().map(|s| !s.starts_with("__")).unwrap_or(false);
+                                                let is_preset = s.as_deref().map(|n| find_preset(n).is_some()).unwrap_or(false);
                                                 if is_existing {
                                                     view! {
                                                         <div class="flex gap-2">
@@ -1110,13 +1121,19 @@ fn ProviderDetailPanel(
                                                             >
                                                                 "Set Default"
                                                             </button>
-                                                            <button
-                                                                on:click=on_delete
-                                                                prop:disabled=move || saving.get()
-                                                                class="px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
-                                                            >
-                                                                "Delete"
-                                                            </button>
+                                                            {if !is_preset {
+                                                                view! {
+                                                                    <button
+                                                                        on:click=on_delete
+                                                                        prop:disabled=move || saving.get()
+                                                                        class="px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
+                                                                    >
+                                                                        "Delete"
+                                                                    </button>
+                                                                }.into_any()
+                                                            } else {
+                                                                view! { <span></span> }.into_any()
+                                                            }}
                                                         </div>
                                                     }.into_any()
                                                 } else {

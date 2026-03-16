@@ -150,7 +150,21 @@ pub async fn handle_list(
     // Sort by name for consistent ordering
     providers.sort_by(|a, b| a.name.cmp(&b.name));
 
-    JsonRpcResponse::success(request.id, serde_json::to_value(providers).unwrap())
+    // Serialize and inject api_key (which is #[serde(skip)] on the config struct)
+    let json_arr: Vec<serde_json::Value> = providers
+        .iter()
+        .map(|entry| {
+            let mut val = serde_json::to_value(entry).unwrap_or_default();
+            if let Some(ref key) = entry.config.api_key {
+                if let Some(obj) = val.get_mut("config").and_then(|c| c.as_object_mut()) {
+                    obj.insert("api_key".into(), serde_json::json!(key));
+                }
+            }
+            val
+        })
+        .collect();
+
+    JsonRpcResponse::success(request.id, serde_json::json!(json_arr))
 }
 
 /// Get a specific generation provider
@@ -192,11 +206,18 @@ pub async fn handle_get(
             cfg_clone.api_key = resolve_api_key(&params.name, &vault);
             let entry = GenerationProviderEntry {
                 name: params.name,
-                config: cfg_clone,
+                config: cfg_clone.clone(),
                 is_default_for,
             };
 
-            JsonRpcResponse::success(request.id, serde_json::to_value(entry).unwrap())
+            // Serialize and inject api_key (which is #[serde(skip)] on the config struct)
+            let mut val = serde_json::to_value(entry).unwrap_or_default();
+            if let Some(ref key) = cfg_clone.api_key {
+                if let Some(obj) = val.get_mut("config").and_then(|c| c.as_object_mut()) {
+                    obj.insert("api_key".into(), serde_json::json!(key));
+                }
+            }
+            JsonRpcResponse::success(request.id, val)
         }
         None => JsonRpcResponse::error(
             request.id,

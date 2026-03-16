@@ -51,7 +51,7 @@ pub fn facts_schema() -> Arc<Schema> {
         Field::new("path", DataType::Utf8, false),
         Field::new("parent_path", DataType::Utf8, false),
         Field::new("namespace", DataType::Utf8, false),
-        Field::new("workspace", DataType::Utf8, false),
+        Field::new("agent", DataType::Utf8, false),
         string_list_field("tags", true),
         string_list_field("source_memory_ids", true),
         Field::new("content_hash", DataType::Utf8, false),
@@ -89,7 +89,7 @@ pub fn graph_nodes_schema() -> Arc<Schema> {
         Field::new("decay_score", DataType::Float32, false),
         Field::new("created_at", DataType::Int64, false),
         Field::new("updated_at", DataType::Int64, false),
-        Field::new("workspace", DataType::Utf8, false),
+        Field::new("agent", DataType::Utf8, false),
     ]))
 }
 
@@ -107,7 +107,7 @@ pub fn graph_edges_schema() -> Arc<Schema> {
         Field::new("created_at", DataType::Int64, false),
         Field::new("updated_at", DataType::Int64, false),
         Field::new("last_seen_at", DataType::Int64, false),
-        Field::new("workspace", DataType::Utf8, false),
+        Field::new("agent", DataType::Utf8, false),
     ]))
 }
 
@@ -122,7 +122,7 @@ pub fn memories_schema() -> Arc<Schema> {
         Field::new("session_id", DataType::Utf8, true),
         Field::new("session_key", DataType::Utf8, false),
         Field::new("namespace", DataType::Utf8, false),
-        Field::new("workspace", DataType::Utf8, false),
+        Field::new("agent", DataType::Utf8, false),
         // Vector columns (multi-dimension coexistence, same as facts table)
         vector_field("vec_768", 768),
         vector_field("vec_1024", 1024),
@@ -265,7 +265,7 @@ mod tests {
         let required = [
             "id", "content", "fact_type", "fact_source", "specificity",
             "temporal_scope", "layer", "category", "path", "parent_path", "namespace",
-            "content_hash", "workspace", "confidence", "decay_score", "is_valid",
+            "content_hash", "agent", "confidence", "decay_score", "is_valid",
             "embedding_model", "created_at", "updated_at", "version",
             "tier", "scope", "strength", "access_count",
         ];

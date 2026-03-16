@@ -28,6 +28,7 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>, v
         .map(|(name, cfg)| ProviderInfo {
             name: name.clone(),
             enabled: cfg.enabled,
+            model: cfg.models.first().cloned().unwrap_or_default(),
             models: cfg.models.clone(),
             provider_type: Some(cfg.protocol()),
             base_url: cfg.base_url.clone(),
@@ -62,6 +63,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>, va
             let info = ProviderInfo {
                 name: params.name.clone(),
                 enabled: cfg.enabled,
+                model: cfg.models.first().cloned().unwrap_or_default(),
                 models: cfg.models.clone(),
                 provider_type: Some(cfg.protocol()),
                 base_url: cfg.base_url.clone(),
@@ -497,31 +499,37 @@ async fn set_default_provider_inner(
     event_bus: &Arc<GatewayEventBus>,
     swappable_registry: Option<&Arc<crate::thinker::SwappableProviderRegistry>>,
 ) -> JsonRpcResponse {
+    // Resolve canonical name (e.g. "codex" → "chatgpt")
+    let name = match params.name.to_lowercase().as_str() {
+        "codex" => "chatgpt".to_string(),
+        _ => params.name.clone(),
+    };
+
     // Set default provider and build new provider instance
     let provider_config_for_swap: Option<(String, crate::config::ProviderConfig)>;
     {
         let mut cfg = config.write().await;
 
         // Guard: only verified providers can be set as default
-        if let Some(provider) = cfg.providers.get(&params.name) {
+        if let Some(provider) = cfg.providers.get(&name) {
             if !provider.verified {
                 return JsonRpcResponse::error(
                     request.id.clone(),
                     INVALID_PARAMS,
-                    format!("Provider '{}' must pass a connection test before being set as default", params.name),
+                    format!("Provider '{}' must pass a connection test before being set as default", name),
                 );
             }
         }
 
         // Capture provider config before setting default (for runtime swap)
         provider_config_for_swap = if swappable_registry.is_some() {
-            cfg.providers.get(&params.name).map(|pc| (params.name.clone(), pc.clone()))
+            cfg.providers.get(&name).map(|pc| (name.clone(), pc.clone()))
         } else {
             None
         };
 
         // Use the existing set_default_provider method
-        if let Err(e) = cfg.set_default_provider(&params.name) {
+        if let Err(e) = cfg.set_default_provider(&name) {
             return JsonRpcResponse::error(
                 request.id.clone(),
                 INVALID_PARAMS,

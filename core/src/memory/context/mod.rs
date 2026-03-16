@@ -89,8 +89,8 @@ pub struct MemoryEntry {
     pub embedding: Option<Vec<f32>>,
     /// Access control scope: "owner", "guest:xxx", "shared"
     pub namespace: String,
-    /// Domain isolation workspace ID
-    pub workspace: String,
+    /// Domain isolation agent ID
+    pub agent: String,
     /// Similarity score (when retrieved from search)
     pub similarity_score: Option<f32>,
 }
@@ -105,7 +105,7 @@ impl MemoryEntry {
             ai_output,
             embedding: None,
             namespace: "owner".to_string(),
-            workspace: "main".to_string(),
+            agent: "main".to_string(),
             similarity_score: None,
         }
     }
@@ -125,7 +125,7 @@ impl MemoryEntry {
             ai_output,
             embedding: Some(embedding),
             namespace: "owner".to_string(),
-            workspace: "main".to_string(),
+            agent: "main".to_string(),
             similarity_score: None,
         }
     }

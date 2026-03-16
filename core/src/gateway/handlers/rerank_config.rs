@@ -87,14 +87,19 @@ pub async fn handle_update(
 /// Builds a rerank provider from the supplied config and sends a test query
 /// with 3 sample documents. Returns success/failure with score info.
 pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
+    tracing::info!("rerank_config.test called");
+
     let params = match &request.params {
         Some(p) => p.clone(),
         None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params"),
     };
 
+    tracing::info!(params = %params, "rerank_config.test params");
+
     let config: RerankConfig = match serde_json::from_value(params) {
         Ok(c) => c,
         Err(e) => {
+            tracing::error!(error = %e, "rerank_config.test: failed to parse config");
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
@@ -103,6 +108,7 @@ pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
         }
     };
 
+    tracing::info!(provider = ?config.provider, "rerank_config.test: building provider");
     let provider = rerank::build_provider(&config);
 
     let test_docs = vec![
@@ -111,6 +117,7 @@ pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
         "Memory optimization is an important task.".to_string(),
     ];
 
+    tracing::info!("rerank_config.test: calling rerank API...");
     match provider
         .rerank(
             "What programming language does the user prefer?",
@@ -119,21 +126,27 @@ pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
         )
         .await
     {
-        Ok(results) => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "success": true,
-                "results_count": results.len(),
-                "top_score": results.first().map(|r| r.relevance_score).unwrap_or(0.0),
-            }),
-        ),
-        Err(e) => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "success": false,
-                "error": e.to_string(),
-            }),
-        ),
+        Ok(results) => {
+            tracing::info!(count = results.len(), "rerank_config.test: success");
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "success": true,
+                    "results_count": results.len(),
+                    "top_score": results.first().map(|r| r.relevance_score).unwrap_or(0.0),
+                }),
+            )
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "rerank_config.test: rerank failed");
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "success": false,
+                    "error": e.to_string(),
+                }),
+            )
+        }
     }
 }
 

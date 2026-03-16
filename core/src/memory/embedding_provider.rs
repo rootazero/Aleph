@@ -127,8 +127,39 @@ impl RemoteEmbeddingProvider {
             )));
         }
 
-        let resp: serde_json::Value = response.json().await.map_err(|e| {
-            AlephError::config(format!("Failed to parse embedding response: {}", e))
+        // Check content-type before parsing — catch misconfigured URLs early
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        if !content_type.contains("json") {
+            let body_snippet: String = response
+                .text()
+                .await
+                .unwrap_or_default()
+                .chars()
+                .take(200)
+                .collect();
+            return Err(AlephError::config(format!(
+                "Embedding API returned non-JSON response (content-type: {}). \
+                 Check that api_base ends with /v1. Body: {}",
+                content_type, body_snippet
+            )));
+        }
+
+        let raw_body = response.text().await.map_err(|e| {
+            AlephError::config(format!("Failed to read embedding response body: {}", e))
+        })?;
+
+        let resp: serde_json::Value = serde_json::from_str(&raw_body).map_err(|e| {
+            let snippet: String = raw_body.chars().take(200).collect();
+            AlephError::config(format!(
+                "Failed to parse embedding response: {}. Body: {}",
+                e, snippet
+            ))
         })?;
 
         let data = resp["data"]

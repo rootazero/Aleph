@@ -66,11 +66,11 @@ impl WorkspaceFilter {
     /// Convert the filter to a SQL WHERE clause fragment.
     ///
     /// Returns a string suitable for use in a SQL `WHERE` clause that filters
-    /// on the `workspace` column.
+    /// on the `agent` column.
     pub fn to_sql_filter(&self) -> String {
         match self {
             WorkspaceFilter::Single(id) => {
-                format!("workspace = '{}'", id.replace('\'', "''"))
+                format!("agent = '{}'", id.replace('\'', "''"))
             }
             WorkspaceFilter::Multiple(ids) => {
                 if ids.is_empty() {
@@ -80,7 +80,7 @@ impl WorkspaceFilter {
                     .iter()
                     .map(|id| format!("'{}'", id.replace('\'', "''")))
                     .collect();
-                format!("workspace IN ({})", escaped.join(", "))
+                format!("agent IN ({})", escaped.join(", "))
             }
             WorkspaceFilter::All => "1=1".to_string(),
         }
@@ -437,9 +437,9 @@ impl ActiveWorkspace {
 
     /// Resolve the workspace directory path from the workspace ID.
     ///
-    /// Convention: `~/.aleph/workspaces/{workspace_id}`
+    /// Convention: `~/.aleph/agents/{workspace_id}`
     fn resolve_workspace_path(workspace_id: &str) -> Option<PathBuf> {
-        dirs::home_dir().map(|h| h.join(".aleph/workspaces").join(workspace_id))
+        dirs::home_dir().map(|h| h.join(".aleph/agents").join(workspace_id))
     }
 }
 
@@ -851,7 +851,7 @@ mod tests {
         assert!(active.profile.tools.is_empty());
 
         let filter_sql = active.memory_filter.to_sql_filter();
-        assert_eq!(filter_sql, "workspace = 'global'");
+        assert_eq!(filter_sql, "agent = 'global'");
     }
 
     // -----------------------------------------------------------------------
@@ -861,10 +861,10 @@ mod tests {
     #[test]
     fn test_workspace_filter_sql() {
         let f = WorkspaceFilter::Single("work".to_string());
-        assert_eq!(f.to_sql_filter(), "workspace = 'work'");
+        assert_eq!(f.to_sql_filter(), "agent = 'work'");
 
         let f = WorkspaceFilter::Multiple(vec!["a".to_string(), "b".to_string()]);
-        assert_eq!(f.to_sql_filter(), "workspace IN ('a', 'b')");
+        assert_eq!(f.to_sql_filter(), "agent IN ('a', 'b')");
 
         let f = WorkspaceFilter::Multiple(vec![]);
         assert_eq!(f.to_sql_filter(), "1=0");
@@ -876,10 +876,10 @@ mod tests {
     #[test]
     fn test_workspace_filter_sql_injection_escape() {
         let f = WorkspaceFilter::Single("it's".to_string());
-        assert_eq!(f.to_sql_filter(), "workspace = 'it''s'");
+        assert_eq!(f.to_sql_filter(), "agent = 'it''s'");
 
         let f = WorkspaceFilter::Multiple(vec!["o'reilly".to_string()]);
-        assert_eq!(f.to_sql_filter(), "workspace IN ('o''reilly')");
+        assert_eq!(f.to_sql_filter(), "agent IN ('o''reilly')");
     }
 
     // -----------------------------------------------------------------------
@@ -904,7 +904,7 @@ mod tests {
         let ctx = WorkspaceContext::new("crypto", NamespaceScope::Owner);
         let filter = ctx.to_search_filter();
         let sql = filter.to_lance_filter().unwrap();
-        assert!(sql.contains("workspace = 'crypto'"));
+        assert!(sql.contains("agent = 'crypto'"));
         assert!(sql.contains("is_valid = true"));
         assert!(sql.contains("namespace = 'owner'"));
     }

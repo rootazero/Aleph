@@ -220,7 +220,7 @@ pub fn ChannelConfigTemplate(
         let id = channel_id_sig.get_value();
         spawn_local(async move {
             match state
-                .rpc_call("channel.delete", json!({ "channel_id": id }))
+                .rpc_call("channel.delete", json!({ "id": id }))
                 .await
             {
                 Ok(_) => {
@@ -339,6 +339,9 @@ pub fn ChannelConfigTemplate(
                     }.into_any()
                 }
             }}
+
+            // ---- Channel Pairing section ----
+            <ChannelPairingSection channel_id=channel_id_sig />
 
             // ---- Action bar: Save + Delete + docs link ----
             <div class="flex items-center justify-between">
@@ -583,4 +586,191 @@ fn render_field(
             .into_any()
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// ChannelPairingSection — approve pairing codes & manage approved senders
+// ---------------------------------------------------------------------------
+
+/// Inline section for approving channel pairing codes and listing approved senders.
+#[component]
+fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
+    let state = expect_context::<DashboardState>();
+
+    let pairing_code_input = RwSignal::new(String::new());
+    let approving = RwSignal::new(false);
+    let pairing_error = RwSignal::new(Option::<String>::None);
+    let pairing_success = RwSignal::new(Option::<String>::None);
+
+    // Approved senders list
+    let approved_senders: RwSignal<Vec<ApprovedSenderInfo>> = RwSignal::new(Vec::new());
+    let refresh_approved = RwSignal::new(0u32);
+
+    // Load approved senders
+    Effect::new(move |_| {
+        let _ = refresh_approved.get();
+        let ch_id = channel_id.get_value();
+        spawn_local(async move {
+            match state
+                .rpc_call(
+                    "channel.pairing.approved",
+                    json!({ "channel": ch_id }),
+                )
+                .await
+            {
+                Ok(val) => {
+                    if let Some(arr) = val.get("senders").and_then(|v| v.as_array()) {
+                        let senders: Vec<ApprovedSenderInfo> = arr
+                            .iter()
+                            .filter_map(|v| {
+                                Some(ApprovedSenderInfo {
+                                    sender_id: v
+                                        .get("sender_id")
+                                        .and_then(|s| s.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    approved_at: v
+                                        .get("approved_at")
+                                        .and_then(|s| s.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                })
+                            })
+                            .collect();
+                        approved_senders.set(senders);
+                    }
+                }
+                Err(_) => {}
+            }
+        });
+    });
+
+    // Approve handler
+    let on_approve = move || {
+        let code = pairing_code_input.get().trim().to_uppercase();
+        if code.is_empty() {
+            pairing_error.set(Some("Please enter a pairing code.".to_string()));
+            return;
+        }
+        approving.set(true);
+        pairing_error.set(None);
+        pairing_success.set(None);
+
+        let ch_id = channel_id.get_value();
+        spawn_local(async move {
+            match state
+                .rpc_call(
+                    "channel.pairing.approve",
+                    json!({ "channel": ch_id, "code": code }),
+                )
+                .await
+            {
+                Ok(_) => {
+                    pairing_success.set(Some("Sender approved successfully.".to_string()));
+                    pairing_code_input.set(String::new());
+                    refresh_approved.update(|n| *n += 1);
+                }
+                Err(e) => {
+                    pairing_error.set(Some(format!("Failed to approve: {}", e)));
+                }
+            }
+            approving.set(false);
+        });
+    };
+
+    view! {
+        <SettingsSection title="Channel Pairing">
+            // Approve pairing code input
+            <div class="space-y-3">
+                <p class="text-sm text-text-secondary">
+                    "Enter a pairing code to approve a new sender for this channel."
+                </p>
+                <div class="flex items-center gap-2">
+                    <input
+                        type="text"
+                        placeholder="e.g. XPL3A7"
+                        class="flex-1 px-3 py-2 text-sm font-mono tracking-widest bg-surface border border-border rounded-lg focus:outline-none focus:border-primary text-text-primary uppercase"
+                        prop:value=move || pairing_code_input.get()
+                        on:input=move |ev| pairing_code_input.set(event_target_value(&ev))
+                        on:keydown=move |ev| {
+                            if ev.key() == "Enter" {
+                                on_approve();
+                            }
+                        }
+                    />
+                    <button
+                        on:click=move |_| on_approve()
+                        disabled=move || approving.get()
+                        class="px-4 py-2 text-sm bg-primary text-text-inverse rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors whitespace-nowrap"
+                    >
+                        {move || if approving.get() { "Approving..." } else { "Approve" }}
+                    </button>
+                </div>
+
+                // Error / Success
+                {move || pairing_error.get().map(|e| view! {
+                    <div class="text-sm text-danger">{e}</div>
+                })}
+                {move || pairing_success.get().map(|msg| view! {
+                    <div class="text-sm text-success">{msg}</div>
+                })}
+            </div>
+
+            // Approved senders list
+            {move || {
+                let senders = approved_senders.get();
+                if senders.is_empty() {
+                    view! {
+                        <div class="text-sm text-text-tertiary mt-3">
+                            "No approved senders yet."
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div class="mt-3 space-y-1">
+                            <div class="text-xs text-text-tertiary font-medium uppercase tracking-wider mb-2">
+                                "Approved Senders"
+                            </div>
+                            {senders.into_iter().map(|s| {
+                                let sender_id = s.sender_id.clone();
+                                let ch_id_for_revoke = channel_id.get_value();
+                                let sid_for_revoke = sender_id.clone();
+                                view! {
+                                    <div class="flex items-center justify-between px-3 py-2 bg-surface-raised border border-border rounded-lg">
+                                        <div class="flex items-center gap-2">
+                                            <span class="w-2 h-2 rounded-full bg-success flex-shrink-0" />
+                                            <span class="text-sm font-mono text-text-primary">{sender_id}</span>
+                                        </div>
+                                        <button
+                                            on:click=move |_| {
+                                                let ch = ch_id_for_revoke.clone();
+                                                let sid = sid_for_revoke.clone();
+                                                spawn_local(async move {
+                                                    let _ = state.rpc_call(
+                                                        "channel.pairing.revoke",
+                                                        json!({ "channel": ch, "sender_id": sid }),
+                                                    ).await;
+                                                    refresh_approved.update(|n| *n += 1);
+                                                });
+                                            }
+                                            class="text-xs text-danger hover:text-danger-hover transition-colors"
+                                        >
+                                            "Revoke"
+                                        </button>
+                                    </div>
+                                }
+                            }).collect_view()}
+                        </div>
+                    }.into_any()
+                }
+            }}
+        </SettingsSection>
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ApprovedSenderInfo {
+    sender_id: String,
+    #[allow(dead_code)]
+    approved_at: String,
 }

@@ -41,7 +41,7 @@ pub struct GenerationProviderConfig {
     pub provider_type: String,
 
     /// Runtime-only API key (populated from encrypted vault, never persisted to config.toml)
-    #[serde(skip)]
+    #[serde(default, skip_serializing)]
     #[schemars(skip)]
     pub api_key: Option<String>,
 

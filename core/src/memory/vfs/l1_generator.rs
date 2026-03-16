@@ -232,19 +232,19 @@ mod tests {
             .with_path("aleph://user/preferences/coding/rust".to_string())
             .with_layer(MemoryLayer::L2Detail)
             .with_fact_source(FactSource::Extracted);
-        target_l2.workspace = "default".to_string();
+        target_l2.agent = "default".to_string();
 
         let mut target_non_l2 = MemoryFact::new("Target non-L2".into(), FactType::Preference, vec![])
             .with_path("aleph://user/preferences/coding/overview".to_string())
             .with_layer(MemoryLayer::L1Overview)
             .with_fact_source(FactSource::Manual);
-        target_non_l2.workspace = "default".to_string();
+        target_non_l2.agent = "default".to_string();
 
         let mut other_path_l2 = MemoryFact::new("Other path".into(), FactType::Preference, vec![])
             .with_path("aleph://user/preferences/ui/theme".to_string())
             .with_layer(MemoryLayer::L2Detail)
             .with_fact_source(FactSource::Extracted);
-        other_path_l2.workspace = "default".to_string();
+        other_path_l2.agent = "default".to_string();
 
         db.batch_insert_facts(&[target_l2.clone(), target_non_l2, other_path_l2])
             .await

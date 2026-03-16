@@ -39,7 +39,15 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
 
     async fn execute(&self, input: Value) -> ToolResult {
         match self.registry.execute_tool(&self.name, input).await {
-            Ok(output) => ToolResult::Success { output },
+            Ok(output) => {
+                // agent_switch should terminate the current loop so the next
+                // message is routed to the newly-selected agent.
+                if self.name == "agent_switch" {
+                    ToolResult::SuccessAndStopLoop { output }
+                } else {
+                    ToolResult::Success { output }
+                }
+            }
             Err(e) => ToolResult::Error {
                 error: e.to_string(),
                 retryable: true,

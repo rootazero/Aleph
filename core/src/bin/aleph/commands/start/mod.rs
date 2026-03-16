@@ -450,16 +450,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     register_memory_handlers(&mut server, &memory_db, &agent_result.compression_service, args.daemon);
     register_daemon_handlers(&mut server, start_time, args.daemon);
 
-    // OAuth state: restore from config if chatgpt provider has an api_key
+    // OAuth state: restore from vault if chatgpt provider exists
+    let oauth_vault = auth_bundle.auth_ctx.shared_token_mgr.clone();
     let oauth_state: alephcore::gateway::handlers::oauth::SharedOAuthState = {
-        use alephcore::gateway::handlers::oauth::restore_from_config;
-        let restored = restore_from_config(&*app_config_for_oauth.read().await);
+        use alephcore::gateway::handlers::oauth::restore_from_vault;
+        let restored = restore_from_vault(&*app_config_for_oauth.read().await, &oauth_vault);
         if restored.is_some() && !args.daemon {
-            println!("OAuth: restored ChatGPT token from config");
+            println!("OAuth: restored ChatGPT token from vault");
         }
         Arc::new(tokio::sync::RwLock::new(restored))
     };
-    register_oauth_handlers(&mut server, &oauth_state, &app_config_for_oauth, args.daemon);
+    register_oauth_handlers(&mut server, &oauth_state, &app_config_for_oauth, &oauth_vault, args.daemon);
 
     if let Some(ref wm) = workspace_manager {
         register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);

@@ -1,6 +1,6 @@
 //! Provider preset definitions
 //!
-//! Shared between the settings form and the setup wizard.
+//! Shared preset data for provider settings forms.
 
 /// Provider preset for quick-setup
 pub struct ProviderPreset {
@@ -154,7 +154,7 @@ pub const OAUTH_PRESETS: &[ProviderPreset] = &[
     ProviderPreset {
         name: "codex",
         protocol: "chatgpt",
-        model: "gpt-5.3-codex",
+        model: "gpt-5.4",
         base_url: "https://chatgpt.com",
         description: "OpenAI Codex via ChatGPT subscription",
         api_key_placeholder: "",
@@ -165,5 +165,15 @@ pub const OAUTH_PRESETS: &[ProviderPreset] = &[
 ];
 
 pub fn find_preset(name: &str) -> Option<&'static ProviderPreset> {
-    PRESETS.iter().chain(OAUTH_PRESETS.iter()).find(|p| p.name == name)
+    PRESETS.iter().chain(OAUTH_PRESETS.iter()).find(|p| {
+        p.name == name || canonical_preset_name(p.name) == name
+    })
+}
+
+/// Map OAuth preset name to the canonical name used in config (e.g. "codex" → "chatgpt").
+fn canonical_preset_name(name: &str) -> &str {
+    match name {
+        "codex" => "chatgpt",
+        other => other,
+    }
 }

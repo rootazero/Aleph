@@ -68,7 +68,7 @@ async fn test_full_memory_lifecycle() {
         decay_score: 1.0,
         created_at: 1700000000,
         updated_at: 1700000000,
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
     };
     backend.upsert_node(&node, "default").await.unwrap();
 
@@ -179,7 +179,7 @@ async fn test_ensure_indexes_idempotent() {
         decay_score: 1.0,
         created_at: 0,
         updated_at: 0,
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
     };
     backend.upsert_node(&node, "default").await.unwrap();
 

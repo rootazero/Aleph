@@ -355,7 +355,7 @@ impl std::fmt::Display for MemoryTier {
 ///
 /// Controls which retrieval contexts can see a given fact:
 /// - **Global**: visible everywhere
-/// - **Workspace**: visible only within a specific workspace
+/// - **Agent**: visible only within a specific agent
 /// - **Persona**: visible only to a specific persona
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
@@ -363,8 +363,8 @@ pub enum MemoryScope {
     /// Visible everywhere.
     #[default]
     Global,
-    /// Visible only within a specific workspace.
-    Workspace,
+    /// Visible only within a specific agent.
+    Agent,
     /// Visible only to a specific persona.
     Persona,
 }
@@ -373,7 +373,7 @@ impl MemoryScope {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Global => "global",
-            Self::Workspace => "workspace",
+            Self::Agent => "agent",
             Self::Persona => "persona",
         }
     }
@@ -389,7 +389,7 @@ impl std::str::FromStr for MemoryScope {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "global" => Ok(Self::Global),
-            "workspace" => Ok(Self::Workspace),
+            "agent" => Ok(Self::Agent),
             "persona" => Ok(Self::Persona),
             _ => Err(format!("Unknown memory scope: {}", s)),
         }
