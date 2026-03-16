@@ -106,6 +106,8 @@ pub enum Capability {
     Canvas,
     /// Silent replies (background processing, no user notification)
     SilentReply,
+    /// Channel natively displays agent identity (e.g. webchat sidebar)
+    NativeIdentity,
 }
 
 impl Capability {
@@ -129,6 +131,10 @@ impl Capability {
             Self::SilentReply => {
                 ("silent_reply", "Responses will be processed silently in background")
             }
+            Self::NativeIdentity => (
+                "native_identity",
+                "Channel natively shows agent identity — no prefix needed",
+            ),
         }
     }
 }
@@ -336,6 +342,21 @@ mod tests {
         assert!(manifest.has_capability(&Capability::RichText));
         assert!(manifest.has_capability(&Capability::FileUpload));
         assert!(!manifest.has_capability(&Capability::Streaming)); // Not in override set
+    }
+
+    #[test]
+    fn test_native_identity_capability() {
+        let (name, hint) = Capability::NativeIdentity.prompt_hint();
+        assert_eq!(name, "native_identity");
+        assert!(hint.contains("identity"));
+    }
+
+    #[test]
+    fn test_native_identity_serde_roundtrip() {
+        let cap = Capability::NativeIdentity;
+        let json = serde_json::to_string(&cap).expect("serialize");
+        let deserialized: Capability = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(deserialized, Capability::NativeIdentity);
     }
 
     #[test]
