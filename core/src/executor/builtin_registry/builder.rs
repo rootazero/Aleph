@@ -33,7 +33,7 @@ impl BuiltinToolRegistry {
     /// - Dangerous commands are still blocked by CommandChecker (rm -rf /, sudo, etc.)
     /// - File operations are sandboxed by PathPermissionChecker
     /// - TODO: Tool policy will be reimplemented following OpenClaw's sandbox pattern
-    pub fn with_config(config: BuiltinToolConfig) -> Self {
+    pub async fn with_config(config: BuiltinToolConfig) -> Self {
         let search_tool = SearchTool::with_api_key(config.tavily_api_key.clone());
         let web_fetch_tool = WebFetchTool::new();
         let file_ops_tool = FileOpsTool::new();
@@ -270,7 +270,7 @@ impl BuiltinToolRegistry {
                 use crate::builtin_tools::acp_tools::{ClaudeCodeTool, CodexTool, GeminiCliTool, AcpSwitchTool};
                 info!("Creating ACP delegate tools");
 
-                let cc = if manager.has_harness("claude-code") {
+                let cc = if manager.has_harness("claude-code").await {
                     tools.insert("claude_code".to_string(), UnifiedTool::new(
                         "builtin:claude_code", "claude_code",
                         ClaudeCodeTool::DESCRIPTION, ToolSource::Builtin,
@@ -278,7 +278,7 @@ impl BuiltinToolRegistry {
                     Some(ClaudeCodeTool::new(Arc::clone(manager)))
                 } else { None };
 
-                let cx = if manager.has_harness("codex") {
+                let cx = if manager.has_harness("codex").await {
                     tools.insert("codex".to_string(), UnifiedTool::new(
                         "builtin:codex", "codex",
                         CodexTool::DESCRIPTION, ToolSource::Builtin,
@@ -286,7 +286,7 @@ impl BuiltinToolRegistry {
                     Some(CodexTool::new(Arc::clone(manager)))
                 } else { None };
 
-                let gm = if manager.has_harness("gemini") {
+                let gm = if manager.has_harness("gemini").await {
                     tools.insert("gemini_cli".to_string(), UnifiedTool::new(
                         "builtin:gemini_cli", "gemini_cli",
                         GeminiCliTool::DESCRIPTION, ToolSource::Builtin,

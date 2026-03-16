@@ -193,7 +193,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             acp_manager: acp_manager.clone(),
             ..Default::default()
         };
-        let mut tool_registry = BuiltinToolRegistry::with_config(tool_config);
+        let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;
 
         use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
         use alephcore::dispatcher::{UnifiedTool, ToolSource};

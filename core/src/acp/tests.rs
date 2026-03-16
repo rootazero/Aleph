@@ -328,93 +328,93 @@ fn session_state_serde_all_variants() {
 // Manager — default configuration
 // =============================================================================
 
-#[test]
-fn manager_default_has_all_three_harnesses() {
+#[tokio::test]
+async fn manager_default_has_all_three_harnesses() {
     let mgr = AcpHarnessManager::new();
-    let ids = mgr.harness_ids();
+    let ids = mgr.harness_ids().await;
     assert_eq!(ids.len(), 3);
     assert!(ids.contains(&"claude-code".to_string()));
     assert!(ids.contains(&"codex".to_string()));
     assert!(ids.contains(&"gemini".to_string()));
 }
 
-#[test]
-fn manager_has_harness_returns_false_for_unknown() {
+#[tokio::test]
+async fn manager_has_harness_returns_false_for_unknown() {
     let mgr = AcpHarnessManager::new();
-    assert!(!mgr.has_harness("gpt-5"));
-    assert!(!mgr.has_harness(""));
-    assert!(!mgr.has_harness("Claude-Code")); // case-sensitive
+    assert!(!mgr.has_harness("gpt-5").await);
+    assert!(!mgr.has_harness("").await);
+    assert!(!mgr.has_harness("Claude-Code").await); // case-sensitive
 }
 
-#[test]
-fn manager_display_names_correct() {
+#[tokio::test]
+async fn manager_display_names_correct() {
     let mgr = AcpHarnessManager::new();
-    assert_eq!(mgr.display_name("claude-code"), Some("Claude Code"));
-    assert_eq!(mgr.display_name("codex"), Some("Codex"));
-    assert_eq!(mgr.display_name("gemini"), Some("Gemini"));
-    assert_eq!(mgr.display_name("unknown"), None);
+    assert_eq!(mgr.display_name("claude-code").await, Some("Claude Code".to_string()));
+    assert_eq!(mgr.display_name("codex").await, Some("Codex".to_string()));
+    assert_eq!(mgr.display_name("gemini").await, Some("Gemini".to_string()));
+    assert_eq!(mgr.display_name("unknown").await, None);
 }
 
-#[test]
-fn manager_harness_modes_correct() {
+#[tokio::test]
+async fn manager_harness_modes_correct() {
     use super::harness::HarnessMode;
     let mgr = AcpHarnessManager::new();
-    assert_eq!(mgr.harness_mode("gemini"), Some(HarnessMode::NativeAcp));
-    assert_eq!(mgr.harness_mode("claude-code"), Some(HarnessMode::Oneshot));
-    assert_eq!(mgr.harness_mode("codex"), Some(HarnessMode::Oneshot));
-    assert_eq!(mgr.harness_mode("unknown"), None);
+    assert_eq!(mgr.harness_mode("gemini").await, Some(HarnessMode::NativeAcp));
+    assert_eq!(mgr.harness_mode("claude-code").await, Some(HarnessMode::Oneshot));
+    assert_eq!(mgr.harness_mode("codex").await, Some(HarnessMode::Oneshot));
+    assert_eq!(mgr.harness_mode("unknown").await, None);
 }
 
 // =============================================================================
 // Manager — custom configuration
 // =============================================================================
 
-#[test]
-fn manager_disable_single_harness() {
+#[tokio::test]
+async fn manager_disable_single_harness() {
     let mut config = AcpManagerConfig::default();
     config.enabled.insert("codex".to_string(), false);
     let mgr = AcpHarnessManager::with_config(config);
-    assert!(!mgr.has_harness("codex"));
-    assert!(mgr.has_harness("claude-code"));
-    assert!(mgr.has_harness("gemini"));
-    assert_eq!(mgr.harness_ids().len(), 2);
+    assert!(!mgr.has_harness("codex").await);
+    assert!(mgr.has_harness("claude-code").await);
+    assert!(mgr.has_harness("gemini").await);
+    assert_eq!(mgr.harness_ids().await.len(), 2);
 }
 
-#[test]
-fn manager_disable_all_harnesses() {
+#[tokio::test]
+async fn manager_disable_all_harnesses() {
     let mut config = AcpManagerConfig::default();
     config.enabled.insert("claude-code".to_string(), false);
     config.enabled.insert("codex".to_string(), false);
     config.enabled.insert("gemini".to_string(), false);
     let mgr = AcpHarnessManager::with_config(config);
-    assert!(mgr.harness_ids().is_empty());
+    assert!(mgr.harness_ids().await.is_empty());
 }
 
-#[test]
-fn manager_explicit_enable_is_noop() {
+#[tokio::test]
+async fn manager_explicit_enable_is_noop() {
     let mut config = AcpManagerConfig::default();
     config.enabled.insert("claude-code".to_string(), true);
     let mgr = AcpHarnessManager::with_config(config);
-    assert!(mgr.has_harness("claude-code"));
-    assert_eq!(mgr.harness_ids().len(), 3);
+    assert!(mgr.has_harness("claude-code").await);
+    assert_eq!(mgr.harness_ids().await.len(), 3);
 }
 
-#[test]
-fn manager_custom_executable_path() {
+#[tokio::test]
+async fn manager_custom_executable_path() {
     let mut config = AcpManagerConfig::default();
     config
         .executables
         .insert("gemini".to_string(), "/opt/bin/gemini-custom".to_string());
     let mgr = AcpHarnessManager::with_config(config);
-    assert!(mgr.has_harness("gemini"));
+    assert!(mgr.has_harness("gemini").await);
     // Verify the override took effect via display_name (harness still registered)
-    assert_eq!(mgr.display_name("gemini"), Some("Gemini"));
+    assert_eq!(mgr.display_name("gemini").await, Some("Gemini".to_string()));
 }
 
-#[test]
-fn manager_harness_ids_sorted() {
+#[tokio::test]
+async fn manager_harness_ids_sorted() {
     let mgr = AcpHarnessManager::new();
-    let ids = mgr.harness_ids();
+    let ids = mgr.harness_ids().await;
     let mut sorted = ids.clone();
     sorted.sort();
     assert_eq!(ids, sorted, "harness_ids() should return sorted IDs");

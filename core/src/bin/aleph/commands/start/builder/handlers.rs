@@ -468,6 +468,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     device_store: Arc<alephcore::gateway::device_store::DeviceStore>,
     swappable_registry: Option<Arc<alephcore::SwappableProviderRegistry>>,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
+    acp_manager: Option<Arc<alephcore::acp::manager::AcpHarnessManager>>,
 ) {
     use alephcore::gateway::handlers::config::{handle_get_full_config, handle_patch_config};
     use alephcore::gateway::handlers::providers;
@@ -583,6 +584,20 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "search_config.update", search_config::handle_update, config, event_bus, shared_token_mgr);
     register_handler!(server, "search_config.test", search_config::handle_test, config, shared_token_mgr);
     register_handler!(server, "search_config.deleteBackend", search_config::handle_delete_backend, config, event_bus, shared_token_mgr);
+
+    // ACP harness config (only if ACP manager is available)
+    if let Some(ref acp) = acp_manager {
+        use alephcore::gateway::handlers::acp_config;
+
+        register_handler!(server, "acp.list", acp_config::handle_list, acp, config);
+        register_handler!(server, "acp.get", acp_config::handle_get, acp, config);
+        register_handler!(server, "acp.create", acp_config::handle_create, acp, config, event_bus);
+        register_handler!(server, "acp.update", acp_config::handle_update, acp, config, event_bus);
+        register_handler!(server, "acp.delete", acp_config::handle_delete, acp, config, event_bus);
+        register_handler!(server, "acp.test", acp_config::handle_test, acp);
+        register_handler!(server, "acp.set_enabled", acp_config::handle_set_enabled, acp, config, event_bus);
+        register_handler!(server, "acp.presets", acp_config::handle_presets);
+    }
 }
 
 // ─── register_daemon_handlers ────────────────────────────────────────────────
