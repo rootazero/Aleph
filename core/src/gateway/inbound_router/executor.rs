@@ -75,6 +75,8 @@ impl InboundMessageRouter {
             self.channel_registry.clone(),
             ctx.reply_route.clone(),
             run_id.clone(),
+            agent.config().display_name.clone(),
+            false,
         ));
 
         // Build the run request metadata
