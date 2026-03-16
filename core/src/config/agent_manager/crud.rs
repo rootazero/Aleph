@@ -17,6 +17,11 @@ impl AgentManager {
     /// On construction, ensures at least one default agent exists in the config
     /// file. If `[[agents.list]]` is empty or missing, writes a default "main"
     /// agent to the TOML config and creates its workspace directory.
+    ///
+    /// Also reconciles orphan workspaces: if a workspace directory exists under
+    /// `workspace_root` but has no corresponding entry in config, a minimal
+    /// definition is appended so it becomes visible in both the Panel UI and
+    /// the `agent_list` tool.
     pub fn new(
         config_path: std::path::PathBuf,
         workspace_root: std::path::PathBuf,
@@ -59,7 +64,113 @@ impl AgentManager {
             }
         }
 
+        // Reconcile orphan workspaces with config
+        mgr.reconcile_orphan_workspaces();
+
         mgr
+    }
+
+    /// Scan workspace_root for directories that have no matching config entry
+    /// and register them as minimal agent definitions.
+    fn reconcile_orphan_workspaces(&self) {
+        let entries = match fs::read_dir(&self.workspace_root) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+
+        let config = match self.load_config() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        let known_ids: std::collections::HashSet<&str> =
+            config.list.iter().map(|a| a.id.as_str()).collect();
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name.to_string(),
+                None => continue,
+            };
+
+            // Skip hidden directories (e.g. .DS_Store folder)
+            if dir_name.starts_with('.') {
+                continue;
+            }
+
+            // Skip if already in config
+            if known_ids.contains(dir_name.as_str()) {
+                continue;
+            }
+
+            // Validate that this looks like a valid agent ID
+            if self.validate_id(&dir_name).is_err() {
+                warn!(
+                    "Skipping orphan workspace '{}': invalid agent ID format",
+                    dir_name
+                );
+                continue;
+            }
+
+            // Try to extract agent name from SOUL.md first line (# Agent Name)
+            let agent_name = self.read_agent_name_from_workspace(&path)
+                .unwrap_or_else(|| dir_name.clone());
+
+            let def = AgentDefinition {
+                id: dir_name.clone(),
+                name: Some(agent_name),
+                ..Default::default()
+            };
+
+            match self.append_agent_to_config(&def) {
+                Ok(()) => {
+                    info!(
+                        "Reconciled orphan workspace '{}' into config",
+                        dir_name
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to reconcile orphan workspace '{}': {}",
+                        dir_name, e
+                    );
+                }
+            }
+        }
+    }
+
+    /// Try to read the agent's display name from workspace files.
+    ///
+    /// Checks IDENTITY.md for `**Name:** value` first, then falls back to
+    /// the directory name.
+    fn read_agent_name_from_workspace(&self, ws_path: &std::path::Path) -> Option<String> {
+        // Try IDENTITY.md: look for "**Name:** <value>" pattern
+        let identity_path = ws_path.join("IDENTITY.md");
+        if let Ok(content) = fs::read_to_string(identity_path) {
+            for line in content.lines() {
+                let trimmed = line.trim().trim_start_matches("- ");
+                if let Some(rest) = trimmed.strip_prefix("**Name:**") {
+                    let name = rest.trim();
+                    if !name.is_empty() {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Append an agent definition to the config file without creating workspace
+    /// directories (they already exist for orphan workspaces).
+    fn append_agent_to_config(&self, def: &AgentDefinition) -> Result<()> {
+        let mut doc = self.load_document()?;
+        self.append_agent_to_document(&mut doc, def)?;
+        self.save_document(&doc)?;
+        Ok(())
     }
 
     // =========================================================================

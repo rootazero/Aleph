@@ -135,15 +135,15 @@ fn test_memory_tier_roundtrip() {
 #[test]
 fn test_memory_scope_roundtrip() {
     assert_eq!(MemoryScope::Global.as_str(), "global");
-    assert_eq!(MemoryScope::Workspace.as_str(), "workspace");
+    assert_eq!(MemoryScope::Agent.as_str(), "agent");
     assert_eq!(MemoryScope::Persona.as_str(), "persona");
     assert_eq!(
         MemoryScope::from_str_or_default("global"),
         MemoryScope::Global
     );
     assert_eq!(
-        MemoryScope::from_str_or_default("workspace"),
-        MemoryScope::Workspace
+        MemoryScope::from_str_or_default("agent"),
+        MemoryScope::Agent
     );
     assert_eq!(
         MemoryScope::from_str_or_default("persona"),

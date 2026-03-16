@@ -9,8 +9,8 @@ use crate::memory::store::types::SearchFilter;
 pub struct CompositionRequest {
     /// Current persona ID (None if no persona active)
     pub persona_id: Option<String>,
-    /// Current workspace ID
-    pub workspace: String,
+    /// Current agent ID
+    pub agent: String,
     /// Current namespace (user identity)
     pub namespace: String,
     /// Token budget for context injection
@@ -46,7 +46,7 @@ impl ContextComposer {
     pub fn build_core_filter(req: &CompositionRequest) -> SearchFilter {
         SearchFilter::new()
             .with_tier(MemoryTier::Core)
-            .with_scope_stack(req.persona_id.as_deref(), &req.workspace)
+            .with_scope_stack(req.persona_id.as_deref(), &req.agent)
             .with_namespace(NamespaceScope::Owner)
             .with_valid_only()
     }
@@ -60,7 +60,7 @@ impl ContextComposer {
     /// facts so the caller can rank them by relevance.
     pub fn build_retrieval_filter(req: &CompositionRequest) -> SearchFilter {
         SearchFilter::new()
-            .with_scope_stack(req.persona_id.as_deref(), &req.workspace)
+            .with_scope_stack(req.persona_id.as_deref(), &req.agent)
             .with_namespace(NamespaceScope::Owner)
             .with_valid_only()
     }
@@ -73,7 +73,7 @@ mod tests {
     fn make_request(persona: Option<&str>) -> CompositionRequest {
         CompositionRequest {
             persona_id: persona.map(|s| s.to_string()),
-            workspace: "aleph".to_string(),
+            agent: "aleph".to_string(),
             namespace: "owner".to_string(),
             token_budget: 2000,
         }
@@ -108,7 +108,7 @@ mod tests {
         let sql = filter.to_lance_filter().unwrap();
         assert!(!sql.contains("tier = 'core'"), "Retrieval filter should NOT restrict to Core, got: {sql}");
         assert!(sql.contains("scope = 'global'"), "Should include Global, got: {sql}");
-        assert!(sql.contains("scope = 'workspace'"), "Should include Workspace, got: {sql}");
+        assert!(sql.contains("scope = 'agent'"), "Should include Agent, got: {sql}");
         assert!(sql.contains("scope = 'persona'"), "Should include Persona, got: {sql}");
     }
 
@@ -118,7 +118,7 @@ mod tests {
         let filter = ContextComposer::build_retrieval_filter(&req);
         let sql = filter.to_lance_filter().unwrap();
         assert!(sql.contains("scope = 'global'"), "Should include Global, got: {sql}");
-        assert!(sql.contains("scope = 'workspace'"), "Should include Workspace, got: {sql}");
+        assert!(sql.contains("scope = 'agent'"), "Should include Agent, got: {sql}");
         assert!(!sql.contains("persona"), "Should NOT include persona, got: {sql}");
     }
 }

@@ -160,7 +160,7 @@ mod tests {
             specificity: FactSpecificity::Pattern,
             temporal_scope: TemporalScope::Contextual,
             namespace: "owner".into(),
-            workspace: "default".into(),
+            agent: "default".into(),
             similarity_score: None,
             path: "/test".into(),
             layer: MemoryLayer::L2Detail,

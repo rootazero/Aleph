@@ -145,7 +145,7 @@ pub enum MemoryEvent {
         scope: MemoryScope,
         path: String,
         namespace: String,
-        workspace: String,
+        agent: String,
         confidence: f32,
         source: FactSource,
         source_memory_ids: Vec<String>,
@@ -440,7 +440,7 @@ mod tests {
             MemoryEvent::FactCreated {
                 fact_id: "a".into(), content: "c".into(), fact_type: FactType::Other,
                 tier: MemoryTier::ShortTerm, scope: MemoryScope::Global,
-                path: "p".into(), namespace: "n".into(), workspace: "w".into(),
+                path: "p".into(), namespace: "n".into(), agent: "w".into(),
                 confidence: 1.0, source: FactSource::Manual, source_memory_ids: vec![],
             },
             MemoryEvent::FactContentUpdated {
@@ -491,7 +491,7 @@ mod tests {
                     fact_id: "f".into(), content: String::new(), fact_type: FactType::Other,
                     source: FactSource::Extracted, tier: MemoryTier::ShortTerm,
                     scope: MemoryScope::Global, path: String::new(), namespace: "owner".into(),
-                    workspace: "default".into(), confidence: 1.0,
+                    agent: "default".into(), confidence: 1.0,
                     source_memory_ids: vec![],
                 },
                 "FactCreated",
@@ -583,7 +583,7 @@ mod tests {
         assert!(MemoryEvent::FactCreated {
             fact_id: "f".into(), content: "c".into(), fact_type: FactType::Other,
             tier: MemoryTier::ShortTerm, scope: MemoryScope::Global,
-            path: "p".into(), namespace: "n".into(), workspace: "w".into(),
+            path: "p".into(), namespace: "n".into(), agent: "w".into(),
             confidence: 1.0, source: FactSource::Extracted, source_memory_ids: vec![],
         }.is_skeleton());
         assert!(MemoryEvent::FactDeleted { fact_id: "f".into(), reason: "r".into() }.is_skeleton());
@@ -602,7 +602,7 @@ mod tests {
             scope: MemoryScope::Global,
             path: "aleph://user/preferences/language".into(),
             namespace: "owner".into(),
-            workspace: "default".into(),
+            agent: "default".into(),
             confidence: 0.85,
             source: FactSource::Extracted,
             source_memory_ids: vec!["mem-001".into()],
@@ -665,8 +665,8 @@ mod tests {
         let events = vec![
             MemoryEvent::FactCreated {
                 fact_id: "f".into(), content: "c".into(), fact_type: FactType::Learning,
-                source: FactSource::Manual, tier: MemoryTier::Core, scope: MemoryScope::Workspace,
-                path: "p".into(), namespace: "n".into(), workspace: "w".into(),
+                source: FactSource::Manual, tier: MemoryTier::Core, scope: MemoryScope::Agent,
+                path: "p".into(), namespace: "n".into(), agent: "w".into(),
                 confidence: 1.0, source_memory_ids: vec![],
             },
             MemoryEvent::FactContentUpdated {
@@ -724,7 +724,7 @@ mod tests {
             scope: MemoryScope::Global,
             path: "p".into(),
             namespace: "owner".into(),
-            workspace: "default".into(),
+            agent: "default".into(),
             confidence: 1.0,
             source_memory_ids: vec![],
         };

@@ -333,55 +333,80 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     Ok(dirs)
 }
 
-/// Get the projects directory for project-local working memory
+/// Get the workspace root directory for agent project files
 ///
-/// All project-specific files (scratchpad, session history, identity) are
-/// stored under `~/.aleph/projects/<project_id>/` rather than in the project's
-/// own filesystem. This reflects Aleph's conversation-driven architecture:
-/// projects are generated artifacts managed by Aleph, not user-created
-/// directories entered via CLI.
+/// Each agent has its own workspace directory under `~/.aleph/workspace/<agent_id>/`
+/// for storing project files, scratchpads, session history, and other working data.
 ///
-/// Returns: `<config_dir>/projects/`
+/// Returns: `<config_dir>/workspace/`
 ///
 /// The directory is created if it doesn't exist.
-pub fn get_projects_dir() -> Result<PathBuf> {
-    let projects_dir = get_config_dir()?.join("projects");
+pub fn get_workspace_dir() -> Result<PathBuf> {
+    let workspace_dir = get_config_dir()?.join("workspace");
 
-    if !projects_dir.exists() {
-        std::fs::create_dir_all(&projects_dir)
-            .map_err(|e| AlephError::config(format!("Failed to create projects directory: {}", e)))?;
+    if !workspace_dir.exists() {
+        std::fs::create_dir_all(&workspace_dir)
+            .map_err(|e| AlephError::config(format!("Failed to create workspace directory: {}", e)))?;
     }
 
-    Ok(projects_dir)
+    Ok(workspace_dir)
 }
 
-/// Get the directory for a specific project
+/// Get the workspace directory for a specific agent
 ///
-/// Returns: `<config_dir>/projects/<project_id>/`
+/// Returns: `<config_dir>/workspace/<agent_id>/`
 ///
 /// The directory is created if it doesn't exist.
-pub fn get_project_dir(project_id: &str) -> Result<PathBuf> {
-    // Validate project_id to prevent path traversal attacks.
-    // Reject any ID containing path separators or ".." components.
-    if project_id.contains('/')
-        || project_id.contains('\\')
-        || project_id.contains("..")
-        || project_id.is_empty()
+pub fn get_agent_workspace_dir(agent_id: &str) -> Result<PathBuf> {
+    // Validate agent_id to prevent path traversal attacks.
+    if agent_id.contains('/')
+        || agent_id.contains('\\')
+        || agent_id.contains("..")
+        || agent_id.is_empty()
     {
         return Err(AlephError::config(format!(
-            "Invalid project ID '{}': must not contain path separators or '..'",
-            project_id
+            "Invalid agent ID '{}': must not contain path separators or '..'",
+            agent_id
         )));
     }
 
-    let project_dir = get_projects_dir()?.join(project_id);
+    let agent_dir = get_workspace_dir()?.join(agent_id);
 
-    if !project_dir.exists() {
-        std::fs::create_dir_all(&project_dir)
-            .map_err(|e| AlephError::config(format!("Failed to create project directory: {}", e)))?;
+    if !agent_dir.exists() {
+        std::fs::create_dir_all(&agent_dir)
+            .map_err(|e| AlephError::config(format!("Failed to create agent workspace directory: {}", e)))?;
     }
 
-    Ok(project_dir)
+    Ok(agent_dir)
+}
+
+/// Get the identity/config directory for a specific agent
+///
+/// Agent capabilities (skills, plugins) and identity files are stored here.
+///
+/// Returns: `<config_dir>/agents/<agent_id>/`
+///
+/// The directory is created if it doesn't exist.
+pub fn get_agent_config_dir(agent_id: &str) -> Result<PathBuf> {
+    if agent_id.contains('/')
+        || agent_id.contains('\\')
+        || agent_id.contains("..")
+        || agent_id.is_empty()
+    {
+        return Err(AlephError::config(format!(
+            "Invalid agent ID '{}': must not contain path separators or '..'",
+            agent_id
+        )));
+    }
+
+    let agent_dir = get_config_dir()?.join("agents").join(agent_id);
+
+    if !agent_dir.exists() {
+        std::fs::create_dir_all(&agent_dir)
+            .map_err(|e| AlephError::config(format!("Failed to create agent config directory: {}", e)))?;
+    }
+
+    Ok(agent_dir)
 }
 
 /// Get the tool output directory for storing full outputs

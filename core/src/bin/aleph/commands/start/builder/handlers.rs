@@ -151,7 +151,7 @@ pub(in crate::commands::start) fn register_channel_handlers(
     channel_registry: &Arc<ChannelRegistry>,
     app_config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
 ) {
-    register_handler!(server, "channels.list", channel_handlers::handle_list, channel_registry);
+    register_handler!(server, "channels.list", channel_handlers::handle_list, channel_registry, app_config);
     register_handler!(server, "channels.status", channel_handlers::handle_status, channel_registry);
     register_handler!(server, "channel.start", channel_handlers::handle_start, channel_registry, app_config);
     register_handler!(server, "channel.stop", channel_handlers::handle_stop, channel_registry);
@@ -552,6 +552,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "embedding_providers.remove", embedding_providers::handle_remove, config, event_bus, shared_token_mgr);
     register_handler!(server, "embedding_providers.setActive", embedding_providers::handle_set_active, config, event_bus);
     register_handler!(server, "embedding_providers.test", embedding_providers::handle_test, config, shared_token_mgr);
+    register_handler!(server, "embedding_providers.presets", embedding_providers::handle_presets);
 
     // Agent config
     register_handler!(server, "agent_config.get", agent_config::handle_get, config);
@@ -619,11 +620,12 @@ pub(in crate::commands::start) fn register_oauth_handlers(
     server: &mut GatewayServer,
     oauth_state: &oauth_handlers::SharedOAuthState,
     config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
+    vault: &Arc<alephcore::gateway::security::SharedTokenManager>,
     daemon: bool,
 ) {
-    register_handler!(server, "providers.oauthLogin", oauth_handlers::handle_oauth_login, oauth_state, config);
-    register_handler!(server, "providers.oauthLogout", oauth_handlers::handle_oauth_logout, oauth_state, config);
-    register_handler!(server, "providers.oauthStatus", oauth_handlers::handle_oauth_status, oauth_state, config);
+    register_handler!(server, "providers.oauthLogin", oauth_handlers::handle_oauth_login, oauth_state, config, vault);
+    register_handler!(server, "providers.oauthLogout", oauth_handlers::handle_oauth_logout, oauth_state, config, vault);
+    register_handler!(server, "providers.oauthStatus", oauth_handlers::handle_oauth_status, oauth_state, config, vault);
 
     if !daemon {
         println!("OAuth methods:");

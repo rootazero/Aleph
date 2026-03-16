@@ -15,8 +15,8 @@ pub(crate) fn default_namespace() -> String {
     "owner".to_string()
 }
 
-/// Default serde helper for workspace_id field
-pub(crate) fn default_workspace_id() -> String {
+/// Default serde helper for agent_id field
+pub(crate) fn default_agent_id() -> String {
     "default".to_string()
 }
 
@@ -63,9 +63,9 @@ pub struct MemoryFact {
     /// Access control scope: "owner", "guest:xxx", "shared"
     #[serde(default = "default_namespace")]
     pub namespace: String,
-    /// Domain isolation workspace ID
-    #[serde(default = "default_workspace_id")]
-    pub workspace: String,
+    /// Domain isolation agent ID
+    #[serde(default = "default_agent_id")]
+    pub agent: String,
     /// Similarity score (when retrieved from search)
     #[serde(skip)]
     pub similarity_score: Option<f32>,
@@ -140,7 +140,7 @@ impl MemoryFact {
             specificity: FactSpecificity::default(),
             temporal_scope: TemporalScope::default(),
             namespace: "owner".to_string(),
-            workspace: "main".to_string(),
+            agent: "main".to_string(),
             similarity_score: None,
             path,
             layer: MemoryLayer::L2Detail,
@@ -184,7 +184,7 @@ impl MemoryFact {
             specificity: FactSpecificity::default(),
             temporal_scope: TemporalScope::default(),
             namespace: "owner".to_string(),
-            workspace: "main".to_string(),
+            agent: "main".to_string(),
             similarity_score: None,
             path,
             layer: MemoryLayer::L2Detail,
@@ -269,9 +269,9 @@ impl MemoryFact {
         self
     }
 
-    /// Set workspace ID for domain isolation
-    pub fn with_workspace(mut self, workspace: String) -> Self {
-        self.workspace = workspace;
+    /// Set agent ID for domain isolation
+    pub fn with_agent(mut self, agent: String) -> Self {
+        self.agent = agent;
         self
     }
 

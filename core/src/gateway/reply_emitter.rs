@@ -95,7 +95,7 @@ pub struct ReplyEmitter {
 /// Prepend agent identity prefix if agent has a display name.
 fn apply_agent_prefix(text: &str, agent_name: &Option<String>) -> String {
     match agent_name {
-        Some(name) if !name.is_empty() => format!("[{}] {}", name, text),
+        Some(name) if !name.is_empty() => format!("\\[{}\\]\n{}", name, text),
         _ => text.to_string(),
     }
 }
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn test_apply_agent_prefix_with_name() {
         let result = apply_agent_prefix("Hello", &Some("Trading Bot".to_string()));
-        assert_eq!(result, "[Trading Bot] Hello");
+        assert_eq!(result, "\\[Trading Bot\\]\nHello");
     }
 
     #[test]
@@ -541,6 +541,6 @@ mod tests {
     #[test]
     fn test_apply_agent_prefix_chinese_name() {
         let result = apply_agent_prefix("今天BTC价格是...", &Some("交易助手".to_string()));
-        assert_eq!(result, "[交易助手] 今天BTC价格是...");
+        assert_eq!(result, "\\[交易助手\\]\n今天BTC价格是...");
     }
 }

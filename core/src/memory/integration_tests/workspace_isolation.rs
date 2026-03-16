@@ -18,7 +18,7 @@ mod tests {
         fact.embedding = Some(embedding);
         fact.embedding_model = "test-model".to_string();
         fact.content_hash = format!("hash-{}", uuid::Uuid::new_v4());
-        fact.workspace = workspace.to_string();
+        fact.agent = workspace.to_string();
         fact
     }
 
@@ -52,7 +52,7 @@ mod tests {
             .unwrap();
         assert_eq!(results_a.len(), 1, "workspace ws-a should have exactly 1 fact");
         assert_eq!(results_a[0].fact.content, "Bitcoin price is $100k");
-        assert_eq!(results_a[0].fact.workspace, "ws-a");
+        assert_eq!(results_a[0].fact.agent, "ws-a");
 
         // Search in workspace B — should only return B's fact
         let filter_b = SearchFilter::new()
@@ -63,7 +63,7 @@ mod tests {
             .unwrap();
         assert_eq!(results_b.len(), 1, "workspace ws-b should have exactly 1 fact");
         assert_eq!(results_b[0].fact.content, "Chapter 3 outline complete");
-        assert_eq!(results_b[0].fact.workspace, "ws-b");
+        assert_eq!(results_b[0].fact.agent, "ws-b");
 
         // Search with All — should return both
         let filter_all = SearchFilter::new()
@@ -96,7 +96,7 @@ mod tests {
             decay_score: 1.0,
             created_at: 1700000000,
             updated_at: 1700000000,
-            workspace: "ws-a".to_string(),
+            agent: "ws-a".to_string(),
         };
         backend.upsert_node(&node_a, "ws-a").await.unwrap();
 
@@ -110,7 +110,7 @@ mod tests {
             decay_score: 1.0,
             created_at: 1700000000,
             updated_at: 1700000000,
-            workspace: "ws-b".to_string(),
+            agent: "ws-b".to_string(),
         };
         backend.upsert_node(&node_b, "ws-b").await.unwrap();
 
@@ -196,8 +196,8 @@ mod tests {
 
         // Verify all expected constraints are present
         assert!(
-            sql.contains("workspace = 'crypto'"),
-            "SQL should contain workspace filter, got: {}",
+            sql.contains("agent = 'crypto'"),
+            "SQL should contain agent filter, got: {}",
             sql
         );
         assert!(
@@ -218,7 +218,7 @@ mod tests {
             .to_search_filter()
             .to_lance_filter()
             .unwrap();
-        assert!(default_sql.contains("workspace = 'main'"));
+        assert!(default_sql.contains("agent = 'main'"));
     }
 
     // -----------------------------------------------------------------------

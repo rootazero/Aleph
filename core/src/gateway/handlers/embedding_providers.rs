@@ -78,6 +78,13 @@ fn inject_is_active(provider: &EmbeddingProviderConfig, active_id: &str) -> serd
             "is_active".into(),
             serde_json::json!(provider.id == active_id),
         );
+        // Panel expects "model" (string), core serializes "models" (array)
+        if !obj.contains_key("model") {
+            obj.insert(
+                "model".into(),
+                serde_json::json!(provider.default_model()),
+            );
+        }
     }
     val
 }
@@ -533,7 +540,42 @@ pub async fn handle_test(
         ),
     }
 }
+/// Return preset embedding provider configurations.
+pub async fn handle_presets(
+    request: JsonRpcRequest,
+) -> JsonRpcResponse {
+    let presets = vec![
+        serde_json::json!({
+            "preset": "silicon_flow",
+            "id": "siliconflow",
+            "name": "SiliconFlow",
+            "api_base": "https://api.siliconflow.cn/v1",
+            "api_key_env": null,
+            "model": "BAAI/bge-m3",
+            "dimensions": 1024
+        }),
+        serde_json::json!({
+            "preset": "open_ai",
+            "id": "openai",
+            "name": "OpenAI",
+            "api_base": "https://api.openai.com/v1",
+            "api_key_env": null,
+            "model": "text-embedding-3-small",
+            "dimensions": 1536
+        }),
+        serde_json::json!({
+            "preset": "ollama",
+            "id": "ollama",
+            "name": "Ollama",
+            "api_base": "http://localhost:11434/v1",
+            "api_key_env": null,
+            "model": "nomic-embed-text",
+            "dimensions": 768
+        }),
+    ];
 
+    JsonRpcResponse::success(request.id, serde_json::json!(presets))
+}
 
 #[cfg(test)]
 mod tests {

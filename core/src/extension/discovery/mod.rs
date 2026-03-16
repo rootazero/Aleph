@@ -79,7 +79,7 @@ impl DiscoveryConfig {
 ///
 /// Scans all 4 layers in order:
 /// 1. Config-specified paths (highest priority)
-/// 2. Project-level `~/.aleph/projects/<id>/extensions/`
+/// 2. Agent-level `~/.aleph/agents/<id>/extensions/`
 /// 3. Global `~/.aleph/extensions` and `~/.claude/extensions`
 /// 4. Bundled plugins (lowest priority)
 ///
@@ -99,12 +99,12 @@ pub fn discover_all(config: &DiscoveryConfig) -> ExtensionResult<ResolvedPlugins
         }
     }
 
-    // Priority 2: Project-level (~/.aleph/projects/<id>/extensions/)
+    // Priority 2: Agent-level (~/.aleph/agents/<id>/extensions/)
     if let Some(project_id) = &config.project_id {
         let project_dir = if let Some(base) = &config.projects_base_dir {
             Some(base.join(project_id))
         } else {
-            crate::utils::paths::get_project_dir(project_id).ok()
+            crate::utils::paths::get_agent_config_dir(project_id).ok()
         };
 
         if let Some(project_dir) = project_dir {

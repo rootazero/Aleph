@@ -338,7 +338,7 @@ pub fn initialize_agent_dir(path: &Path) -> Result<(), io::Error> {
 /// Standard workspace directory structure:
 ///
 /// ```text
-/// ~/.aleph/workspaces/{agent_id}/
+/// ~/.aleph/agents/{agent_id}/
 /// ├── SOUL.md           # Agent soul — core persona and behavior
 /// ├── AGENTS.md         # Workspace-specific instructions
 /// └── MEMORY.md         # Persistent memory notes
@@ -644,12 +644,12 @@ fn resolve_user_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-/// Default workspace root directory: `~/.aleph/workspaces`.
+/// Default workspace root directory: `~/.aleph/agents`.
 fn default_workspace_root() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join(".aleph")
-        .join("workspaces")
+        .join("agents")
 }
 
 /// Default agent state root directory: `~/.aleph/agents`.

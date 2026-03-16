@@ -26,7 +26,7 @@ pub fn graph_edges_to_record_batch(edges: &[GraphEdge]) -> Result<RecordBatch, A
     let created_at_arr = Int64Array::from_iter_values(edges.iter().map(|e| e.created_at));
     let updated_at_arr = Int64Array::from_iter_values(edges.iter().map(|e| e.updated_at));
     let last_seen_at_arr = Int64Array::from_iter_values(edges.iter().map(|e| e.last_seen_at));
-    let workspace_arr = StringArray::from_iter_values(edges.iter().map(|e| e.workspace.as_str()));
+    let workspace_arr = StringArray::from_iter_values(edges.iter().map(|e| e.agent.as_str()));
 
     let batch = RecordBatch::try_new(
         schema,
@@ -68,7 +68,7 @@ pub fn record_batch_to_graph_edges(batch: &RecordBatch) -> Result<Vec<GraphEdge>
     let created_at_col = col::<Int64Array>(batch, "created_at")?;
     let updated_at_col = col::<Int64Array>(batch, "updated_at")?;
     let last_seen_at_col = col::<Int64Array>(batch, "last_seen_at")?;
-    let workspace_col = col::<StringArray>(batch, "workspace").ok();
+    let workspace_col = col::<StringArray>(batch, "agent").ok();
 
     let mut edges = Vec::with_capacity(n);
     for i in 0..n {
@@ -84,7 +84,7 @@ pub fn record_batch_to_graph_edges(batch: &RecordBatch) -> Result<Vec<GraphEdge>
             created_at: created_at_col.value(i),
             updated_at: updated_at_col.value(i),
             last_seen_at: last_seen_at_col.value(i),
-            workspace: workspace_col
+            agent: workspace_col
                 .map(|c| c.value(i).to_string())
                 .unwrap_or_else(|| "default".to_string()),
         });

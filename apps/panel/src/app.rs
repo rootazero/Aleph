@@ -11,14 +11,11 @@ use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
 use crate::views::logs::Logs;
 use crate::views::settings::*;
-use crate::views::wizard::SetupWizard;
-
 // Layout components
 use crate::components::top_bar::TopBar;
 use crate::components::mode_sidebar::ModeSidebar;
 use crate::components::bottom_bar::{BottomBar, PanelMode};
 use crate::context::{DashboardContext, DashboardState};
-use crate::api::ProvidersApi;
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -32,7 +29,6 @@ pub fn App() -> impl IntoView {
 #[component]
 fn AppContent() -> impl IntoView {
     let state = expect_context::<DashboardState>();
-    let show_wizard = RwSignal::new(false);
 
     // Setup WebSocket connection and alert subscriptions on mount
     Effect::new(move || {
@@ -43,17 +39,6 @@ fn AppContent() -> impl IntoView {
                     web_sys::console::log_1(&"Connected to Gateway".into());
                     if let Err(e) = state.setup_alert_subscriptions().await {
                         web_sys::console::error_1(&format!("Failed to setup alert subscriptions: {}", e).into());
-                    }
-                    // Check if first-run wizard is needed
-                    match ProvidersApi::needs_setup(&state).await {
-                        Ok(needs) => {
-                            if needs {
-                                show_wizard.set(true);
-                            }
-                        }
-                        Err(e) => {
-                            web_sys::console::error_1(&format!("Failed to check setup status: {}", e).into());
-                        }
                     }
                 }
                 Err(e) => {
@@ -72,9 +57,6 @@ fn AppContent() -> impl IntoView {
 
     view! {
         <div class="flex flex-col h-screen bg-surface text-text-primary font-sans selection:bg-primary/30">
-            {move || show_wizard.get().then(|| view! {
-                <SetupWizard on_close=Callback::new(move |_| show_wizard.set(false)) />
-            })}
             <Router>
                 // Top bar (fixed)
                 <TopBar />

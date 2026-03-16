@@ -570,13 +570,6 @@ impl ProvidersApi {
             .map_err(|e| format!("Failed to parse OAuth status: {}", e))
     }
 
-    /// Check if setup is needed (no providers configured)
-    pub async fn needs_setup(state: &DashboardState) -> Result<bool, String> {
-        let result = state.rpc_call("providers.needsSetup", Value::Null).await?;
-        result.get("needs_setup")
-            .and_then(|v| v.as_bool())
-            .ok_or_else(|| "Invalid response: missing needs_setup".to_string())
-    }
 }
 
 

@@ -231,11 +231,11 @@ impl MemoryStore for LanceMemoryBackend {
         let pp_safe = escape_sql_string(parent_path);
         let ws_safe = escape_sql_string(workspace);
         let filter = if matches!(ns, NamespaceScope::Owner) {
-            format!("parent_path = '{}' AND workspace = '{}'", pp_safe, ws_safe)
+            format!("parent_path = '{}' AND agent = '{}'", pp_safe, ws_safe)
         } else {
             let ns_safe = escape_sql_string(&ns_value);
             format!(
-                "parent_path = '{}' AND namespace = '{}' AND workspace = '{}'",
+                "parent_path = '{}' AND namespace = '{}' AND agent = '{}'",
                 pp_safe, ns_safe, ws_safe
             )
         };
@@ -272,10 +272,10 @@ impl MemoryStore for LanceMemoryBackend {
         let path_safe = escape_sql_string(path);
         let ws_safe = escape_sql_string(workspace);
         let filter = if matches!(ns, NamespaceScope::Owner) {
-            format!("path = '{}' AND workspace = '{}'", path_safe, ws_safe)
+            format!("path = '{}' AND agent = '{}'", path_safe, ws_safe)
         } else {
             let ns_safe = escape_sql_string(&ns_value);
-            format!("path = '{}' AND namespace = '{}' AND workspace = '{}'", path_safe, ns_safe, ws_safe)
+            format!("path = '{}' AND namespace = '{}' AND agent = '{}'", path_safe, ns_safe, ws_safe)
         };
 
         let facts = scan_facts(&self.facts_table, Some(&filter), Some(1)).await?;
@@ -323,11 +323,11 @@ impl MemoryStore for LanceMemoryBackend {
         let ns_value = ns.to_namespace_value();
         let ws_safe = escape_sql_string(workspace);
         let filter = if matches!(ns, NamespaceScope::Owner) {
-            format!("fact_type = '{}' AND workspace = '{}'", fact_type.as_str(), ws_safe)
+            format!("fact_type = '{}' AND agent = '{}'", fact_type.as_str(), ws_safe)
         } else {
             let ns_safe = escape_sql_string(&ns_value);
             format!(
-                "fact_type = '{}' AND namespace = '{}' AND workspace = '{}'",
+                "fact_type = '{}' AND namespace = '{}' AND agent = '{}'",
                 fact_type.as_str(),
                 ns_safe,
                 ws_safe
@@ -348,7 +348,7 @@ impl MemoryStore for LanceMemoryBackend {
         }
         if let Some(ws) = workspace {
             clauses.push(format!(
-                "workspace = '{}'",
+                "agent = '{}'",
                 escape_sql_string(ws)
             ));
         }

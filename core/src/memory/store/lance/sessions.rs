@@ -219,7 +219,7 @@ impl SessionStore for LanceMemoryBackend {
         use crate::memory::store::types::escape_sql_string;
         let ns_value = namespace.to_namespace_value();
         let filter = format!(
-            "timestamp >= {} AND namespace = '{}' AND workspace = '{}'",
+            "timestamp >= {} AND namespace = '{}' AND agent = '{}'",
             since_timestamp, escape_sql_string(&ns_value), escape_sql_string(workspace)
         );
 
@@ -480,7 +480,7 @@ mod tests {
             decay_score: 1.0,
             created_at: 1700000000,
             updated_at: 1700000000,
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
         };
         backend.upsert_node(&node, "default").await.unwrap();
 

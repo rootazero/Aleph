@@ -672,14 +672,23 @@ fn ProviderDetailView(
                 }).collect_view()}
             </div>
 
-            // Delete button
-            <button
-                on:click=handle_delete
-                disabled=move || deleting.get()
-                class="w-full px-4 py-2.5 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors font-medium"
-            >
-                {move || if deleting.get() { "Deleting..." } else { "Delete Provider" }}
-            </button>
+            // Delete button (only for custom providers, not presets)
+            {
+                let is_preset = PresetProviders::all().iter().any(|p| p.id == provider_name_for_default);
+                if !is_preset {
+                    view! {
+                        <button
+                            on:click=handle_delete
+                            disabled=move || deleting.get()
+                            class="w-full px-4 py-2.5 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors font-medium"
+                        >
+                            {move || if deleting.get() { "Deleting..." } else { "Delete Provider" }}
+                        </button>
+                    }.into_any()
+                } else {
+                    view! { <span></span> }.into_any()
+                }
+            }
 
             </div> // scrollable content
         </div> // flex wrapper
@@ -883,7 +892,7 @@ fn AddCustomProviderPanel(
                         placeholder="e.g. dall-e-3, stable-diffusion-xl"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"Enter a model name"</p>
+                    <p class="mt-1 text-xs text-text-tertiary">"Enter multiple models, separated by commas"</p>
                 </div>
 
                 // Base URL

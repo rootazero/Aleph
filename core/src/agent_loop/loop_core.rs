@@ -195,6 +195,9 @@ impl<P: LoopProvider> AgentLoop<P> {
         let mut tool_calls_made: usize = 0;
         let mut total_tokens: usize = 0;
         let mut hit_limit = false;
+        let mut stop_requested = false;
+        let mut consecutive_errors: usize = 0;
+        const MAX_CONSECUTIVE_ERRORS: usize = 10;
 
         let start = Instant::now();
 
@@ -213,6 +216,8 @@ impl<P: LoopProvider> AgentLoop<P> {
                 .provider
                 .call(&messages, &system_prompt, &tool_defs)
                 .await?;
+
+            // Removed debug logging
 
             // Track tokens
             if let Some(usage) = &response.usage {
@@ -286,10 +291,25 @@ impl<P: LoopProvider> AgentLoop<P> {
                         let result = self.tool_registry.execute(&tc.name, tc.arguments.clone()).await;
                         callback.on_tool_done(&tc.name, &result);
 
-                        let (output, is_error) = match &result {
-                            ToolResult::Success { output } => (output.clone(), false),
+                        let (output, is_error, should_stop) = match &result {
+                            ToolResult::Success { output } => {
+                                consecutive_errors = 0;
+                                (output.clone(), false, false)
+                            },
+                            ToolResult::SuccessAndStopLoop { output } => {
+                                tracing::info!(tool = %tc.name, "Tool returned SuccessAndStopLoop — will break loop");
+                                (output.clone(), false, true)
+                            },
                             ToolResult::Error { error, .. } => {
-                                (Value::String(error.clone()), true)
+                                consecutive_errors += 1;
+                                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                    tracing::warn!(
+                                        consecutive_errors,
+                                        tool = %tc.name,
+                                        "Too many consecutive tool errors — stopping loop"
+                                    );
+                                }
+                                (Value::String(error.clone()), true, false)
                             }
                         };
 
@@ -298,10 +318,38 @@ impl<P: LoopProvider> AgentLoop<P> {
                             output,
                             is_error,
                         });
+
+                        if should_stop {
+                            // Extract response text from the tool output for final_text
+                            if final_text.is_none() {
+                                if let Some(msg) = messages.last()
+                                    .and_then(|m| if let LoopMessage::ToolResult { output, .. } = m {
+                                        output.get("message").and_then(|v| v.as_str())
+                                    } else { None })
+                                {
+                                    final_text = Some(msg.to_string());
+                                }
+                            }
+                            stop_requested = true;
+                        }
                     }
                 }
 
                 tool_calls_made += 1;
+            }
+
+            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                hit_limit = true;
+                final_text = Some(format!(
+                    "Tool execution failed repeatedly ({} consecutive errors). The last error was for tool '{}'. Please try rephrasing your request.",
+                    consecutive_errors,
+                    response.tool_calls.last().map(|tc| tc.name.as_str()).unwrap_or("unknown")
+                ));
+                break;
+            }
+
+            if stop_requested {
+                break;
             }
 
             // Check token budget

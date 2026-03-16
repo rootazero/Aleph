@@ -138,7 +138,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
             match state
                 .rpc_call(
                     "channel.create",
-                    json!({ "channel_type": pt, "channel_id": id }),
+                    json!({ "type": pt, "id": id }),
                 )
                 .await
             {

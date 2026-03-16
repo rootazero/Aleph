@@ -174,7 +174,7 @@ mod tests {
             decay_score: 0.95,
             created_at: 1700000000,
             updated_at: 1700000100,
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
         };
 
         let batch = graph_nodes_to_record_batch(std::slice::from_ref(&node)).expect("to_batch");
@@ -205,7 +205,7 @@ mod tests {
             decay_score: 1.0,
             created_at: 1700000000,
             updated_at: 1700000000,
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
         };
 
         let batch = graph_nodes_to_record_batch(std::slice::from_ref(&node)).expect("to_batch");
@@ -229,7 +229,7 @@ mod tests {
             created_at: 1700000000,
             updated_at: 1700000100,
             last_seen_at: 1700000200,
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
         };
 
         let batch = graph_edges_to_record_batch(std::slice::from_ref(&edge)).expect("to_batch");
@@ -274,7 +274,7 @@ mod tests {
             ai_output: "Rust is a systems programming language.".to_string(),
             embedding: Some(vec![0.5_f32; 768]),
             namespace: "owner".to_string(),
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
             similarity_score: None,
         };
 
@@ -311,7 +311,7 @@ mod tests {
             ai_output: "Hi there!".to_string(),
             embedding: None,
             namespace: "owner".to_string(),
-            workspace: "default".to_string(),
+            agent: "default".to_string(),
             similarity_score: None,
         };
 

@@ -178,7 +178,7 @@ impl SearchFilter {
         let ws_safe = escape_sql_string(workspace);
         let mut parts = vec![
             "scope = 'global'".to_string(),
-            format!("(scope = 'workspace' AND workspace = '{ws_safe}')"),
+            format!("(scope = 'agent' AND agent = '{ws_safe}')"),
         ];
         if let Some(pid) = persona_id {
             let pid_safe = escape_sql_string(pid);
@@ -438,7 +438,7 @@ mod tests {
         let f = SearchFilter::new()
             .with_workspace(WorkspaceFilter::Single("crypto".into()));
         let sql = f.to_lance_filter().unwrap();
-        assert_eq!(sql, "workspace = 'crypto'");
+        assert_eq!(sql, "agent = 'crypto'");
     }
 
     #[test]
@@ -446,7 +446,7 @@ mod tests {
         let f = SearchFilter::new()
             .with_workspace(WorkspaceFilter::Multiple(vec!["a".into(), "b".into()]));
         let sql = f.to_lance_filter().unwrap();
-        assert_eq!(sql, "workspace IN ('a', 'b')");
+        assert_eq!(sql, "agent IN ('a', 'b')");
     }
 
     #[test]
@@ -464,7 +464,7 @@ mod tests {
             .with_workspace(WorkspaceFilter::Single("crypto".into()))
             .with_valid_only();
         let sql = f.to_lance_filter().unwrap();
-        assert!(sql.contains("workspace = 'crypto'"));
+        assert!(sql.contains("agent = 'crypto'"));
         assert!(sql.contains("namespace = 'owner'"));
         assert!(sql.contains("is_valid = true"));
     }
@@ -487,7 +487,7 @@ mod tests {
             ..Default::default()
         };
         let sql = f.to_lance_filter().unwrap();
-        assert_eq!(sql, "workspace = 'novel'");
+        assert_eq!(sql, "agent = 'novel'");
     }
 
     #[test]
@@ -513,7 +513,7 @@ mod tests {
             .with_scope_stack(Some("reviewer"), "aleph");
         let sql = filter.to_lance_filter().unwrap();
         assert!(sql.contains("scope = 'global'"));
-        assert!(sql.contains("scope = 'workspace'"));
+        assert!(sql.contains("scope = 'agent'"));
         assert!(sql.contains("scope = 'persona'"));
         assert!(sql.contains("persona_id = 'reviewer'"));
     }
@@ -524,7 +524,7 @@ mod tests {
             .with_scope_stack(None, "aleph");
         let sql = filter.to_lance_filter().unwrap();
         assert!(sql.contains("scope = 'global'"));
-        assert!(sql.contains("scope = 'workspace'"));
+        assert!(sql.contains("scope = 'agent'"));
         assert!(!sql.contains("persona"));
     }
 

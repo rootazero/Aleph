@@ -280,16 +280,20 @@ fn ProviderDetailPanel(
         }
     };
 
+    // Grab state once for closures
+    let state = expect_context::<DashboardState>();
+
     // Test connection
     let build_for_test = build_rerank_config.clone();
+    let test_state = state.clone();
     let handle_test = move |_| {
         set_testing.set(true);
         set_test_result.set(None);
         set_action_error.set(None);
 
         let rerank = build_for_test();
+        let state = test_state.clone();
         spawn_local(async move {
-            let state = expect_context::<DashboardState>();
             match RerankConfigApi::test(&state, rerank).await {
                 Ok(resp) => {
                     if resp.success {
@@ -314,6 +318,7 @@ fn ProviderDetailPanel(
 
     // Save handler
     let build_for_save = build_rerank_config.clone();
+    let save_state = state.clone();
     let handle_save = move |_| {
         set_action_error.set(None);
         set_save_success.set(false);
@@ -321,8 +326,8 @@ fn ProviderDetailPanel(
 
         let rerank = build_for_save();
         let rerank_clone = rerank.clone();
+        let state = save_state.clone();
         spawn_local(async move {
-            let state = expect_context::<DashboardState>();
             match RerankConfigApi::update(&state, rerank_clone.clone()).await {
                 Ok(_) => {
                     config.set(Some(rerank_clone));
@@ -396,7 +401,7 @@ fn ProviderDetailPanel(
                         placeholder="e.g. jina-reranker-v2-base-multilingual"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Enter a model name"</p>
+                    <p class="text-xs text-text-tertiary mt-1">"Enter multiple models, separated by commas"</p>
                 </div>
 
                 // API Base URL
@@ -563,16 +568,20 @@ fn AddCustomProviderPanel(
         }
     };
 
+    // Grab state once for closures
+    let state = expect_context::<DashboardState>();
+
     // Test connection
     let build_for_test = build_rerank_config.clone();
+    let test_state = state.clone();
     let handle_test = move |_| {
         set_testing.set(true);
         set_test_result.set(None);
         set_action_error.set(None);
 
         let rerank = build_for_test();
+        let state = test_state.clone();
         spawn_local(async move {
-            let state = expect_context::<DashboardState>();
             match RerankConfigApi::test(&state, rerank).await {
                 Ok(resp) => {
                     if resp.success {
@@ -597,6 +606,7 @@ fn AddCustomProviderPanel(
 
     // Save handler — saves as vLLM provider with custom endpoint
     let build_for_save = build_rerank_config.clone();
+    let save_state = state.clone();
     let handle_save = move |_| {
         // Validate
         if api_base.get().is_empty() {
@@ -613,8 +623,8 @@ fn AddCustomProviderPanel(
 
         let rerank = build_for_save();
         let rerank_clone = rerank.clone();
+        let state = save_state.clone();
         spawn_local(async move {
-            let state = expect_context::<DashboardState>();
             match RerankConfigApi::update(&state, rerank_clone.clone()).await {
                 Ok(_) => {
                     config.set(Some(rerank_clone));
@@ -701,7 +711,7 @@ fn AddCustomProviderPanel(
                         placeholder="e.g. BAAI/bge-reranker-v2-m3"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Enter a model name"</p>
+                    <p class="text-xs text-text-tertiary mt-1">"Enter multiple models, separated by commas"</p>
                 </div>
 
                 // API Base URL

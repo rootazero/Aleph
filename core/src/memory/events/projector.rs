@@ -72,7 +72,7 @@ impl EventProjector {
                     scope,
                     path,
                     namespace,
-                    workspace,
+                    agent: workspace,
                     confidence,
                     source,
                     source_memory_ids,
@@ -95,7 +95,7 @@ impl EventProjector {
                         specificity: FactSpecificity::default(),
                         temporal_scope: TemporalScope::default(),
                         namespace: namespace.clone(),
-                        workspace: workspace.clone(),
+                        agent: workspace.clone(),
                         similarity_score: None,
                         path: path.clone(),
                         layer: MemoryLayer::default(),
@@ -153,8 +153,8 @@ impl EventProjector {
                             "namespace" => {
                                 f.namespace = new_value.clone();
                             }
-                            "workspace" => {
-                                f.workspace = new_value.clone();
+                            "agent" => {
+                                f.agent = new_value.clone();
                             }
                             _ => {
                                 // Unknown metadata field — silently ignore
@@ -276,7 +276,7 @@ mod tests {
                 scope: MemoryScope::Global,
                 path: "aleph://user/preferences/".to_string(),
                 namespace: "owner".to_string(),
-                workspace: "default".to_string(),
+                agent: "default".to_string(),
                 confidence: 0.9,
                 source: FactSource::Extracted,
                 source_memory_ids: vec!["mem-001".to_string()],
@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(fact.scope, MemoryScope::Global);
         assert_eq!(fact.path, "aleph://user/preferences/");
         assert_eq!(fact.namespace, "owner");
-        assert_eq!(fact.workspace, "default");
+        assert_eq!(fact.agent, "default");
         assert!((fact.confidence - 0.9).abs() < f32::EPSILON);
         assert_eq!(fact.fact_source, FactSource::Extracted);
         assert_eq!(fact.source_memory_ids, vec!["mem-001"]);

@@ -33,7 +33,7 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
     );
     let session_key_arr = StringArray::from_iter_values(memories.iter().map(|_| "default"));
     let namespace_arr = StringArray::from_iter_values(memories.iter().map(|m| m.namespace.as_str()));
-    let workspace_arr = StringArray::from_iter_values(memories.iter().map(|m| m.workspace.as_str()));
+    let workspace_arr = StringArray::from_iter_values(memories.iter().map(|m| m.agent.as_str()));
 
     // Vector columns (multi-dimension coexistence, same pattern as facts)
     let normalized: Vec<Option<Vec<f32>>> = memories
@@ -98,7 +98,7 @@ pub fn record_batch_to_memories(batch: &RecordBatch) -> Result<Vec<MemoryEntry>,
         .ok();
     // namespace and workspace columns (with fallback for backward compatibility)
     let namespace_col = col::<StringArray>(batch, "namespace").ok();
-    let workspace_col = col::<StringArray>(batch, "workspace").ok();
+    let workspace_col = col::<StringArray>(batch, "agent").ok();
     let vec_768_col = col::<FixedSizeListArray>(batch, "vec_768").ok();
     let vec_1024_col = col::<FixedSizeListArray>(batch, "vec_1024").ok();
     let vec_1536_col = col::<FixedSizeListArray>(batch, "vec_1536").ok();
@@ -130,7 +130,7 @@ pub fn record_batch_to_memories(batch: &RecordBatch) -> Result<Vec<MemoryEntry>,
             namespace: namespace_col
                 .map(|c| c.value(i).to_string())
                 .unwrap_or_else(|| "owner".to_string()),
-            workspace: workspace_col
+            agent: workspace_col
                 .map(|c| c.value(i).to_string())
                 .unwrap_or_else(|| "default".to_string()),
             similarity_score: None,

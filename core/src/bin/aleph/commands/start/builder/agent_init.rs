@@ -197,12 +197,20 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         use alephcore::dispatcher::{UnifiedTool, ToolSource};
         let mut tools: Vec<UnifiedTool> = BUILTIN_TOOL_DEFINITIONS
             .iter()
-            .map(|def| UnifiedTool::new(
-                format!("builtin:{}", def.name),
-                def.name,
-                def.description,
-                ToolSource::Builtin,
-            ))
+            .map(|def| {
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", def.name),
+                    def.name,
+                    def.description,
+                    ToolSource::Builtin,
+                );
+                // Attach parameter schemas from the tool registry so LLMs
+                // know which arguments each tool expects.
+                if let Some(schema) = tool_registry.get_tool_schema(def.name) {
+                    ut = ut.with_parameters_schema(schema);
+                }
+                ut
+            })
             .collect();
 
         // Add plugin tools to both LLM tool list and BuiltinToolRegistry

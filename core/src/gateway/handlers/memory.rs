@@ -124,7 +124,7 @@ pub async fn handle_search(
                 .into_iter()
                 .map(|m| MemoryEntry {
                     id: m.id,
-                    agent_id: m.workspace,
+                    agent_id: m.agent,
                     window_title: m.context.window_title,
                     user_input: m.user_input,
                     ai_output: m.ai_output,
@@ -269,7 +269,7 @@ pub async fn handle_list_facts(
                 .into_iter()
                 .map(|f| FactEntry {
                     id: f.id,
-                    agent_id: f.workspace,
+                    agent_id: f.agent,
                     content: f.content,
                     fact_type: format!("{:?}", f.fact_type),
                     confidence: f.confidence,

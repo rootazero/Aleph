@@ -98,16 +98,59 @@ fn status_to_string(status: ChannelStatus) -> String {
 
 /// Handle channels.list RPC request
 ///
-/// Returns a list of all registered channels with their status.
+/// Returns a list of all channels — both registered (running/stopped) instances
+/// from the registry AND pending channels that exist in config but haven't been
+/// instantiated yet (e.g. missing required fields like bot_token).
 pub async fn handle_list(
     request: JsonRpcRequest,
     registry: Arc<ChannelRegistry>,
+    app_config: Arc<RwLock<Config>>,
 ) -> JsonRpcResponse {
     debug!("Handling channels.list");
 
     let channels = registry.list().await;
-    let infos: Vec<ChannelInfoResponse> = channels.iter().map(ChannelInfoResponse::from).collect();
+    let mut infos: Vec<ChannelInfoResponse> = channels.iter().map(ChannelInfoResponse::from).collect();
     let summary = registry.status_summary().await;
+
+    // Merge channels from config that aren't in the registry (pending_config)
+    {
+        let cfg = app_config.read().await;
+        let registered_ids: std::collections::HashSet<String> =
+            infos.iter().map(|i| i.id.clone()).collect();
+
+        let pending: Vec<ChannelInfoResponse> = cfg.channels.iter()
+            .filter(|(id, _)| !registered_ids.contains(id.as_str()))
+            .map(|(id, val)| {
+                let channel_type = val
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                ChannelInfoResponse {
+                    id: id.clone(),
+                    name: id.clone(),
+                    channel_type,
+                    status: "pending_config".to_string(),
+                    capabilities: CapabilitiesResponse {
+                        attachments: false,
+                        images: false,
+                        audio: false,
+                        video: false,
+                        reactions: false,
+                        replies: false,
+                        editing: false,
+                        deletion: false,
+                        typing_indicator: false,
+                        read_receipts: false,
+                        rich_text: false,
+                        max_message_length: 0,
+                        max_attachment_size: 0,
+                    },
+                }
+            })
+            .collect();
+        infos.extend(pending);
+    }
 
     JsonRpcResponse::success(
         request.id,
@@ -467,26 +510,11 @@ pub async fn handle_create(
         );
     }
 
-    // Create channel instance
-    let channel = match create_channel_from_config(&id, &channel_type, config.clone()) {
-        Some(ch) => ch,
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("Failed to create channel: unsupported type '{}' or invalid config", channel_type),
-            );
-        }
-    };
-
-    // Register the channel
-    registry.register(channel).await;
-
-    // Save to app config
+    // Save to app config first (always succeeds)
     {
         let mut app_cfg = app_config.write().await;
-        let mut config_to_save = if let Value::Object(map) = config {
-            map
+        let mut config_to_save = if let Value::Object(ref map) = config {
+            map.clone()
         } else {
             serde_json::Map::new()
         };
@@ -494,27 +522,47 @@ pub async fn handle_create(
         app_cfg.channels.insert(id.clone(), Value::Object(config_to_save));
     }
 
-    // Auto-start the channel
-    let start_result = registry.start_channel(&channel_id).await;
+    // Try to create and register channel instance.
+    // If config is incomplete (e.g. missing bot_token), we still succeed
+    // with status "pending_config" so the user can fill in details via Panel.
+    let channel = create_channel_from_config(&id, &channel_type, config.clone());
 
-    match start_result {
-        Ok(()) => JsonRpcResponse::success(
+    if let Some(ch) = channel {
+        registry.register(ch).await;
+
+        // Auto-start the channel
+        let start_result = registry.start_channel(&channel_id).await;
+
+        match start_result {
+            Ok(()) => JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "id": id,
+                    "type": channel_type,
+                    "status": "started",
+                }),
+            ),
+            Err(e) => JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "id": id,
+                    "type": channel_type,
+                    "status": "created_but_start_failed",
+                    "error": e.to_string(),
+                }),
+            ),
+        }
+    } else {
+        // Config incomplete — saved to config but not instantiated yet.
+        // User can fill in required fields via Panel and then start manually.
+        JsonRpcResponse::success(
             request.id,
             json!({
                 "id": id,
                 "type": channel_type,
-                "status": "started",
+                "status": "pending_config",
             }),
-        ),
-        Err(e) => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "id": id,
-                "type": channel_type,
-                "status": "created_but_start_failed",
-                "error": e.to_string(),
-            }),
-        ),
+        )
     }
 }
 
@@ -542,8 +590,14 @@ pub async fn handle_delete(
 
     debug!("Handling channel.delete: id={}", id);
 
-    // Check if channel exists
-    if registry.get(&channel_id).await.is_none() {
+    // Check if channel exists in registry or config
+    let in_registry = registry.get(&channel_id).await.is_some();
+    let in_config = {
+        let cfg = app_config.read().await;
+        cfg.channels.get(&id).is_some()
+    };
+
+    if !in_registry && !in_config {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
@@ -551,11 +605,11 @@ pub async fn handle_delete(
         );
     }
 
-    // Stop the channel first
-    let _ = registry.stop_channel(&channel_id).await;
-
-    // Remove from registry
-    registry.unregister(&channel_id).await;
+    // Stop and unregister from registry (if present)
+    if in_registry {
+        let _ = registry.stop_channel(&channel_id).await;
+        registry.unregister(&channel_id).await;
+    }
 
     // Remove from app config
     {

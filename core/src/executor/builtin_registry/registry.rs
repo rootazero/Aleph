@@ -121,6 +121,17 @@ impl BuiltinToolRegistry {
         self.tools.insert(tool.name.clone(), tool);
     }
 
+    /// Get the parameter schema for a tool by name.
+    ///
+    /// Returns the schema if the tool exists in the internal registry and has
+    /// a `parameters_schema` set. Used to attach schemas to the `UnifiedTool`
+    /// list sent to the LLM so it knows which arguments to pass.
+    pub fn get_tool_schema(&self, name: &str) -> Option<Value> {
+        self.tools
+            .get(name)
+            .and_then(|t| t.parameters_schema.clone())
+    }
+
     /// Check if an operation is permitted
     ///
     /// TODO: Implement tool policy following OpenClaw's sandbox/tool-policy pattern.

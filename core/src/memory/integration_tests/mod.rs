@@ -107,7 +107,7 @@ mod event_sourcing {
                 scope: MemoryScope::Global,
                 path: "/user/preferences/language".into(),
                 namespace: "owner".into(),
-                workspace: "default".into(),
+                agent: "default".into(),
                 confidence: 0.9,
                 source: FactSource::Extracted,
                 source_memory_ids: vec!["conv-001".into()],

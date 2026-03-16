@@ -204,7 +204,7 @@ impl CompressionService {
         let mut affected_paths: HashSet<String> = HashSet::new();
 
         for mut fact in extracted_facts {
-            fact.workspace = workspace_id.to_string();
+            fact.agent = workspace_id.to_string();
             // Detect conflicts
             let resolutions = self.conflict_detector.resolve_conflicts(&fact).await?;
 
@@ -229,7 +229,7 @@ impl CompressionService {
                         scope: fact.scope,
                         path: fact.path.clone(),
                         namespace: fact.namespace.clone(),
-                        workspace: fact.workspace.clone(),
+                        agent: fact.agent.clone(),
                         confidence: fact.confidence,
                         source: fact.fact_source,
                         source_memory_ids: fact.source_memory_ids.clone(),

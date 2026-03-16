@@ -413,10 +413,10 @@ impl FactRetrieval {
         let mut cross_facts: Vec<CrossWorkspaceFact> = all_results
             .facts
             .into_iter()
-            .filter(|f| f.workspace != primary_workspace && !primary_ids.contains(f.id.as_str()))
+            .filter(|f| f.agent != primary_workspace && !primary_ids.contains(f.id.as_str()))
             .map(|f| CrossWorkspaceFact {
                 content: f.content.clone(),
-                source_workspace: f.workspace.clone(),
+                source_workspace: f.agent.clone(),
                 relevance_score: f.similarity_score.unwrap_or(0.0),
             })
             .collect();
