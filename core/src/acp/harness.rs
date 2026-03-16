@@ -16,6 +16,24 @@ pub enum HarnessMode {
     Oneshot,
 }
 
+impl HarnessMode {
+    /// Convert to the serde-friendly config enum.
+    pub fn to_serde(&self) -> crate::config::types::acp::HarnessModeSerde {
+        match self {
+            HarnessMode::NativeAcp => crate::config::types::acp::HarnessModeSerde::NativeAcp,
+            HarnessMode::Oneshot => crate::config::types::acp::HarnessModeSerde::Oneshot,
+        }
+    }
+
+    /// Convert from the serde-friendly config enum.
+    pub fn from_serde(s: &crate::config::types::acp::HarnessModeSerde) -> Self {
+        match s {
+            crate::config::types::acp::HarnessModeSerde::NativeAcp => HarnessMode::NativeAcp,
+            crate::config::types::acp::HarnessModeSerde::Oneshot => HarnessMode::Oneshot,
+        }
+    }
+}
+
 /// Trait for ACP-capable CLI harnesses (Claude Code, Codex, Gemini, etc.).
 ///
 /// Each harness knows how to build a `HarnessConfig` for its CLI tool
