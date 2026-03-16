@@ -113,7 +113,7 @@ pub struct AcpHarnessEntry {
     #[serde(default = "super::search::default_true")]
     pub enabled: bool,
 
-    /// Preset identifier (e.g. "claude_code", "codex", "gemini") — if set,
+    /// Preset identifier (e.g. "claude-code", "codex", "gemini") — if set,
     /// missing fields are filled from the preset defaults
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
@@ -145,7 +145,7 @@ impl Default for AcpHarnessEntry {
 // =============================================================================
 
 /// Well-known preset identifiers
-const PRESET_CLAUDE_CODE: &str = "claude_code";
+const PRESET_CLAUDE_CODE: &str = "claude-code";
 const PRESET_CODEX: &str = "codex";
 const PRESET_GEMINI: &str = "gemini";
 
