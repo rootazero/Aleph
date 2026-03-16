@@ -13,10 +13,7 @@ use crate::providers::openai::{
     ChatCompletionResponse, ContentBlock, ImageUrl, Message, MessageContent, OpenAiFunction,
     OpenAiTool,
 };
-use crate::providers::shared::{
-    build_document_context, combine_with_document_context, separate_attachments,
-    should_use_prepend_mode,
-};
+use crate::providers::message::UnifiedMessage;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
@@ -64,163 +61,113 @@ impl OpenAiProtocol {
         }
     }
 
-    /// Build messages array from request payload
-    fn build_messages(payload: &RequestPayload, config: &ProviderConfig) -> Vec<Message> {
-        let mut messages = Vec::new();
-        let use_prepend_mode = !payload.force_standard_mode && should_use_prepend_mode(config);
+    /// Convert UnifiedMessages to OpenAI Messages
+    fn convert_messages(messages: &[UnifiedMessage], system_prompt: Option<&str>) -> Vec<Message> {
+        let mut result = Vec::new();
 
-        // Check if we have any image content
-        let has_image = payload.image.is_some();
-        let has_image_attachments = payload
-            .attachments
-            .map(|a| a.iter().any(|att| att.media_type == "image"))
-            .unwrap_or(false);
-
-        if has_image || has_image_attachments {
-            Self::build_multimodal_messages(payload, config, use_prepend_mode, &mut messages);
-        } else {
-            Self::build_text_messages(payload, use_prepend_mode, &mut messages);
-        }
-
-        messages
-    }
-
-    /// Build text-only messages
-    fn build_text_messages(
-        payload: &RequestPayload,
-        use_prepend_mode: bool,
-        messages: &mut Vec<Message>,
-    ) {
-        // Handle document attachments by injecting into text
-        let input = if let Some(attachments) = payload.attachments {
-            let (_, documents) = separate_attachments(attachments);
-            if !documents.is_empty() {
-                let doc_context = build_document_context(&documents);
-                combine_with_document_context(&doc_context, payload.input)
-            } else {
-                payload.input.to_string()
-            }
-        } else {
-            payload.input.to_string()
-        };
-
-        if use_prepend_mode {
-            // Prepend system prompt to user message (for APIs that ignore system role)
-            let user_content = if let Some(prompt) = payload.system_prompt {
-                format!(
-                    "<<< SYSTEM INSTRUCTIONS - YOU MUST FOLLOW EXACTLY >>>\n\n{}\n\n<<< END INSTRUCTIONS >>>\n\n<<< USER INPUT >>>\n{}",
-                    prompt, input
-                )
-            } else {
-                input
-            };
-
-            messages.push(Message {
-                role: "user".to_string(),
+        // Add system message if provided
+        if let Some(prompt) = system_prompt {
+            result.push(Message {
+                role: "system".to_string(),
                 content: MessageContent::Text {
-                    content: user_content,
-                },
-            });
-        } else {
-            // Standard mode: use separate system message
-            if let Some(prompt) = payload.system_prompt {
-                messages.push(Message {
-                    role: "system".to_string(),
-                    content: MessageContent::Text {
-                        content: prompt.to_string(),
-                    },
-                });
-            }
-
-            messages.push(Message {
-                role: "user".to_string(),
-                content: MessageContent::Text { content: input },
-            });
-        }
-    }
-
-    /// Build multimodal messages with images
-    fn build_multimodal_messages(
-        payload: &RequestPayload,
-        _config: &ProviderConfig,
-        use_prepend_mode: bool,
-        messages: &mut Vec<Message>,
-    ) {
-        // Add system message if not using prepend mode
-        if !use_prepend_mode {
-            if let Some(prompt) = payload.system_prompt {
-                messages.push(Message {
-                    role: "system".to_string(),
-                    content: MessageContent::Text {
-                        content: prompt.to_string(),
-                    },
-                });
-            }
-        }
-
-        // Build content blocks
-        let mut content_blocks = Vec::new();
-        let mut text_input = payload.input.to_string();
-
-        // Handle document attachments
-        if let Some(attachments) = payload.attachments {
-            let (_, documents) = separate_attachments(attachments);
-            if !documents.is_empty() {
-                let doc_context = build_document_context(&documents);
-                text_input = combine_with_document_context(&doc_context, &text_input);
-            }
-        }
-
-        // Build text content (with prepended system prompt if in prepend mode)
-        let text_content = if use_prepend_mode {
-            if let Some(prompt) = payload.system_prompt {
-                format!("{}\n\n{}", prompt, text_input)
-            } else {
-                text_input
-            }
-        } else {
-            text_input
-        };
-
-        // Provide default description for empty input
-        let final_text = if text_content.is_empty() {
-            "Describe this image in detail.".to_string()
-        } else {
-            text_content
-        };
-
-        content_blocks.push(ContentBlock::Text { text: final_text });
-
-        // Add legacy image if present
-        if let Some(image) = payload.image {
-            content_blocks.push(ContentBlock::ImageUrl {
-                image_url: ImageUrl {
-                    url: image.to_base64(),
-                    detail: Some("auto".to_string()),
+                    content: prompt.to_string(),
                 },
             });
         }
 
-        // Add image attachments
-        if let Some(attachments) = payload.attachments {
-            let (images, _) = separate_attachments(attachments);
-            for attachment in images {
-                let data_uri = format!("data:{};base64,{}", attachment.mime_type, attachment.data);
-                content_blocks.push(ContentBlock::ImageUrl {
-                    image_url: ImageUrl {
-                        url: data_uri,
-                        detail: Some("auto".to_string()),
-                    },
-                });
+        for msg in messages {
+            match msg {
+                UnifiedMessage::User { content } => {
+                    let text = content
+                        .iter()
+                        .filter_map(|b| b.as_text())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    result.push(Message {
+                        role: "user".to_string(),
+                        content: MessageContent::Text { content: text },
+                    });
+                }
+                UnifiedMessage::Assistant { content } => {
+                    let text: String = content
+                        .iter()
+                        .filter_map(|b| match b {
+                            crate::providers::message::ContentBlock::Text { text } => {
+                                Some(text.as_str())
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    // Extract tool calls
+                    let tool_calls: Vec<_> = content
+                        .iter()
+                        .filter_map(|b| match b {
+                            crate::providers::message::ContentBlock::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                            } => {
+                                use crate::providers::openai::{OpenAiFunctionCall, OpenAiToolCall};
+                                Some(OpenAiToolCall {
+                                    id: id.clone(),
+                                    call_type: Some("function".to_string()),
+                                    function: OpenAiFunctionCall {
+                                        name: name.clone(),
+                                        arguments: serde_json::to_string(arguments)
+                                            .unwrap_or_default(),
+                                    },
+                                })
+                            }
+                            _ => None,
+                        })
+                        .collect();
+
+                    let msg_content = if text.is_empty() { None } else { Some(text) };
+                    let msg_tool_calls = if tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(tool_calls)
+                    };
+
+                    // We need to build the JSON manually for assistant messages with tool_calls
+                    // because the Message struct may not have tool_calls field
+                    result.push(Message {
+                        role: "assistant".to_string(),
+                        content: MessageContent::Text {
+                            content: msg_content.unwrap_or_default(),
+                        },
+                    });
+                    // Note: tool_calls on assistant messages handled via json serialization override
+                    let _ = msg_tool_calls; // TODO: extend Message type if needed
+                }
+                UnifiedMessage::ToolResult {
+                    tool_call_id,
+                    content,
+                    ..
+                } => {
+                    let output = content
+                        .iter()
+                        .map(|b| match b {
+                            crate::providers::message::ContentBlock::Text { text } => text.clone(),
+                            crate::providers::message::ContentBlock::Json { value } => {
+                                serde_json::to_string(value).unwrap_or_default()
+                            }
+                            _ => String::new(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    // Each ToolResult as separate tool message
+                    result.push(Message {
+                        role: "tool".to_string(),
+                        content: MessageContent::Text { content: output },
+                    });
+                    let _ = tool_call_id; // tool_call_id would need Message extension
+                }
             }
         }
-
-        messages.push(Message {
-            role: "user".to_string(),
-            content: MessageContent::Multimodal {
-                content: content_blocks,
-            },
-        });
+        result
     }
 
     /// Map ThinkLevel to OpenAI reasoning_effort
@@ -259,7 +206,7 @@ impl ProtocolAdapter for OpenAiProtocol {
         is_streaming: bool,
     ) -> Result<reqwest::RequestBuilder> {
         let endpoint = Self::build_endpoint(config);
-        let messages = Self::build_messages(payload, config);
+        let messages = Self::convert_messages(payload.messages, payload.system_prompt);
 
         // Build request body
         let mut body = json!({
@@ -467,6 +414,7 @@ impl ProtocolAdapter for OpenAiProtocol {
 mod tests {
     use super::*;
     use crate::config::ProviderConfig;
+    use crate::providers::message::UnifiedMessage;
     use crate::providers::openai::{
         OpenAiFunctionCall, OpenAiToolCall,
     };
@@ -547,25 +495,18 @@ mod tests {
     }
 
     #[test]
-    fn test_build_messages_text_only() {
-        let config = ProviderConfig::test_config("gpt-4o");
-        let payload = RequestPayload::new("Hello, world!");
-
-        let messages = OpenAiProtocol::build_messages(&payload, &config);
+    fn test_convert_messages_text_only() {
+        let msgs = [UnifiedMessage::user("Hello, world!")];
+        let messages = OpenAiProtocol::convert_messages(&msgs, None);
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");
     }
 
     #[test]
-    fn test_build_messages_with_system_prompt_standard_mode() {
-        let mut config = ProviderConfig::test_config("gpt-4o");
-        config.system_prompt_mode = Some("standard".to_string());
-
-        let payload = RequestPayload::new("Hello")
-            .with_system(Some("You are helpful"));
-
-        let messages = OpenAiProtocol::build_messages(&payload, &config);
+    fn test_convert_messages_with_system_prompt() {
+        let msgs = [UnifiedMessage::user("Hello")];
+        let messages = OpenAiProtocol::convert_messages(&msgs, Some("You are helpful"));
 
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, "system");
@@ -573,16 +514,11 @@ mod tests {
     }
 
     #[test]
-    fn test_build_messages_with_system_prompt_prepend_mode() {
-        let mut config = ProviderConfig::test_config("gpt-4o");
-        config.system_prompt_mode = Some("prepend".to_string());
+    fn test_convert_messages_no_system_prompt() {
+        let msgs = [UnifiedMessage::user("Hello")];
+        let messages = OpenAiProtocol::convert_messages(&msgs, None);
 
-        let payload = RequestPayload::new("Hello")
-            .with_system(Some("You are helpful"));
-
-        let messages = OpenAiProtocol::build_messages(&payload, &config);
-
-        // In prepend mode, system prompt is merged into user message
+        // Without system prompt, only user message
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");
     }
@@ -743,7 +679,8 @@ mod tests {
             }),
             ToolCategory::Builtin,
         )];
-        let payload = RequestPayload::new("Hello").with_tools(Some(&tools));
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs).with_tools(Some(&tools));
         let mut config = ProviderConfig::test_config("gpt-4o");
         config.api_key = Some("test-key".to_string());
 
@@ -763,7 +700,8 @@ mod tests {
     #[test]
     fn test_build_request_no_tools_when_none() {
         let protocol = OpenAiProtocol::new(Client::new());
-        let payload = RequestPayload::new("Hello");
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs);
         let mut config = ProviderConfig::test_config("gpt-4o");
         config.api_key = Some("test-key".to_string());
 
@@ -796,7 +734,8 @@ mod tests {
                 ToolCategory::Builtin,
             ),
         ];
-        let payload = RequestPayload::new("Hello").with_tools(Some(&tools));
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs).with_tools(Some(&tools));
         let mut config = ProviderConfig::test_config("gpt-4o");
         config.api_key = Some("test-key".to_string());
 

@@ -93,6 +93,19 @@ pub enum ContentBlock {
     Text { text: String },
     /// Image content (base64)
     Image { source: ImageSource },
+    /// Tool use (assistant requesting tool execution)
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    /// Tool result (user returning tool output)
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        is_error: bool,
+    },
 }
 
 /// Image source for base64 encoded images

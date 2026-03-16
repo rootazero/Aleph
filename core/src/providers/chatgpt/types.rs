@@ -40,21 +40,16 @@ pub enum InputItem {
     /// A text message from user, assistant, or developer
     #[serde(rename = "message")]
     Message { role: String, content: String },
-
-    /// A function call that the model previously made (echo back for context)
+    /// A function call from the assistant
     #[serde(rename = "function_call")]
     FunctionCall {
         call_id: String,
         name: String,
         arguments: String,
     },
-
-    /// The output/result of a function call
+    /// Output from a function call
     #[serde(rename = "function_call_output")]
-    FunctionCallOutput {
-        call_id: String,
-        output: String,
-    },
+    FunctionCallOutput { call_id: String, output: String },
 }
 
 /// Reasoning effort configuration

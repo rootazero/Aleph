@@ -322,41 +322,10 @@ mod tests {
     impl crate::providers::AiProvider for MockProvider {
         fn process(
             &self,
-            _input: &str,
-            _system_prompt: Option<&str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
+            _payload: crate::providers::adapter::RequestPayload<'_>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<crate::providers::adapter::ProviderResponse>> + Send + '_>>
         {
-            Box::pin(async { Ok("{}".to_string()) })
-        }
-
-        fn process_with_thinking(
-            &self,
-            input: &str,
-            system_prompt: Option<&str>,
-            _level: crate::agents::thinking::ThinkLevel,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
-        {
-            self.process(input, system_prompt)
-        }
-
-        fn process_with_image(
-            &self,
-            input: &str,
-            _image: Option<&crate::ImageData>,
-            system_prompt: Option<&str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
-        {
-            self.process(input, system_prompt)
-        }
-
-        fn process_with_attachments(
-            &self,
-            input: &str,
-            _attachments: Option<&[crate::core::MediaAttachment]>,
-            system_prompt: Option<&str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
-        {
-            self.process(input, system_prompt)
+            Box::pin(async { Ok(crate::providers::adapter::ProviderResponse::text_only("{}".to_string())) })
         }
 
         fn name(&self) -> &str {

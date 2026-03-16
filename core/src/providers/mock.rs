@@ -3,6 +3,7 @@
 /// This module provides a mock implementation of `AiProvider` for testing
 /// without requiring actual API calls or network connectivity.
 use crate::error::{AlephError, Result};
+use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 use std::future::Future;
 use std::pin::Pin;
@@ -132,9 +133,8 @@ impl MockProvider {
 impl AiProvider for MockProvider {
     fn process(
         &self,
-        _input: &str,
-        _system_prompt: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        _payload: RequestPayload<'_>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + '_>> {
         Box::pin(async move {
             // Simulate delay if configured
             if let Some(delay) = self.delay {
@@ -147,7 +147,7 @@ impl AiProvider for MockProvider {
             }
 
             // Return configured response
-            Ok(self.response.clone())
+            Ok(ProviderResponse::text_only(self.response.clone()))
         })
     }
 
@@ -163,13 +163,21 @@ impl AiProvider for MockProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::message::UnifiedMessage;
+
+    fn make_payload(text: &str) -> RequestPayload<'_> {
+        // We can't return a reference to a local, so tests create msgs externally
+        let _ = text;
+        RequestPayload::default()
+    }
 
     #[tokio::test]
     async fn test_mock_provider_basic() {
         let provider = MockProvider::new("test response");
 
-        let response = provider.process("any input", None).await.unwrap();
-        assert_eq!(response, "test response");
+        let msgs = [UnifiedMessage::user("any input")];
+        let response = provider.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(response.text_content(), "test response");
 
         assert_eq!(provider.name(), "mock");
         assert_eq!(provider.color(), "#000000");
@@ -179,11 +187,12 @@ mod tests {
     async fn test_mock_provider_with_system_prompt() {
         let provider = MockProvider::new("response");
 
+        let msgs = [UnifiedMessage::user("input")];
         let response = provider
-            .process("input", Some("system prompt"))
+            .process(RequestPayload::new(&msgs).with_system(Some("system prompt")))
             .await
             .unwrap();
-        assert_eq!(response, "response");
+        assert_eq!(response.text_content(), "response");
     }
 
     #[tokio::test]
@@ -191,10 +200,11 @@ mod tests {
         let provider = MockProvider::new("delayed").with_delay(Duration::from_millis(50));
 
         let start = std::time::Instant::now();
-        let response = provider.process("input", None).await.unwrap();
+        let msgs = [UnifiedMessage::user("input")];
+        let response = provider.process(RequestPayload::new(&msgs)).await.unwrap();
         let elapsed = start.elapsed();
 
-        assert_eq!(response, "delayed");
+        assert_eq!(response.text_content(), "delayed");
         assert!(elapsed >= Duration::from_millis(50));
     }
 
@@ -203,7 +213,8 @@ mod tests {
         let provider = MockProvider::new("ignored")
             .with_error(MockError::Authentication("invalid key".to_string()));
 
-        let result = provider.process("input", None).await;
+        let msgs = [UnifiedMessage::user("input")];
+        let result = provider.process(RequestPayload::new(&msgs)).await;
         assert!(result.is_err());
 
         if let Err(AlephError::AuthenticationError { message, .. }) = result {
@@ -217,7 +228,8 @@ mod tests {
     async fn test_mock_provider_timeout_error() {
         let provider = MockProvider::new("ignored").with_error(MockError::Timeout);
 
-        let result = provider.process("input", None).await;
+        let msgs = [UnifiedMessage::user("input")];
+        let result = provider.process(RequestPayload::new(&msgs)).await;
         assert!(matches!(result, Err(AlephError::Timeout { .. })));
     }
 
@@ -230,8 +242,9 @@ mod tests {
         assert_eq!(provider.name(), "custom");
         assert_eq!(provider.color(), "#ffffff");
 
-        let response = provider.process("input", None).await.unwrap();
-        assert_eq!(response, "response");
+        let msgs = [UnifiedMessage::user("input")];
+        let response = provider.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(response.text_content(), "response");
     }
 
     #[test]
@@ -249,7 +262,8 @@ mod tests {
 
         let provider: Arc<dyn AiProvider> = Arc::new(MockProvider::new("test"));
 
-        let response = provider.process("input", None).await.unwrap();
-        assert_eq!(response, "test");
+        let msgs = [UnifiedMessage::user("input")];
+        let response = provider.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(response.text_content(), "test");
     }
 }

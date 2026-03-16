@@ -20,21 +20,10 @@ impl MockScoringProvider {
 impl AiProvider for MockScoringProvider {
     fn process(
         &self,
-        _input: &str,
-        _system_prompt: Option<&str>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>> {
+        _payload: crate::providers::adapter::RequestPayload<'_>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<crate::providers::adapter::ProviderResponse>> + Send + '_>> {
         let score = self.score;
-        Box::pin(async move { Ok(format!("{}", score)) })
-    }
-
-    fn process_with_image(
-        &self,
-        _input: &str,
-        _image: Option<&crate::clipboard::ImageData>,
-        _system_prompt: Option<&str>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>> {
-        let score = self.score;
-        Box::pin(async move { Ok(format!("{}", score)) })
+        Box::pin(async move { Ok(crate::providers::adapter::ProviderResponse::text_only(format!("{}", score))) })
     }
 
     fn name(&self) -> &str {

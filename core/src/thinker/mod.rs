@@ -186,9 +186,9 @@ mod swappable_registry_tests {
     struct TaggedProvider { tag: String }
     impl AiProvider for TaggedProvider {
         fn process(
-            &self, _input: &str, _system_prompt: Option<&str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<String>> + Send + '_>> {
-            Box::pin(async { Ok(String::new()) })
+            &self, _payload: crate::providers::adapter::RequestPayload<'_>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<crate::providers::adapter::ProviderResponse>> + Send + '_>> {
+            Box::pin(async { Ok(crate::providers::adapter::ProviderResponse::text_only(String::new())) })
         }
         fn name(&self) -> &str { &self.tag }
         fn color(&self) -> &str { "#000" }

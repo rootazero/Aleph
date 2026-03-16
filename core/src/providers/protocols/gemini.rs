@@ -13,9 +13,7 @@ use crate::providers::gemini::{
     Content, GeminiFunctionDeclaration, GeminiToolConfig, GenerateContentRequest,
     GenerateContentResponse, GenerationConfig, Part, ThinkingConfig,
 };
-use crate::providers::shared::{
-    build_document_context, combine_with_document_context, separate_attachments,
-};
+use crate::providers::message::UnifiedMessage;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::StreamExt;
@@ -59,103 +57,83 @@ impl GeminiProtocol {
         }
     }
 
-    /// Build contents array from payload
-    fn build_contents(payload: &RequestPayload) -> Vec<Content> {
-        // Check for image content
-        let has_image = payload.image.is_some();
-        let has_image_attachments = payload
-            .attachments
-            .map(|a| a.iter().any(|att| att.media_type == "image"))
-            .unwrap_or(false);
-
-        if has_image || has_image_attachments {
-            Self::build_multimodal_contents(payload)
-        } else {
-            Self::build_text_contents(payload)
-        }
-    }
-
-    /// Build text-only contents
-    fn build_text_contents(payload: &RequestPayload) -> Vec<Content> {
-        let input = if let Some(attachments) = payload.attachments {
-            let (_, documents) = separate_attachments(attachments);
-            if !documents.is_empty() {
-                let doc_context = build_document_context(&documents);
-                combine_with_document_context(&doc_context, payload.input)
-            } else {
-                payload.input.to_string()
-            }
-        } else {
-            payload.input.to_string()
-        };
-
-        vec![Content {
-            role: Some("user".to_string()),
-            parts: vec![Part::Text { text: input }],
-        }]
-    }
-
-    /// Build multimodal contents with images
-    fn build_multimodal_contents(payload: &RequestPayload) -> Vec<Content> {
-        let mut parts = Vec::new();
-
-        // Handle document attachments
-        let text_input = if let Some(attachments) = payload.attachments {
-            let (_, documents) = separate_attachments(attachments);
-            if !documents.is_empty() {
-                let doc_context = build_document_context(&documents);
-                combine_with_document_context(&doc_context, payload.input)
-            } else {
-                payload.input.to_string()
-            }
-        } else {
-            payload.input.to_string()
-        };
-
-        // Add text content
-        let text = if text_input.is_empty() {
-            "Describe this image in detail.".to_string()
-        } else {
-            text_input
-        };
-        parts.push(Part::Text { text });
-
-        // Add legacy image
-        if let Some(image) = payload.image {
-            let mime_type = match image.format {
-                crate::clipboard::ImageFormat::Png => "image/png",
-                crate::clipboard::ImageFormat::Jpeg => "image/jpeg",
-                crate::clipboard::ImageFormat::Gif => "image/gif",
-            };
-            let base64_data = {
-                use base64::{engine::general_purpose, Engine as _};
-                general_purpose::STANDARD.encode(&image.data)
-            };
-            parts.push(Part::InlineData {
-                inline_data: crate::providers::gemini::InlineData {
-                    mime_type: mime_type.to_string(),
-                    data: base64_data,
-                },
-            });
-        }
-
-        // Add image attachments
-        if let Some(attachments) = payload.attachments {
-            let (images, _) = separate_attachments(attachments);
-            for attachment in images {
-                parts.push(Part::InlineData {
-                    inline_data: crate::providers::gemini::InlineData {
-                        mime_type: attachment.mime_type.clone(),
-                        data: attachment.data.clone(),
-                    },
-                });
+    /// Convert UnifiedMessages to Gemini Contents
+    fn convert_messages(messages: &[UnifiedMessage]) -> Vec<Content> {
+        let mut result = Vec::new();
+        for msg in messages {
+            match msg {
+                UnifiedMessage::User { content } => {
+                    let text = content
+                        .iter()
+                        .filter_map(|b| b.as_text())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    result.push(Content {
+                        role: Some("user".to_string()),
+                        parts: vec![Part::Text { text }],
+                    });
+                }
+                UnifiedMessage::Assistant { content } => {
+                    let mut parts = Vec::new();
+                    for block in content {
+                        match block {
+                            crate::providers::message::ContentBlock::Text { text } => {
+                                parts.push(Part::Text { text: text.clone() });
+                            }
+                            crate::providers::message::ContentBlock::ToolCall {
+                                name,
+                                arguments,
+                                ..
+                            } => {
+                                parts.push(Part::FunctionCall {
+                                    function_call: crate::providers::gemini::GeminiFunctionCall {
+                                        name: name.clone(),
+                                        args: arguments.clone(),
+                                    },
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    if parts.is_empty() {
+                        parts.push(Part::Text {
+                            text: String::new(),
+                        });
+                    }
+                    result.push(Content {
+                        role: Some("model".to_string()),
+                        parts,
+                    });
+                }
+                UnifiedMessage::ToolResult {
+                    tool_name,
+                    content,
+                    ..
+                } => {
+                    let output = content
+                        .iter()
+                        .map(|b| match b {
+                            crate::providers::message::ContentBlock::Text { text } => text.clone(),
+                            crate::providers::message::ContentBlock::Json { value } => {
+                                serde_json::to_string(value).unwrap_or_default()
+                            }
+                            _ => String::new(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    result.push(Content {
+                        role: Some("user".to_string()),
+                        parts: vec![Part::FunctionResponse {
+                            function_response: crate::providers::gemini::GeminiFunctionResponse {
+                                name: tool_name.clone(),
+                                response: serde_json::json!({ "result": output }),
+                            },
+                        }],
+                    });
+                }
             }
         }
-
-        vec![Content {
-            role: Some("user".to_string()),
-            parts,
-        }]
+        result
     }
 
     /// Build system instruction from system prompt
@@ -219,7 +197,7 @@ impl ProtocolAdapter for GeminiProtocol {
         is_streaming: bool,
     ) -> Result<reqwest::RequestBuilder> {
         let endpoint = Self::build_endpoint(config, is_streaming);
-        let contents = Self::build_contents(payload);
+        let contents = Self::convert_messages(payload.messages);
         let system_instruction = Self::build_system_instruction(payload.system_prompt);
 
         // Build generation config
@@ -432,6 +410,7 @@ impl ProtocolAdapter for GeminiProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::message::UnifiedMessage;
 
     #[test]
     fn test_build_endpoint_non_streaming() {
@@ -490,9 +469,9 @@ mod tests {
     }
 
     #[test]
-    fn test_build_text_contents() {
-        let payload = RequestPayload::new("Hello, Gemini!");
-        let contents = GeminiProtocol::build_contents(&payload);
+    fn test_convert_messages_text() {
+        let msgs = [UnifiedMessage::user("Hello, Gemini!")];
+        let contents = GeminiProtocol::convert_messages(&msgs);
 
         assert_eq!(contents.len(), 1);
         assert_eq!(contents[0].role, Some("user".to_string()));
@@ -593,7 +572,8 @@ mod tests {
         let mut config = ProviderConfig::test_config("gemini-pro");
         config.api_key = Some("test-api-key".to_string());
 
-        let payload = RequestPayload::new("Hello");
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs);
 
         let request = protocol
             .build_request(&payload, &config, false)
@@ -613,7 +593,8 @@ mod tests {
         let mut config = ProviderConfig::test_config("gemini-pro");
         config.api_key = Some("test-api-key".to_string());
 
-        let payload = RequestPayload::new("Hello");
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs);
 
         let request = protocol
             .build_request(&payload, &config, true)
@@ -633,7 +614,8 @@ mod tests {
         let mut config = ProviderConfig::test_config("gemini-pro");
         config.api_key = Some("test-api-key".to_string());
 
-        let payload = RequestPayload::new("Solve this problem")
+        let msgs = [UnifiedMessage::user("Solve this problem")];
+        let payload = RequestPayload::new(&msgs)
             .with_think_level(Some(ThinkLevel::Medium));
 
         let request = protocol
@@ -674,7 +656,8 @@ mod tests {
             ToolCategory::Builtin,
         )];
 
-        let payload = RequestPayload::new("Search for Rust").with_tools(Some(&tools));
+        let msgs = [UnifiedMessage::user("Search for Rust")];
+        let payload = RequestPayload::new(&msgs).with_tools(Some(&tools));
 
         let request = protocol
             .build_request(&payload, &config, false)

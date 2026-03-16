@@ -341,8 +341,9 @@ mod tests {
         registry.register("test".to_string(), provider).unwrap();
 
         let provider = registry.get("test").unwrap();
-        let response = provider.process("input", None).await.unwrap();
-        assert_eq!(response, "AI response");
+        let msgs = [crate::providers::message::UnifiedMessage::user("input")];
+        let response = provider.process(crate::providers::adapter::RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(response.text_content(), "AI response");
     }
 
     #[test]

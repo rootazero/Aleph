@@ -55,6 +55,8 @@
 /// ```
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
+use crate::providers::adapter::{ProviderResponse, RequestPayload};
+use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -324,11 +326,20 @@ impl OllamaProvider {
 impl AiProvider for OllamaProvider {
     fn process(
         &self,
-        input: &str,
-        system_prompt: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        let input = input.to_string();
-        let system_prompt = system_prompt.map(|s| s.to_string());
+        payload: RequestPayload<'_>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + '_>> {
+        // Extract text from last user message (Ollama is text-only)
+        let input = payload
+            .messages
+            .iter()
+            .rev()
+            .find_map(|m| match m {
+                UnifiedMessage::User { content } => content.iter().find_map(|b| b.as_text()),
+                _ => None,
+            })
+            .unwrap_or("")
+            .to_string();
+        let system_prompt = payload.system_prompt.map(|s| s.to_string());
 
         Box::pin(async move {
             debug!(
@@ -338,10 +349,8 @@ impl AiProvider for OllamaProvider {
                 "Sending request to Ollama"
             );
 
-            // Build request body
             let request_body = self.build_request(&input, system_prompt.as_deref());
 
-            // Send POST request
             let response = self
                 .client
                 .post(&self.endpoint)
@@ -369,12 +378,10 @@ impl AiProvider for OllamaProvider {
                     }
                 })?;
 
-            // Check status code
             if !response.status().is_success() {
                 return Err(self.handle_error(response).await);
             }
 
-            // Parse response
             let generate_response: GenerateResponse = response.json().await.map_err(|e| {
                 error!(error = %e, "Failed to parse Ollama response");
                 AlephError::provider(format!("Failed to parse Ollama response: {}", e))
@@ -393,149 +400,8 @@ impl AiProvider for OllamaProvider {
                 "Ollama request completed successfully"
             );
 
-            Ok(text)
+            Ok(ProviderResponse::text_only(text))
         })
-    }
-
-    fn process_with_attachments(
-        &self,
-        input: &str,
-        attachments: Option<&[crate::core::MediaAttachment]>,
-        system_prompt: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        let input = input.to_string();
-        let attachments = attachments.map(|a| a.to_vec());
-        let system_prompt = system_prompt.map(|s| s.to_string());
-
-        Box::pin(async move {
-            // Check if we have any attachments (images or documents)
-            let Some(all_attachments) = attachments.as_ref() else {
-                return self.process(&input, system_prompt.as_deref()).await;
-            };
-
-            let image_count = all_attachments
-                .iter()
-                .filter(|a| a.media_type == "image")
-                .count();
-            let document_count = all_attachments
-                .iter()
-                .filter(|a| a.media_type == "document")
-                .count();
-
-            // If no useful attachments, fall back to text-only
-            if image_count == 0 && document_count == 0 {
-                return self.process(&input, system_prompt.as_deref()).await;
-            }
-
-            // If only documents (no images), inject document content into text and use text-only request
-            if image_count == 0 && document_count > 0 {
-                let documents: Vec<_> = all_attachments
-                    .iter()
-                    .filter(|a| a.media_type == "document")
-                    .collect();
-
-                let doc_context = documents
-                    .iter()
-                    .map(|d| {
-                        let name = d.filename.as_deref().unwrap_or("document");
-                        format!("--- {} ---\n{}", name, d.data)
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-
-                let full_input = format!("{}\n\n{}", doc_context, input);
-
-                debug!(
-                    model = %self.model,
-                    document_count = document_count,
-                    full_input_length = full_input.len(),
-                    "Sending document-only request as text to Ollama"
-                );
-
-                return self.process(&full_input, system_prompt.as_deref()).await;
-            }
-
-            // Check if model supports vision (only needed for images)
-            if image_count > 0 && !self.is_vision_model() {
-                warn!(
-                    model = %self.model,
-                    "Model does not support vision, falling back to text-only"
-                );
-                return self.process(&input, system_prompt.as_deref()).await;
-            }
-
-            debug!(
-                model = %self.model,
-                input_length = input.len(),
-                image_count = image_count,
-                document_count = document_count,
-                has_system_prompt = system_prompt.is_some(),
-                "Sending multimodal request to Ollama"
-            );
-
-            // Build multimodal request body (only when we have images)
-            let request_body =
-                self.build_multimodal_request(&input, all_attachments, system_prompt.as_deref());
-
-            // Send POST request
-            let response = self
-                .client
-                .post(&self.endpoint)
-                .header("Content-Type", "application/json")
-                .json(&request_body)
-                .send()
-                .await
-                .map_err(|e| {
-                    if e.is_timeout() {
-                        error!("Ollama multimodal request timed out");
-                        AlephError::Timeout {
-                            suggestion: Some(
-                                "Vision processing is slow. Try increasing the timeout."
-                                    .to_string(),
-                            ),
-                        }
-                    } else if e.is_connect() {
-                        error!(error = %e, "Failed to connect to Ollama");
-                        AlephError::network(format!(
-                            "Failed to connect to Ollama at {}. Is Ollama running?",
-                            self.endpoint
-                        ))
-                    } else {
-                        error!(error = %e, "Ollama network error");
-                        AlephError::network(format!("Network error: {}", e))
-                    }
-                })?;
-
-            // Check status code
-            if !response.status().is_success() {
-                return Err(self.handle_error(response).await);
-            }
-
-            // Parse response
-            let generate_response: GenerateResponse = response.json().await.map_err(|e| {
-                error!(error = %e, "Failed to parse Ollama multimodal response");
-                AlephError::provider(format!("Failed to parse Ollama response: {}", e))
-            })?;
-
-            let text = generate_response.response.trim().to_string();
-
-            if text.is_empty() {
-                warn!(model = %self.model, "Ollama returned empty response");
-                return Err(AlephError::provider("Ollama returned empty response"));
-            }
-
-            info!(
-                model = %self.model,
-                response_length = text.len(),
-                "Ollama multimodal request completed successfully"
-            );
-
-            Ok(text)
-        })
-    }
-
-    fn supports_vision(&self) -> bool {
-        self.is_vision_model()
     }
 
     fn name(&self) -> &str {
@@ -612,18 +478,6 @@ mod tests {
         bak_config.models = vec!["bakllava:latest".to_string()];
         let bak_provider = OllamaProvider::new("ollama".to_string(), bak_config).unwrap();
         assert!(bak_provider.is_vision_model());
-    }
-
-    #[test]
-    fn test_supports_vision() {
-        let config = create_test_config();
-        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
-        assert!(!provider.supports_vision());
-
-        let mut vision_config = create_test_config();
-        vision_config.models = vec!["llava".to_string()];
-        let vision_provider = OllamaProvider::new("ollama".to_string(), vision_config).unwrap();
-        assert!(vision_provider.supports_vision());
     }
 
     #[test]
