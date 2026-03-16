@@ -11,6 +11,8 @@ use tracing::{debug, info, warn};
 use crate::config::GenerationConfig;
 use crate::dispatcher::planner::GenerationProviders;
 use crate::generation::GenerationType;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 use crate::utils::json_extract::extract_json_robust;
 
 /// Multi-step indicator patterns
@@ -107,12 +109,13 @@ impl TaskAnalyzer {
 
         // Use LLM to determine if multi-step is needed
         let analysis_prompt = self.build_analysis_prompt(input);
+        let __msgs = [UnifiedMessage::user(&analysis_prompt)];
         let response = self
             .provider
-            .process(&analysis_prompt, Some(ANALYSIS_SYSTEM_PROMPT))
+            .process(RequestPayload::new(&__msgs).with_system(Some(ANALYSIS_SYSTEM_PROMPT)))
             .await?;
 
-        self.parse_analysis_response(&response, input).await
+        self.parse_analysis_response(&response.text_content(), input).await
     }
 
     /// Quick heuristic to skip LLM call for obvious single-step tasks
@@ -358,6 +361,8 @@ fn default_risk() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::RequestPayload;
 
     #[test]
     fn test_is_likely_single_step_short_input() {

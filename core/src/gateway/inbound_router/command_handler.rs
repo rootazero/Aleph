@@ -6,6 +6,8 @@ use crate::gateway::channel::{InboundMessage, OutboundMessage};
 use crate::gateway::inbound_context::InboundContext;
 use crate::gateway::router::SessionKey;
 use crate::intent::{DirectToolSource, IntentResult};
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 
 use super::types::{RoutingError, check_link_access};
 use super::InboundMessageRouter;
@@ -204,9 +206,10 @@ impl InboundMessageRouter {
             conversation
         );
 
-        match llm.process(&prompt, None).await {
-            Ok(topic) => {
-                let topic = topic.trim().to_string();
+        let __msgs = [UnifiedMessage::user(&prompt)];
+        match llm.process(RequestPayload::new(&__msgs)).await {
+            Ok(resp) => {
+                let topic = resp.text_content().trim().to_string();
                 if topic.is_empty() { None } else { Some(topic) }
             }
             Err(e) => {

@@ -8,6 +8,8 @@ use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::store::types::SearchFilter;
 use crate::providers::AiProvider;
 use crate::Result;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::RequestPayload;
 
 /// Detects contradictions between facts
 pub struct ContradictionDetector {
@@ -112,10 +114,13 @@ impl ContradictionDetector {
                             Two facts contradict if they cannot both be true at the same time.";
 
         // Call LLM
-        let response = provider.process(&prompt, Some(system_prompt)).await?;
+        let __msgs = [UnifiedMessage::user(&prompt)];
+        let response = provider.process(
+            RequestPayload::new(&__msgs).with_system(Some(system_prompt))
+        ).await?;
 
         // Parse response (simple JSON parsing)
-        if let Ok(parsed) = self.parse_llm_response(&response, candidates) {
+        if let Ok(parsed) = self.parse_llm_response(&response.text_content(), candidates) {
             contradictions = parsed;
         }
 

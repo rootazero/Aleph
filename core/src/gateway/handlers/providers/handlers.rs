@@ -12,6 +12,8 @@ use crate::gateway::security::SharedTokenManager;
 use super::parse_params;
 use super::types::*;
 use super::helpers::*;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::RequestPayload;
 
 // ============================================================================
 // List
@@ -397,7 +399,8 @@ pub async fn handle_test(request: JsonRpcRequest, config_store: Arc<RwLock<Confi
 
     // Test the connection with a simple ping
     let start = std::time::Instant::now();
-    match provider.process("ping", Some("Reply with 'pong'")).await {
+    let ping_msgs = [UnifiedMessage::user("ping")];
+    match provider.process(RequestPayload::new(&ping_msgs).with_system(Some("Reply with 'pong'"))).await {
         Ok(_) => {
             let latency_ms = start.elapsed().as_millis() as u64;
 

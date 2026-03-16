@@ -14,6 +14,8 @@ use crate::dispatcher::agent_types::{
 };
 use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 use crate::utils::json_extract::extract_json_robust;
 
 /// LLM-based task planner
@@ -309,9 +311,10 @@ impl TaskPlanner for LlmTaskPlanner {
         debug!("Sending planning request to LLM");
 
         // Call the LLM
+        let __msgs = [UnifiedMessage::user(&user_prompt)];
         let response = self
             .provider
-            .process(&user_prompt, Some(PLANNING_SYSTEM_PROMPT))
+            .process(RequestPayload::new(&__msgs).with_system(Some(PLANNING_SYSTEM_PROMPT)))
             .await
             .map_err(|e| {
                 error!("LLM planning request failed: {}", e);
@@ -321,7 +324,7 @@ impl TaskPlanner for LlmTaskPlanner {
         debug!("Received LLM response, parsing...");
 
         // Parse the response
-        self.parse_response(&response, request)
+        self.parse_response(&response.text_content(), request)
     }
 
     async fn plan_with_providers(
@@ -342,9 +345,10 @@ impl TaskPlanner for LlmTaskPlanner {
         );
 
         // Call the LLM
+        let __msgs = [UnifiedMessage::user(&user_prompt)];
         let response = self
             .provider
-            .process(&user_prompt, Some(PLANNING_SYSTEM_PROMPT))
+            .process(RequestPayload::new(&__msgs).with_system(Some(PLANNING_SYSTEM_PROMPT)))
             .await
             .map_err(|e| {
                 error!("LLM planning request failed: {}", e);
@@ -354,7 +358,7 @@ impl TaskPlanner for LlmTaskPlanner {
         debug!("Received LLM response, parsing...");
 
         // Parse the response
-        self.parse_response(&response, request)
+        self.parse_response(&response.text_content(), request)
     }
 
     fn name(&self) -> &str {
@@ -475,6 +479,8 @@ Let me know if you need changes."#;
     #[test]
     fn test_parse_response_plain_text_fallback() {
         use crate::providers::MockProvider;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::RequestPayload;
         let provider = Arc::new(MockProvider::new(""));
         let planner = LlmTaskPlanner::new(provider);
 

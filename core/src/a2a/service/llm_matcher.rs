@@ -4,6 +4,8 @@ use async_trait::async_trait;
 
 use crate::a2a::port::RegisteredAgent;
 use crate::providers::AiProvider;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 
 use super::smart_router::{LlmMatcher, RoutingDecision, RoutingMethod};
 
@@ -114,8 +116,11 @@ impl LlmMatcher for SemanticLlmMatcher {
         let system = self.build_system_prompt();
         let prompt = self.build_routing_prompt(intent, agents);
 
-        match self.provider.process(&prompt, Some(&system)).await {
-            Ok(response) => self.parse_response(&response, agents),
+        let __msgs = [UnifiedMessage::user(&prompt)];
+        match self.provider.process(
+            RequestPayload::new(&__msgs).with_system(Some(&system))
+        ).await {
+            Ok(response) => self.parse_response(&response.text_content(), agents),
             Err(e) => {
                 tracing::warn!(error = %e, "LLM semantic matching failed, skipping tier 3");
                 None
@@ -130,6 +135,8 @@ mod tests {
     use crate::a2a::domain::*;
     use crate::a2a::port::AgentHealth;
     use crate::error::AlephError;
+    use crate::providers::adapter::{ProviderResponse, RequestPayload};
+    use crate::providers::message::UnifiedMessage;
     use chrono::Utc;
     use std::future::Future;
     use std::pin::Pin;
@@ -155,13 +162,12 @@ mod tests {
     }
 
     impl AiProvider for MockProvider {
-        fn process(
-            &self,
-            _input: &str,
-            _system_prompt: Option<&str>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<String>> + Send + '_>> {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
             let result = match &self.response {
-                Ok(s) => Ok(s.clone()),
+                Ok(s) => Ok(ProviderResponse::text_only(s.clone())),
                 Err(e) => Err(AlephError::ProviderError {
                     message: e.clone(),
                     suggestion: None,

@@ -97,7 +97,6 @@ pub use http_provider::HttpProvider;
 pub use presets::{get_preset, ProviderPreset, PRESETS};
 pub use protocols::OpenAiProtocol;
 
-use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::error::AlephError;
 use crate::sync_primitives::Arc;
@@ -183,301 +182,35 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
     Ok(Arc::new(provider))
 }
 
-/// Unified interface for AI providers
+/// Unified interface for AI providers.
 ///
 /// All AI backends (OpenAI, Claude, Ollama, etc.) implement this trait
-/// to provide a consistent API for processing user input.
+/// to provide a consistent API for processing requests.
 ///
-/// # Thread Safety
+/// # Architecture
 ///
-/// The trait extends `Send + Sync` to ensure providers can be safely shared
-/// across async tasks and stored in `Arc<dyn AiProvider>`.
-///
-/// # Async Design
-///
-/// All processing is async to avoid blocking the runtime during API calls
-/// or command execution.
+/// Single `process()` method accepts a `RequestPayload` containing structured
+/// `UnifiedMessage` history. Protocol adapters convert these to native formats.
 pub trait AiProvider: Send + Sync {
-    /// Process input text and return AI-generated response
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - The user input text to process
-    /// * `system_prompt` - Optional system prompt to guide AI behavior
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(String)` - The AI-generated response text
-    /// * `Err(AlephError)` - Various errors:
-    ///   - `NetworkError`: Network connectivity issues
-    ///   - `AuthenticationError`: Invalid API key
-    ///   - `RateLimitError`: Too many requests
-    ///   - `ProviderError`: API returned error response
-    ///   - `Timeout`: Request exceeded timeout
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// # use alephcore::providers::AiProvider;
-    /// # async fn example(provider: &dyn AiProvider) {
-    /// let response = provider.process(
-    ///     "Translate to French: Hello",
-    ///     Some("You are a translator")
-    /// ).await.unwrap();
-    /// # }
-    /// ```
-    fn process(
-        &self,
-        input: &str,
-        system_prompt: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>>;
-
-    /// Process input with optional image and return AI-generated response
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - The user input text to process
-    /// * `image` - Optional image data
-    /// * `system_prompt` - Optional system prompt to guide AI behavior
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(String)` - The AI-generated response text
-    /// * `Err(AlephError)` - Various errors (same as `process()`)
-    ///
-    /// # Default Implementation
-    ///
-    /// Default implementation calls `process()` and ignores the image.
-    /// Vision-capable providers should override this method.
-    fn process_with_image(
-        &self,
-        input: &str,
-        _image: Option<&crate::clipboard::ImageData>,
-        system_prompt: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        // Clone the data we need before moving into async block
-        let input = input.to_string();
-        let system_prompt = system_prompt.map(|s| s.to_string());
-
-        Box::pin(async move {
-            // Default: ignore image and call text-only process
-            self.process(&input, system_prompt.as_deref()).await
-        })
-    }
-
-    /// Process input with MediaAttachment and return AI-generated response
-    ///
-    /// This is the preferred method for multimodal content as it supports
-    /// the new MediaAttachment type from add-multimodal-content-support.
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - The user input text to process
-    /// * `attachments` - Optional media attachments (images, etc.)
-    /// * `system_prompt` - Optional system prompt to guide AI behavior
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(String)` - The AI-generated response text
-    /// * `Err(AlephError)` - Various errors (same as `process()`)
-    ///
-    /// # Default Implementation
-    ///
-    /// Default implementation calls `process()` and ignores attachments.
-    /// Vision-capable providers should override this method.
-    fn process_with_attachments(
-        &self,
-        input: &str,
-        _attachments: Option<&[crate::core::MediaAttachment]>,
-        system_prompt: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        // Clone the data we need before moving into async block
-        let input = input.to_string();
-        let system_prompt = system_prompt.map(|s| s.to_string());
-
-        Box::pin(async move {
-            // Default: ignore attachments and call text-only process
-            self.process(&input, system_prompt.as_deref()).await
-        })
-    }
-
-    /// Check if provider supports vision/image input
-    ///
-    /// # Returns
-    ///
-    /// * `true` if provider can process images (e.g., GPT-4V, Claude 3 Opus)
-    /// * `false` if provider only supports text
-    ///
-    /// # Default Implementation
-    ///
-    /// Default returns `false`. Vision-capable providers should override.
-    fn supports_vision(&self) -> bool {
-        false
-    }
-
-    /// Get provider name for logging and routing
-    ///
-    /// # Returns
-    ///
-    /// Provider identifier (e.g., "openai", "claude", "ollama")
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// # use alephcore::providers::AiProvider;
-    /// # fn example(provider: &dyn AiProvider) {
-    /// assert_eq!(provider.name(), "openai");
-    /// # }
-    /// ```
-    fn name(&self) -> &str;
-
-    /// Get provider brand color for UI theming
-    ///
-    /// # Returns
-    ///
-    /// Hex color string (e.g., "#10a37f" for OpenAI green)
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// # use alephcore::providers::AiProvider;
-    /// # fn example(provider: &dyn AiProvider) {
-    /// let color = provider.color();
-    /// assert!(color.starts_with('#'));
-    /// # }
-    /// ```
-    fn color(&self) -> &str;
-
-    /// Process input with explicit mode control for system prompt handling.
-    ///
-    /// This method allows forcing "standard" mode for system prompts.
-    /// When `force_standard_mode` is true, the system prompt is sent as a
-    /// separate system role message, regardless of the provider's configured
-    /// `system_prompt_mode` setting.
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - The user input text to process
-    /// * `system_prompt` - Optional system prompt to guide AI behavior
-    /// * `force_standard_mode` - If true, always use system role message
-    ///
-    /// # Default Implementation
-    ///
-    /// Default implementation ignores `force_standard_mode` and calls `process()`.
-    fn process_with_mode(
-        &self,
-        input: &str,
-        system_prompt: Option<&str>,
-        _force_standard_mode: bool,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        self.process(input, system_prompt)
-    }
-
-    /// Process input with thinking level configuration
-    ///
-    /// This method enables extended thinking/reasoning for supported models.
-    /// The actual implementation depends on the provider:
-    /// - Anthropic: Uses `thinking` block with `budget_tokens`
-    /// - OpenAI: Uses `reasoning_effort` for o1/o3 models
-    /// - Gemini: Uses `thinking_config` or `thinking_level`
-    /// - Other: Falls back to standard processing
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - The user input text to process
-    /// * `system_prompt` - Optional system prompt to guide AI behavior
-    /// * `think_level` - Thinking level to use (Off, Minimal, Low, Medium, High, XHigh)
-    ///
-    /// # Default Implementation
-    ///
-    /// Default implementation ignores `think_level` and calls `process()`.
-    /// Providers that support thinking should override this method.
-    fn process_with_thinking(
-        &self,
-        input: &str,
-        system_prompt: Option<&str>,
-        _think_level: ThinkLevel,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        // Default: ignore thinking level and use standard processing
-        self.process(input, system_prompt)
-    }
-
-    /// Check if provider supports extended thinking
-    ///
-    /// # Returns
-    ///
-    /// * `true` if provider supports thinking level control
-    /// * `false` if provider only supports standard processing
-    ///
-    /// # Default Implementation
-    ///
-    /// Default returns `false`. Providers with thinking support should override.
-    fn supports_thinking(&self) -> bool {
-        false
-    }
-
-    /// Get maximum supported thinking level for this provider/model
-    ///
-    /// # Returns
-    ///
-    /// The highest thinking level this provider supports.
-    /// Default is `ThinkLevel::Off` (no thinking support).
-    fn max_think_level(&self) -> ThinkLevel {
-        ThinkLevel::Off
-    }
-
-    /// Process input with per-request generation overrides and thinking level.
-    ///
-    /// This combines thinking support with per-request temperature/max_tokens
-    /// overrides from workspace profiles. Providers that support `RequestPayload`
-    /// (e.g., `HttpProvider`) override this to inject the overrides.
-    ///
-    /// # Default Implementation
-    ///
-    /// Delegates to `process_with_thinking()` or `process()`, ignoring overrides.
-    fn process_with_overrides(
-        &self,
-        input: &str,
-        system_prompt: Option<&str>,
-        think_level: ThinkLevel,
-        temperature: Option<f32>,
-        max_tokens: Option<u32>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        let _ = (temperature, max_tokens); // unused in default impl
-        if think_level != ThinkLevel::Off && self.supports_thinking() {
-            self.process_with_thinking(input, system_prompt, think_level)
-        } else {
-            self.process(input, system_prompt)
-        }
-    }
-
-    /// Process with full RequestPayload, returning structured ProviderResponse.
-    ///
-    /// This is the native tool_use aware entry point. Providers that support
-    /// native tool_use should override this to pass tools through.
-    ///
-    /// # Default Implementation
-    ///
-    /// Delegates to `process_with_overrides()` and wraps result in `ProviderResponse::text_only()`.
-    fn process_with_payload<'a>(
+    /// Core method — process a request and return structured response
+    fn process<'a>(
         &'a self,
         payload: adapter::RequestPayload<'a>,
-    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
-        let input = payload.input.to_string();
-        let system = payload.system_prompt.map(|s| s.to_string());
-        let think = payload.think_level.unwrap_or(ThinkLevel::Off);
-        let temp = payload.temperature;
-        let max_tok = payload.max_tokens;
-        Box::pin(async move {
-            let text = self
-                .process_with_overrides(&input, system.as_deref(), think, temp, max_tok)
-                .await?;
-            Ok(ProviderResponse::text_only(text))
-        })
-    }
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>>;
+
+    /// Provider name
+    fn name(&self) -> &str;
+
+    /// Provider brand color
+    fn color(&self) -> &str;
 
     /// Whether this provider supports native tool_use
     fn supports_native_tools(&self) -> bool {
+        false
+    }
+
+    /// Whether this provider supports extended thinking
+    fn supports_thinking(&self) -> bool {
         false
     }
 }
@@ -485,6 +218,7 @@ pub trait AiProvider: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::message::UnifiedMessage;
     use crate::sync_primitives::Arc;
 
     // Simple test implementation to verify trait can be used as trait object
@@ -493,11 +227,11 @@ mod tests {
     impl AiProvider for TestProvider {
         fn process(
             &self,
-            input: &str,
-            _system_prompt: Option<&str>,
-        ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-            let response = format!("Echo: {}", input);
-            Box::pin(async move { Ok(response) })
+            payload: adapter::RequestPayload<'_>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + '_>> {
+            let text = UnifiedMessage::extract_all_text(payload.messages);
+            let response = format!("Echo: {}", text);
+            Box::pin(async move { Ok(ProviderResponse::text_only(response)) })
         }
 
         fn name(&self) -> &str {
@@ -513,11 +247,13 @@ mod tests {
     async fn test_provider_trait_object() {
         let provider: Arc<dyn AiProvider> = Arc::new(TestProvider);
 
-        // Test process method
-        let response = provider.process("hello", None).await.unwrap();
-        assert_eq!(response, "Echo: hello");
+        let msgs = [UnifiedMessage::user("hello")];
+        let response = provider
+            .process(adapter::RequestPayload::new(&msgs))
+            .await
+            .unwrap();
+        assert_eq!(response.text_content(), "Echo: hello");
 
-        // Test metadata methods
         assert_eq!(provider.name(), "test");
         assert_eq!(provider.color(), "#000000");
     }
@@ -525,16 +261,19 @@ mod tests {
     #[tokio::test]
     async fn test_provider_with_system_prompt() {
         let provider: Arc<dyn AiProvider> = Arc::new(TestProvider);
+        let msgs = [UnifiedMessage::user("input")];
         let response = provider
-            .process("input", Some("system prompt"))
+            .process(
+                adapter::RequestPayload::new(&msgs)
+                    .with_system(Some("system prompt")),
+            )
             .await
             .unwrap();
-        assert_eq!(response, "Echo: input");
+        assert_eq!(response.text_content(), "Echo: input");
     }
 
     #[test]
     fn test_provider_is_send_sync() {
-        // This test ensures AiProvider can be used across threads
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Arc<dyn AiProvider>>();
     }

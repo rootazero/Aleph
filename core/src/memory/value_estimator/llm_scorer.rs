@@ -9,6 +9,8 @@ use tracing::{debug, info, warn};
 
 use crate::memory::MemoryEntry;
 use crate::providers::AiProvider;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 use crate::Result;
 
 /// Performance metrics for LLM scoring
@@ -220,10 +222,13 @@ impl LlmScorer {
         let system_prompt = self.build_system_prompt();
 
         // Call LLM
-        let response = self.provider.process(&prompt, Some(&system_prompt)).await?;
+        let __msgs = [UnifiedMessage::user(&prompt)];
+        let response = self.provider.process(
+            RequestPayload::new(&__msgs).with_system(Some(&system_prompt))
+        ).await?;
 
         // Parse response
-        let score = self.parse_score(&response)?;
+        let score = self.parse_score(&response.text_content())?;
 
         Ok(score)
     }
@@ -317,6 +322,8 @@ impl LlmScorer {
 #[cfg(test)]
 mod tests {
     use super::*;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::RequestPayload;
 
     #[test]
     fn test_parse_score_valid() {

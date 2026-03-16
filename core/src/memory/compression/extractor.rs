@@ -7,6 +7,8 @@ use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryEntry, MemoryFact};
 use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 use crate::utils::json_extract::extract_json_robust;
 use serde::{Deserialize, Serialize};
 use crate::sync_primitives::Arc;
@@ -57,14 +59,15 @@ impl FactExtractor {
         let system_prompt = self.get_system_prompt();
 
         // Call LLM
+        let __msgs = [UnifiedMessage::user(&prompt)];
         let response = self
             .provider
-            .process(&prompt, Some(&system_prompt))
+            .process(RequestPayload::new(&__msgs).with_system(Some(&system_prompt)))
             .await
             .map_err(|e| AlephError::other(format!("LLM extraction failed: {}", e)))?;
 
         // Parse response
-        let extracted = self.parse_extraction_response(&response, memories)?;
+        let extracted = self.parse_extraction_response(&response.text_content(), memories)?;
 
         // Generate embeddings for each fact
         let mut facts_with_embeddings = Vec::new();
@@ -283,6 +286,8 @@ mod tests {
     fn create_test_extractor() -> FactExtractor {
         use crate::providers::create_mock_provider;
         use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::RequestPayload;
 
         let provider = create_mock_provider();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
