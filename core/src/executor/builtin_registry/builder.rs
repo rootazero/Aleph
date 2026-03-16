@@ -260,7 +260,7 @@ impl BuiltinToolRegistry {
                 use crate::builtin_tools::acp_tools::{ClaudeCodeTool, CodexTool, GeminiCliTool, AcpSwitchTool};
                 info!("Creating ACP delegate tools");
 
-                let cc = if manager.has_harness("claude_code").await {
+                let cc = if manager.has_harness("claude-code").await {
                     tools.insert("claude_code".to_string(), UnifiedTool::new(
                         "builtin:claude_code", "claude_code",
                         ClaudeCodeTool::DESCRIPTION, ToolSource::Builtin,

@@ -118,7 +118,7 @@ impl AcpHarnessManager {
     fn build_harness(id: &str, entry: &AcpHarnessEntry) -> Box<dyn AcpHarness> {
         let preset = entry.preset.as_deref().unwrap_or("");
         match preset {
-            "claude_code" => {
+            "claude-code" => {
                 Box::new(ClaudeCodeHarness::new(entry.executable.clone()))
             }
             "codex" => {
@@ -244,7 +244,12 @@ impl AcpHarnessManager {
     /// Update an existing harness configuration.
     ///
     /// Replaces the harness instance and config. Kills any active session.
+    ///
+    /// Lock ordering: sessions → harnesses → configs
+    /// (matches `ensure_session` which acquires sessions first, then harnesses)
     pub async fn update_harness(&self, id: &str, entry: AcpHarnessEntry) -> Result<()> {
+        // Acquire locks in consistent order: sessions → harnesses → configs
+        let mut sessions = self.sessions.write().await;
         let mut harnesses = self.harnesses.write().await;
         let mut configs = self.configs.write().await;
 
@@ -254,7 +259,6 @@ impl AcpHarnessManager {
             configs.insert(id.to_string(), entry);
 
             // Kill active session
-            let mut sessions = self.sessions.write().await;
             if let Some(mut session) = sessions.remove(id) {
                 session.kill().await;
             }
@@ -268,7 +272,6 @@ impl AcpHarnessManager {
         configs.insert(id.to_string(), entry);
 
         // Kill any active session so it will be respawned with the new config
-        let mut sessions = self.sessions.write().await;
         if let Some(mut session) = sessions.remove(id) {
             session.kill().await;
         }
@@ -408,7 +411,7 @@ mod tests {
     async fn test_manager_registers_harnesses() {
         let manager = AcpHarnessManager::new();
         let ids = manager.harness_ids().await;
-        assert!(ids.contains(&"claude_code".to_string()));
+        assert!(ids.contains(&"claude-code".to_string()));
         assert!(ids.contains(&"codex".to_string()));
         assert!(ids.contains(&"gemini".to_string()));
     }
@@ -416,7 +419,7 @@ mod tests {
     #[tokio::test]
     async fn test_manager_has_harness() {
         let manager = AcpHarnessManager::new();
-        assert!(manager.has_harness("claude_code").await);
+        assert!(manager.has_harness("claude-code").await);
         assert!(!manager.has_harness("unknown").await);
     }
 
@@ -426,14 +429,14 @@ mod tests {
         config.enabled.insert("codex".to_string(), false);
         let manager = AcpHarnessManager::with_config(config);
         assert!(!manager.has_harness("codex").await);
-        assert!(manager.has_harness("claude_code").await);
+        assert!(manager.has_harness("claude-code").await);
         assert!(manager.has_harness("gemini").await);
     }
 
     #[tokio::test]
     async fn test_manager_display_name() {
         let manager = AcpHarnessManager::new();
-        assert_eq!(manager.display_name("claude_code").await, Some("Claude Code".to_string()));
+        assert_eq!(manager.display_name("claude-code").await, Some("Claude Code".to_string()));
         assert_eq!(manager.display_name("codex").await, Some("Codex".to_string()));
         assert_eq!(manager.display_name("gemini").await, Some("Gemini".to_string()));
         assert_eq!(manager.display_name("unknown").await, None);
@@ -443,19 +446,19 @@ mod tests {
     async fn test_manager_harness_modes() {
         let manager = AcpHarnessManager::new();
         assert_eq!(manager.harness_mode("gemini").await, Some(HarnessMode::NativeAcp));
-        assert_eq!(manager.harness_mode("claude_code").await, Some(HarnessMode::Oneshot));
+        assert_eq!(manager.harness_mode("claude-code").await, Some(HarnessMode::Oneshot));
         assert_eq!(manager.harness_mode("codex").await, Some(HarnessMode::Oneshot));
     }
 
     #[tokio::test]
     async fn test_manager_executable_override() {
         let mut config = AcpManagerConfig::default();
-        config.executables.insert("claude_code".to_string(), "/custom/claude".to_string());
+        config.executables.insert("claude-code".to_string(), "/custom/claude".to_string());
         let manager = AcpHarnessManager::with_config(config);
-        assert!(manager.has_harness("claude_code").await);
+        assert!(manager.has_harness("claude-code").await);
         // Verify override is applied via build_config
         let harnesses = manager.harnesses.read().await;
-        let harness = harnesses.get("claude_code").unwrap();
+        let harness = harnesses.get("claude-code").unwrap();
         let cfg = harness.build_config(None);
         assert_eq!(cfg.executable, "/custom/claude");
     }
@@ -509,11 +512,11 @@ mod tests {
         let entry = AcpHarnessEntry {
             display_name: "Dup".to_string(),
             enabled: true,
-            preset: Some("claude_code".to_string()),
+            preset: Some("claude-code".to_string()),
             ..Default::default()
         };
 
-        let result = manager.register_harness("claude_code".to_string(), entry).await;
+        let result = manager.register_harness("claude-code".to_string(), entry).await;
         assert!(result.is_err());
     }
 
@@ -537,7 +540,7 @@ mod tests {
     #[tokio::test]
     async fn test_unregister_preset_fails() {
         let manager = AcpHarnessManager::new();
-        let result = manager.unregister_harness("claude_code").await;
+        let result = manager.unregister_harness("claude-code").await;
         assert!(result.is_err());
     }
 
@@ -548,13 +551,13 @@ mod tests {
             display_name: "Claude Code Updated".to_string(),
             executable: Some("/new/path/claude".to_string()),
             enabled: true,
-            preset: Some("claude_code".to_string()),
+            preset: Some("claude-code".to_string()),
             ..Default::default()
         };
 
-        manager.update_harness("claude_code", updated).await.unwrap();
+        manager.update_harness("claude-code", updated).await.unwrap();
 
-        let config = manager.get_config("claude_code").await.unwrap();
+        let config = manager.get_config("claude-code").await.unwrap();
         assert_eq!(config.executable, Some("/new/path/claude".to_string()));
     }
 
@@ -580,7 +583,7 @@ mod tests {
         let configs = manager.list_configs().await;
         assert_eq!(configs.len(), 3);
         // Should be sorted
-        assert_eq!(configs[0].0, "claude_code");
+        assert_eq!(configs[0].0, "claude-code");
         assert_eq!(configs[1].0, "codex");
         assert_eq!(configs[2].0, "gemini");
     }
@@ -588,7 +591,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_config() {
         let manager = AcpHarnessManager::new();
-        let config = manager.get_config("claude_code").await;
+        let config = manager.get_config("claude-code").await;
         assert!(config.is_some());
         assert_eq!(config.unwrap().display_name, "Claude Code");
 

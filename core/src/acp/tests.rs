@@ -333,7 +333,7 @@ async fn manager_default_has_all_three_harnesses() {
     let mgr = AcpHarnessManager::new();
     let ids = mgr.harness_ids().await;
     assert_eq!(ids.len(), 3);
-    assert!(ids.contains(&"claude_code".to_string()));
+    assert!(ids.contains(&"claude-code".to_string()));
     assert!(ids.contains(&"codex".to_string()));
     assert!(ids.contains(&"gemini".to_string()));
 }
@@ -349,7 +349,7 @@ async fn manager_has_harness_returns_false_for_unknown() {
 #[tokio::test]
 async fn manager_display_names_correct() {
     let mgr = AcpHarnessManager::new();
-    assert_eq!(mgr.display_name("claude_code").await, Some("Claude Code".to_string()));
+    assert_eq!(mgr.display_name("claude-code").await, Some("Claude Code".to_string()));
     assert_eq!(mgr.display_name("codex").await, Some("Codex".to_string()));
     assert_eq!(mgr.display_name("gemini").await, Some("Gemini".to_string()));
     assert_eq!(mgr.display_name("unknown").await, None);
@@ -360,7 +360,7 @@ async fn manager_harness_modes_correct() {
     use super::harness::HarnessMode;
     let mgr = AcpHarnessManager::new();
     assert_eq!(mgr.harness_mode("gemini").await, Some(HarnessMode::NativeAcp));
-    assert_eq!(mgr.harness_mode("claude_code").await, Some(HarnessMode::Oneshot));
+    assert_eq!(mgr.harness_mode("claude-code").await, Some(HarnessMode::Oneshot));
     assert_eq!(mgr.harness_mode("codex").await, Some(HarnessMode::Oneshot));
     assert_eq!(mgr.harness_mode("unknown").await, None);
 }
@@ -375,7 +375,7 @@ async fn manager_disable_single_harness() {
     config.enabled.insert("codex".to_string(), false);
     let mgr = AcpHarnessManager::with_config(config);
     assert!(!mgr.has_harness("codex").await);
-    assert!(mgr.has_harness("claude_code").await);
+    assert!(mgr.has_harness("claude-code").await);
     assert!(mgr.has_harness("gemini").await);
     assert_eq!(mgr.harness_ids().await.len(), 2);
 }
@@ -383,7 +383,7 @@ async fn manager_disable_single_harness() {
 #[tokio::test]
 async fn manager_disable_all_harnesses() {
     let mut config = AcpManagerConfig::default();
-    config.enabled.insert("claude_code".to_string(), false);
+    config.enabled.insert("claude-code".to_string(), false);
     config.enabled.insert("codex".to_string(), false);
     config.enabled.insert("gemini".to_string(), false);
     let mgr = AcpHarnessManager::with_config(config);
@@ -393,9 +393,9 @@ async fn manager_disable_all_harnesses() {
 #[tokio::test]
 async fn manager_explicit_enable_is_noop() {
     let mut config = AcpManagerConfig::default();
-    config.enabled.insert("claude_code".to_string(), true);
+    config.enabled.insert("claude-code".to_string(), true);
     let mgr = AcpHarnessManager::with_config(config);
-    assert!(mgr.has_harness("claude_code").await);
+    assert!(mgr.has_harness("claude-code").await);
     assert_eq!(mgr.harness_ids().await.len(), 3);
 }
 
