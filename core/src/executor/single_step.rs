@@ -740,7 +740,7 @@ mod tests {
         use crate::sync_primitives::Arc;
         use aleph_protocol::IdentityContext;
 
-        let tool_registry = Arc::new(crate::executor::BuiltinToolRegistry::new());
+        let tool_registry = Arc::new(crate::executor::BuiltinToolRegistry::new().await);
         let approval_manager = Arc::new(ExecApprovalManager::new());
         let gate = Arc::new(ExecSecurityGate::new(approval_manager, None));
 

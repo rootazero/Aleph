@@ -78,13 +78,13 @@ impl AlephTool for ClaudeCodeTool {
         notify_tool_start(Self::NAME, &args_summary);
 
         let cwd = resolve_cwd(args.cwd.as_deref());
-        let result = self.manager.prompt("claude-code", &args.prompt, &cwd).await;
+        let result = self.manager.prompt("claude_code", &args.prompt, &cwd).await;
 
         match result {
             Ok(text) => {
                 notify_tool_result(Self::NAME, "completed", true);
                 Ok(AcpDelegateOutput {
-                    harness: "claude-code".to_string(),
+                    harness: "claude_code".to_string(),
                     result: text,
                 })
             }
@@ -199,7 +199,7 @@ impl AlephTool for GeminiCliTool {
 /// Arguments for switching the active CLI agent.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AcpSwitchArgs {
-    /// Target agent to switch to: "claude-code", "codex", "gemini", or "aleph".
+    /// Target agent to switch to: "claude_code", "codex", "gemini", or "aleph".
     pub target: String,
 }
 
@@ -248,14 +248,14 @@ impl AlephTool for AcpSwitchTool {
         }
 
         // Validate harness exists
-        if !self.manager.has_harness(&args.target) {
-            let err_msg = format!("Unknown agent: '{}'. Valid targets: claude-code, codex, gemini, aleph", &args.target);
+        if !self.manager.has_harness(&args.target).await {
+            let err_msg = format!("Unknown agent: '{}'. Valid targets: claude_code, codex, gemini, aleph", &args.target);
             notify_tool_result(Self::NAME, &err_msg, false);
             return Err(AlephError::tool(err_msg));
         }
 
         // Pre-spawn session for NativeAcp harnesses so the switch is immediate
-        if self.manager.harness_mode(&args.target) == Some(crate::acp::harness::HarnessMode::NativeAcp) {
+        if self.manager.harness_mode(&args.target).await == Some(crate::acp::harness::HarnessMode::NativeAcp) {
             let cwd = resolve_cwd(None);
             self.manager.ensure_session(&args.target, &cwd).await?;
         }
@@ -263,7 +263,8 @@ impl AlephTool for AcpSwitchTool {
         let display_name = self
             .manager
             .display_name(&args.target)
-            .unwrap_or(&args.target);
+            .await
+            .unwrap_or_else(|| args.target.clone());
         let msg = format!("Switched to {}. Messages will be forwarded to this agent.", display_name);
 
         info!(target = %args.target, "ACP agent switch");
@@ -348,8 +349,8 @@ mod tests {
 
     #[test]
     fn test_switch_args_deserialize() {
-        let json = r#"{"target": "claude-code"}"#;
+        let json = r#"{"target": "claude_code"}"#;
         let args: AcpSwitchArgs = serde_json::from_str(json).unwrap();
-        assert_eq!(args.target, "claude-code");
+        assert_eq!(args.target, "claude_code");
     }
 }

@@ -112,8 +112,8 @@ pub struct BuiltinToolRegistry {
 
 impl BuiltinToolRegistry {
     /// Create a new registry with default configuration
-    pub fn new() -> Self {
-        Self::with_config(BuiltinToolConfig::default())
+    pub async fn new() -> Self {
+        Self::with_config(BuiltinToolConfig::default()).await
     }
 
     /// Register an additional tool (e.g., plugin tools discovered at runtime)
@@ -132,12 +132,6 @@ impl BuiltinToolRegistry {
         // TODO: Implement OpenClaw-style tool policy
         // See: /Volumes/TBU4/Workspace/openclaw/src/agents/pi-tools.policy.ts
         Ok(())
-    }
-}
-
-impl Default for BuiltinToolRegistry {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
