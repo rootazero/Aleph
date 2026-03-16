@@ -158,6 +158,8 @@ impl SessionScheduler {
             self.channel_registry.clone(),
             enriched.merged.primary_context.reply_route.clone(),
             run_id.clone(),
+            agent.config().display_name.clone(),
+            false,
         ));
 
         // Wrap with scheduler event listener
@@ -358,6 +360,8 @@ async fn execute_next(
         channel_registry.clone(),
         enriched.merged.primary_context.reply_route.clone(),
         run_id.clone(),
+        agent.config().display_name.clone(),
+        false,
     ));
 
     // Wrap with a new listener for the next run
