@@ -66,6 +66,7 @@ pub mod registry;
 pub mod retry;
 pub mod shared;
 pub mod adapter;
+pub mod message;
 pub mod http_provider;
 pub mod presets;
 pub mod protocols;
