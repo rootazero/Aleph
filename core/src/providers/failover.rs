@@ -56,7 +56,7 @@
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use crate::providers::{create_provider, AiProvider};
+use crate::providers::{adapter, create_provider, AiProvider, ProviderResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
@@ -371,46 +371,58 @@ impl FailoverProvider {
 impl AiProvider for FailoverProvider {
     fn process(
         &self,
-        input: &str,
-        system_prompt: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        let input = input.to_string();
-        let system_prompt = system_prompt.map(|s| s.to_string());
+        payload: adapter::RequestPayload<'_>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + '_>> {
+        // Clone messages for ownership across retries
+        let messages: Vec<crate::providers::message::UnifiedMessage> = payload.messages.to_vec();
+        let system_prompt = payload.system_prompt.map(|s| s.to_string());
+        let tools: Option<Vec<crate::dispatcher::ToolDefinition>> =
+            payload.tools.map(|t| t.to_vec());
+        let think_level = payload.think_level;
+        let temperature = payload.temperature;
+        let max_tokens = payload.max_tokens;
 
         Box::pin(async move {
             let providers = self.providers.read().await;
             let provider_count = providers.len();
-            drop(providers); // Release lock
+            drop(providers);
 
             let mut last_error = None;
 
             for i in 0..provider_count {
-                // Check if provider is healthy
                 if !self.is_provider_healthy(i).await {
                     tracing::debug!("Skipping unhealthy provider at index {}", i);
                     continue;
                 }
 
-                // Get provider
                 let provider = {
                     let providers = self.providers.read().await;
-                    providers.get(i).map(|p| (p.provider.clone(), p.entry.name.clone()))
+                    providers
+                        .get(i)
+                        .map(|p| (p.provider.clone(), p.entry.name.clone()))
                 };
 
                 let Some((provider, name)) = provider else {
                     continue;
                 };
 
-                // Try the provider with retries
                 for retry in 0..=self.config.max_retries {
                     if retry > 0 {
                         tracing::debug!("Retry {} for provider '{}'", retry, name);
-                        // Brief delay between retries
                         tokio::time::sleep(Duration::from_millis(100 * retry as u64)).await;
                     }
 
+                    let inner_payload = adapter::RequestPayload {
+                        messages: &messages,
+                        system_prompt: system_prompt.as_deref(),
+                        tools: tools.as_deref(),
+                        think_level,
+                        temperature,
+                        max_tokens,
+                    };
+
                     let start = Instant::now();
-                    match provider.process(&input, system_prompt.as_deref()).await {
+                    match provider.process(inner_payload).await {
                         Ok(response) => {
                             let latency_ms = start.elapsed().as_millis() as u64;
                             self.mark_healthy(i, latency_ms).await;
@@ -431,13 +443,11 @@ impl AiProvider for FailoverProvider {
                             );
                             last_error = Some(error_msg.clone());
 
-                            // Don't retry on certain errors
                             if Self::is_non_retryable_error(&e) {
                                 self.mark_unhealthy(i, error_msg).await;
                                 break;
                             }
 
-                            // Rate-limited: skip remaining retries, move to next provider
                             if matches!(e, AlephError::RateLimitError { .. }) {
                                 tracing::info!(
                                     "Provider '{}' rate-limited, failing over to next provider",
@@ -450,13 +460,11 @@ impl AiProvider for FailoverProvider {
                     }
                 }
 
-                // Mark unhealthy after all retries exhausted
                 if let Some(ref error) = last_error {
                     self.mark_unhealthy(i, error.clone()).await;
                 }
             }
 
-            // All providers failed
             Err(AlephError::provider(format!(
                 "All {} providers failed. Last error: {}",
                 provider_count,
@@ -470,78 +478,7 @@ impl AiProvider for FailoverProvider {
     }
 
     fn color(&self) -> &str {
-        "#6366f1" // Indigo
-    }
-
-    fn supports_vision(&self) -> bool {
-        // Return true if any provider supports vision
-        // This is a sync method, so we can't easily check async
-        // Default to true to allow vision requests to try
-        true
-    }
-
-    fn process_with_image(
-        &self,
-        input: &str,
-        image: Option<&crate::clipboard::ImageData>,
-        system_prompt: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        let input = input.to_string();
-        let system_prompt = system_prompt.map(|s| s.to_string());
-        let image = image.cloned();
-
-        Box::pin(async move {
-            let providers = self.providers.read().await;
-            let provider_count = providers.len();
-            drop(providers);
-
-            let mut last_error = None;
-
-            for i in 0..provider_count {
-                if !self.is_provider_healthy(i).await {
-                    continue;
-                }
-
-                let provider = {
-                    let providers = self.providers.read().await;
-                    providers.get(i).map(|p| (p.provider.clone(), p.entry.name.clone()))
-                };
-
-                let Some((provider, name)) = provider else { continue };
-
-                // Skip providers that don't support vision when image is present
-                if image.is_some() && !provider.supports_vision() {
-                    tracing::debug!("Skipping provider '{}' (no vision support)", name);
-                    continue;
-                }
-
-                let start = std::time::Instant::now();
-                match provider
-                    .process_with_image(&input, image.as_ref(), system_prompt.as_deref())
-                    .await
-                {
-                    Ok(response) => {
-                        let latency_ms = start.elapsed().as_millis() as u64;
-                        self.mark_healthy(i, latency_ms).await;
-                        return Ok(response);
-                    }
-                    Err(e) => {
-                        let error_msg = e.to_string();
-                        tracing::warn!("Provider '{}' vision failed: {}", name, error_msg);
-                        last_error = Some(error_msg.clone());
-                        if Self::is_non_retryable_error(&e) {
-                            self.mark_unhealthy(i, error_msg).await;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            Err(AlephError::provider(format!(
-                "All providers failed for vision request. Last error: {}",
-                last_error.unwrap_or_else(|| "No providers available".to_string())
-            )))
-        })
+        "#6366f1"
     }
 }
 

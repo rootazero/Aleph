@@ -7,6 +7,8 @@ use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
 use tracing::{debug, info, warn};
+use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::RequestPayload;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -102,8 +104,10 @@ impl IntentDetector {
             let prompt = build_intent_classify_prompt(trimmed, &self.available_agents);
             debug!(prompt_len = prompt.len(), "LLM intent classification");
 
-            match provider.process(&prompt, None).await {
+            let _msgs = [crate::providers::message::UnifiedMessage::user(&prompt)];
+            match provider.process(crate::providers::adapter::RequestPayload::new(&_msgs)).await {
                 Ok(response) => {
+                    let response = response.text_content();
                     if let Some(intent) = parse_intent_response(&response) {
                         info!(name = %intent_name(&intent), "intent detected via LLM");
                         return intent;

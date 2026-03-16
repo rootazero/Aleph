@@ -397,11 +397,10 @@ use crate::providers::adapter::RequestPayload;
 
         fn process(
             &self,
-            _input: &str,
-            _system_prompt: Option<&str>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<String>> + Send + '_>> {
+            _payload: crate::providers::adapter::RequestPayload<'_>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<crate::providers::adapter::ProviderResponse>> + Send + '_>> {
             let response = self.response.clone();
-            Box::pin(async move { Ok(response) })
+            Box::pin(async move { Ok(crate::providers::adapter::ProviderResponse::text_only(response)) })
         }
     }
 

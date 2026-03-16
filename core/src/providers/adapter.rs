@@ -4,9 +4,7 @@
 //! that enable protocol-centric provider architecture.
 
 use crate::agents::thinking::ThinkLevel;
-use crate::clipboard::ImageData;
 use crate::config::ProviderConfig;
-use crate::core::MediaAttachment;
 use crate::dispatcher::ToolDefinition;
 use crate::error::Result;
 use async_trait::async_trait;
@@ -14,45 +12,45 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Unified request payload for protocol adapters
+use super::message::UnifiedMessage;
+
+/// Unified request payload for protocol adapters.
 ///
-/// This DTO (Data Transfer Object) contains all possible inputs for an LLM request.
 /// Protocol adapters translate this into provider-specific request formats.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RequestPayload<'a> {
-    /// Core text input (user message)
-    pub input: &'a str,
-
-    /// System prompt (optional)
+    /// Structured message list
+    pub messages: &'a [UnifiedMessage],
+    /// System prompt (handled differently per provider)
     pub system_prompt: Option<&'a str>,
-
-    /// Legacy image format (for process_with_image compatibility)
-    pub image: Option<&'a ImageData>,
-
-    /// Multimodal attachments (for process_with_attachments compatibility)
-    pub attachments: Option<&'a [MediaAttachment]>,
-
-    /// Thinking/reasoning level configuration
-    pub think_level: Option<ThinkLevel>,
-
-    /// Force standard mode for system prompt handling
-    pub force_standard_mode: bool,
-
-    /// Per-request temperature override (takes priority over provider config)
-    pub temperature: Option<f32>,
-
-    /// Per-request max_tokens override (takes priority over provider config)
-    pub max_tokens: Option<u32>,
-
-    /// Tool definitions for native tool_use (None = no tools / fallback mode)
+    /// Tool definitions for native tool_use
     pub tools: Option<&'a [ToolDefinition]>,
+    /// Thinking/reasoning level
+    pub think_level: Option<ThinkLevel>,
+    /// Per-request temperature override
+    pub temperature: Option<f32>,
+    /// Per-request max_tokens override
+    pub max_tokens: Option<u32>,
+}
+
+impl<'a> Default for RequestPayload<'a> {
+    fn default() -> Self {
+        Self {
+            messages: &[],
+            system_prompt: None,
+            tools: None,
+            think_level: None,
+            temperature: None,
+            max_tokens: None,
+        }
+    }
 }
 
 impl<'a> RequestPayload<'a> {
-    /// Create a new payload with input text
-    pub fn new(input: &'a str) -> Self {
+    /// Create payload from messages
+    pub fn new(messages: &'a [UnifiedMessage]) -> Self {
         Self {
-            input,
+            messages,
             ..Default::default()
         }
     }
@@ -63,45 +61,27 @@ impl<'a> RequestPayload<'a> {
         self
     }
 
-    /// Add legacy image
-    pub fn with_image(mut self, image: Option<&'a ImageData>) -> Self {
-        self.image = image;
+    /// Add tools
+    pub fn with_tools(mut self, tools: Option<&'a [ToolDefinition]>) -> Self {
+        self.tools = tools;
         self
     }
 
-    /// Add multimodal attachments
-    pub fn with_attachments(mut self, attachments: Option<&'a [MediaAttachment]>) -> Self {
-        self.attachments = attachments;
-        self
-    }
-
-    /// Add thinking level
+    /// Set thinking level
     pub fn with_think_level(mut self, level: Option<ThinkLevel>) -> Self {
         self.think_level = level;
         self
     }
 
-    /// Set force standard mode
-    pub fn with_force_standard_mode(mut self, force: bool) -> Self {
-        self.force_standard_mode = force;
-        self
-    }
-
-    /// Set per-request temperature override
+    /// Set temperature
     pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
         self.temperature = temperature;
         self
     }
 
-    /// Set per-request max_tokens override
+    /// Set max_tokens
     pub fn with_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
         self.max_tokens = max_tokens;
-        self
-    }
-
-    /// Set tool definitions for native tool_use
-    pub fn with_tools(mut self, tools: Option<&'a [ToolDefinition]>) -> Self {
-        self.tools = tools;
         self
     }
 }
@@ -198,6 +178,21 @@ impl ProviderResponse {
     pub fn has_tool_calls(&self) -> bool {
         !self.tool_calls.is_empty()
     }
+
+    /// Extract text content (convenience for callers migrating from String return)
+    pub fn text_content(&self) -> String {
+        self.text.clone().unwrap_or_default()
+    }
+
+    /// Validate response completeness — warns on missing usage or unknown stop reason
+    pub fn validate(&self, protocol_name: &str) {
+        if self.usage.is_none() {
+            tracing::warn!(protocol = protocol_name, "Provider response missing usage data");
+        }
+        if self.stop_reason == StopReason::Unknown {
+            tracing::warn!(protocol = protocol_name, "Provider response has Unknown stop_reason");
+        }
+    }
 }
 
 /// A native tool call from the LLM
@@ -239,23 +234,22 @@ mod tests {
 
     #[test]
     fn test_payload_builder() {
-        let payload = RequestPayload::new("Hello")
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs)
             .with_system(Some("You are helpful"))
             .with_think_level(Some(ThinkLevel::Medium));
 
-        assert_eq!(payload.input, "Hello");
+        assert_eq!(payload.messages.len(), 1);
         assert_eq!(payload.system_prompt, Some("You are helpful"));
         assert!(payload.think_level.is_some());
-        assert!(!payload.force_standard_mode);
     }
 
     #[test]
     fn test_payload_default() {
-        let payload = RequestPayload::new("Test");
-        assert_eq!(payload.input, "Test");
+        let msgs = [UnifiedMessage::user("Test")];
+        let payload = RequestPayload::new(&msgs);
+        assert_eq!(payload.messages.len(), 1);
         assert!(payload.system_prompt.is_none());
-        assert!(payload.image.is_none());
-        assert!(payload.attachments.is_none());
         assert!(payload.think_level.is_none());
         assert!(payload.temperature.is_none());
         assert!(payload.max_tokens.is_none());
@@ -263,7 +257,8 @@ mod tests {
 
     #[test]
     fn test_payload_with_generation_overrides() {
-        let payload = RequestPayload::new("Hello")
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs)
             .with_temperature(Some(0.7))
             .with_max_tokens(Some(4096));
 
@@ -277,6 +272,7 @@ mod tests {
         assert_eq!(resp.text.as_deref(), Some("hello"));
         assert!(!resp.has_tool_calls());
         assert_eq!(resp.stop_reason, StopReason::EndTurn);
+        assert_eq!(resp.text_content(), "hello");
     }
 
     #[test]
@@ -302,11 +298,13 @@ mod tests {
         assert!(!resp.has_tool_calls());
         assert_eq!(resp.stop_reason, StopReason::EndTurn);
         assert!(resp.usage.is_none());
+        assert_eq!(resp.text_content(), "");
     }
 
     #[test]
     fn test_request_payload_with_tools() {
-        let payload = RequestPayload::new("test input")
+        let msgs = [UnifiedMessage::user("test input")];
+        let payload = RequestPayload::new(&msgs)
             .with_tools(None);
         assert!(payload.tools.is_none());
     }

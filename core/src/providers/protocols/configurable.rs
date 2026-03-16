@@ -138,11 +138,21 @@ impl ProtocolAdapter for ConfigurableProtocol {
                 "Building custom protocol request"
             );
 
+            // Extract last user message text as template input
+            let input_text = payload.messages.iter().rev()
+                .find_map(|m| match m {
+                    crate::providers::message::UnifiedMessage::User { content } => {
+                        Some(content.iter().filter_map(|b| b.as_text()).collect::<Vec<_>>().join("\n"))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default();
+
             // Build template context (per-request overrides applied after config)
             let context = TemplateContext::new()
                 .with_config(config)
                 .with_payload_overrides(payload)
-                .with_input(payload.input)
+                .with_input(&input_text)
                 .with_system_prompt(payload.system_prompt.unwrap_or(""))
                 .build();
 
@@ -362,7 +372,8 @@ mod tests {
         config.api_key = Some("test-key".to_string());
 
         // Create a test payload
-        let payload = RequestPayload::new("Hello, world!");
+        let msgs = [crate::providers::message::UnifiedMessage::user("Hello, world!")];
+        let payload = RequestPayload::new(&msgs);
 
         // Build request (this should work now)
         let request = proto
@@ -398,7 +409,8 @@ mod tests {
         config.api_key = Some("test-key".to_string());
 
         // Create a test payload
-        let payload = RequestPayload::new("Test message");
+        let msgs = [crate::providers::message::UnifiedMessage::user("Test message")];
+        let payload = RequestPayload::new(&msgs);
 
         // Build request (should use base protocol's auth)
         let request = proto
@@ -447,7 +459,8 @@ mod tests {
 
         let mut config = ProviderConfig::test_config("test-model");
         config.api_key = Some("test-key-123".to_string());
-        let payload = RequestPayload::new("Hello, AI!");
+        let msgs = [crate::providers::message::UnifiedMessage::user("Hello, AI!")];
+        let payload = RequestPayload::new(&msgs);
 
         // Build request should work now
         let result = proto.build_request(&payload, &config, false);

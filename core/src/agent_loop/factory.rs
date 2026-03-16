@@ -96,10 +96,9 @@ mod tests {
 
         fn process(
             &self,
-            _input: &str,
-            _system_prompt: Option<&str>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<String>> + Send + '_>> {
-            Box::pin(async { Ok("response".into()) })
+            _payload: crate::providers::adapter::RequestPayload<'_>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<crate::providers::adapter::ProviderResponse>> + Send + '_>> {
+            Box::pin(async { Ok(crate::providers::adapter::ProviderResponse::text_only("response".into())) })
         }
     }
 

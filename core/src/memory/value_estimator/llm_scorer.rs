@@ -376,23 +376,11 @@ use crate::providers::adapter::RequestPayload;
     impl AiProvider for MockProvider {
         fn process(
             &self,
-            _input: &str,
-            _system_prompt: Option<&str>,
+            _payload: crate::providers::adapter::RequestPayload<'_>,
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<String>> + Send + '_>,
+            Box<dyn std::future::Future<Output = Result<crate::providers::adapter::ProviderResponse>> + Send + '_>,
         > {
-            Box::pin(async { Ok("0.5".to_string()) })
-        }
-
-        fn process_with_image(
-            &self,
-            _input: &str,
-            _image: Option<&crate::clipboard::ImageData>,
-            _system_prompt: Option<&str>,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<String>> + Send + '_>,
-        > {
-            Box::pin(async { Ok("0.5".to_string()) })
+            Box::pin(async { Ok(crate::providers::adapter::ProviderResponse::text_only("0.5".to_string())) })
         }
 
         fn name(&self) -> &str {

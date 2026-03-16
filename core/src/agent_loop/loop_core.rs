@@ -18,6 +18,7 @@ use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
 use crate::providers::adapter::{ProviderResponse, StopReason};
+use crate::providers::message::UnifiedMessage;
 
 // =============================================================================
 // LoopProvider trait
@@ -25,37 +26,16 @@ use crate::providers::adapter::{ProviderResponse, StopReason};
 
 /// Abstraction over AI provider for testability.
 ///
-/// Implementations translate `LoopMessage` history into provider-specific
+/// Implementations translate `UnifiedMessage` history into provider-specific
 /// API calls and return a structured `ProviderResponse`.
 #[async_trait]
 pub trait LoopProvider: Send + Sync {
     async fn call(
         &self,
-        messages: &[LoopMessage],
+        messages: &[UnifiedMessage],
         system_prompt: &str,
         tools: &[ToolDefinition],
     ) -> anyhow::Result<ProviderResponse>;
-}
-
-// =============================================================================
-// LoopMessage
-// =============================================================================
-
-/// Messages in the conversation history.
-#[derive(Debug, Clone)]
-pub enum LoopMessage {
-    User(String),
-    Assistant(String),
-    ToolUse {
-        id: String,
-        name: String,
-        input: Value,
-    },
-    ToolResult {
-        id: String,
-        output: Value,
-        is_error: bool,
-    },
 }
 
 // =============================================================================
@@ -146,12 +126,6 @@ impl<P: LoopProvider> AgentLoop<P> {
     }
 
     /// Run the agent loop with the given user input.
-    ///
-    /// This is THE CORE LOOP:
-    /// 1. Build system prompt and tool definitions
-    /// 2. Start with optional history + `LoopMessage::User(input)`
-    /// 3. Loop: call provider → process response → execute tools → repeat
-    /// 4. Stop on EndTurn, max iterations, token budget, or timeout
     pub async fn run(
         &self,
         input: &str,
@@ -161,16 +135,13 @@ impl<P: LoopProvider> AgentLoop<P> {
     }
 
     /// Run the agent loop with conversation history prepended.
-    ///
-    /// `history` contains prior User/Assistant messages from the session.
-    /// The current `input` is appended as the final User message.
     pub async fn run_with_history(
         &self,
         input: &str,
-        history: Vec<LoopMessage>,
+        history: Vec<UnifiedMessage>,
         callback: &mut dyn LoopCallback,
     ) -> anyhow::Result<LoopRunResult> {
-        // Build system prompt with tool info (no memory context for now)
+        // Build system prompt with tool info
         let tool_infos: Vec<ToolInfo> = self
             .tool_registry
             .tool_definitions()
@@ -188,7 +159,7 @@ impl<P: LoopProvider> AgentLoop<P> {
 
         // Initialize conversation with history + current user message
         let mut messages = history;
-        messages.push(LoopMessage::User(input.to_string()));
+        messages.push(UnifiedMessage::user(input));
 
         let mut final_text: Option<String> = None;
         let mut iterations: usize = 0;
@@ -230,6 +201,9 @@ impl<P: LoopProvider> AgentLoop<P> {
                 final_text = Some(text.clone());
             }
 
+            // Push complete assistant message from response
+            messages.push(UnifiedMessage::from_provider_response(&response));
+
             // If no tool calls and EndTurn → done
             if !response.has_tool_calls() && response.stop_reason == StopReason::EndTurn {
                 break;
@@ -243,13 +217,6 @@ impl<P: LoopProvider> AgentLoop<P> {
 
             // Act: process each tool call
             for tc in &response.tool_calls {
-                // Push ToolUse message
-                messages.push(LoopMessage::ToolUse {
-                    id: tc.id.clone(),
-                    name: tc.name.clone(),
-                    input: tc.arguments.clone(),
-                });
-
                 // Safety check
                 let safety_call = SafetyToolCall {
                     name: tc.name.clone(),
@@ -263,27 +230,28 @@ impl<P: LoopProvider> AgentLoop<P> {
                             pattern: pattern.clone(),
                         };
                         callback.on_safety_block(&err);
-                        messages.push(LoopMessage::ToolResult {
-                            id: tc.id.clone(),
-                            output: Value::String(format!(
+                        messages.push(UnifiedMessage::tool_result(
+                            tc.id.clone(),
+                            tc.name.clone(),
+                            format!(
                                 "BLOCKED: tool '{}' blocked by safety pattern '{}'",
                                 tool, pattern
-                            )),
-                            is_error: true,
-                        });
+                            ),
+                            true,
+                        ));
                     }
                     Err(SafetyError::NeedsConfirmation { ref tool }) => {
                         let err = SafetyError::NeedsConfirmation { tool: tool.clone() };
                         callback.on_safety_block(&err);
-                        // TODO: wire to real UI confirmation flow
-                        messages.push(LoopMessage::ToolResult {
-                            id: tc.id.clone(),
-                            output: Value::String(format!(
+                        messages.push(UnifiedMessage::tool_result(
+                            tc.id.clone(),
+                            tc.name.clone(),
+                            format!(
                                 "NEEDS_CONFIRMATION: tool '{}' requires user approval (auto-denied for now)",
                                 tool
-                            )),
-                            is_error: true,
-                        });
+                            ),
+                            true,
+                        ));
                     }
                     Ok(()) => {
                         // Safe — execute the tool
@@ -291,14 +259,14 @@ impl<P: LoopProvider> AgentLoop<P> {
                         let result = self.tool_registry.execute(&tc.name, tc.arguments.clone()).await;
                         callback.on_tool_done(&tc.name, &result);
 
-                        let (output, is_error, should_stop) = match &result {
+                        let (output_text, is_error, should_stop) = match &result {
                             ToolResult::Success { output } => {
                                 consecutive_errors = 0;
-                                (output.clone(), false, false)
+                                (serde_json::to_string(output).unwrap_or_default(), false, false)
                             },
                             ToolResult::SuccessAndStopLoop { output } => {
                                 tracing::info!(tool = %tc.name, "Tool returned SuccessAndStopLoop — will break loop");
-                                (output.clone(), false, true)
+                                (serde_json::to_string(output).unwrap_or_default(), false, true)
                             },
                             ToolResult::Error { error, .. } => {
                                 consecutive_errors += 1;
@@ -309,25 +277,23 @@ impl<P: LoopProvider> AgentLoop<P> {
                                         "Too many consecutive tool errors — stopping loop"
                                     );
                                 }
-                                (Value::String(error.clone()), true, false)
+                                (error.clone(), true, false)
                             }
                         };
 
-                        messages.push(LoopMessage::ToolResult {
-                            id: tc.id.clone(),
-                            output,
+                        messages.push(UnifiedMessage::tool_result(
+                            tc.id.clone(),
+                            tc.name.clone(),
+                            output_text,
                             is_error,
-                        });
+                        ));
 
                         if should_stop {
-                            // Extract response text from the tool output for final_text
                             if final_text.is_none() {
-                                if let Some(msg) = messages.last()
-                                    .and_then(|m| if let LoopMessage::ToolResult { output, .. } = m {
-                                        output.get("message").and_then(|v| v.as_str())
-                                    } else { None })
-                                {
-                                    final_text = Some(msg.to_string());
+                                if let Some(UnifiedMessage::ToolResult { content, .. }) = messages.last() {
+                                    if let Some(text) = content.iter().find_map(|b| b.as_text()) {
+                                        final_text = Some(text.to_string());
+                                    }
                                 }
                             }
                             stop_requested = true;
@@ -385,17 +351,12 @@ mod tests {
     use serde_json::json;
     use std::sync::Mutex;
 
-    // =========================================================================
-    // MockProvider — returns predetermined response sequences
-    // =========================================================================
-
     struct MockProvider {
         responses: Mutex<Vec<ProviderResponse>>,
     }
 
     impl MockProvider {
         fn new(responses: Vec<ProviderResponse>) -> Self {
-            // Reverse so we can pop from the end (FIFO order)
             let mut responses = responses;
             responses.reverse();
             Self {
@@ -408,7 +369,7 @@ mod tests {
     impl LoopProvider for MockProvider {
         async fn call(
             &self,
-            _messages: &[LoopMessage],
+            _messages: &[UnifiedMessage],
             _system_prompt: &str,
             _tools: &[ToolDefinition],
         ) -> anyhow::Result<ProviderResponse> {
@@ -416,15 +377,10 @@ mod tests {
             if let Some(resp) = responses.pop() {
                 Ok(resp)
             } else {
-                // If no more responses, return EndTurn to stop the loop
                 Ok(ProviderResponse::text_only("(no more mock responses)".to_string()))
             }
         }
     }
-
-    // =========================================================================
-    // TrackingCallback — records events for test assertions
-    // =========================================================================
 
     #[derive(Default)]
     struct TrackingCallback {
@@ -448,10 +404,6 @@ mod tests {
             self.safety_blocks.push(error.to_string());
         }
     }
-
-    // =========================================================================
-    // EchoTool for tests
-    // =========================================================================
 
     struct EchoTool;
 
@@ -477,10 +429,6 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // Helper to build a agent loop
-    // =========================================================================
-
     fn make_loop(provider: MockProvider) -> AgentLoop<MockProvider> {
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(EchoTool));
@@ -498,13 +446,8 @@ mod tests {
         )
     }
 
-    // =========================================================================
-    // Tests
-    // =========================================================================
-
     #[tokio::test]
     async fn test_simple_text_response() {
-        // Provider returns text with EndTurn → loop completes in 1 iteration
         let provider = MockProvider::new(vec![ProviderResponse {
             text: Some("Hello, world!".to_string()),
             tool_calls: vec![],
@@ -531,10 +474,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_call_then_response() {
-        // Iteration 1: provider returns tool_call
-        // Iteration 2: provider returns text (after seeing tool result)
         let provider = MockProvider::new(vec![
-            // First response: tool call
             ProviderResponse {
                 text: None,
                 tool_calls: vec![NativeToolCall {
@@ -550,7 +490,6 @@ mod tests {
                     cache_read_tokens: None,
                 }),
             },
-            // Second response: final text
             ProviderResponse {
                 text: Some("Done echoing.".to_string()),
                 tool_calls: vec![],
@@ -571,7 +510,7 @@ mod tests {
         assert_eq!(result.final_text.as_deref(), Some("Done echoing."));
         assert_eq!(result.iterations, 2);
         assert_eq!(result.tool_calls_made, 1);
-        assert_eq!(result.total_tokens, 65); // 30 + 35
+        assert_eq!(result.total_tokens, 65);
         assert!(!result.hit_limit);
         assert_eq!(cb.tool_starts, vec!["echo"]);
         assert_eq!(cb.tool_dones, vec!["echo"]);
@@ -579,7 +518,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_max_iterations_guard() {
-        // Provider always returns a tool call → should hit max_iterations
         let responses: Vec<ProviderResponse> = (0..15)
             .map(|i| ProviderResponse {
                 text: None,
@@ -625,9 +563,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_safety_guard_blocks_tool() {
-        // Provider requests a tool that the safety guard blocks
         let provider = MockProvider::new(vec![
-            // First response: blocked tool call
             ProviderResponse {
                 text: None,
                 tool_calls: vec![NativeToolCall {
@@ -639,7 +575,6 @@ mod tests {
                 stop_reason: StopReason::ToolUse,
                 usage: None,
             },
-            // Second response: provider gives up after seeing the error
             ProviderResponse {
                 text: Some("I cannot do that.".to_string()),
                 tool_calls: vec![],
@@ -651,7 +586,7 @@ mod tests {
 
         let agent = AgentLoop::new(
             provider,
-            LoopToolRegistry::new(), // no tools registered
+            LoopToolRegistry::new(),
             PromptBuilder::new(),
             SafetyGuard::new(
                 vec![r"rm\s+-rf\s+/".to_string()],
@@ -671,10 +606,8 @@ mod tests {
         assert_eq!(result.iterations, 2);
         assert_eq!(result.tool_calls_made, 1);
         assert!(!result.hit_limit);
-        // Safety block callback was invoked
         assert_eq!(cb.safety_blocks.len(), 1);
         assert!(cb.safety_blocks[0].contains("blocked"));
-        // Tool was NOT actually started (no on_tool_start)
         assert!(cb.tool_starts.is_empty());
     }
 }

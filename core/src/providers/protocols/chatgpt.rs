@@ -5,7 +5,8 @@
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason};
+use crate::providers::adapter::{NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage};
+use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::chatgpt::types::{
     FunctionToolDef, InputItem, ReasoningConfig, ResponseResource, ResponsesRequest, StreamEvent,
 };
@@ -62,6 +63,73 @@ impl ChatGptProtocol {
         }
     }
 
+    /// Convert UnifiedMessages to Responses API InputItems
+    fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
+        let mut items = Vec::new();
+        for msg in messages {
+            match msg {
+                UnifiedMessage::User { content } => {
+                    let text = content
+                        .iter()
+                        .filter_map(|b| b.as_text())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    items.push(InputItem::Message {
+                        role: "user".to_string(),
+                        content: text,
+                    });
+                }
+                UnifiedMessage::Assistant { content } => {
+                    let text: String = content
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !text.is_empty() {
+                        items.push(InputItem::Message {
+                            role: "assistant".to_string(),
+                            content: text,
+                        });
+                    }
+                    for block in content {
+                        if let ContentBlock::ToolCall { id, name, arguments } = block {
+                            items.push(InputItem::FunctionCall {
+                                call_id: id.clone(),
+                                name: name.clone(),
+                                arguments: serde_json::to_string(arguments).unwrap_or_default(),
+                            });
+                        }
+                    }
+                }
+                UnifiedMessage::ToolResult {
+                    tool_call_id,
+                    content,
+                    ..
+                } => {
+                    let output = content
+                        .iter()
+                        .map(|b| match b {
+                            ContentBlock::Text { text } => text.clone(),
+                            ContentBlock::Json { value } => {
+                                serde_json::to_string(value).unwrap_or_default()
+                            }
+                            _ => String::new(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    items.push(InputItem::FunctionCallOutput {
+                        call_id: tool_call_id.clone(),
+                        output,
+                    });
+                }
+            }
+        }
+        items
+    }
+
     /// Build a Responses API request from the unified payload
     ///
     /// Parses XML-tagged conversation history from the input string into
@@ -71,7 +139,7 @@ impl ChatGptProtocol {
         payload: &RequestPayload,
         model: &str,
     ) -> ResponsesRequest {
-        let input = Self::parse_input_items(payload.input);
+        let input = Self::convert_messages(payload.messages);
 
         // Convert tool definitions to Responses API format
         let tools = payload.tools.map(|tool_defs| {
@@ -463,7 +531,9 @@ mod tests {
 
     #[test]
     fn test_build_responses_request_basic() {
-        let payload = RequestPayload::new("Hello");
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs);
         let request = ChatGptProtocol::build_responses_request(&payload, "codex-mini-latest");
 
         assert_eq!(request.model, "codex-mini-latest");
@@ -477,28 +547,33 @@ mod tests {
                 assert_eq!(role, "user");
                 assert_eq!(content, "Hello");
             }
+            _ => panic!("Expected Message"),
         }
     }
 
     #[test]
     fn test_build_responses_request_with_system_prompt() {
-        let payload = RequestPayload::new("Hello").with_system(Some("You are helpful"));
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs).with_system(Some("You are helpful"));
         let request = ChatGptProtocol::build_responses_request(&payload, "codex-mini-latest");
 
         assert_eq!(request.instructions.as_deref(), Some("You are helpful"));
-        // System prompt goes to instructions, NOT prepended to user message
         match &request.input[0] {
             InputItem::Message { content, .. } => {
                 assert_eq!(content, "Hello");
                 assert!(!content.contains("You are helpful"));
             }
+            _ => panic!("Expected Message"),
         }
     }
 
     #[test]
     fn test_build_responses_request_with_reasoning() {
         use crate::agents::thinking::ThinkLevel;
-        let payload = RequestPayload::new("Think about this")
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("Think about this")];
+        let payload = RequestPayload::new(&msgs)
             .with_think_level(Some(ThinkLevel::High));
         let request = ChatGptProtocol::build_responses_request(&payload, "codex-mini-latest");
 

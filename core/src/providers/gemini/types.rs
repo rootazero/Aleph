@@ -71,6 +71,23 @@ pub enum Part {
     Text { text: String },
     /// Inline image data part
     InlineData { inline_data: InlineData },
+    /// Function call from model
+    FunctionCall {
+        #[serde(rename = "functionCall")]
+        function_call: GeminiFunctionCall,
+    },
+    /// Function response from user
+    FunctionResponse {
+        #[serde(rename = "functionResponse")]
+        function_response: GeminiFunctionResponse,
+    },
+}
+
+/// Function response structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiFunctionResponse {
+    pub name: String,
+    pub response: serde_json::Value,
 }
 
 /// Inline data for images

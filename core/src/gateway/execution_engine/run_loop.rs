@@ -142,11 +142,11 @@ async fn build_loop_history(
     agent: &AgentInstance,
     session_key: &crate::gateway::router::SessionKey,
     current_input: &str,
-) -> Vec<crate::agent_loop::LoopMessage> {
-    use crate::agent_loop::LoopMessage;
+) -> Vec<crate::providers::message::UnifiedMessage> {
+    use crate::providers::message::UnifiedMessage;
 
     let session_history = agent.get_history(session_key, Some(50)).await;
-    let mut msgs: Vec<LoopMessage> = Vec::new();
+    let mut msgs: Vec<UnifiedMessage> = Vec::new();
 
     // Skip the last message if it's the current user input we just stored
     let history_slice = if session_history.last().map(|m| {
@@ -159,8 +159,8 @@ async fn build_loop_history(
 
     for msg in history_slice {
         match msg.role {
-            MessageRole::User => msgs.push(LoopMessage::User(msg.content.clone())),
-            MessageRole::Assistant => msgs.push(LoopMessage::Assistant(msg.content.clone())),
+            MessageRole::User => msgs.push(UnifiedMessage::user(msg.content.clone())),
+            MessageRole::Assistant => msgs.push(UnifiedMessage::assistant(msg.content.clone())),
             _ => {}
         }
     }

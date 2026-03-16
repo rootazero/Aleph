@@ -13,7 +13,7 @@ mod tool;
 
 pub use factory::LoopFactory;
 pub use loop_core::{
-    AgentLoop, LoopCallback, LoopConfig, LoopMessage, LoopProvider, LoopRunResult, NoopCallback,
+    AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult, NoopCallback,
 };
 pub use prompt_builder::{PromptBuilder, ToolInfo};
 pub use provider_bridge::AiProviderBridge;

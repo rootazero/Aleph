@@ -283,9 +283,8 @@ struct NoProfileProvider;
 impl AiProvider for NoProfileProvider {
     fn process(
         &self,
-        _input: &str,
-        _system_prompt: Option<&str>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<String>> + Send + '_>> {
+        _payload: crate::providers::adapter::RequestPayload<'_>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<crate::providers::adapter::ProviderResponse>> + Send + '_>> {
         Box::pin(async {
             Err(AlephError::provider(
                 "No auth profiles configured. Please add an API key to ~/.aleph/auth-profiles.json"

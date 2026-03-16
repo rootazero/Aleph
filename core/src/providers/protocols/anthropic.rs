@@ -14,9 +14,7 @@ use crate::providers::anthropic::{
     AnthropicContentBlock, AnthropicTool, ContentBlock, ErrorResponse, ImageSource, Message,
     MessageContent, MessagesRequest, MessagesResponse, SystemBlock, ThinkingBlock,
 };
-use crate::providers::shared::{
-    build_document_context, combine_with_document_context, separate_attachments,
-};
+use crate::providers::message::UnifiedMessage;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::StreamExt;
@@ -56,107 +54,154 @@ impl AnthropicProtocol {
         format!("{}/v1/messages", base_url)
     }
 
-    /// Build messages from payload
-    fn build_messages(payload: &RequestPayload, _config: &ProviderConfig) -> Vec<Message> {
-        // Check for image content
-        let has_image = payload.image.is_some();
-        let has_image_attachments = payload
-            .attachments
-            .map(|a| a.iter().any(|att| att.media_type == "image"))
-            .unwrap_or(false);
-
-        if has_image || has_image_attachments {
-            Self::build_multimodal_messages(payload)
-        } else {
-            Self::build_text_messages(payload)
-        }
-    }
-
-    /// Build text-only messages
-    fn build_text_messages(payload: &RequestPayload) -> Vec<Message> {
-        let input = if let Some(attachments) = payload.attachments {
-            let (_, documents) = separate_attachments(attachments);
-            if !documents.is_empty() {
-                let doc_context = build_document_context(&documents);
-                combine_with_document_context(&doc_context, payload.input)
-            } else {
-                payload.input.to_string()
+    /// Convert UnifiedMessages to Anthropic Messages
+    fn convert_messages(messages: &[UnifiedMessage]) -> Vec<Message> {
+        let mut result = Vec::new();
+        let mut i = 0;
+        while i < messages.len() {
+            match &messages[i] {
+                UnifiedMessage::User { content } => {
+                    let mut blocks = Vec::new();
+                    for block in content {
+                        match block {
+                            crate::providers::message::ContentBlock::Text { text } => {
+                                blocks.push(ContentBlock::Text { text: text.clone() });
+                            }
+                            crate::providers::message::ContentBlock::Image { data, mime_type } => {
+                                blocks.push(ContentBlock::Image {
+                                    source: ImageSource {
+                                        source_type: "base64".to_string(),
+                                        media_type: mime_type.clone(),
+                                        data: data.clone(),
+                                    },
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    if blocks.is_empty() {
+                        blocks.push(ContentBlock::Text {
+                            text: String::new(),
+                        });
+                    }
+                    if blocks.len() == 1 {
+                        if let ContentBlock::Text { text } = &blocks[0] {
+                            result.push(Message {
+                                role: "user".to_string(),
+                                content: MessageContent::Text {
+                                    content: text.clone(),
+                                },
+                            });
+                            i += 1;
+                            continue;
+                        }
+                    }
+                    result.push(Message {
+                        role: "user".to_string(),
+                        content: MessageContent::Multimodal { content: blocks },
+                    });
+                    i += 1;
+                }
+                UnifiedMessage::Assistant { content } => {
+                    let mut blocks = Vec::new();
+                    for block in content {
+                        match block {
+                            crate::providers::message::ContentBlock::Text { text } => {
+                                blocks.push(ContentBlock::Text { text: text.clone() });
+                            }
+                            crate::providers::message::ContentBlock::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                            } => {
+                                // Sanitize tool_use_id for Anthropic
+                                let sanitized_id: String = id
+                                    .chars()
+                                    .map(|c| {
+                                        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                                            c
+                                        } else {
+                                            '_'
+                                        }
+                                    })
+                                    .take(64)
+                                    .collect();
+                                blocks.push(ContentBlock::ToolUse {
+                                    id: sanitized_id,
+                                    name: name.clone(),
+                                    input: arguments.clone(),
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    if blocks.is_empty() {
+                        blocks.push(ContentBlock::Text {
+                            text: String::new(),
+                        });
+                    }
+                    result.push(Message {
+                        role: "assistant".to_string(),
+                        content: MessageContent::Multimodal { content: blocks },
+                    });
+                    i += 1;
+                }
+                UnifiedMessage::ToolResult { .. } => {
+                    // Collect consecutive ToolResults into one user message
+                    let mut tool_blocks = Vec::new();
+                    while i < messages.len() {
+                        if let UnifiedMessage::ToolResult {
+                            tool_call_id,
+                            content,
+                            is_error,
+                            ..
+                        } = &messages[i]
+                        {
+                            let output = content
+                                .iter()
+                                .map(|b| match b {
+                                    crate::providers::message::ContentBlock::Text { text } => {
+                                        text.clone()
+                                    }
+                                    crate::providers::message::ContentBlock::Json { value } => {
+                                        serde_json::to_string(value).unwrap_or_default()
+                                    }
+                                    _ => String::new(),
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            // Sanitize tool_use_id
+                            let sanitized_id: String = tool_call_id
+                                .chars()
+                                .map(|c| {
+                                    if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                                        c
+                                    } else {
+                                        '_'
+                                    }
+                                })
+                                .take(64)
+                                .collect();
+                            tool_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: sanitized_id,
+                                content: output,
+                                is_error: *is_error,
+                            });
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    result.push(Message {
+                        role: "user".to_string(),
+                        content: MessageContent::Multimodal {
+                            content: tool_blocks,
+                        },
+                    });
+                }
             }
-        } else {
-            payload.input.to_string()
-        };
-
-        vec![Message {
-            role: "user".to_string(),
-            content: MessageContent::Text { content: input },
-        }]
-    }
-
-    /// Build multimodal messages with images
-    fn build_multimodal_messages(payload: &RequestPayload) -> Vec<Message> {
-        let mut content_blocks = Vec::new();
-
-        // Handle document attachments
-        let text_input = if let Some(attachments) = payload.attachments {
-            let (_, documents) = separate_attachments(attachments);
-            if !documents.is_empty() {
-                let doc_context = build_document_context(&documents);
-                combine_with_document_context(&doc_context, payload.input)
-            } else {
-                payload.input.to_string()
-            }
-        } else {
-            payload.input.to_string()
-        };
-
-        // Add text content
-        let text = if text_input.is_empty() {
-            "Describe this image in detail.".to_string()
-        } else {
-            text_input
-        };
-        content_blocks.push(ContentBlock::Text { text });
-
-        // Add legacy image
-        if let Some(image) = payload.image {
-            let media_type = match image.format {
-                crate::clipboard::ImageFormat::Png => "image/png",
-                crate::clipboard::ImageFormat::Jpeg => "image/jpeg",
-                crate::clipboard::ImageFormat::Gif => "image/gif",
-            };
-            let base64_data = {
-                use base64::{engine::general_purpose, Engine as _};
-                general_purpose::STANDARD.encode(&image.data)
-            };
-            content_blocks.push(ContentBlock::Image {
-                source: ImageSource {
-                    source_type: "base64".to_string(),
-                    media_type: media_type.to_string(),
-                    data: base64_data,
-                },
-            });
         }
-
-        // Add image attachments
-        if let Some(attachments) = payload.attachments {
-            let (images, _) = separate_attachments(attachments);
-            for attachment in images {
-                content_blocks.push(ContentBlock::Image {
-                    source: ImageSource {
-                        source_type: "base64".to_string(),
-                        media_type: attachment.mime_type.clone(),
-                        data: attachment.data.clone(),
-                    },
-                });
-            }
-        }
-
-        vec![Message {
-            role: "user".to_string(),
-            content: MessageContent::Multimodal {
-                content: content_blocks,
-            },
-        }]
+        result
     }
 
     /// Map ThinkLevel to budget_tokens
@@ -202,7 +247,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         is_streaming: bool,
     ) -> Result<reqwest::RequestBuilder> {
         let endpoint = Self::build_endpoint(config);
-        let messages = Self::build_messages(payload, config);
+        let messages = Self::convert_messages(payload.messages);
 
         // Per-request overrides provider config
         let max_tokens = payload.max_tokens.or(config.max_tokens).unwrap_or(DEFAULT_MAX_TOKENS);
@@ -449,6 +494,7 @@ mod tests {
     #[test]
     fn test_build_request_includes_tools() {
         use crate::dispatcher::ToolDefinition;
+        use crate::providers::message::UnifiedMessage;
         use crate::ToolCategory;
 
         let protocol = AnthropicProtocol::new(Client::new());
@@ -462,7 +508,8 @@ mod tests {
             }),
             ToolCategory::Builtin,
         )];
-        let payload = RequestPayload::new("Hello").with_tools(Some(&tools));
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs).with_tools(Some(&tools));
         let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
         config.api_key = Some("test-key".to_string());
 
@@ -480,8 +527,10 @@ mod tests {
 
     #[test]
     fn test_build_request_no_tools_when_none() {
+        use crate::providers::message::UnifiedMessage;
         let protocol = AnthropicProtocol::new(Client::new());
-        let payload = RequestPayload::new("Hello");
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs);
         let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
         config.api_key = Some("test-key".to_string());
 
