@@ -275,17 +275,36 @@ Called after every `parse_response()` in `HttpProvider::execute()`.
 
 Current `HttpProvider::execute()` runs PII filtering on `payload.input` (a `&str`) and leak detection via `LeakDetector::scan_outbound(payload.input)`. After the refactor, these must iterate over all `ContentBlock::Text` blocks across all messages.
 
+**PII filtering** uses per-block iteration (not extract-all), because it mutates text:
+
 ```rust
-// New helper in message.rs
-impl UnifiedMessage {
-    /// Extract all text content for PII/leak scanning
-    pub fn extract_all_text(messages: &[UnifiedMessage]) -> String {
-        // Concatenate all Text blocks from all messages for scanning
+// In http_provider.rs execute():
+// Iterate all messages, filter each Text block individually
+fn filter_pii_in_messages(messages: &mut [UnifiedMessage], engine: &PiiEngine) {
+    for msg in messages.iter_mut() {
+        for block in msg.content_blocks_mut() {
+            if let ContentBlock::Text { ref mut text } = block {
+                let result = engine.filter(text);
+                if result.has_detections() {
+                    *text = result.text;
+                }
+            }
+        }
     }
 }
 ```
 
-PII filtering applies the filter to extracted text, then reconstructs messages with filtered text. Leak detection uses `extract_all_text()` for scanning. This ensures no security regression.
+**Leak detection** uses read-only `extract_all_text()` for scanning (concatenates all Text blocks):
+
+```rust
+impl UnifiedMessage {
+    pub fn extract_all_text(messages: &[UnifiedMessage]) -> String {
+        // Concatenate all Text blocks from all messages
+    }
+}
+```
+
+This preserves message structure during PII mutation while keeping leak detection simple.
 
 ## Streaming Scope
 
@@ -312,6 +331,30 @@ pub trait LoopProvider: Send + Sync {
 **`AiProviderBridge` simplified** — No XML serialization. Constructs `RequestPayload { messages, system_prompt, tools }` and delegates to `provider.process()`.
 
 **Key fix:** Assistant response creates one `UnifiedMessage::Assistant` with all content blocks (text + tool calls), not separate messages. This fixes the missing assistant turn bug.
+
+**ProviderResponse → UnifiedMessage::Assistant conversion:**
+
+```rust
+impl UnifiedMessage {
+    pub fn from_provider_response(resp: &ProviderResponse) -> Self {
+        let mut content = Vec::new();
+        if let Some(ref thinking) = resp.thinking {
+            content.push(ContentBlock::Thinking { thinking: thinking.clone() });
+        }
+        if let Some(ref text) = resp.text {
+            content.push(ContentBlock::Text { text: text.clone() });
+        }
+        for tc in &resp.tool_calls {
+            content.push(ContentBlock::ToolCall {
+                id: tc.id.clone(), name: tc.name.clone(), arguments: tc.arguments.clone(),
+            });
+        }
+        UnifiedMessage::Assistant { content }
+    }
+}
+```
+
+**Tool name threading:** Current `LoopMessage::ToolResult` has no `tool_name` field. The new `UnifiedMessage::ToolResult` requires it (needed for Gemini `functionResponse`). The tool name is available from `tc.name` in the loop's `for tc in &response.tool_calls` iteration — thread it through to the ToolResult construction.
 
 ## Complete Data Flow (After Refactor)
 
@@ -364,6 +407,7 @@ AgentLoop
 | **Direct impl** | `providers/ollama.rs` | update AiProvider impl to new process(RequestPayload) signature |
 | **Direct impl** | `providers/mock.rs` | update AiProvider impl |
 | **Direct impl** | `providers/failover.rs` | update AiProvider impl (delegates to inner providers) |
+| **Direct impl** | `providers/auth_profile_registry.rs` | update NoProfileProvider AiProvider impl |
 | **Callers** | ~46 files | migrate to new process(RequestPayload) — see migration patterns above |
 | **Tests** | all affected modules | update to new types |
 
