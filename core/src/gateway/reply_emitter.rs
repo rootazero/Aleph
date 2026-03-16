@@ -19,6 +19,8 @@
 //!     channel_registry.clone(),
 //!     reply_route,
 //!     "run-123".to_string(),
+//!     None,
+//!     false,
 //! );
 //!
 //! // Use emitter as EventEmitter for agent execution
@@ -82,6 +84,20 @@ pub struct ReplyEmitter {
 
     /// Run ID for this execution
     run_id: String,
+
+    /// Agent display name for identity prefix
+    agent_display_name: Option<String>,
+
+    /// Whether the target channel natively shows agent identity
+    native_identity: bool,
+}
+
+/// Prepend agent identity prefix if agent has a display name.
+fn apply_agent_prefix(text: &str, agent_name: &Option<String>) -> String {
+    match agent_name {
+        Some(name) if !name.is_empty() => format!("[{}] {}", name, text),
+        _ => text.to_string(),
+    }
 }
 
 impl ReplyEmitter {
@@ -90,6 +106,8 @@ impl ReplyEmitter {
         channel_registry: Arc<ChannelRegistry>,
         route: ReplyRoute,
         run_id: String,
+        agent_display_name: Option<String>,
+        native_identity: bool,
     ) -> Self {
         Self {
             channel_registry,
@@ -99,6 +117,8 @@ impl ReplyEmitter {
             seq_counter: AtomicU64::new(0),
             has_sent: AtomicBool::new(false),
             run_id,
+            agent_display_name,
+            native_identity,
         }
     }
 
@@ -108,6 +128,8 @@ impl ReplyEmitter {
         route: ReplyRoute,
         run_id: String,
         config: ReplyEmitterConfig,
+        agent_display_name: Option<String>,
+        native_identity: bool,
     ) -> Self {
         Self {
             channel_registry,
@@ -117,6 +139,8 @@ impl ReplyEmitter {
             seq_counter: AtomicU64::new(0),
             has_sent: AtomicBool::new(false),
             run_id,
+            agent_display_name,
+            native_identity,
         }
     }
 
@@ -168,9 +192,18 @@ impl ReplyEmitter {
         if content.is_empty() {
             return;
         }
+
+        let is_first_send = !self.has_sent.load(Ordering::SeqCst);
         self.has_sent.store(true, Ordering::SeqCst);
 
-        let chunks = Self::split_message(content, Self::MAX_MESSAGE_LENGTH);
+        // Apply agent prefix only on first send, if channel lacks native identity
+        let content = if is_first_send && !self.native_identity {
+            apply_agent_prefix(content, &self.agent_display_name)
+        } else {
+            content.to_string()
+        };
+
+        let chunks = Self::split_message(&content, Self::MAX_MESSAGE_LENGTH);
         let total_chunks = chunks.len();
 
         for (i, chunk) in chunks.into_iter().enumerate() {
@@ -178,7 +211,6 @@ impl ReplyEmitter {
                 conversation_id: self.route.conversation_id.clone(),
                 text: chunk,
                 attachments: vec![],
-                // Only set reply_to on the first chunk
                 reply_to: if i == 0 {
                     self.route.reply_to.clone()
                 } else {
@@ -186,7 +218,7 @@ impl ReplyEmitter {
                 },
                 inline_keyboard: None,
                 metadata: Default::default(),
-                agent_display_name: None,
+                agent_display_name: self.agent_display_name.clone(),
             };
 
             match self
@@ -211,7 +243,6 @@ impl ReplyEmitter {
                         total_chunks,
                         e
                     );
-                    // Stop sending remaining chunks if one fails
                     break;
                 }
             }
@@ -375,7 +406,7 @@ mod tests {
         );
 
         let registry = Arc::new(ChannelRegistry::new());
-        let emitter = ReplyEmitter::new(registry, route.clone(), "run-123".to_string());
+        let emitter = ReplyEmitter::new(registry, route.clone(), "run-123".to_string(), None, false);
 
         assert_eq!(emitter.run_id(), "run-123");
         assert_eq!(emitter.route().channel_id.as_str(), "imessage");
@@ -400,6 +431,8 @@ mod tests {
             route,
             "run-456".to_string(),
             config,
+            None,
+            false,
         );
 
         assert_eq!(emitter.config.buffer_threshold, 1000);
@@ -414,7 +447,7 @@ mod tests {
         );
 
         let registry = Arc::new(ChannelRegistry::new());
-        let emitter = ReplyEmitter::new(registry, route, "run-789".to_string());
+        let emitter = ReplyEmitter::new(registry, route, "run-789".to_string(), None, false);
 
         // Sequence should start at 0 and increment
         assert_eq!(emitter.next_seq(), 0);
@@ -430,7 +463,7 @@ mod tests {
         );
 
         let registry = Arc::new(ChannelRegistry::new());
-        let emitter = ReplyEmitter::new(registry, route, "run-test".to_string());
+        let emitter = ReplyEmitter::new(registry, route, "run-test".to_string(), None, false);
 
         // Buffer some text
         emitter.buffer_text("Hello ").await;
@@ -485,5 +518,29 @@ mod tests {
             assert!(chunk.len() <= 150);
             // Verify it's valid UTF-8 (implicit — String type guarantees this)
         }
+    }
+
+    #[test]
+    fn test_apply_agent_prefix_with_name() {
+        let result = apply_agent_prefix("Hello", &Some("Trading Bot".to_string()));
+        assert_eq!(result, "[Trading Bot] Hello");
+    }
+
+    #[test]
+    fn test_apply_agent_prefix_none() {
+        let result = apply_agent_prefix("Hello", &None);
+        assert_eq!(result, "Hello");
+    }
+
+    #[test]
+    fn test_apply_agent_prefix_empty_name() {
+        let result = apply_agent_prefix("Hello", &Some(String::new()));
+        assert_eq!(result, "Hello");
+    }
+
+    #[test]
+    fn test_apply_agent_prefix_chinese_name() {
+        let result = apply_agent_prefix("今天BTC价格是...", &Some("交易助手".to_string()));
+        assert_eq!(result, "[交易助手] 今天BTC价格是...");
     }
 }
