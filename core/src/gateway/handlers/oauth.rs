@@ -488,31 +488,7 @@ mod tests {
         assert_eq!(deserialized.expires_at_unix, 1700000000);
     }
 
-    #[test]
-    fn test_restore_from_config_present() {
-        let mut config = Config::new();
-        let mut provider = new_provider_from_preset("chatgpt");
-        provider.api_key = Some("my-oauth-token".to_string());
-        config.providers.insert("chatgpt".to_string(), provider);
-
-        let cache = restore_from_config(&config).unwrap();
-        assert_eq!(cache.access_token, "my-oauth-token");
-        assert!(!cache.is_expired()); // 1-hour window
-    }
-
-    #[test]
-    fn test_restore_from_config_absent() {
-        let config = Config::new();
-        assert!(restore_from_config(&config).is_none());
-    }
-
-    #[test]
-    fn test_restore_from_config_empty_key() {
-        let mut config = Config::new();
-        let mut provider = new_provider_from_preset("chatgpt");
-        provider.api_key = Some(String::new());
-        config.providers.insert("chatgpt".to_string(), provider);
-
-        assert!(restore_from_config(&config).is_none());
-    }
+    // Tests for restore_from_vault are omitted here because the function
+    // requires a full SharedTokenManager with SQLite + vault infrastructure.
+    // Integration tests cover this path.
 }

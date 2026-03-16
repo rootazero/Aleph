@@ -11,6 +11,9 @@ pub mod provider_bridge;
 mod safety;
 mod tool;
 
+#[cfg(test)]
+mod integration_probe;
+
 pub use factory::LoopFactory;
 pub use loop_core::{
     AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult, NoopCallback,

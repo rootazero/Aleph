@@ -209,7 +209,7 @@ mod tests {
         let result = tool.execute(json!({})).await;
 
         match result {
-            ToolResult::Success { output } => {
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 let events = output["events"].as_array().unwrap();
                 assert_eq!(events.len(), 2);
                 assert_eq!(events[0]["type"], "file_change");
@@ -229,7 +229,7 @@ mod tests {
         let result = tool.execute(json!({})).await;
 
         match result {
-            ToolResult::Success { output } => {
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 let events = output["events"].as_array().unwrap();
                 assert!(events.is_empty());
             }
@@ -247,7 +247,7 @@ mod tests {
             .await;
 
         match result {
-            ToolResult::Success { output } => {
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 assert_eq!(output["subscription_id"], "sub-1");
             }
             ToolResult::Error { error, .. } => panic!("expected success, got: {error}"),
@@ -268,7 +268,7 @@ mod tests {
                 assert!(error.contains("missing required parameter: rule"));
                 assert!(!retryable);
             }
-            ToolResult::Success { .. } => panic!("expected error"),
+            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => panic!("expected error"),
         }
     }
 }

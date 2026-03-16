@@ -166,7 +166,7 @@ mod tests {
         let result = registry.execute("search", json!({"q": "rust"})).await;
 
         match result {
-            ToolResult::Success { output } => assert_eq!(output["found"], 42),
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => assert_eq!(output["found"], 42),
             ToolResult::Error { error, .. } => panic!("expected success: {}", error),
         }
     }

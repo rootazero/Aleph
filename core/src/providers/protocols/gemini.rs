@@ -837,4 +837,178 @@ mod tests {
         assert_eq!(result.stop_reason, StopReason::Unknown);
     }
 
+    // =========================================================================
+    // convert_messages() Tests
+    // =========================================================================
+
+    #[test]
+    fn test_convert_s1_pure_text_user() {
+        let msgs = [UnifiedMessage::user("Hello, Gemini!")];
+        let result = GeminiProtocol::convert_messages(&msgs);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, Some("user".to_string()));
+        assert_eq!(result[0].parts.len(), 1);
+        match &result[0].parts[0] {
+            Part::Text { text } => assert_eq!(text, "Hello, Gemini!"),
+            _ => panic!("Expected Text part"),
+        }
+    }
+
+    #[test]
+    fn test_convert_s2_multi_turn() {
+        let msgs = [
+            UnifiedMessage::user("What is Rust?"),
+            UnifiedMessage::assistant("Rust is a systems language."),
+            UnifiedMessage::user("Tell me more."),
+        ];
+        let result = GeminiProtocol::convert_messages(&msgs);
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].role, Some("user".to_string()));
+        assert_eq!(result[1].role, Some("model".to_string()));
+        assert_eq!(result[2].role, Some("user".to_string()));
+    }
+
+    #[test]
+    fn test_convert_s3_assistant_with_tool_call() {
+        use crate::providers::message::ContentBlock as CB;
+        let msgs = [UnifiedMessage::Assistant {
+            content: vec![CB::ToolCall {
+                id: "call_1".to_string(),
+                name: "search".to_string(),
+                arguments: serde_json::json!({"query": "rust"}),
+            }],
+        }];
+        let result = GeminiProtocol::convert_messages(&msgs);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, Some("model".to_string()));
+        // Serialize to check JSON structure
+        let json = serde_json::to_value(&result[0]).unwrap();
+        let parts = json["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 1);
+        assert!(parts[0].get("functionCall").is_some());
+        assert_eq!(parts[0]["functionCall"]["name"], "search");
+        assert_eq!(parts[0]["functionCall"]["args"]["query"], "rust");
+    }
+
+    #[test]
+    fn test_convert_s4_tool_result() {
+        let msgs = [UnifiedMessage::tool_result(
+            "call_1",
+            "search",
+            "Found 3 results",
+            false,
+        )];
+        let result = GeminiProtocol::convert_messages(&msgs);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, Some("user".to_string()));
+        let json = serde_json::to_value(&result[0]).unwrap();
+        let parts = json["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 1);
+        assert!(parts[0].get("functionResponse").is_some());
+        assert_eq!(parts[0]["functionResponse"]["name"], "search");
+        assert_eq!(
+            parts[0]["functionResponse"]["response"]["result"],
+            "Found 3 results"
+        );
+    }
+
+    #[test]
+    fn test_convert_s5_full_cycle() {
+        use crate::providers::message::ContentBlock as CB;
+        let msgs = [
+            UnifiedMessage::user("Search for Rust"),
+            UnifiedMessage::Assistant {
+                content: vec![CB::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "Rust"}),
+                }],
+            },
+            UnifiedMessage::tool_result("call_1", "search", "Rust is great", false),
+            UnifiedMessage::assistant("Based on results, Rust is great!"),
+        ];
+        let result = GeminiProtocol::convert_messages(&msgs);
+
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0].role, Some("user".to_string()));
+        assert_eq!(result[1].role, Some("model".to_string()));
+        assert_eq!(result[2].role, Some("user".to_string())); // tool result as user
+        assert_eq!(result[3].role, Some("model".to_string()));
+    }
+
+    #[test]
+    fn test_convert_s6_consecutive_tool_results_separate() {
+        // Gemini does NOT merge consecutive ToolResults (unlike Anthropic);
+        // each becomes a separate user Content entry
+        let msgs = [
+            UnifiedMessage::tool_result("call_1", "search", "result 1", false),
+            UnifiedMessage::tool_result("call_2", "read_file", "result 2", false),
+        ];
+        let result = GeminiProtocol::convert_messages(&msgs);
+
+        // Each ToolResult becomes its own Content
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].role, Some("user".to_string()));
+        assert_eq!(result[1].role, Some("user".to_string()));
+        // Both should have functionResponse parts
+        let json0 = serde_json::to_value(&result[0]).unwrap();
+        let json1 = serde_json::to_value(&result[1]).unwrap();
+        assert!(json0["parts"][0].get("functionResponse").is_some());
+        assert!(json1["parts"][0].get("functionResponse").is_some());
+    }
+
+    #[test]
+    fn test_convert_s7_role_assignment() {
+        // Verify user/model roles are correctly assigned
+        let msgs = [
+            UnifiedMessage::user("msg1"),
+            UnifiedMessage::assistant("msg2"),
+            UnifiedMessage::user("msg3"),
+            UnifiedMessage::assistant("msg4"),
+        ];
+        let result = GeminiProtocol::convert_messages(&msgs);
+
+        let roles: Vec<&str> = result
+            .iter()
+            .map(|c| c.role.as_deref().unwrap())
+            .collect();
+        assert_eq!(roles, vec!["user", "model", "user", "model"]);
+    }
+
+    #[test]
+    fn test_convert_s8_assistant_text_and_tool_call_same_turn() {
+        use crate::providers::message::ContentBlock as CB;
+        let msgs = [UnifiedMessage::Assistant {
+            content: vec![
+                CB::Text {
+                    text: "Let me search for that.".to_string(),
+                },
+                CB::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "web_search".to_string(),
+                    arguments: serde_json::json!({"q": "test"}),
+                },
+            ],
+        }];
+        let result = GeminiProtocol::convert_messages(&msgs);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, Some("model".to_string()));
+        assert_eq!(result[0].parts.len(), 2);
+
+        // First part should be text
+        match &result[0].parts[0] {
+            Part::Text { text } => assert_eq!(text, "Let me search for that."),
+            _ => panic!("Expected Text part"),
+        }
+        // Second part should be function call
+        let json = serde_json::to_value(&result[0]).unwrap();
+        let parts = json["parts"].as_array().unwrap();
+        assert!(parts[1].get("functionCall").is_some());
+        assert_eq!(parts[1]["functionCall"]["name"], "web_search");
+    }
 }

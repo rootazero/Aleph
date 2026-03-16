@@ -168,7 +168,7 @@ mod tests {
 
         let result = adapter.execute(input).await;
         match result {
-            ToolResult::Success { output } => {
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 assert_eq!(output["server"], "search-server");
                 assert_eq!(output["tool"], "mcp_search");
                 assert_eq!(output["args"]["query"], "hello");
@@ -192,7 +192,7 @@ mod tests {
                 assert!(error.contains("search-server"));
                 assert!(retryable);
             }
-            ToolResult::Success { .. } => panic!("expected error"),
+            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => panic!("expected error"),
         }
     }
 }

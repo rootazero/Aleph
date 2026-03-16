@@ -348,8 +348,9 @@ impl<P: LoopProvider> AgentLoop<P> {
 mod tests {
     use super::*;
     use crate::providers::adapter::{NativeToolCall, TokenUsage};
+    use crate::providers::message::ContentBlock;
     use serde_json::json;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     struct MockProvider {
         responses: Mutex<Vec<ProviderResponse>>,
@@ -378,6 +379,90 @@ mod tests {
                 Ok(resp)
             } else {
                 Ok(ProviderResponse::text_only("(no more mock responses)".to_string()))
+            }
+        }
+    }
+
+    /// MockProvider that captures messages it receives on each call.
+    struct CapturingMockProvider {
+        responses: Mutex<Vec<ProviderResponse>>,
+        captured_messages: Arc<Mutex<Vec<Vec<UnifiedMessage>>>>,
+    }
+
+    impl CapturingMockProvider {
+        fn new(
+            responses: Vec<ProviderResponse>,
+            captured: Arc<Mutex<Vec<Vec<UnifiedMessage>>>>,
+        ) -> Self {
+            let mut responses = responses;
+            responses.reverse();
+            Self {
+                responses: Mutex::new(responses),
+                captured_messages: captured,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LoopProvider for CapturingMockProvider {
+        async fn call(
+            &self,
+            messages: &[UnifiedMessage],
+            _system_prompt: &str,
+            _tools: &[ToolDefinition],
+        ) -> anyhow::Result<ProviderResponse> {
+            self.captured_messages
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(messages.to_vec());
+            let mut responses = self.responses.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(resp) = responses.pop() {
+                Ok(resp)
+            } else {
+                Ok(ProviderResponse::text_only("(no more mock responses)".to_string()))
+            }
+        }
+    }
+
+    /// A tool that always returns an error.
+    struct FailTool;
+
+    #[async_trait]
+    impl super::super::tool::LoopTool for FailTool {
+        fn name(&self) -> &str {
+            "fail"
+        }
+        fn description(&self) -> &str {
+            "Always fails"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
+        async fn execute(&self, _input: Value) -> ToolResult {
+            ToolResult::Error {
+                error: "intentional failure".into(),
+                retryable: true,
+            }
+        }
+    }
+
+    /// A tool that returns SuccessAndStopLoop.
+    struct StopTool;
+
+    #[async_trait]
+    impl super::super::tool::LoopTool for StopTool {
+        fn name(&self) -> &str {
+            "stop"
+        }
+        fn description(&self) -> &str {
+            "Stops the loop"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
+        async fn execute(&self, _input: Value) -> ToolResult {
+            ToolResult::SuccessAndStopLoop {
+                output: json!({ "stopped": true }),
             }
         }
     }
@@ -609,5 +694,582 @@ mod tests {
         assert_eq!(cb.safety_blocks.len(), 1);
         assert!(cb.safety_blocks[0].contains("blocked"));
         assert!(cb.tool_starts.is_empty());
+    }
+
+    // =========================================================================
+    // L1: Multi-turn tool chain
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_multi_turn_tool_chain() {
+        let captured = Arc::new(Mutex::new(Vec::<Vec<UnifiedMessage>>::new()));
+        let provider = CapturingMockProvider::new(
+            vec![
+                // Turn 1: call tool A (echo)
+                ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: "call_a".to_string(),
+                        name: "echo".to_string(),
+                        arguments: json!({ "message": "step1" }),
+                    }],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: Some(TokenUsage {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        cache_read_tokens: None,
+                    }),
+                },
+                // Turn 2: call tool B (echo again with different input)
+                ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: "call_b".to_string(),
+                        name: "echo".to_string(),
+                        arguments: json!({ "message": "step2" }),
+                    }],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: Some(TokenUsage {
+                        input_tokens: 15,
+                        output_tokens: 5,
+                        cache_read_tokens: None,
+                    }),
+                },
+                // Turn 3: final text
+                ProviderResponse {
+                    text: Some("All done.".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: Some(TokenUsage {
+                        input_tokens: 20,
+                        output_tokens: 5,
+                        cache_read_tokens: None,
+                    }),
+                },
+            ],
+            captured.clone(),
+        );
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        let agent = AgentLoop::new(
+            provider,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::new(vec![], vec![]),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+                timeout_secs: 60,
+            },
+        );
+
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("chain test", &mut cb).await.unwrap();
+
+        assert_eq!(result.iterations, 3);
+        assert_eq!(result.tool_calls_made, 2);
+        assert_eq!(result.final_text.as_deref(), Some("All done."));
+        assert!(!result.hit_limit);
+
+        // Verify history accumulates: each call should have more messages
+        let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(caps.len(), 3);
+        // Call 1: [user]
+        assert_eq!(caps[0].len(), 1);
+        // Call 2: [user, assistant(tool_call_a), tool_result_a]
+        assert_eq!(caps[1].len(), 3);
+        // Call 3: [user, assistant(tool_call_a), tool_result_a, assistant(tool_call_b), tool_result_b]
+        assert_eq!(caps[2].len(), 5);
+    }
+
+    // =========================================================================
+    // L2: Single turn multiple tools
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_single_turn_multiple_tools() {
+        let provider = MockProvider::new(vec![
+            // Turn 1: two tool calls in one response
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![
+                    NativeToolCall {
+                        id: "call_x".to_string(),
+                        name: "echo".to_string(),
+                        arguments: json!({ "message": "first" }),
+                    },
+                    NativeToolCall {
+                        id: "call_y".to_string(),
+                        name: "echo".to_string(),
+                        arguments: json!({ "message": "second" }),
+                    },
+                ],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            // Turn 2: final text
+            ProviderResponse {
+                text: Some("Both done.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]);
+
+        let agent = make_loop(provider);
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("parallel tools", &mut cb).await.unwrap();
+
+        assert_eq!(result.iterations, 2);
+        assert_eq!(result.tool_calls_made, 2);
+        assert_eq!(result.final_text.as_deref(), Some("Both done."));
+        assert!(!result.hit_limit);
+        assert_eq!(cb.tool_starts, vec!["echo", "echo"]);
+    }
+
+    // =========================================================================
+    // L3: Consecutive errors threshold
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_consecutive_errors_threshold() {
+        // Need 10+ tool calls that all fail. Each response has one fail call.
+        let responses: Vec<ProviderResponse> = (0..12)
+            .map(|i| ProviderResponse {
+                text: None,
+                tool_calls: vec![NativeToolCall {
+                    id: format!("fail_{}", i),
+                    name: "fail".to_string(),
+                    arguments: json!({}),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            })
+            .collect();
+
+        let provider = MockProvider::new(responses);
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(FailTool));
+
+        let agent = AgentLoop::new(
+            provider,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::new(vec![], vec![]),
+            LoopConfig {
+                max_iterations: 25,
+                token_budget: 100_000,
+                timeout_secs: 60,
+            },
+        );
+
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("keep failing", &mut cb).await.unwrap();
+
+        assert!(result.hit_limit);
+        assert_eq!(result.tool_calls_made, 10); // stops at MAX_CONSECUTIVE_ERRORS
+        let text = result.final_text.unwrap();
+        assert!(text.contains("failed repeatedly"));
+    }
+
+    // =========================================================================
+    // L4: Success resets error counter
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_success_resets_error_counter() {
+        // Pattern: 5 fails, 1 success (echo), 5 fails, then text.
+        // Total errors never reach 10 consecutive because success resets counter.
+        let mut responses: Vec<ProviderResponse> = Vec::new();
+
+        // 5 fail calls
+        for i in 0..5 {
+            responses.push(ProviderResponse {
+                text: None,
+                tool_calls: vec![NativeToolCall {
+                    id: format!("fail_{}", i),
+                    name: "fail".to_string(),
+                    arguments: json!({}),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            });
+        }
+        // 1 success (echo)
+        responses.push(ProviderResponse {
+            text: None,
+            tool_calls: vec![NativeToolCall {
+                id: "success_1".to_string(),
+                name: "echo".to_string(),
+                arguments: json!({ "message": "reset" }),
+            }],
+            thinking: None,
+            stop_reason: StopReason::ToolUse,
+            usage: None,
+        });
+        // 5 more fail calls
+        for i in 5..10 {
+            responses.push(ProviderResponse {
+                text: None,
+                tool_calls: vec![NativeToolCall {
+                    id: format!("fail_{}", i),
+                    name: "fail".to_string(),
+                    arguments: json!({}),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            });
+        }
+        // Final text
+        responses.push(ProviderResponse {
+            text: Some("Survived.".to_string()),
+            tool_calls: vec![],
+            thinking: None,
+            stop_reason: StopReason::EndTurn,
+            usage: None,
+        });
+
+        let provider = MockProvider::new(responses);
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        registry.register(Box::new(FailTool));
+
+        let agent = AgentLoop::new(
+            provider,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::new(vec![], vec![]),
+            LoopConfig {
+                max_iterations: 25,
+                token_budget: 100_000,
+                timeout_secs: 60,
+            },
+        );
+
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("alternate errors", &mut cb).await.unwrap();
+
+        assert!(!result.hit_limit);
+        assert_eq!(result.final_text.as_deref(), Some("Survived."));
+        // 5 fails + 1 echo + 5 fails = 11 tool calls
+        assert_eq!(result.tool_calls_made, 11);
+    }
+
+    // =========================================================================
+    // L5: SuccessAndStopLoop
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_success_and_stop_loop() {
+        let provider = MockProvider::new(vec![
+            // Provider calls the stop tool
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![NativeToolCall {
+                    id: "call_stop".to_string(),
+                    name: "stop".to_string(),
+                    arguments: json!({}),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            // This response should never be reached
+            ProviderResponse {
+                text: Some("Should not reach here.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]);
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(StopTool));
+        let agent = AgentLoop::new(
+            provider,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::new(vec![], vec![]),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+                timeout_secs: 60,
+            },
+        );
+
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("stop early", &mut cb).await.unwrap();
+
+        // Loop should stop after 1 iteration (the stop tool)
+        assert_eq!(result.iterations, 1);
+        assert_eq!(result.tool_calls_made, 1);
+        assert!(!result.hit_limit);
+        // final_text should come from the stop tool's output
+        assert!(result.final_text.is_some());
+        let text = result.final_text.unwrap();
+        assert!(text.contains("stopped"));
+    }
+
+    // =========================================================================
+    // L6: MaxTokens stop reason
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_max_tokens_stop_reason() {
+        let provider = MockProvider::new(vec![ProviderResponse {
+            text: Some("Truncated response...".to_string()),
+            tool_calls: vec![],
+            thinking: None,
+            stop_reason: StopReason::MaxTokens,
+            usage: Some(TokenUsage {
+                input_tokens: 100,
+                output_tokens: 4096,
+                cache_read_tokens: None,
+            }),
+        }]);
+
+        let agent = make_loop(provider);
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("long question", &mut cb).await.unwrap();
+
+        assert!(result.hit_limit);
+        assert_eq!(result.iterations, 1);
+        assert_eq!(result.tool_calls_made, 0);
+        assert_eq!(result.final_text.as_deref(), Some("Truncated response..."));
+    }
+
+    // =========================================================================
+    // L7: History injection via run_with_history
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_history_injection() {
+        let captured = Arc::new(Mutex::new(Vec::<Vec<UnifiedMessage>>::new()));
+        let provider = CapturingMockProvider::new(
+            vec![ProviderResponse {
+                text: Some("Got your history.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            }],
+            captured.clone(),
+        );
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        let agent = AgentLoop::new(
+            provider,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::new(vec![], vec![]),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+                timeout_secs: 60,
+            },
+        );
+
+        let history = vec![
+            UnifiedMessage::user("Previous question"),
+            UnifiedMessage::assistant("Previous answer"),
+        ];
+
+        let mut cb = TrackingCallback::default();
+        let result = agent
+            .run_with_history("New question", history, &mut cb)
+            .await
+            .unwrap();
+
+        assert_eq!(result.iterations, 1);
+        assert!(!result.hit_limit);
+
+        // Verify provider received history + new user message
+        let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(caps.len(), 1);
+        let messages = &caps[0];
+        // [history_user, history_assistant, new_user]
+        assert_eq!(messages.len(), 3);
+        // First message should be the history user message
+        match &messages[0] {
+            UnifiedMessage::User { content } => {
+                assert_eq!(content[0].as_text(), Some("Previous question"));
+            }
+            _ => panic!("expected User message"),
+        }
+        // Second should be the history assistant message
+        match &messages[1] {
+            UnifiedMessage::Assistant { content } => {
+                assert_eq!(content[0].as_text(), Some("Previous answer"));
+            }
+            _ => panic!("expected Assistant message"),
+        }
+        // Third should be the new user message
+        match &messages[2] {
+            UnifiedMessage::User { content } => {
+                assert_eq!(content[0].as_text(), Some("New question"));
+            }
+            _ => panic!("expected User message"),
+        }
+    }
+
+    // =========================================================================
+    // L8: Token budget exhaustion
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_token_budget_exhaustion() {
+        let provider = MockProvider::new(vec![
+            // Turn 1: tool call consuming 30 tokens
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![NativeToolCall {
+                    id: "call_1".to_string(),
+                    name: "echo".to_string(),
+                    arguments: json!({ "message": "hi" }),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: Some(TokenUsage {
+                    input_tokens: 20,
+                    output_tokens: 10,
+                    cache_read_tokens: None,
+                }),
+            },
+            // Turn 2: another tool call consuming 30 more (total: 60, over budget of 50)
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![NativeToolCall {
+                    id: "call_2".to_string(),
+                    name: "echo".to_string(),
+                    arguments: json!({ "message": "bye" }),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: Some(TokenUsage {
+                    input_tokens: 20,
+                    output_tokens: 10,
+                    cache_read_tokens: None,
+                }),
+            },
+            // Turn 3: should not be reached
+            ProviderResponse {
+                text: Some("Unreachable.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]);
+
+        let agent = AgentLoop::new(
+            provider,
+            {
+                let mut r = LoopToolRegistry::new();
+                r.register(Box::new(EchoTool));
+                r
+            },
+            PromptBuilder::new(),
+            SafetyGuard::new(vec![], vec![]),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 50,
+                timeout_secs: 60,
+            },
+        );
+
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("use tokens", &mut cb).await.unwrap();
+
+        assert!(result.hit_limit);
+        assert_eq!(result.total_tokens, 60);
+        assert_eq!(result.iterations, 2);
+    }
+
+    // =========================================================================
+    // L9: Assistant message completeness (thinking + text + tool_call)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_assistant_message_completeness() {
+        let captured = Arc::new(Mutex::new(Vec::<Vec<UnifiedMessage>>::new()));
+        let provider = CapturingMockProvider::new(
+            vec![
+                // Turn 1: response with thinking + text + tool_call
+                ProviderResponse {
+                    text: Some("I'll search for that.".to_string()),
+                    tool_calls: vec![NativeToolCall {
+                        id: "call_1".to_string(),
+                        name: "echo".to_string(),
+                        arguments: json!({ "message": "search" }),
+                    }],
+                    thinking: Some("Let me think about this...".to_string()),
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                },
+                // Turn 2: final response
+                ProviderResponse {
+                    text: Some("Here are the results.".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: None,
+                },
+            ],
+            captured.clone(),
+        );
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        let agent = AgentLoop::new(
+            provider,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::new(vec![], vec![]),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+                timeout_secs: 60,
+            },
+        );
+
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("complete message test", &mut cb).await.unwrap();
+
+        assert_eq!(result.iterations, 2);
+
+        // Inspect the second call's messages to verify the first assistant message
+        let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(caps.len(), 2);
+        let second_call_msgs = &caps[1];
+        // second_call_msgs: [user, assistant(thinking+text+tool_call), tool_result]
+        assert_eq!(second_call_msgs.len(), 3);
+
+        // The assistant message should have all 3 ContentBlock types
+        match &second_call_msgs[1] {
+            UnifiedMessage::Assistant { content } => {
+                assert_eq!(content.len(), 3);
+                assert!(
+                    matches!(&content[0], ContentBlock::Thinking { thinking } if thinking == "Let me think about this...")
+                );
+                assert!(
+                    matches!(&content[1], ContentBlock::Text { text } if text == "I'll search for that.")
+                );
+                assert!(
+                    matches!(&content[2], ContentBlock::ToolCall { id, name, .. } if id == "call_1" && name == "echo")
+                );
+            }
+            _ => panic!("expected Assistant message with full content"),
+        }
     }
 }
