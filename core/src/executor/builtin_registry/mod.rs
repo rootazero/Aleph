@@ -51,9 +51,9 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_registry_creation() {
-        let registry = BuiltinToolRegistry::new();
+    #[tokio::test]
+    async fn test_registry_creation() {
+        let registry = BuiltinToolRegistry::new().await;
 
         // Verify all tools are registered
         assert!(registry.get_tool("search").is_some());
@@ -67,9 +67,9 @@ mod tests {
         assert!(registry.get_tool("unknown").is_none());
     }
 
-    #[test]
-    fn test_tool_metadata() {
-        let registry = BuiltinToolRegistry::new();
+    #[tokio::test]
+    async fn test_tool_metadata() {
+        let registry = BuiltinToolRegistry::new().await;
 
         let search = registry.get_tool("search").unwrap();
         assert_eq!(search.name, "search");
@@ -79,7 +79,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unknown_tool_returns_error() {
-        let registry = BuiltinToolRegistry::new();
+        let registry = BuiltinToolRegistry::new().await;
 
         let result = registry
             .execute_tool("nonexistent", serde_json::json!({}))
@@ -97,45 +97,45 @@ mod tests {
     async fn test_capability_check_allows_all() {
         // Currently all operations are permitted (capability system removed)
         // Safety is enforced by CommandChecker and PathPermissionChecker
-        let registry = BuiltinToolRegistry::new();
+        let registry = BuiltinToolRegistry::new().await;
 
         let check = registry.check_capability("file_ops", &serde_json::json!({"operation": "delete"}));
         assert!(check.is_ok(), "All operations should be allowed currently");
     }
 
-    #[test]
-    fn test_meta_tools_not_registered_without_dispatcher_registry() {
+    #[tokio::test]
+    async fn test_meta_tools_not_registered_without_dispatcher_registry() {
         // Without dispatcher registry, meta tools should not be registered
-        let registry = BuiltinToolRegistry::new();
+        let registry = BuiltinToolRegistry::new().await;
 
         assert!(registry.get_tool("list_tools").is_none());
         assert!(registry.get_tool("get_tool_schema").is_none());
     }
 
-    #[test]
-    fn test_meta_tools_registered_with_dispatcher_registry() {
+    #[tokio::test]
+    async fn test_meta_tools_registered_with_dispatcher_registry() {
         // With dispatcher registry, meta tools should be registered
         let dispatcher_registry = Arc::new(RwLock::new(DispatcherToolRegistry::new()));
         let config = BuiltinToolConfig {
             dispatcher_registry: Some(dispatcher_registry),
             ..Default::default()
         };
-        let registry = BuiltinToolRegistry::with_config(config);
+        let registry = BuiltinToolRegistry::with_config(config).await;
 
         assert!(registry.get_tool("list_tools").is_some());
         assert!(registry.get_tool("get_tool_schema").is_some());
     }
 
-    #[test]
-    fn test_delegate_tool_not_registered_without_dispatcher() {
+    #[tokio::test]
+    async fn test_delegate_tool_not_registered_without_dispatcher() {
         // Without sub_agent_dispatcher, delegate tool should not be registered
-        let registry = BuiltinToolRegistry::new();
+        let registry = BuiltinToolRegistry::new().await;
 
         assert!(registry.get_tool("delegate").is_none());
     }
 
-    #[test]
-    fn test_delegate_tool_registered_with_dispatcher() {
+    #[tokio::test]
+    async fn test_delegate_tool_registered_with_dispatcher() {
         // With sub_agent_dispatcher, delegate tool should be registered
         let tool_registry = Arc::new(RwLock::new(DispatcherToolRegistry::new()));
         let sub_agent_dispatcher = Arc::new(RwLock::new(
@@ -145,7 +145,7 @@ mod tests {
             sub_agent_dispatcher: Some(sub_agent_dispatcher),
             ..Default::default()
         };
-        let registry = BuiltinToolRegistry::with_config(config);
+        let registry = BuiltinToolRegistry::with_config(config).await;
 
         assert!(registry.get_tool("delegate").is_some());
         let delegate = registry.get_tool("delegate").unwrap();
@@ -164,7 +164,7 @@ mod tests {
             sub_agent_dispatcher: Some(sub_agent_dispatcher),
             ..Default::default()
         };
-        let registry = BuiltinToolRegistry::with_config(config);
+        let registry = BuiltinToolRegistry::with_config(config).await;
 
         // Execute delegate tool
         let result = registry.execute_tool(
@@ -245,24 +245,24 @@ mod tests {
             ))
         }
 
-        #[test]
-        fn test_sessions_tools_not_registered_without_context() {
+        #[tokio::test]
+        async fn test_sessions_tools_not_registered_without_context() {
             // Without gateway_context, sessions tools should not be registered
-            let registry = BuiltinToolRegistry::new();
+            let registry = BuiltinToolRegistry::new().await;
 
             assert!(registry.get_tool("sessions_list").is_none());
             assert!(registry.get_tool("sessions_send").is_none());
         }
 
-        #[test]
-        fn test_sessions_tools_registered_with_context() {
+        #[tokio::test]
+        async fn test_sessions_tools_registered_with_context() {
             // With gateway_context, sessions tools should be registered
             let gateway_context = create_test_gateway_context();
             let config = BuiltinToolConfig {
                 gateway_context: Some(gateway_context),
                 ..Default::default()
             };
-            let registry = BuiltinToolRegistry::with_config(config);
+            let registry = BuiltinToolRegistry::with_config(config).await;
 
             assert!(registry.get_tool("sessions_list").is_some());
             assert!(registry.get_tool("sessions_send").is_some());
@@ -280,7 +280,7 @@ mod tests {
         #[tokio::test]
         async fn test_sessions_list_execution_without_context() {
             // Without gateway_context, sessions_list should fail with error
-            let registry = BuiltinToolRegistry::new();
+            let registry = BuiltinToolRegistry::new().await;
 
             let result = registry
                 .execute_tool(
@@ -302,7 +302,7 @@ mod tests {
                 gateway_context: Some(gateway_context),
                 ..Default::default()
             };
-            let registry = BuiltinToolRegistry::with_config(config);
+            let registry = BuiltinToolRegistry::with_config(config).await;
 
             let result = registry
                 .execute_tool(

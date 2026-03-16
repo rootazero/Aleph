@@ -13,6 +13,7 @@ pub mod search;
 pub mod plugins;
 pub mod skills;
 pub mod policies;
+pub mod acp_harnesses;
 pub mod auth;
 pub mod channels;
 
@@ -31,6 +32,7 @@ pub use search::SearchView;
 pub use plugins::PluginsView;
 pub use skills::SkillsView;
 pub use policies::PoliciesView;
+pub use acp_harnesses::AcpHarnessesView;
 pub use auth::AuthView;
 pub use channels::ChannelsOverview;
 pub use channels::ChannelPlatformPage;

@@ -248,14 +248,14 @@ impl AlephTool for AcpSwitchTool {
         }
 
         // Validate harness exists
-        if !self.manager.has_harness(&args.target) {
+        if !self.manager.has_harness(&args.target).await {
             let err_msg = format!("Unknown agent: '{}'. Valid targets: claude-code, codex, gemini, aleph", &args.target);
             notify_tool_result(Self::NAME, &err_msg, false);
             return Err(AlephError::tool(err_msg));
         }
 
         // Pre-spawn session for NativeAcp harnesses so the switch is immediate
-        if self.manager.harness_mode(&args.target) == Some(crate::acp::harness::HarnessMode::NativeAcp) {
+        if self.manager.harness_mode(&args.target).await == Some(crate::acp::harness::HarnessMode::NativeAcp) {
             let cwd = resolve_cwd(None);
             self.manager.ensure_session(&args.target, &cwd).await?;
         }
@@ -263,7 +263,8 @@ impl AlephTool for AcpSwitchTool {
         let display_name = self
             .manager
             .display_name(&args.target)
-            .unwrap_or(&args.target);
+            .await
+            .unwrap_or_else(|| args.target.clone());
         let msg = format!("Switched to {}. Messages will be forwarded to this agent.", display_name);
 
         info!(target = %args.target, "ACP agent switch");
