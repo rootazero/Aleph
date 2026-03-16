@@ -45,6 +45,7 @@ pi-mono/openclaw (TypeScript) solves this with:
 ```rust
 /// Unified message type — the single data model for all provider interactions
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum UnifiedMessage {
     /// User message
     User {
@@ -65,11 +66,14 @@ pub enum UnifiedMessage {
 
 /// Content block — one atomic unit within a message
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ContentBlock {
     /// Plain text
     Text { text: String },
+    /// Structured JSON (preserves tool output structure)
+    Json { value: Value },
     /// Thinking/reasoning trace (extended thinking)
-    Thinking { thinking: String, signature: Option<String> },
+    Thinking { thinking: String },
     /// Tool call (only in Assistant messages)
     ToolCall { id: String, name: String, arguments: Value },
     /// Image
@@ -108,7 +112,7 @@ pub struct RequestPayload<'a> {
 - `attachments: Option<&[MediaAttachment]>` → migrated to `ContentBlock`
 - `force_standard_mode: bool` → each adapter decides internally
 
-`ProtocolAdapter` trait signature is unchanged. Each adapter's `build_request` reads `payload.messages` instead of `payload.input`.
+`ProtocolAdapter` trait method signatures are syntactically unchanged, but semantically different: `build_request` now receives a `RequestPayload` whose `messages` field replaces the old `input` field. Every adapter's `build_request` implementation must change its internal logic to read structured messages instead of a flat string.
 
 ## AiProvider Trait Simplification
 
@@ -132,15 +136,45 @@ pub trait AiProvider: Send + Sync {
 
 **Removed:** `process(&str, ...)`, `process_with_image`, `process_with_attachments`, `process_with_thinking`, `process_with_overrides`, `process_with_payload`.
 
-**46 callers migrate as:**
+**Caller migration patterns:**
+
 ```rust
+// Pattern 1: Text-only (most common, ~40 callers)
 // Before:
 let text = provider.process("input", Some("system")).await?;
-
 // After:
 let msgs = [UnifiedMessage::user("input")];
 let resp = provider.process(
-    RequestPayload::from_text(&msgs).with_system(Some("system"))
+    RequestPayload { messages: &msgs, system_prompt: Some("system"), ..Default::default() }
+).await?;
+let text = resp.text_content();
+
+// Pattern 2: With image/attachments (multimodal callers)
+// Before:
+let text = provider.process_with_image("describe this", Some(&image), Some("system")).await?;
+// After:
+let msgs = [UnifiedMessage::User {
+    content: vec![
+        ContentBlock::Text { text: "describe this".into() },
+        ContentBlock::Image { data: image.base64, mime_type: image.mime_type },
+    ],
+}];
+let resp = provider.process(
+    RequestPayload { messages: &msgs, system_prompt: Some("system"), ..Default::default() }
+).await?;
+let text = resp.text_content();
+
+// Pattern 3: With thinking/temperature/max_tokens overrides
+// Before:
+let text = provider.process_with_overrides("input", system, ThinkLevel::High, Some(0.7), Some(4096)).await?;
+// After:
+let msgs = [UnifiedMessage::user("input")];
+let resp = provider.process(
+    RequestPayload {
+        messages: &msgs, system_prompt: system,
+        think_level: Some(ThinkLevel::High), temperature: Some(0.7), max_tokens: Some(4096),
+        ..Default::default()
+    }
 ).await?;
 let text = resp.text_content();
 ```
@@ -211,7 +245,7 @@ UnifiedMessage::tool_result(orphaned_id, orphaned_name, "No result provided — 
 
 **normalize_cross_model:** Currently no-op. Reserved for thinking signature downgrade when switching providers mid-conversation.
 
-**Called in:** `HttpProvider::execute()`, before `adapter.build_request()`.
+**Call site:** `AiProviderBridge::call()`, before passing messages to `provider.process()`. This ensures all providers (including `OllamaProvider` which bypasses `HttpProvider`) benefit from the pre-processing. `HttpProvider` does NOT call `transform_messages` — it is the bridge's responsibility.
 
 ## ProviderResponse Validation
 
@@ -236,6 +270,28 @@ impl ProviderResponse {
 ```
 
 Called after every `parse_response()` in `HttpProvider::execute()`.
+
+## PII Filtering Migration
+
+Current `HttpProvider::execute()` runs PII filtering on `payload.input` (a `&str`) and leak detection via `LeakDetector::scan_outbound(payload.input)`. After the refactor, these must iterate over all `ContentBlock::Text` blocks across all messages.
+
+```rust
+// New helper in message.rs
+impl UnifiedMessage {
+    /// Extract all text content for PII/leak scanning
+    pub fn extract_all_text(messages: &[UnifiedMessage]) -> String {
+        // Concatenate all Text blocks from all messages for scanning
+    }
+}
+```
+
+PII filtering applies the filter to extracted text, then reconstructs messages with filtered text. Leak detection uses `extract_all_text()` for scanning. This ensures no security regression.
+
+## Streaming Scope
+
+Streaming (`parse_stream`) is **deferred** from this refactor. Current streaming only yields text deltas (`BoxStream<Result<String>>`). The non-streaming `parse_response` path handles tool calls. The agent loop uses non-streaming mode.
+
+Future work: streaming should yield structured events (text delta, tool call start/delta/end) like pi-mono's `AssistantMessageEventStream`. This requires a new `StreamEvent` enum and changes to `parse_stream` return type. Not in scope for this refactor.
 
 ## Agent Loop Changes
 
@@ -265,11 +321,12 @@ User: "创建贪吃蛇"
 AgentLoop.messages = [UnifiedMessage::user("创建贪吃蛇")]
   ↓
 AiProviderBridge::call(messages, system_prompt, tools)
+  → transform_messages()     // repair orphaned tool calls
   → RequestPayload { messages, system_prompt, tools }
   ↓
 HttpProvider::execute(payload)
-  → transform_messages()     // repair orphaned tool calls
-  → PII filtering            // on text content blocks
+  → PII filtering            // on text content blocks via extract_all_text()
+  → leak detection           // on text content blocks
   → adapter.build_request()  // protocol-specific convert_messages
   ↓
 ChatGptProtocol::build_request()
@@ -296,15 +353,20 @@ AgentLoop
 | **New** | `providers/message.rs` | UnifiedMessage, ContentBlock, transform_messages |
 | **Core** | `providers/adapter.rs` | RequestPayload.messages, validate(), text_content() |
 | **Core** | `providers/mod.rs` | AiProvider: 7 methods → 1 |
-| **Core** | `providers/http_provider.rs` | integrate transform_messages + validate |
+| **Core** | `providers/http_provider.rs` | PII filtering on messages, validate, remove transform_messages |
 | **Protocol** | `protocols/chatgpt.rs` | convert_messages, usage extraction, status→StopReason |
 | **Protocol** | `protocols/anthropic.rs` | convert_messages, merge ToolResult to user turn |
 | **Protocol** | `protocols/openai.rs` | convert_messages, JSON.stringify arguments |
 | **Protocol** | `protocols/gemini.rs` | convert_messages, user/model alternation |
 | **Protocol** | `protocols/configurable.rs` | fallback: extract last user text |
 | **Loop** | `agent_loop/loop_core.rs` | LoopMessage → UnifiedMessage, complete assistant turn |
-| **Loop** | `agent_loop/provider_bridge.rs` | remove XML serialization, pass-through |
-| **Callers** | 46 files | `process("text", sp)` → `process(RequestPayload { messages: &[UnifiedMessage::user("text")], .. })` |
+| **Loop** | `agent_loop/provider_bridge.rs` | remove XML serialization, add transform_messages, pass-through |
+| **Direct impl** | `providers/ollama.rs` | update AiProvider impl to new process(RequestPayload) signature |
+| **Direct impl** | `providers/mock.rs` | update AiProvider impl |
+| **Direct impl** | `providers/failover.rs` | update AiProvider impl (delegates to inner providers) |
+| **Callers** | ~46 files | migrate to new process(RequestPayload) — see migration patterns above |
 | **Tests** | all affected modules | update to new types |
 
-**Unchanged:** ProtocolAdapter trait signature, ProviderConfig, Gateway, Channel, Tool system.
+**Unchanged:** ProtocolAdapter trait method signatures (syntactically), ProviderConfig, Gateway, Channel, Tool system.
+
+**Deferred:** Streaming tool call events (`parse_stream` refactor).
