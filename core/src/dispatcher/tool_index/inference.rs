@@ -7,6 +7,8 @@
 
 use crate::sync_primitives::Arc;
 use crate::providers::AiProvider;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 
 /// Result of semantic purpose inference
 #[derive(Debug, Clone)]
@@ -199,15 +201,16 @@ impl SemanticPurposeInferrer {
         let (system_prompt, user_prompt) = self.build_l2_prompts(tool_id, name, description, category);
 
         // Call LLM using process method
+        let __msgs = [UnifiedMessage::user(&user_prompt)];
         let response = provider
-            .process(&user_prompt, Some(&system_prompt))
+            .process(RequestPayload::new(&__msgs).with_system(Some(&system_prompt)))
             .await
             .map_err(|e| {
                 crate::error::AlephError::provider(format!("L2 LLM enhancement failed: {}", e))
             })?;
 
         // Extract and clean the response
-        let enhanced_description = response.trim().to_string();
+        let enhanced_description = response.text_content().trim().to_string();
 
         // Validate response quality
         if enhanced_description.is_empty() || enhanced_description.len() < 10 {
@@ -267,6 +270,8 @@ impl Default for SemanticPurposeInferrer {
 #[cfg(test)]
 mod tests {
     use super::*;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::RequestPayload;
 
     #[test]
     fn test_l0_structured_meta() {

@@ -7,6 +7,8 @@
 //! 4. Records each persona response and returns the collected messages
 
 use crate::providers::AiProvider;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 use crate::sync_primitives::Arc;
 
 use super::coordinator::{
@@ -64,11 +66,14 @@ impl GroupChatExecutor {
             &session.topic,
         );
 
-        let coordinator_raw = self
-            .provider
-            .process(&coordinator_prompt, None)
-            .await
-            .map_err(|e| GroupChatError::ProviderUnavailable(e.to_string()))?;
+        let coordinator_raw = {
+            let msgs = [UnifiedMessage::user(&coordinator_prompt)];
+            self.provider
+                .process(RequestPayload::new(&msgs))
+                .await
+                .map_err(|e| GroupChatError::ProviderUnavailable(e.to_string()))?
+                .text_content()
+        };
 
         // Step 3: Parse the coordinator plan, fallback on failure
         let plan = parse_coordinator_plan(&coordinator_raw)
@@ -97,14 +102,17 @@ impl GroupChatExecutor {
             );
 
             // Call persona LLM
-            let persona_response = self
-                .provider
-                .process(&persona_prompt, Some(&persona.system_prompt))
-                .await
-                .map_err(|e| GroupChatError::PersonaInvocationFailed {
-                    persona_id: persona.id.clone(),
-                    reason: e.to_string(),
-                })?;
+            let persona_response = {
+                let msgs = [UnifiedMessage::user(&persona_prompt)];
+                self.provider
+                    .process(RequestPayload::new(&msgs).with_system(Some(&persona.system_prompt)))
+                    .await
+                    .map_err(|e| GroupChatError::PersonaInvocationFailed {
+                        persona_id: persona.id.clone(),
+                        reason: e.to_string(),
+                    })?
+                    .text_content()
+            };
 
             // Record the turn in session history
             let speaker = Speaker::Persona {
@@ -140,6 +148,8 @@ impl GroupChatExecutor {
 mod tests {
     use super::*;
     use crate::providers::AiProvider;
+    use crate::providers::adapter::{ProviderResponse, RequestPayload};
+    use crate::providers::message::UnifiedMessage;
     use crate::sync_primitives::Arc;
     use std::future::Future;
     use std::pin::Pin;
@@ -165,18 +175,17 @@ mod tests {
     }
 
     impl AiProvider for SequentialMockProvider {
-        fn process(
-            &self,
-            _input: &str,
-            _system_prompt: Option<&str>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<String>> + Send + '_>> {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
             let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
             let response = self
                 .responses
                 .get(idx)
                 .cloned()
                 .unwrap_or_else(|| format!("unexpected call #{idx}"));
-            Box::pin(async move { Ok(response) })
+            Box::pin(async move { Ok(ProviderResponse::text_only(response)) })
         }
 
         fn name(&self) -> &str {
@@ -321,11 +330,10 @@ mod tests {
         struct FailingProvider;
 
         impl AiProvider for FailingProvider {
-            fn process(
-                &self,
-                _input: &str,
-                _system_prompt: Option<&str>,
-            ) -> Pin<Box<dyn Future<Output = crate::error::Result<String>> + Send + '_>> {
+            fn process<'a>(
+                &'a self,
+                _payload: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
                 Box::pin(async { Err(crate::error::AlephError::network("connection refused")) })
             }
             fn name(&self) -> &str {
@@ -365,15 +373,14 @@ mod tests {
         }
 
         impl AiProvider for CoordinatorOnlyProvider {
-            fn process(
-                &self,
-                _input: &str,
-                _system_prompt: Option<&str>,
-            ) -> Pin<Box<dyn Future<Output = crate::error::Result<String>> + Send + '_>> {
+            fn process<'a>(
+                &'a self,
+                _payload: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
                 let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
                 if idx == 0 {
                     let resp = self.coordinator_response.clone();
-                    Box::pin(async move { Ok(resp) })
+                    Box::pin(async move { Ok(ProviderResponse::text_only(resp)) })
                 } else {
                     Box::pin(async { Err(crate::error::AlephError::provider("model overloaded")) })
                 }
@@ -471,20 +478,23 @@ mod tests {
         }
 
         impl AiProvider for EchoAfterCoordinator {
-            fn process(
-                &self,
-                input: &str,
-                _system_prompt: Option<&str>,
-            ) -> Pin<Box<dyn Future<Output = crate::error::Result<String>> + Send + '_>> {
+            fn process<'a>(
+                &'a self,
+                payload: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
                 let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
                 if idx == 0 {
                     let resp = self.coordinator_response.clone();
-                    Box::pin(async move { Ok(resp) })
+                    Box::pin(async move { Ok(ProviderResponse::text_only(resp)) })
                 } else {
                     // Echo a brief summary so we can verify accumulation
+                    let input = payload.messages.first()
+                        .and_then(|m| m.content_blocks().first())
+                        .and_then(|b| b.as_text())
+                        .unwrap_or("");
                     let has_prior = input.contains("Prior discussion in this round:");
                     let response = format!("call#{idx} prior={has_prior}");
-                    Box::pin(async move { Ok(response) })
+                    Box::pin(async move { Ok(ProviderResponse::text_only(response)) })
                 }
             }
             fn name(&self) -> &str {

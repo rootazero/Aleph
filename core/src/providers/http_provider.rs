@@ -2,12 +2,10 @@
 //!
 //! Uses a ProtocolAdapter for protocol-specific logic.
 
-use crate::agents::thinking::ThinkLevel;
-use crate::clipboard::ImageData;
 use crate::config::ProviderConfig;
-use crate::core::MediaAttachment;
 use crate::error::Result;
 use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload};
+use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::AiProvider;
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector};
 use std::future::Future;
@@ -57,42 +55,29 @@ impl HttpProvider {
 
     /// Execute a request (non-streaming)
     async fn execute(&self, payload: RequestPayload<'_>) -> Result<ProviderResponse> {
-        // PII filtering: filter outbound message before sending to API
-        let filtered_input;
-        let final_payload = if let Some(engine_lock) = crate::pii::PiiEngine::global() {
+        // PII filtering: filter each text block individually
+        let mut filtered_messages: Vec<UnifiedMessage> = payload.messages.to_vec();
+        if let Some(engine_lock) = crate::pii::PiiEngine::global() {
             if let Ok(engine) = engine_lock.read() {
                 if !engine.is_provider_excluded(&self.name) {
-                    let result = engine.filter(payload.input);
-                    if result.has_detections() {
-                        filtered_input = result.text;
-                        RequestPayload {
-                            input: &filtered_input,
-                            system_prompt: payload.system_prompt,
-                            image: payload.image,
-                            attachments: payload.attachments,
-                            think_level: payload.think_level,
-                            force_standard_mode: payload.force_standard_mode,
-                            temperature: payload.temperature,
-                            max_tokens: payload.max_tokens,
-                            tools: payload.tools,
+                    for msg in &mut filtered_messages {
+                        for block in msg.content_blocks_mut() {
+                            if let ContentBlock::Text { ref mut text } = block {
+                                let result = engine.filter(text);
+                                if result.has_detections() {
+                                    *text = result.text;
+                                }
+                            }
                         }
-                    } else {
-                        payload
                     }
-                } else {
-                    payload
                 }
-            } else {
-                payload
             }
-        } else {
-            // PII engine not initialized — pass through
-            payload
-        };
+        }
 
-        // Secret leak detection: scan outbound content
+        // Secret leak detection: scan all text content
         let detector = LeakDetector::new();
-        if let LeakDecision::Block { reason, .. } = detector.scan_outbound(final_payload.input) {
+        let all_text = UnifiedMessage::extract_all_text(&filtered_messages);
+        if let LeakDecision::Block { reason, .. } = detector.scan_outbound(&all_text) {
             tracing::warn!(
                 provider = %self.name,
                 reason = %reason,
@@ -103,6 +88,15 @@ impl HttpProvider {
                 suggestion: Some("Remove secret values from the input before sending.".into()),
             });
         }
+
+        let final_payload = RequestPayload {
+            messages: &filtered_messages,
+            system_prompt: payload.system_prompt,
+            tools: payload.tools,
+            think_level: payload.think_level,
+            temperature: payload.temperature,
+            max_tokens: payload.max_tokens,
+        };
 
         let request = self
             .adapter
@@ -118,6 +112,9 @@ impl HttpProvider {
         })?;
 
         let provider_response = self.adapter.parse_response(response).await?;
+
+        // Validate response
+        provider_response.validate(self.adapter.name());
 
         // Secret leak detection: scan inbound response TEXT only
         if let Some(ref text) = provider_response.text {
@@ -140,135 +137,7 @@ impl HttpProvider {
 }
 
 impl AiProvider for HttpProvider {
-    fn process(
-        &self,
-        input: &str,
-        system_prompt: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        let input = input.to_string();
-        let system_prompt = system_prompt.map(|s| s.to_string());
-
-        Box::pin(async move {
-            let payload = RequestPayload::new(&input).with_system(system_prompt.as_deref());
-            let response = self.execute(payload).await?;
-            Ok(response.text.unwrap_or_default())
-        })
-    }
-
-    fn process_with_image(
-        &self,
-        input: &str,
-        image: Option<&ImageData>,
-        system_prompt: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        let input = input.to_string();
-        let image = image.cloned();
-        let system_prompt = system_prompt.map(|s| s.to_string());
-
-        Box::pin(async move {
-            let payload = RequestPayload::new(&input)
-                .with_system(system_prompt.as_deref())
-                .with_image(image.as_ref());
-            let response = self.execute(payload).await?;
-            Ok(response.text.unwrap_or_default())
-        })
-    }
-
-    fn process_with_attachments(
-        &self,
-        input: &str,
-        attachments: Option<&[MediaAttachment]>,
-        system_prompt: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        let input = input.to_string();
-        let attachments = attachments.map(|a| a.to_vec());
-        let system_prompt = system_prompt.map(|s| s.to_string());
-
-        Box::pin(async move {
-            let payload = RequestPayload::new(&input)
-                .with_system(system_prompt.as_deref())
-                .with_attachments(attachments.as_deref());
-            let response = self.execute(payload).await?;
-            Ok(response.text.unwrap_or_default())
-        })
-    }
-
-    fn process_with_mode(
-        &self,
-        input: &str,
-        system_prompt: Option<&str>,
-        force_standard_mode: bool,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        let input = input.to_string();
-        let system_prompt = system_prompt.map(|s| s.to_string());
-
-        Box::pin(async move {
-            let payload = RequestPayload::new(&input)
-                .with_system(system_prompt.as_deref())
-                .with_force_standard_mode(force_standard_mode);
-            let response = self.execute(payload).await?;
-            Ok(response.text.unwrap_or_default())
-        })
-    }
-
-    fn process_with_thinking(
-        &self,
-        input: &str,
-        system_prompt: Option<&str>,
-        think_level: ThinkLevel,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        let input = input.to_string();
-        let system_prompt = system_prompt.map(|s| s.to_string());
-
-        Box::pin(async move {
-            let payload = RequestPayload::new(&input)
-                .with_system(system_prompt.as_deref())
-                .with_think_level(Some(think_level));
-            let response = self.execute(payload).await?;
-            Ok(response.text.unwrap_or_default())
-        })
-    }
-
-    fn supports_vision(&self) -> bool {
-        true // OpenAI protocol supports vision
-    }
-
-    fn supports_thinking(&self) -> bool {
-        let model_lower = self.config.default_model().to_lowercase();
-        model_lower.contains("o1") || model_lower.contains("o3") || model_lower.contains("gpt-5")
-    }
-
-    fn max_think_level(&self) -> ThinkLevel {
-        if self.supports_thinking() {
-            ThinkLevel::High
-        } else {
-            ThinkLevel::Off
-        }
-    }
-
-    fn process_with_overrides(
-        &self,
-        input: &str,
-        system_prompt: Option<&str>,
-        think_level: ThinkLevel,
-        temperature: Option<f32>,
-        max_tokens: Option<u32>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        let input = input.to_string();
-        let system_prompt = system_prompt.map(|s| s.to_string());
-
-        Box::pin(async move {
-            let payload = RequestPayload::new(&input)
-                .with_system(system_prompt.as_deref())
-                .with_think_level(Some(think_level))
-                .with_temperature(temperature)
-                .with_max_tokens(max_tokens);
-            let response = self.execute(payload).await?;
-            Ok(response.text.unwrap_or_default())
-        })
-    }
-
-    fn process_with_payload<'a>(
+    fn process<'a>(
         &'a self,
         payload: RequestPayload<'a>,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {

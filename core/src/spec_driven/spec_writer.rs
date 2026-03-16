@@ -10,6 +10,8 @@ use tracing::{debug, info, warn};
 
 use crate::error::Result;
 use crate::providers::AiProvider;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 use crate::utils::json_extract::extract_json_robust;
 
 use super::types::{Spec, SpecMetadata, SpecTarget};
@@ -59,10 +61,12 @@ impl SpecWriter {
         );
 
         // Call LLM
+        let __msgs = [UnifiedMessage::user(&prompt)];
         let response = self
             .provider
-            .process(&prompt, Some(SPEC_SYSTEM_PROMPT))
-            .await?;
+            .process(RequestPayload::new(&__msgs).with_system(Some(SPEC_SYSTEM_PROMPT)))
+            .await?
+            .text_content();
 
         debug!(response = %response, "LLM response");
 

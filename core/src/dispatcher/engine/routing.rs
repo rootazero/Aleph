@@ -17,6 +17,8 @@ use crate::dispatcher::model_router::{
 use crate::dispatcher::monitor::TaskMonitor;
 use crate::dispatcher::scheduler::TaskScheduler;
 use crate::error::{AlephError, Result};
+use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::RequestPayload;
 
 impl AgentEngine {
     // =========================================================================
@@ -412,11 +414,12 @@ impl AgentEngine {
             };
 
             // Execute with provider
-            match provider.process(&prompt, None).await {
+            let __msgs = [UnifiedMessage::user(&prompt)];
+            match provider.process(RequestPayload::new(&__msgs)).await {
                 Ok(response) => {
                     let result = TaskResult {
                         output: serde_json::json!({
-                            "response": response,
+                            "response": response.text_content(),
                             "model_used": model_id,
                             "provider": profile.provider,
                         }),

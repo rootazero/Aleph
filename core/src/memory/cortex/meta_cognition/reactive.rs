@@ -9,6 +9,8 @@ use super::AnchorStore;
 use crate::error::AlephError;
 use crate::memory::store::MemoryBackend;
 use crate::providers::AiProvider;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use crate::sync_primitives::{Arc, RwLock};
@@ -340,17 +342,19 @@ impl ReactiveReflector {
             Provide concise, actionable root cause analysis in JSON format.";
 
         // Call LLM
+        let __msgs = [UnifiedMessage::user(&prompt)];
         let response = self
             .provider
-            .process(&prompt, Some(system_prompt))
+            .process(RequestPayload::new(&__msgs).with_system(Some(system_prompt)))
             .await
             .map_err(|e| AlephError::provider(format!("LLM call failed: {}", e)))?;
 
         // Parse JSON response
-        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap_or_else(|_| {
+        let response_text = response.text_content();
+        let parsed: serde_json::Value = serde_json::from_str(&response_text).unwrap_or_else(|_| {
             // Fallback: extract from text if JSON parsing fails
             serde_json::json!({
-                "root_cause": response.lines().next().unwrap_or("Unknown failure"),
+                "root_cause": response_text.lines().next().unwrap_or("Unknown failure"),
                 "preventable": true,
                 "suggested_rule": "Review and retry with corrected approach"
             })
@@ -494,6 +498,8 @@ mod tests {
     use crate::memory::cortex::meta_cognition::schema::initialize_schema;
     use crate::memory::store::LanceMemoryBackend;
     use crate::providers::MockProvider;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::RequestPayload;
     use rusqlite::Connection;
     use tempfile::TempDir;
 

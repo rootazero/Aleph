@@ -7,6 +7,8 @@ use crate::gateway::intent_detector::{DetectedIntent, build_soul_generation_prom
 
 use super::types::{RoutingError, check_link_access};
 use super::InboundMessageRouter;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::RequestPayload;
 
 impl InboundMessageRouter {
     /// Try to handle a switch intent from the message.
@@ -48,8 +50,9 @@ impl InboundMessageRouter {
 
                     let soul_content = if let Some(ref provider) = self.llm_provider {
                         let prompt = build_soul_generation_prompt(id, name);
-                        match provider.process(&prompt, None).await {
-                            Ok(content) => content,
+                        let soul_msgs = [UnifiedMessage::user(&prompt)];
+                        match provider.process(RequestPayload::new(&soul_msgs)).await {
+                            Ok(resp) => resp.text_content(),
                             Err(e) => {
                                 warn!("[Router] Failed to generate soul: {}, using default", e);
                                 format!("You are {}, an AI assistant.", name)

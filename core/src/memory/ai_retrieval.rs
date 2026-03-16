@@ -18,6 +18,8 @@
 
 use crate::config::AiRetrievalPolicy;
 use crate::error::{AlephError, Result};
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 use crate::memory::context::MemoryEntry;
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
@@ -227,9 +229,10 @@ impl AiMemoryRetriever {
         );
 
         // Call AI provider
+        let __msgs = [UnifiedMessage::user(&prompt)];
         let response = self
             .provider
-            .process(&prompt, Some(&system_prompt))
+            .process(RequestPayload::new(&__msgs).with_system(Some(&system_prompt)))
             .await
             .map_err(|e| {
                 AlephError::config(format!(
@@ -239,7 +242,7 @@ impl AiMemoryRetriever {
             })?;
 
         // Parse response
-        let result = self.parse_response(&response)?;
+        let result = self.parse_response(&response.text_content())?;
 
         debug!(
             selected_ids = ?result.selected_memory_ids,
@@ -374,6 +377,8 @@ Past conversations:
 mod tests {
     use super::*;
     use crate::memory::context::ContextAnchor;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::RequestPayload;
     use std::future::Future;
     use std::pin::Pin;
 

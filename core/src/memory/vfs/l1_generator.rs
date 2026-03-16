@@ -14,6 +14,8 @@ use crate::memory::vfs::compute_directory_hash;
 use crate::gateway::workspace::WorkspaceFilter;
 use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter};
 use crate::providers::AiProvider;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 use std::collections::HashSet;
 use crate::sync_primitives::Arc;
 
@@ -192,13 +194,14 @@ Format:
         let system_prompt =
             "You are a knowledge librarian. Generate concise, structured Markdown overviews.";
 
+        let __msgs = [UnifiedMessage::user(&prompt)];
         let response = self
             .provider
-            .process(&prompt, Some(system_prompt))
+            .process(RequestPayload::new(&__msgs).with_system(Some(system_prompt)))
             .await
             .map_err(|e| AlephError::config(format!("LLM failed to generate L1: {}", e)))?;
 
-        Ok(response)
+        Ok(response.text_content())
     }
 }
 
@@ -210,6 +213,8 @@ mod tests {
     use crate::memory::MemoryFact;
 
     use super::*;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::RequestPayload;
 
     #[test]
     fn test_l1_prompt_format() {

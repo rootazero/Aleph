@@ -26,6 +26,8 @@ use alephcore::executor::BuiltinToolRegistry;
 use alephcore::ProviderRegistry;
 
 use crate::server_init::{handle_run_with_engine, handle_chat_send_with_engine};
+use alephcore::providers::message::UnifiedMessage;
+use alephcore::providers::adapter::RequestPayload;
 
 /// Try to create a provider from app config (Settings UI configured providers).
 /// Returns None if no usable provider is found.
@@ -273,8 +275,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     let provider = classify_provider.clone();
                     let prompt = alephcore::routing::llm_classifier::build_classify_prompt(msg);
                     Box::pin(async move {
-                        match provider.process(&prompt, None).await {
-                            Ok(response) => alephcore::routing::llm_classifier::parse_classify_response(&response),
+                        let __msgs = [UnifiedMessage::user(&prompt)];
+                        match provider.process(RequestPayload::new(&__msgs)).await {
+                            Ok(response) => alephcore::routing::llm_classifier::parse_classify_response(&response.text_content()),
                             Err(e) => {
                                 tracing::warn!(
                                     subsystem = "task_router",

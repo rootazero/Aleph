@@ -10,6 +10,8 @@ use tracing::{debug, info, warn};
 
 use crate::error::Result;
 use crate::providers::AiProvider;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 use crate::agents::thinking::ThinkLevel;
 use crate::utils::json_extract::extract_json_robust;
 
@@ -77,15 +79,15 @@ impl LlmJudge {
         let prompt = self.build_prompt(spec, tests, test_results, implementation);
 
         // Call LLM with thinking for thorough evaluation
-        let response = if self.provider.supports_thinking() {
-            self.provider
-                .process_with_thinking(&prompt, Some(JUDGE_SYSTEM_PROMPT), self.think_level)
-                .await?
-        } else {
-            self.provider
-                .process(&prompt, Some(JUDGE_SYSTEM_PROMPT))
-                .await?
-        };
+        let msgs = [UnifiedMessage::user(&prompt)];
+        let response = self.provider
+            .process(
+                RequestPayload::new(&msgs)
+                    .with_system(Some(JUDGE_SYSTEM_PROMPT))
+                    .with_think_level(Some(self.think_level))
+            )
+            .await?
+            .text_content();
 
         debug!(response = %response, "LLM evaluation response");
 
@@ -303,45 +305,16 @@ mod tests {
     struct MockProvider;
 
     impl crate::providers::AiProvider for MockProvider {
-        fn process(
-            &self,
-            _input: &str,
-            _system_prompt: Option<&str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<crate::providers::adapter::ProviderResponse>> + Send + 'a>>
         {
             Box::pin(async {
-                Ok(r#"{"score": 0.9, "feedback": "Good", "is_acceptable": true}"#.to_string())
+                Ok(crate::providers::adapter::ProviderResponse::text_only(
+                    r#"{"score": 0.9, "feedback": "Good", "is_acceptable": true}"#.to_string()
+                ))
             })
-        }
-
-        fn process_with_thinking(
-            &self,
-            input: &str,
-            system_prompt: Option<&str>,
-            _level: ThinkLevel,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
-        {
-            self.process(input, system_prompt)
-        }
-
-        fn process_with_image(
-            &self,
-            input: &str,
-            _image: Option<&crate::ImageData>,
-            system_prompt: Option<&str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
-        {
-            self.process(input, system_prompt)
-        }
-
-        fn process_with_attachments(
-            &self,
-            input: &str,
-            _attachments: Option<&[crate::core::MediaAttachment]>,
-            system_prompt: Option<&str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
-        {
-            self.process(input, system_prompt)
         }
 
         fn name(&self) -> &str {

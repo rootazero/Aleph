@@ -9,6 +9,8 @@ use tracing::{debug, info, warn};
 
 use crate::error::Result;
 use crate::providers::AiProvider;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 use crate::utils::json_extract::extract_json_robust;
 
 use super::types::{AssertionType, Spec, TestCase, TestType};
@@ -55,10 +57,12 @@ impl TestWriter {
         let prompt = self.build_prompt(spec);
 
         // Call LLM
+        let __msgs = [UnifiedMessage::user(&prompt)];
         let response = self
             .provider
-            .process(&prompt, Some(TEST_SYSTEM_PROMPT))
-            .await?;
+            .process(RequestPayload::new(&__msgs).with_system(Some(TEST_SYSTEM_PROMPT)))
+            .await?
+            .text_content();
 
         debug!(response = %response, "LLM response");
 
@@ -176,43 +180,14 @@ mod tests {
     struct MockProvider;
 
     impl crate::providers::AiProvider for MockProvider {
-        fn process(
-            &self,
-            _input: &str,
-            _system_prompt: Option<&str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<crate::providers::adapter::ProviderResponse>> + Send + 'a>>
         {
-            Box::pin(async { Ok("[]".to_string()) })
-        }
-
-        fn process_with_thinking(
-            &self,
-            input: &str,
-            system_prompt: Option<&str>,
-            _level: crate::agents::thinking::ThinkLevel,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
-        {
-            self.process(input, system_prompt)
-        }
-
-        fn process_with_image(
-            &self,
-            input: &str,
-            _image: Option<&crate::ImageData>,
-            system_prompt: Option<&str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
-        {
-            self.process(input, system_prompt)
-        }
-
-        fn process_with_attachments(
-            &self,
-            input: &str,
-            _attachments: Option<&[crate::core::MediaAttachment]>,
-            system_prompt: Option<&str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
-        {
-            self.process(input, system_prompt)
+            Box::pin(async {
+                Ok(crate::providers::adapter::ProviderResponse::text_only("[]".to_string()))
+            })
         }
 
         fn name(&self) -> &str {
