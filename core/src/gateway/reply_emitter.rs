@@ -186,6 +186,7 @@ impl ReplyEmitter {
                 },
                 inline_keyboard: None,
                 metadata: Default::default(),
+                agent_display_name: None,
             };
 
             match self
