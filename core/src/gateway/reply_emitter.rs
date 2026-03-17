@@ -95,7 +95,7 @@ pub struct ReplyEmitter {
 /// Prepend agent identity prefix if agent has a display name.
 fn apply_agent_prefix(text: &str, agent_name: &Option<String>) -> String {
     match agent_name {
-        Some(name) if !name.is_empty() => format!("[{}]\n{}", name, text),
+        Some(name) if !name.is_empty() => format!("*{}*\n{}", name, text),
         _ => text.to_string(),
     }
 }
