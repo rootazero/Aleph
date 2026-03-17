@@ -366,28 +366,53 @@ impl BuiltinToolRegistry {
         }
     }
 
-    /// Register always-available core tool metadata
+    /// Register always-available core tool metadata with JSON Schema parameters.
     fn register_core_tools(tools: &mut HashMap<String, UnifiedTool>) {
-        for (name, desc) in [
-            ("search", SearchTool::DESCRIPTION),
-            ("web_fetch", "Fetch and read content from a URL"),
-            ("file_ops", "File system operations - list, read, write, move, copy, delete, etc."),
-            ("bash", "Execute bash/shell commands (convenience wrapper for code_exec with shell)"),
-            ("code_exec", CodeExecTool::DESCRIPTION),
-            ("pdf_generate", PdfGenerateTool::DESCRIPTION),
-            ("read_skill", ReadSkillTool::DESCRIPTION),
-            ("list_skills", SkillListTool::DESCRIPTION),
-            ("desktop", DesktopTool::DESCRIPTION),
-            ("pim", PimTool::DESCRIPTION),
-            ("soul_update", SoulUpdateTool::DESCRIPTION),
-            ("profile_update", ProfileUpdateTool::DESCRIPTION),
-            ("scratchpad", ScratchpadTool::DESCRIPTION),
-        ] {
-            tools.insert(
-                name.to_string(),
-                UnifiedTool::new(format!("builtin:{name}"), name, desc, ToolSource::Builtin),
+        use schemars::schema_for;
+
+        // Helper: register tool with schema from schemars
+        fn reg(
+            tools: &mut HashMap<String, UnifiedTool>,
+            name: &str,
+            desc: &str,
+            schema: serde_json::Value,
+        ) {
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{name}"),
+                name,
+                desc,
+                ToolSource::Builtin,
             );
+            ut.parameters_schema = Some(schema);
+            tools.insert(name.to_string(), ut);
         }
+
+        reg(tools, "search", SearchTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::search::SearchArgs)).unwrap_or_default());
+        reg(tools, "web_fetch", "Fetch and read content from a URL",
+            serde_json::to_value(schema_for!(crate::builtin_tools::web_fetch::WebFetchArgs)).unwrap_or_default());
+        reg(tools, "file_ops", "File system operations - list, read, write, move, copy, delete, etc.",
+            serde_json::to_value(schema_for!(crate::builtin_tools::file_ops::FileOpsArgs)).unwrap_or_default());
+        reg(tools, "bash", "Execute bash/shell commands (convenience wrapper for code_exec with shell)",
+            serde_json::to_value(schema_for!(crate::builtin_tools::bash_exec::BashExecArgs)).unwrap_or_default());
+        reg(tools, "code_exec", CodeExecTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::code_exec::CodeExecArgs)).unwrap_or_default());
+        reg(tools, "pdf_generate", PdfGenerateTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::pdf_generate::PdfGenerateArgs)).unwrap_or_default());
+        reg(tools, "read_skill", ReadSkillTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::skill_reader::ReadSkillArgs)).unwrap_or_default());
+        reg(tools, "list_skills", SkillListTool::DESCRIPTION,
+            serde_json::json!({"type": "object", "properties": {}, "required": []}));
+        reg(tools, "desktop", DesktopTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::desktop::DesktopArgs)).unwrap_or_default());
+        reg(tools, "pim", PimTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::pim::PimArgs)).unwrap_or_default());
+        reg(tools, "soul_update", SoulUpdateTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::soul_update::SoulUpdateArgs)).unwrap_or_default());
+        reg(tools, "profile_update", ProfileUpdateTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::profile_update::ProfileUpdateArgs)).unwrap_or_default());
+        reg(tools, "scratchpad", ScratchpadTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::scratchpad::ScratchpadArgs)).unwrap_or_default());
     }
 
     /// Register metadata for optional tools (only when their dependencies are available)

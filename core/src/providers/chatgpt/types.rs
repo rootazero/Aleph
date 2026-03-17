@@ -20,6 +20,24 @@ pub struct ResponsesRequest {
     pub reasoning: Option<ReasoningConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<FunctionToolDef>>,
+    /// Tool selection strategy ("auto", "required", "none")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<String>,
+    /// Enable parallel tool calls
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
+    /// Text output verbosity config (Codex mode)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextConfig>,
+    /// Additional fields to include in response (e.g. reasoning.encrypted_content)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+}
+
+/// Text output verbosity configuration (Codex mode)
+#[derive(Debug, Serialize)]
+pub struct TextConfig {
+    pub verbosity: String,
 }
 
 /// Function tool definition for the Responses API
@@ -29,8 +47,12 @@ pub struct FunctionToolDef {
     #[serde(rename = "type")]
     pub tool_type: String,
     pub name: String,
-    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub parameters: serde_json::Value,
+    /// Enable strict mode for reliable argument generation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
 }
 
 /// Input item in the conversation (tagged union)
