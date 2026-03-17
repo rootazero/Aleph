@@ -209,7 +209,7 @@ Key details:
 Chrome DevTools MCP returns tree-structured accessibility snapshots. Conversion to Aleph's `AriaSnapshot`:
 
 - **ref_id strategy**: Use Chrome MCP's native UIDs directly (e.g., `"btn-1"`) as `ref_id` — no remapping needed. Click/type operations pass these IDs straight through to Chrome MCP.
-- **Flattening**: DFS traverse the tree, collect each node into a flat `Vec<AriaElement>`
+- **Tree preservation**: Convert Chrome MCP tree nodes into Aleph's `AriaElement` with `children` populated, preserving hierarchical context for the LLM. The top-level `elements` vec contains root nodes only.
 - **Bounds**: Not provided by Chrome MCP — `bounds` field is `None` for existing-session snapshots
 
 ### Capability Limitations
