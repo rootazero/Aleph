@@ -61,14 +61,19 @@ pub trait AcpHarness: Send + Sync {
     /// Default: runs `executable --version` and returns `true` on exit 0.
     async fn is_available(&self) -> bool {
         let config = self.build_config(None);
-        match Command::new(&config.executable)
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await
-        {
-            Ok(status) => {
+        // Timeout after 5 seconds — some CLIs may hang (e.g., waiting for login)
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            Command::new(&config.executable)
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status(),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(status)) => {
                 let available = status.success();
                 debug!(
                     harness = self.id(),
@@ -78,11 +83,19 @@ pub trait AcpHarness: Send + Sync {
                 );
                 available
             }
-            Err(_) => {
+            Ok(Err(_)) => {
                 debug!(
                     harness = self.id(),
                     executable = %config.executable,
                     "ACP harness not found"
+                );
+                false
+            }
+            Err(_) => {
+                debug!(
+                    harness = self.id(),
+                    executable = %config.executable,
+                    "ACP harness availability check timed out (5s)"
                 );
                 false
             }

@@ -14,7 +14,7 @@ struct HarnessPreset {
 const HARNESS_PRESETS: &[HarnessPreset] = &[
     HarnessPreset { id: "claude-code",  name: "Claude Code", icon_color: "#F97316" },
     HarnessPreset { id: "codex",        name: "Codex",       icon_color: "#3B82F6" },
-    HarnessPreset { id: "gemini-cli",   name: "Gemini CLI",  icon_color: "#10B981" },
+    HarnessPreset { id: "gemini",       name: "Gemini CLI",  icon_color: "#10B981" },
 ];
 
 /// ACP Harnesses settings page — manages external CLI tools
