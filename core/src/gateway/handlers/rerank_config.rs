@@ -97,7 +97,7 @@ pub async fn handle_update(
         let mut cfg = config.write().await;
         cfg.memory.rerank = rerank_config;
 
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["memory"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,

@@ -272,7 +272,7 @@ pub async fn handle_create(
     {
         let mut cfg = config.write().await;
         cfg.acp.harnesses.insert(params.id.clone(), params.config.clone());
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["acp"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -320,7 +320,7 @@ pub async fn handle_update(
     {
         let mut cfg = config.write().await;
         cfg.acp.harnesses.insert(params.id.clone(), params.config.clone());
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["acp"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -379,7 +379,7 @@ pub async fn handle_delete(
     {
         let mut cfg = config.write().await;
         cfg.acp.harnesses.remove(&params.id);
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["acp"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -495,7 +495,7 @@ pub async fn handle_set_enabled(
     {
         let mut cfg = config.write().await;
         cfg.acp.harnesses.insert(params.id.clone(), entry);
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["acp"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,

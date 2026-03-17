@@ -37,9 +37,9 @@ pub(super) fn normalize_optional_string(value: Option<String>) -> Option<String>
     })
 }
 
-pub(super) fn save_config(cfg: &Config) -> Result<(), String> {
+pub(super) fn save_config(cfg: &Config, sections: &[&str]) -> Result<(), String> {
     // api_key is #[serde(skip)] — never persisted to disk
-    cfg.save().map_err(|e| e.to_string())
+    cfg.save_incremental(sections).map_err(|e| e.to_string())
 }
 
 pub(super) fn build_provider_config_for_persistence(

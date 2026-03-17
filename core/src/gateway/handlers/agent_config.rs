@@ -167,7 +167,7 @@ pub async fn handle_update(
         }
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["agent"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -246,7 +246,7 @@ pub async fn handle_update_file_ops(
         cfg.agent.file_ops = file_ops;
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["agent"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -325,7 +325,7 @@ pub async fn handle_update_code_exec(
         cfg.agent.code_exec = code_exec;
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["agent"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,

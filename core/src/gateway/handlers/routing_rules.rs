@@ -163,7 +163,7 @@ pub async fn handle_create(
         cfg.add_rule_at_top(rule_config);
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["rules"]) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
@@ -247,7 +247,7 @@ pub async fn handle_update(
         cfg.rules[params.index] = rule_config;
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["rules"]) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
@@ -332,7 +332,7 @@ pub async fn handle_delete(
         }
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["rules"]) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
@@ -398,7 +398,7 @@ pub async fn handle_move(
         }
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["rules"]) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
