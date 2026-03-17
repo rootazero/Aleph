@@ -104,7 +104,7 @@ async fn handle_connection(
                 match msg {
                     Some(Ok(WsMessage::Text(text))) => {
                         let preview_end = text.char_indices().take_while(|(i, _)| *i < 200).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(text.len());
-                        debug!("Received from {}: {}", conn_id, &text[..preview_end]);
+                        debug!("WS recv from {}: {}", conn_id, &text[..preview_end]);
 
                         // Parse request to check method for auth gating
                         let request: Result<JsonRpcRequest, _> = serde_json::from_str(&text);
@@ -304,6 +304,7 @@ async fn handle_connection(
                                         serde_json::to_string(&resp).unwrap_or_default()
                                     } else {
                                         // --- Lane concurrency control ---
+                                        debug!("RPC dispatch: method={}", req.method);
                                         let lane_result = ctx.lane_manager.acquire(&req.method).await;
                                         let response = match lane_result {
                                             Ok(_permit) => {
