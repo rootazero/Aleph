@@ -50,6 +50,9 @@ fn resolve_api_key(provider_name: &str, vault: &SharedTokenManager) -> Option<St
 }
 
 /// Handle rerank_config.get request
+///
+/// If params contains `"provider": "jina"`, returns config with that provider's vault key.
+/// Otherwise returns config with the active provider's key.
 pub async fn handle_get(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
@@ -60,9 +63,15 @@ pub async fn handle_get(
     let mut rerank = serde_json::to_value(&cfg.memory.rerank)
         .unwrap_or_else(|_| json!({}));
 
-    // Inject API key from vault for the active provider
-    let provider_name = provider_id_str(&cfg.memory.rerank.provider);
-    if let Some(key) = resolve_api_key(&provider_name, &vault) {
+    // Determine which provider's key to inject
+    let query_provider = request.params
+        .as_ref()
+        .and_then(|p| p.get("provider"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| provider_id_str(&cfg.memory.rerank.provider));
+
+    if let Some(key) = resolve_api_key(&query_provider, &vault) {
         if let Some(obj) = rerank.as_object_mut() {
             obj.insert("api_key".into(), json!(key));
         }
