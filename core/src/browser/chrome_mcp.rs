@@ -50,22 +50,25 @@ impl ChromeMcpDriver {
             .get(profile_name)
             .ok_or_else(|| BrowserError::ChromeMcpError("Session not found after creation".into()))?;
 
-        let result = session
-            .client
-            .call_tool(tool_name, args)
-            .await
-            .map_err(|e: crate::error::AlephError| {
+        let result = match session.client.call_tool(tool_name, args).await {
+            Ok(r) => r,
+            Err(e) => {
                 let err_str = e.to_string();
-                if err_str.contains("broken pipe")
+                let is_transport_error = err_str.contains("broken pipe")
                     || err_str.contains("connection reset")
                     || err_str.contains("process exited")
-                {
+                    || err_str.contains("channel closed");
+                if is_transport_error {
                     tracing::warn!(
                         "Chrome MCP transport error for profile '{profile_name}': {err_str}"
                     );
+                    // Drop read lock before destroying session
+                    drop(sessions);
+                    self.destroy_session(profile_name).await;
                 }
-                BrowserError::ChromeMcpError(err_str)
-            })?;
+                return Err(BrowserError::ChromeMcpError(err_str));
+            }
+        };
 
         if !result.success {
             return Err(BrowserError::ChromeMcpError(

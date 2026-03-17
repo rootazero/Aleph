@@ -16,8 +16,12 @@ use crate::tools::AlephTool;
 /// A single form field to fill.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FormField {
-    /// CSS selector of the form field.
-    pub selector: String,
+    /// CSS selector of the form field (used in managed mode).
+    #[serde(default)]
+    pub selector: Option<String>,
+    /// ARIA snapshot ref_id of the form field (used in existing-session mode).
+    #[serde(default)]
+    pub ref_id: Option<String>,
     /// Value to fill into the field.
     pub value: String,
 }
@@ -82,9 +86,20 @@ impl AlephTool for BrowserFillFormTool {
 
                 let mut filled = 0;
                 for field in &args.fields {
-                    let target = ActionTarget::Selector {
-                        css: field.selector.clone(),
+                    let target = if let Some(ref ref_id) = field.ref_id {
+                        ActionTarget::Ref { ref_id: ref_id.clone() }
+                    } else if let Some(ref css) = field.selector {
+                        ActionTarget::Selector { css: css.clone() }
+                    } else {
+                        return Ok(BrowserFillFormOutput {
+                            success: false,
+                            filled_count: filled,
+                            message: Some("Each field must have either 'selector' or 'ref_id'".into()),
+                        });
                     };
+                    let field_name = field.ref_id.as_deref()
+                        .or(field.selector.as_deref())
+                        .unwrap_or("unknown");
                     match backend.fill(&tab_id, target, &field.value).await {
                         Ok(()) => filled += 1,
                         Err(e) => {
@@ -93,7 +108,7 @@ impl AlephTool for BrowserFillFormTool {
                                 filled_count: filled,
                                 message: Some(format!(
                                     "Failed on field '{}': {e}",
-                                    field.selector
+                                    field_name
                                 )),
                             });
                         }
@@ -140,11 +155,13 @@ mod tests {
                 profile: "default".into(),
                 fields: vec![
                     FormField {
-                        selector: "input#name".into(),
+                        selector: Some("input#name".into()),
+                        ref_id: None,
                         value: "Alice".into(),
                     },
                     FormField {
-                        selector: "input#email".into(),
+                        selector: Some("input#email".into()),
+                        ref_id: None,
                         value: "alice@example.com".into(),
                     },
                 ],
