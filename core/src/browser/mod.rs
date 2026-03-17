@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod backend;
+pub mod chrome_mcp_snapshot;
 pub mod discovery;
 pub mod error;
 pub mod managed_backend;
