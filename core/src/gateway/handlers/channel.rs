@@ -594,7 +594,7 @@ pub async fn handle_delete(
     let in_registry = registry.get(&channel_id).await.is_some();
     let in_config = {
         let cfg = app_config.read().await;
-        cfg.channels.get(&id).is_some()
+        cfg.channels.contains_key(&id)
     };
 
     if !in_registry && !in_config {

@@ -10,7 +10,7 @@ use crate::providers::adapter::{
     TokenUsage,
 };
 use crate::providers::openai::{
-    ChatCompletionResponse, ContentBlock, ImageUrl, Message, MessageContent, OpenAiFunction,
+    ChatCompletionResponse, Message, MessageContent, OpenAiFunction,
     OpenAiTool,
 };
 use crate::providers::message::UnifiedMessage;

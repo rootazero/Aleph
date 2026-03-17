@@ -7,8 +7,6 @@ use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
 use tracing::{debug, info, warn};
-use crate::providers::message::UnifiedMessage;
-use crate::providers::adapter::RequestPayload;
 
 // ---------------------------------------------------------------------------
 // Types

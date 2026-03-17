@@ -33,6 +33,7 @@ pub struct RequestPayload<'a> {
     pub max_tokens: Option<u32>,
 }
 
+#[allow(clippy::derivable_impls)]
 impl<'a> Default for RequestPayload<'a> {
     fn default() -> Self {
         Self {

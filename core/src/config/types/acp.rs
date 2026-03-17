@@ -32,19 +32,14 @@ pub struct AcpConfig {
 // =============================================================================
 
 /// Communication mode for an ACP harness
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HarnessModeSerde {
     /// Full ACP protocol (bidirectional JSON-RPC over stdio)
     NativeAcp,
     /// Single-shot: send prompt via CLI args/stdin, read stdout
+    #[default]
     Oneshot,
-}
-
-impl Default for HarnessModeSerde {
-    fn default() -> Self {
-        Self::Oneshot
-    }
 }
 
 // =============================================================================
@@ -52,22 +47,17 @@ impl Default for HarnessModeSerde {
 // =============================================================================
 
 /// How to parse the harness stdout output
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OutputFormatSerde {
     /// Treat entire stdout as plain text result
+    #[default]
     PlainText,
     /// Parse stdout as JSON and extract a specific field
     Json {
         /// JSON field name to extract as the result
         field: String,
     },
-}
-
-impl Default for OutputFormatSerde {
-    fn default() -> Self {
-        Self::PlainText
-    }
 }
 
 // =============================================================================

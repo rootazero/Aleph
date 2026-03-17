@@ -5,7 +5,7 @@
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage};
+use crate::providers::adapter::{NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::chatgpt::types::{
     FunctionToolDef, InputItem, ReasoningConfig, ResponseResource, ResponsesRequest, StreamEvent,
@@ -202,7 +202,6 @@ impl ChatGptProtocol {
         // Convert tool definitions to Responses API format.
         // Only clean schemars metadata — pass schema as-is to Codex.
         // pi_agent_rust does the same: direct clone, no transformation.
-        let has_tools = payload.tools.map_or(false, |t| !t.is_empty());
         let tools = payload.tools.map(|tool_defs| {
             tool_defs
                 .iter()
@@ -272,6 +271,7 @@ impl ChatGptProtocol {
     /// - `<tool_use id="..." name="...">...</tool_use>` → FunctionCall
     /// - `<tool_result id="...">...</tool_result>` → FunctionCallOutput
     /// - `<tool_error id="...">...</tool_error>` → FunctionCallOutput (with error prefix)
+    #[allow(dead_code)]
     fn parse_input_items(input: &str) -> Vec<InputItem> {
         let mut items = Vec::new();
         debug!("parse_input_items: input length={}", input.len());
@@ -317,6 +317,7 @@ impl ChatGptProtocol {
 
     /// Try to parse a specific XML tag from the start of `remaining`.
     /// On success, advances `remaining` past the closing tag and returns the InputItem.
+    #[allow(dead_code)]
     fn try_parse_tag(remaining: &mut &str, tag: &str) -> Option<InputItem> {
         let open_prefix = format!("<{}", tag);
         if !remaining.starts_with(&open_prefix) {
@@ -554,7 +555,7 @@ impl ProtocolAdapter for ChatGptProtocol {
                             for (item_id, (call_id, name)) in &fc_meta {
                                 let args_str = fc_args.get(item_id).cloned().unwrap_or_default();
                                 let args = serde_json::from_str(&args_str)
-                                    .unwrap_or_else(|_| serde_json::Value::String(args_str));
+                                    .unwrap_or(serde_json::Value::String(args_str));
                                 debug!("Codex function_call: name={} call_id={} arguments={}", name, call_id, args);
                                 tool_calls.push(NativeToolCall {
                                     id: call_id.clone(),
