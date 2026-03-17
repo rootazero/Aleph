@@ -44,7 +44,7 @@ pub(in crate::commands::start) fn initialize_auth(
     daemon: bool,
 ) -> AuthBundle {
     use alephcore::utils::paths;
-    use tracing::{info, warn};
+    use tracing::{error, info, warn};
 
     let device_store_path = paths::get_devices_db_path()
         .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_devices.db"));
@@ -92,36 +92,68 @@ pub(in crate::commands::start) fn initialize_auth(
     let token_file = data_dir.join(".shared_token");
 
     if auth_mode.is_auth_required() {
-        // Try to load existing token from file — reuse if it validates
-        if let Some(existing) = shared_token_mgr.try_load_token_from_file(&token_file) {
-            info!("========================================");
-            info!("  Access token (existing): {}", existing);
-            info!("========================================");
-        } else {
-            // No valid token found — generate a new one
-            match shared_token_mgr.generate_token() {
-                Ok(token) => {
-                    info!("========================================");
-                    info!("  Access token (new): {}", token);
-                    info!("========================================");
+        use alephcore::gateway::security::LoadTokenResult;
 
-                    let _ = std::fs::create_dir_all(&data_dir);
-                    if let Err(e) = std::fs::write(&token_file, &token) {
-                        warn!("Failed to write token file: {}", e);
-                    } else {
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::PermissionsExt;
-                            let _ = std::fs::set_permissions(
-                                &token_file,
-                                std::fs::Permissions::from_mode(0o600),
-                            );
+        match shared_token_mgr.try_load_token_from_file_detailed(&token_file) {
+            LoadTokenResult::Ok(existing) => {
+                info!("========================================");
+                info!("  Access token (existing): {}", existing);
+                info!("========================================");
+            }
+            LoadTokenResult::NotFound => {
+                // First start or empty file — safe to generate a new token
+                match shared_token_mgr.generate_token() {
+                    Ok(token) => {
+                        info!("========================================");
+                        info!("  Access token (new): {}", token);
+                        info!("========================================");
+
+                        let _ = std::fs::create_dir_all(&data_dir);
+                        if let Err(e) = std::fs::write(&token_file, &token) {
+                            warn!("Failed to write token file: {}", e);
+                        } else {
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::PermissionsExt;
+                                let _ = std::fs::set_permissions(
+                                    &token_file,
+                                    std::fs::Permissions::from_mode(0o600),
+                                );
+                            }
+                            info!("  Token saved to: {}", token_file.display());
                         }
-                        info!("  Token saved to: {}", token_file.display());
+                    }
+                    Err(e) => {
+                        warn!("Failed to generate shared token: {}", e);
                     }
                 }
-                Err(e) => {
-                    warn!("Failed to generate shared token: {}", e);
+            }
+            LoadTokenResult::HmacMismatch => {
+                // Token file exists but doesn't match HMAC — another process may have
+                // overwritten it. Generating a new token would destroy all vault secrets
+                // (API keys, OAuth tokens, etc.). Refuse to start and let user decide.
+                error!("========================================");
+                error!("  CRITICAL: Token HMAC mismatch!");
+                error!("  The token file at {} exists but fails HMAC validation.", token_file.display());
+                error!("  This usually means another process overwrote the token.");
+                error!("  Generating a new token would destroy ALL stored API keys.");
+                error!("");
+                error!("  To fix: delete the token file and restart (vault secrets will be lost),");
+                error!("  or restore the correct token file from backup.");
+                error!("    rm {}", token_file.display());
+                error!("========================================");
+                // Continue without auth — server starts but vault is inaccessible
+                warn!("Starting without authentication due to HMAC mismatch. Vault secrets are unavailable.");
+            }
+            LoadTokenResult::Error(e) => {
+                warn!("Token validation error: {}. Generating new token.", e);
+                match shared_token_mgr.generate_token() {
+                    Ok(token) => {
+                        let _ = std::fs::create_dir_all(&data_dir);
+                        let _ = std::fs::write(&token_file, &token);
+                        info!("  Access token (new): {}", token);
+                    }
+                    Err(e) => warn!("Failed to generate shared token: {}", e),
                 }
             }
         }
