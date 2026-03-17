@@ -209,27 +209,36 @@ impl AgentDefinitionResolver {
         let workspace_path = self.resolve_workspace_path(agent, defaults);
         let agent_dir = self.resolve_agent_dir(agent, defaults);
 
-        // 2. Initialize workspace directory (create dirs + default files)
+        // 2. Initialize agent identity directory (SOUL.md, AGENTS.md, etc.)
         let agent_name = agent
             .name
             .as_deref()
             .unwrap_or(&agent.id);
-        if let Err(e) = initialize_workspace(&workspace_path, agent_name) {
-            tracing::warn!(
-                agent_id = %agent.id,
-                path = %workspace_path.display(),
-                error = %e,
-                "Failed to initialize workspace directory"
-            );
-        }
-
-        // 2b. Initialize agent state directory
         if let Err(e) = initialize_agent_dir(&agent_dir) {
             tracing::warn!(
                 agent_id = %agent.id,
                 path = %agent_dir.display(),
                 error = %e,
                 "Failed to initialize agent state directory"
+            );
+        }
+        // Identity files go in agent_dir, NOT workspace (workspace is for projects)
+        if let Err(e) = initialize_workspace(&agent_dir, agent_name) {
+            tracing::warn!(
+                agent_id = %agent.id,
+                path = %agent_dir.display(),
+                error = %e,
+                "Failed to initialize agent identity files"
+            );
+        }
+
+        // 2b. Ensure workspace directory exists (for project files)
+        if let Err(e) = fs::create_dir_all(&workspace_path) {
+            tracing::warn!(
+                agent_id = %agent.id,
+                path = %workspace_path.display(),
+                error = %e,
+                "Failed to create workspace directory"
             );
         }
 
@@ -290,15 +299,15 @@ impl AgentDefinitionResolver {
             .or_else(|| defaults.skills_blacklist.clone())
             .unwrap_or_default();
 
-        // 6. Load SOUL.md, AGENTS.md, MEMORY.md from workspace
-        let soul = self.workspace_loader.load_soul(&workspace_path);
-        let agents_md = self.workspace_loader.load_agents_md(&workspace_path);
+        // 6. Load SOUL.md, AGENTS.md, MEMORY.md from agent identity directory
+        let soul = self.workspace_loader.load_soul(&agent_dir);
+        let agents_md = self.workspace_loader.load_agents_md(&agent_dir);
         let max_chars = defaults
             .bootstrap_max_chars
             .unwrap_or(DEFAULT_BOOTSTRAP_MAX_CHARS);
         let memory_md = self
             .workspace_loader
-            .load_memory_md(&workspace_path, max_chars);
+            .load_memory_md(&agent_dir, max_chars);
 
         // 7. Build ResolvedAgent
         let name = agent

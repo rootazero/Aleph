@@ -214,21 +214,27 @@ impl AgentManager {
         self.append_agent_to_document(&mut doc, &def)?;
         self.save_document(&doc)?;
 
-        // Initialize workspace directory with standard structure
-        let ws_dir = self.workspace_root.join(&def.id);
-        let agent_name = def.name.as_deref().unwrap_or(&def.id);
-        initialize_workspace(&ws_dir, agent_name).map_err(|e| {
+        // Initialize agent state directory + identity files (SOUL.md, etc.)
+        let agent_state_dir = self.agents_root.join(&def.id);
+        initialize_agent_dir(&agent_state_dir).map_err(|e| {
             AlephError::IoError(format!(
-                "Failed to initialize workspace for '{}': {}",
+                "Failed to initialize agent dir for '{}': {}",
+                def.id, e
+            ))
+        })?;
+        let agent_name = def.name.as_deref().unwrap_or(&def.id);
+        initialize_workspace(&agent_state_dir, agent_name).map_err(|e| {
+            AlephError::IoError(format!(
+                "Failed to initialize identity files for '{}': {}",
                 def.id, e
             ))
         })?;
 
-        // Initialize agent state directory
-        let agent_state_dir = self.agents_root.join(&def.id);
-        initialize_agent_dir(&agent_state_dir).map_err(|e| {
+        // Ensure workspace directory exists (for project files)
+        let ws_dir = self.workspace_root.join(&def.id);
+        std::fs::create_dir_all(&ws_dir).map_err(|e| {
             AlephError::IoError(format!(
-                "Failed to initialize agent state dir for '{}': {}",
+                "Failed to create workspace for '{}': {}",
                 def.id, e
             ))
         })?;
