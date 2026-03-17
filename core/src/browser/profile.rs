@@ -18,6 +18,17 @@ pub enum BrowserType {
     Edge,
 }
 
+/// Driver mode for browser profiles.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserDriver {
+    /// Aleph launches and manages a dedicated browser instance (chromiumoxide).
+    #[default]
+    Managed,
+    /// Attach to user's running Chrome via Chrome DevTools MCP.
+    ExistingSession,
+}
+
 /// Per-profile browser configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProfileConfig {
@@ -52,6 +63,10 @@ pub struct ProfileConfig {
     /// Seconds of inactivity before the browser is automatically stopped.
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_secs: u64,
+
+    /// Driver mode: managed (launch dedicated browser) or existing-session (attach to user's Chrome).
+    #[serde(default)]
+    pub driver: BrowserDriver,
 }
 
 fn default_cdp_port() -> u16 {
@@ -73,6 +88,7 @@ impl Default for ProfileConfig {
             user_data_dir: None,
             extra_args: Vec::new(),
             idle_timeout_secs: default_idle_timeout(),
+            driver: BrowserDriver::default(),
         }
     }
 }
@@ -140,6 +156,40 @@ impl Default for PlaywrightMcpConfig {
     }
 }
 
+/// Configuration for the Chrome DevTools MCP integration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ChromeMcpConfig {
+    /// Command to launch Chrome DevTools MCP server.
+    #[serde(default = "default_chrome_mcp_command")]
+    pub command: String,
+
+    /// Arguments for the MCP command.
+    #[serde(default = "default_chrome_mcp_args")]
+    pub args: Vec<String>,
+}
+
+fn default_chrome_mcp_command() -> String {
+    "npx".to_string()
+}
+
+fn default_chrome_mcp_args() -> Vec<String> {
+    vec![
+        "-y".to_string(),
+        "chrome-devtools-mcp@latest".to_string(),
+        "--autoConnect".to_string(),
+        "--experimentalStructuredContent".to_string(),
+    ]
+}
+
+impl Default for ChromeMcpConfig {
+    fn default() -> Self {
+        Self {
+            command: default_chrome_mcp_command(),
+            args: default_chrome_mcp_args(),
+        }
+    }
+}
+
 /// Top-level browser system configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserSystemConfig {
@@ -154,6 +204,10 @@ pub struct BrowserSystemConfig {
     /// Playwright MCP integration settings.
     #[serde(default)]
     pub playwright_mcp: PlaywrightMcpConfig,
+
+    /// Chrome DevTools MCP integration settings.
+    #[serde(default)]
+    pub chrome_mcp: ChromeMcpConfig,
 }
 
 #[cfg(test)]
@@ -280,5 +334,58 @@ args = ["./mcp-server.js"]
         assert!(config.profiles.is_empty());
         assert!(config.policy.block_private);
         assert!(config.playwright_mcp.enabled);
+    }
+
+    #[test]
+    fn test_browser_driver_default_is_managed() {
+        let driver = BrowserDriver::default();
+        assert_eq!(driver, BrowserDriver::Managed);
+    }
+
+    #[test]
+    fn test_browser_driver_serde_roundtrip() {
+        let drivers = vec![BrowserDriver::Managed, BrowserDriver::ExistingSession];
+        for d in drivers {
+            let json = serde_json::to_string(&d).unwrap();
+            let deserialized: BrowserDriver = serde_json::from_str(&json).unwrap();
+            assert_eq!(d, deserialized);
+        }
+        assert_eq!(serde_json::to_string(&BrowserDriver::Managed).unwrap(), "\"managed\"");
+        assert_eq!(serde_json::to_string(&BrowserDriver::ExistingSession).unwrap(), "\"existing_session\"");
+    }
+
+    #[test]
+    fn test_profile_config_driver_defaults_to_managed() {
+        let config = ProfileConfig::default();
+        assert_eq!(config.driver, BrowserDriver::Managed);
+    }
+
+    #[test]
+    fn test_chrome_mcp_config_defaults() {
+        let config = ChromeMcpConfig::default();
+        assert_eq!(config.command, "npx");
+        assert!(config.args.contains(&"chrome-devtools-mcp@latest".to_string()));
+        assert!(config.args.contains(&"--autoConnect".to_string()));
+    }
+
+    #[test]
+    fn test_browser_system_config_with_chrome_mcp() {
+        let toml_str = r##"
+[profiles.user]
+browser = "chrome"
+driver = "existing_session"
+color = "#00AA00"
+
+[chrome_mcp]
+command = "npx"
+args = ["-y", "chrome-devtools-mcp@latest", "--autoConnect"]
+"##;
+
+        let config: BrowserSystemConfig = toml::from_str(toml_str).unwrap();
+        let user = config.profiles.get("user").unwrap();
+        assert_eq!(user.browser, BrowserType::Chrome);
+        assert_eq!(user.driver, BrowserDriver::ExistingSession);
+        assert_eq!(user.color.as_deref(), Some("#00AA00"));
+        assert_eq!(config.chrome_mcp.command, "npx");
     }
 }
