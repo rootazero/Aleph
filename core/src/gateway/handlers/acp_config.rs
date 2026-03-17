@@ -148,6 +148,7 @@ pub async fn handle_list(
     acp_manager: Arc<AcpHarnessManager>,
     config: Arc<RwLock<Config>>,
 ) -> JsonRpcResponse {
+    tracing::debug!("acp.list: loading harness list");
     // Collect all configs: presets merged with user overrides
     let all_presets: std::collections::HashMap<String, AcpHarnessEntry> =
         AcpHarnessEntry::all_presets().into_iter().collect();
@@ -176,6 +177,7 @@ pub async fn handle_list(
         results.push(info);
     }
 
+    tracing::debug!(count = results.len(), "acp.list: returning harnesses");
     JsonRpcResponse::success(
         request.id,
         serde_json::to_value(&results).unwrap_or_else(|_| json!([])),
@@ -303,6 +305,8 @@ pub async fn handle_update(
         Err(e) => return e,
     };
 
+    tracing::info!(harness_id = %params.id, "acp.update: saving harness config");
+
     // Update in manager
     if let Err(e) = acp_manager.update_harness(&params.id, params.config.clone()).await {
         return JsonRpcResponse::error(
@@ -399,6 +403,7 @@ pub async fn handle_test(
         Err(e) => return e,
     };
 
+    tracing::info!(harness_id = %params.id, "acp.test: starting availability check");
     let start = std::time::Instant::now();
 
     // Check if harness exists

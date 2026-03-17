@@ -427,8 +427,8 @@ fn HarnessDetailPanel(
         set_action_error.set(None);
 
         let id = hid_test.clone();
+        let state = expect_context::<DashboardState>();
         spawn_local(async move {
-            let state = expect_context::<DashboardState>();
             match AcpApi::test(&state, &id).await {
                 Ok(resp) => {
                     if resp.success {
@@ -458,8 +458,8 @@ fn HarnessDetailPanel(
 
         let config = build_for_save();
         let id = hid_save.clone();
+        let state = expect_context::<DashboardState>();
         spawn_local(async move {
-            let state = expect_context::<DashboardState>();
             match AcpApi::update(&state, &id, &config).await {
                 Ok(updated) => {
                     // Update the harness in the list
@@ -485,8 +485,8 @@ fn HarnessDetailPanel(
         let new_val = !enabled.get();
         enabled.set(new_val);
         let id = hid_toggle.clone();
+        let state = expect_context::<DashboardState>();
         spawn_local(async move {
-            let state = expect_context::<DashboardState>();
             match AcpApi::set_enabled(&state, &id, new_val).await {
                 Ok(_) => {
                     harnesses.update(|list| {
@@ -510,8 +510,8 @@ fn HarnessDetailPanel(
         set_deleting.set(true);
         set_action_error.set(None);
         let id = hid_delete.clone();
+        let state = expect_context::<DashboardState>();
         spawn_local(async move {
-            let state = expect_context::<DashboardState>();
             match AcpApi::delete(&state, &id).await {
                 Ok(_) => {
                     harnesses.update(|list| list.retain(|h| h.id != id));
@@ -942,8 +942,8 @@ fn AddHarnessPanel(
         };
 
         let create_id = id_val.clone();
+        let state = expect_context::<DashboardState>();
         spawn_local(async move {
-            let state = expect_context::<DashboardState>();
             match AcpApi::create(&state, &create_id, &config).await {
                 Ok(created) => {
                     let new_id = created.id.clone();
