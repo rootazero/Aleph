@@ -152,10 +152,8 @@ async fn update_config_api_key(
         if let Err(e) = vault.store_secret(&vault_key, token) {
             warn!(error = %e, "Failed to store OAuth token in vault");
         }
-    } else {
-        if let Err(e) = vault.delete_secret(&vault_key) {
-            warn!(error = %e, "Failed to delete OAuth token from vault");
-        }
+    } else if let Err(e) = vault.delete_secret(&vault_key) {
+        warn!(error = %e, "Failed to delete OAuth token from vault");
     }
 
     let mut cfg = config.write().await;

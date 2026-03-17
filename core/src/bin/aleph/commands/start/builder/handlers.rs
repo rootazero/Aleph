@@ -460,6 +460,7 @@ pub(in crate::commands::start) fn register_workspace_handlers(
 
 // ─── register_config_handlers ────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) fn register_config_handlers(
     server: &mut GatewayServer,
     config: Arc<tokio::sync::RwLock<alephcore::Config>>,

@@ -549,6 +549,7 @@ impl Channel for TelegramChannel {
         // Try Markdown (legacy) first — supports ```code blocks```, *bold*, _italic_.
         // MarkdownV2 requires escaping too many chars and almost always fails with LLM output.
         // Fall back to plain text only if Markdown also fails.
+        #[allow(deprecated)]
         let sent = match build_request(Some(ParseMode::Markdown)).await {
             Ok(msg) => msg,
             Err(md_err) => {

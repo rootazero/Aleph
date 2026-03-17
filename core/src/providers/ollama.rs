@@ -202,6 +202,7 @@ impl OllamaProvider {
     /// Check if the model supports vision
     ///
     /// Vision-capable models include llava, bakllava, and similar.
+    #[allow(dead_code)]
     fn is_vision_model(&self) -> bool {
         let model_lower = self.model.to_lowercase();
         model_lower.contains("llava")
@@ -239,6 +240,7 @@ impl OllamaProvider {
     }
 
     /// Build request with images for vision generation
+    #[allow(dead_code)]
     fn build_multimodal_request(
         &self,
         input: &str,
