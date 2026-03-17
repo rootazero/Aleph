@@ -160,7 +160,7 @@ impl AcpHarnessEntry {
                 "--output-format".into(),
                 "json".into(),
             ],
-            mode: HarnessModeSerde::Oneshot,
+            mode: HarnessModeSerde::NativeAcp,
             output_format: OutputFormatSerde::Json {
                 field: "result".into(),
             },
@@ -175,7 +175,7 @@ impl AcpHarnessEntry {
             display_name: "Codex".into(),
             executable: Some("codex".into()),
             args: vec!["exec".into()],
-            mode: HarnessModeSerde::Oneshot,
+            mode: HarnessModeSerde::NativeAcp,
             output_format: OutputFormatSerde::PlainText,
             preset: Some(PRESET_CODEX.into()),
             ..Default::default()

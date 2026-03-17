@@ -217,7 +217,8 @@ pub async fn handle_get(
         }
     };
 
-    let available_ids = acp_manager.available_harnesses().await;
+    let is_available = acp_manager.is_harness_available(&params.id).await;
+    let available_ids = if is_available { vec![params.id.clone()] } else { vec![] };
     let info = build_harness_info(&params.id, &entry, &available_ids, &acp_manager).await;
 
     JsonRpcResponse::success(
@@ -280,7 +281,8 @@ pub async fn handle_create(
 
     broadcast_acp_changed(&event_bus, "created");
 
-    let available_ids = acp_manager.available_harnesses().await;
+    let is_available = acp_manager.is_harness_available(&params.id).await;
+    let available_ids = if is_available { vec![params.id.clone()] } else { vec![] };
     let info = build_harness_info(&params.id, &params.config, &available_ids, &acp_manager).await;
 
     JsonRpcResponse::success(
@@ -325,7 +327,8 @@ pub async fn handle_update(
 
     broadcast_acp_changed(&event_bus, "updated");
 
-    let available_ids = acp_manager.available_harnesses().await;
+    let is_available = acp_manager.is_harness_available(&params.id).await;
+    let available_ids = if is_available { vec![params.id.clone()] } else { vec![] };
     let info = build_harness_info(&params.id, &params.config, &available_ids, &acp_manager).await;
 
     JsonRpcResponse::success(
@@ -411,9 +414,8 @@ pub async fn handle_test(
         );
     }
 
-    // Run availability check (calls --version)
-    let available_ids = acp_manager.available_harnesses().await;
-    let is_available = available_ids.contains(&params.id);
+    // Run availability check for this single harness (not all!)
+    let is_available = acp_manager.is_harness_available(&params.id).await;
     let elapsed = start.elapsed();
 
     let result = AcpTestResult {

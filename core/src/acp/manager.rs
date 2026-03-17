@@ -177,6 +177,16 @@ impl AcpHarnessManager {
         available
     }
 
+    /// Check availability of a single harness by ID.
+    pub async fn is_harness_available(&self, id: &str) -> bool {
+        let harnesses = self.harnesses.read().await;
+        if let Some(harness) = harnesses.get(id) {
+            harness.is_available().await
+        } else {
+            false
+        }
+    }
+
     // =========================================================================
     // Dynamic management
     // =========================================================================
