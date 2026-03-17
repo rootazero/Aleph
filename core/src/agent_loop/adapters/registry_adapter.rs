@@ -50,7 +50,17 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
                     Value::Object(m) => m,
                     _ => serde_json::Map::new(),
                 };
-                if !obj.contains_key("working_dir") || obj.get("working_dir").map_or(false, |v| v.is_null()) {
+                // Inject workspace if working_dir is missing, null, or relative
+                let should_inject = match obj.get("working_dir") {
+                    None => true,
+                    Some(v) if v.is_null() => true,
+                    Some(Value::String(s)) => {
+                        let s = s.trim();
+                        s.is_empty() || s == "." || s == "./" || !s.starts_with('/')
+                    }
+                    _ => false,
+                };
+                if should_inject {
                     obj.insert("working_dir".to_string(), Value::String(dir.clone()));
                 }
                 Value::Object(obj)
