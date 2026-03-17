@@ -128,7 +128,7 @@ pub use crate::config::{
     agent_resolver::{AgentDefinitionResolver, ResolvedAgent},
     agent_manager::AgentManager,
     policies::CompressionPolicy,
-    types::acp::AcpHarnessEntry,
+    types::acp::{AcpConfig, AcpHarnessEntry, HarnessModeSerde, OutputFormatSerde},
 };
 
 // Initialization
