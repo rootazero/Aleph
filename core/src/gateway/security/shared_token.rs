@@ -36,6 +36,20 @@ pub enum SharedTokenError {
     Storage(String),
 }
 
+/// Result of trying to load a token from a file.
+#[derive(Debug)]
+pub enum LoadTokenResult {
+    /// Token loaded and validated successfully.
+    Ok(String),
+    /// Token file does not exist or is empty — safe to generate a new token.
+    NotFound,
+    /// Token file exists but HMAC validation failed — vault data at risk!
+    /// Generating a new token would make all existing vault secrets unreadable.
+    HmacMismatch,
+    /// Other validation error.
+    Error(String),
+}
+
 impl SharedTokenManager {
     /// Create a new manager, restoring persisted HMAC secret if available.
     ///
@@ -104,31 +118,48 @@ impl SharedTokenManager {
     /// Try to load and validate an existing token from a file.
     /// Returns `Some(token)` if the file exists and the token validates.
     pub fn try_load_token_from_file(&self, path: &std::path::Path) -> Option<String> {
+        match self.try_load_token_from_file_detailed(path) {
+            LoadTokenResult::Ok(token) => Some(token),
+            _ => None,
+        }
+    }
+
+    /// Try to load and validate an existing token from a file (detailed result).
+    pub fn try_load_token_from_file_detailed(&self, path: &std::path::Path) -> LoadTokenResult {
         let token = match std::fs::read_to_string(path) {
             Ok(t) => t.trim().to_string(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tracing::info!("SharedTokenManager: no token file at {:?} — first start", path);
+                return LoadTokenResult::NotFound;
+            }
             Err(e) => {
                 tracing::warn!("SharedTokenManager: failed to read token file {:?}: {}", path, e);
-                return None;
+                return LoadTokenResult::Error(e.to_string());
             }
         };
         if token.is_empty() {
             tracing::warn!("SharedTokenManager: token file {:?} is empty", path);
-            return None;
+            return LoadTokenResult::NotFound;
         }
         match self.validate(&token) {
             Ok(true) => {
                 tracing::info!("SharedTokenManager: existing token validated successfully from {:?}", path);
                 let mut current = self.current_token.lock().unwrap_or_else(|e| e.into_inner());
                 *current = Some(token.clone());
-                Some(token)
+                LoadTokenResult::Ok(token)
             }
             Ok(false) => {
-                tracing::warn!("SharedTokenManager: token from {:?} failed HMAC validation — HMAC secret may have changed", path);
-                None
+                tracing::error!(
+                    "SharedTokenManager: token from {:?} failed HMAC validation! \
+                     Another process may have overwritten the token file. \
+                     Refusing to generate a new token to protect vault secrets.",
+                    path
+                );
+                LoadTokenResult::HmacMismatch
             }
             Err(e) => {
                 tracing::warn!("SharedTokenManager: token validation error for {:?}: {}", path, e);
-                None
+                LoadTokenResult::Error(e.to_string())
             }
         }
     }
