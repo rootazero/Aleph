@@ -24,17 +24,17 @@ use crate::memory::rerank::RerankProviderType;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
-/// Serialize provider enum to lowercase string (matches serde rename_all = "lowercase")
-fn provider_id_str(provider: &rerank::RerankProviderType) -> String {
+/// Build vault key for a rerank provider (consistent with other modules: prefix:name)
+fn vault_key(provider_name: &str) -> String {
+    format!("rerank:{}", provider_name)
+}
+
+/// Get provider name as lowercase string
+fn provider_name(provider: &rerank::RerankProviderType) -> String {
     serde_json::to_value(provider)
         .ok()
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_else(|| "jina".to_string())
-}
-
-/// Build vault key for a rerank provider
-fn vault_key(provider_name: &str) -> String {
-    format!("rerank:{}:api_key", provider_name)
 }
 
 /// Resolve API key from vault for a rerank provider
@@ -69,7 +69,7 @@ pub async fn handle_get(
         .and_then(|p| p.get("provider"))
         .and_then(|v| v.as_str())
         .map(String::from)
-        .unwrap_or_else(|| provider_id_str(&cfg.memory.rerank.provider));
+        .unwrap_or_else(|| provider_name(&cfg.memory.rerank.provider));
 
     if let Some(key) = resolve_api_key(&query_provider, &vault) {
         if let Some(obj) = rerank.as_object_mut() {
@@ -106,7 +106,7 @@ pub async fn handle_update(
     };
 
     // Store API key in vault if provided (keyed by provider name)
-    let provider_name = provider_id_str(&rerank_config.provider);
+    let provider_name = provider_name(&rerank_config.provider);
     if !rerank_config.api_key.is_empty() {
         if let Err(e) = vault.store_secret(&vault_key(&provider_name), &rerank_config.api_key) {
             error!(error = %e, "Failed to store rerank API key in vault");
@@ -166,7 +166,7 @@ pub async fn handle_test(
 
     // If no api_key in request, fall back to vault (keyed by provider)
     if config.api_key.is_empty() {
-        let provider_name = provider_id_str(&config.provider);
+        let provider_name = provider_name(&config.provider);
         if let Some(key) = resolve_api_key(&provider_name, &vault) {
             config.api_key = key;
         }
