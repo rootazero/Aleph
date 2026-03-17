@@ -280,3 +280,39 @@ mod tests {
         assert!(!ChromeMcpDriver::is_process_alive(999999));
     }
 }
+
+#[cfg(test)]
+mod integration_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::browser::backend::BrowserBackend;
+    use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
+
+    #[tokio::test]
+    #[ignore] // Requires Chrome + npx chrome-devtools-mcp installed
+    async fn test_chrome_mcp_list_tabs() {
+        let config = ChromeMcpConfig::default();
+        let driver = Arc::new(ChromeMcpDriver::new(config));
+        let backend = ChromeMcpBackend::new(driver, "user".to_string());
+
+        let tabs = backend.list_tabs().await.expect("list_tabs should succeed");
+        assert!(!tabs.is_empty(), "Should have at least one tab open");
+        println!("Open tabs: {tabs:?}");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_chrome_mcp_snapshot() {
+        let config = ChromeMcpConfig::default();
+        let driver = Arc::new(ChromeMcpDriver::new(config));
+        let backend = ChromeMcpBackend::new(driver, "user".to_string());
+
+        let tabs = backend.list_tabs().await.expect("list_tabs");
+        let tab_id = &tabs[0].id;
+
+        let snapshot = backend.snapshot(tab_id).await.expect("snapshot should succeed");
+        assert!(!snapshot.elements.is_empty(), "Snapshot should have elements");
+        println!("Snapshot elements: {}", snapshot.elements.len());
+    }
+}
