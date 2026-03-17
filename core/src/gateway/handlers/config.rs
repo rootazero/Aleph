@@ -565,6 +565,101 @@ pub async fn handle_patch_config(
     }
 }
 
+// ============================================================================
+// Tool Permissions Handlers
+// ============================================================================
+
+/// Handle config.get_tool_permissions RPC request
+///
+/// Returns the global tool permissions from `config.policies.tool_permissions`.
+pub async fn handle_get_tool_permissions(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+) -> JsonRpcResponse {
+    debug!("Handling config.get_tool_permissions");
+
+    let cfg = config.read().await;
+    let perms = &cfg.policies.tool_permissions;
+
+    match serde_json::to_value(perms) {
+        Ok(v) => JsonRpcResponse::success(request.id, v),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize tool permissions: {}", e),
+        ),
+    }
+}
+
+/// Parameters for config.update_tool_permissions
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateToolPermissionsParams {
+    /// Default permission level (optional partial update)
+    #[serde(default)]
+    pub default: Option<crate::extension::PermissionAction>,
+
+    /// Per-tool overrides (optional partial update)
+    #[serde(default)]
+    pub overrides: Option<std::collections::HashMap<String, crate::extension::PermissionAction>>,
+}
+
+/// Handle config.update_tool_permissions RPC request
+///
+/// Partial update of `config.policies.tool_permissions`.
+/// Only provided fields are updated; omitted fields remain unchanged.
+pub async fn handle_update_tool_permissions(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    event_bus: Arc<GatewayEventBus>,
+) -> JsonRpcResponse {
+    debug!("Handling config.update_tool_permissions");
+
+    let params: UpdateToolPermissionsParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let updated = {
+        let mut cfg = config.write().await;
+
+        if let Some(default) = params.default {
+            cfg.policies.tool_permissions.default = default;
+        }
+        if let Some(overrides) = params.overrides {
+            cfg.policies.tool_permissions.overrides = overrides;
+        }
+
+        // Save to file
+        if let Err(e) = cfg.save_incremental(&["policies"]) {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to save configuration: {}", e),
+            );
+        }
+
+        info!("Global tool permissions updated successfully");
+        cfg.policies.tool_permissions.clone()
+    };
+
+    // Broadcast configuration change event
+    let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
+        section: Some("policies.tool_permissions".to_string()),
+        value: json!({"updated": true}),
+        timestamp: chrono::Utc::now().timestamp_millis(),
+    });
+    let _ = event_bus.publish_json(&event);
+
+    match serde_json::to_value(&updated) {
+        Ok(v) => JsonRpcResponse::success(request.id, v),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize tool permissions: {}", e),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

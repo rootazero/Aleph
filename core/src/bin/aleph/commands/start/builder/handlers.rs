@@ -490,6 +490,10 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "config.get", handle_get_full_config, config);
     register_handler!(server, "config.patch", handle_patch_config, config_patcher, event_bus);
 
+    // Global tool permissions
+    register_handler!(server, "config.get_tool_permissions", config_handlers::handle_get_tool_permissions, config);
+    register_handler!(server, "config.update_tool_permissions", config_handlers::handle_update_tool_permissions, config, event_bus);
+
     // Providers (vault-backed API key storage)
     register_handler!(server, "providers.list", providers::handle_list, config, shared_token_mgr);
     register_handler!(server, "providers.get", providers::handle_get, config, shared_token_mgr);
@@ -562,6 +566,8 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "agent_config.update_file_ops", agent_config::handle_update_file_ops, config, event_bus);
     register_handler!(server, "agent_config.get_code_exec", agent_config::handle_get_code_exec, config);
     register_handler!(server, "agent_config.update_code_exec", agent_config::handle_update_code_exec, config, event_bus);
+    register_handler!(server, "agent_config.get_tool_permissions", agent_config::handle_get_tool_permissions, config);
+    register_handler!(server, "agent_config.update_tool_permissions", agent_config::handle_update_tool_permissions, config, event_bus);
 
     // General config
     register_handler!(server, "general_config.get", general_config::handle_get, config);
