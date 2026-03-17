@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod backend;
 pub mod chrome_mcp;
+pub mod chrome_mcp_backend;
 pub mod chrome_mcp_snapshot;
 pub mod discovery;
 pub mod error;
@@ -15,6 +16,7 @@ pub mod types;
 
 pub use backend::BrowserBackend;
 pub use chrome_mcp::ChromeMcpDriver;
+pub use chrome_mcp_backend::ChromeMcpBackend;
 pub use discovery::find_chromium;
 pub use error::BrowserError;
 pub use managed_backend::ManagedBackend;

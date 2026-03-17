@@ -2,10 +2,13 @@
 // Manages profile instances: registration, state tracking, idle reclamation.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
+use super::chrome_mcp::ChromeMcpDriver;
 use super::network_policy::{PolicyViolation, SsrfPolicy};
-use super::profile::{BrowserSystemConfig, ProfileConfig, ProfileState};
+use super::profile::{
+    BrowserDriver, BrowserSystemConfig, BrowserType, ProfileConfig, ProfileState,
+};
 
 /// Manages the lifecycle of browser profiles.
 pub struct ProfileManager {
@@ -13,6 +16,7 @@ pub struct ProfileManager {
     ssrf_policy: SsrfPolicy,
     #[allow(dead_code)]
     config: BrowserSystemConfig,
+    chrome_mcp_driver: Arc<ChromeMcpDriver>,
 }
 
 struct ManagedProfile {
@@ -24,6 +28,7 @@ struct ManagedProfile {
 impl ProfileManager {
     pub fn new(config: BrowserSystemConfig) -> Self {
         let ssrf_policy = SsrfPolicy::new(config.policy.clone());
+        let chrome_mcp_driver = Arc::new(ChromeMcpDriver::new(config.chrome_mcp.clone()));
 
         let mut profiles = HashMap::new();
 
@@ -50,11 +55,40 @@ impl ProfileManager {
             }
         }
 
+        // Auto-inject "user" profile if not already present
+        if !profiles.contains_key("user") {
+            profiles.insert(
+                "user".into(),
+                ManagedProfile {
+                    config: ProfileConfig {
+                        browser: BrowserType::Chrome,
+                        driver: BrowserDriver::ExistingSession,
+                        color: Some("#00AA00".into()),
+                        ..Default::default()
+                    },
+                    state: ProfileState::Idle,
+                    last_activity: std::time::Instant::now(),
+                },
+            );
+        }
+
         Self {
             profiles: RwLock::new(profiles),
             ssrf_policy,
             config,
+            chrome_mcp_driver,
         }
+    }
+
+    /// Get the shared Chrome MCP driver instance.
+    pub fn get_chrome_mcp_driver(&self) -> Arc<ChromeMcpDriver> {
+        self.chrome_mcp_driver.clone()
+    }
+
+    /// Get the driver mode for a named profile.
+    pub fn get_driver(&self, name: &str) -> Option<BrowserDriver> {
+        let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
+        profiles.get(name).map(|p| p.config.driver.clone())
     }
 
     /// List all profiles with their current state.
@@ -133,9 +167,11 @@ mod tests {
 
         let manager = ProfileManager::new(config);
         let profiles = manager.list_profiles();
-        assert_eq!(profiles.len(), 2);
+        // 2 explicit + auto-injected "user" = 3
+        assert_eq!(profiles.len(), 3);
         assert!(profiles.iter().any(|p| p.0 == "default"));
         assert!(profiles.iter().any(|p| p.0 == "work"));
+        assert!(profiles.iter().any(|p| p.0 == "user"));
     }
 
     #[test]
@@ -143,8 +179,10 @@ mod tests {
         let config = BrowserSystemConfig::default();
         let manager = ProfileManager::new(config);
         let profiles = manager.list_profiles();
-        assert_eq!(profiles.len(), 1);
-        assert_eq!(profiles[0].0, "default");
+        // "default" + auto-injected "user" = 2
+        assert_eq!(profiles.len(), 2);
+        assert!(profiles.iter().any(|p| p.0 == "default"));
+        assert!(profiles.iter().any(|p| p.0 == "user"));
     }
 
     #[test]
@@ -188,5 +226,53 @@ mod tests {
         // Back to Idle
         manager.set_state("default", ProfileState::Idle);
         assert_eq!(manager.get_state("default"), Some(ProfileState::Idle));
+    }
+
+    #[test]
+    fn test_auto_injects_user_profile() {
+        let config = BrowserSystemConfig::default();
+        let manager = ProfileManager::new(config);
+        let profiles = manager.list_profiles();
+        assert!(profiles.iter().any(|p| p.0 == "default"));
+        assert!(profiles.iter().any(|p| p.0 == "user"));
+    }
+
+    #[test]
+    fn test_user_profile_is_existing_session() {
+        let config = BrowserSystemConfig::default();
+        let manager = ProfileManager::new(config);
+        let user_config = manager.get_config("user").unwrap();
+        assert_eq!(user_config.driver, BrowserDriver::ExistingSession);
+        assert_eq!(user_config.browser, BrowserType::Chrome);
+        assert_eq!(user_config.color.as_deref(), Some("#00AA00"));
+    }
+
+    #[test]
+    fn test_explicit_user_profile_not_overridden() {
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "user".into(),
+            ProfileConfig {
+                browser: BrowserType::Chrome,
+                driver: BrowserDriver::ExistingSession,
+                color: Some("#FF0000".into()),
+                ..Default::default()
+            },
+        );
+        let manager = ProfileManager::new(config);
+        let user_config = manager.get_config("user").unwrap();
+        assert_eq!(user_config.color.as_deref(), Some("#FF0000"));
+    }
+
+    #[test]
+    fn test_get_driver() {
+        let config = BrowserSystemConfig::default();
+        let manager = ProfileManager::new(config);
+        assert_eq!(manager.get_driver("default"), Some(BrowserDriver::Managed));
+        assert_eq!(
+            manager.get_driver("user"),
+            Some(BrowserDriver::ExistingSession)
+        );
+        assert_eq!(manager.get_driver("nonexistent"), None);
     }
 }
