@@ -708,7 +708,7 @@ fn AddCustomProviderPanel(
                         type="text"
                         value=move || form_model.get()
                         on:input=move |ev| form_model.set(event_target_value(&ev))
-                        placeholder="e.g. BAAI/bge-reranker-v2-m3"
+                        placeholder="e.g. jina-reranker-v2-base-multilingual"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <p class="text-xs text-text-tertiary mt-1">"Enter multiple models, separated by commas"</p>

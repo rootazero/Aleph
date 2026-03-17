@@ -498,7 +498,7 @@ pub async fn handle_create(
         .cloned()
         .unwrap_or(Value::Object(serde_json::Map::new()));
 
-    debug!("Handling channel.create: id={}, type={}", id, channel_type);
+    tracing::info!("channel.create: id={}, type={}", id, channel_type);
 
     // Check if channel already exists
     let channel_id = ChannelId::new(&id);
