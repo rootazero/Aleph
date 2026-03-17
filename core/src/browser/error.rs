@@ -34,4 +34,13 @@ pub enum BrowserError {
 
     #[error("JavaScript evaluation error: {0}")]
     EvalError(String),
+
+    #[error("Failed to attach to browser: {0}")]
+    AttachFailed(String),
+
+    #[error("Chrome DevTools MCP error: {0}")]
+    ChromeMcpError(String),
+
+    #[error("Browser profile not found: {0}")]
+    ProfileNotFound(String),
 }
