@@ -966,7 +966,7 @@ pub struct RerankConfig {
     pub rerank_weight: f32,
 }
 
-fn default_rerank_model() -> String { "BAAI/bge-reranker-v2-m3".to_string() }
+fn default_rerank_model() -> String { "jina-reranker-v2-base-multilingual".to_string() }
 fn default_rerank_timeout() -> u64 { 5000 }
 fn default_rerank_weight() -> f32 { 0.6 }
 

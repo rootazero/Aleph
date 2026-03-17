@@ -164,7 +164,7 @@ mod tests {
         let config = RerankConfig::default();
         assert!(!config.enabled);
         assert_eq!(config.provider, RerankProviderType::Jina);
-        assert_eq!(config.default_model(), "BAAI/bge-reranker-v2-m3");
+        assert_eq!(config.default_model(), "jina-reranker-v2-base-multilingual");
         assert_eq!(config.timeout_ms, 5000);
         assert!((config.rerank_weight - 0.6).abs() < f32::EPSILON);
     }
