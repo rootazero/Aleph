@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod chat;
 pub mod cron;
+pub mod tool_permissions;
 
 // API layer for Gateway RPC methods
 // Provides type-safe interfaces for interacting with the Gateway
