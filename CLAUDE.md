@@ -180,6 +180,27 @@ English commit messages. Format: `<scope>: <description>` — Example: `gateway:
 
 `EnterWorktree` 会在每次 Bash 命令后强制重置 CWD 到 worktree 目录，即使 `cd` 切回主仓库也无效。因此在同一会话内执行 `git worktree remove` 会导致 Shell 永久损坏。**正确做法**：在 `EnterWorktree` 会话内只合并不删除，用新会话清理 worktree；或不用 `EnterWorktree`，手动用绝对路径管理。
 
+### 进程管理 (Process Management) ⚠️ CRITICAL
+
+**重启 Aleph 前必须杀掉所有旧进程**。多个 aleph 进程同时运行会竞争写入 `.shared_token` 文件，导致 HMAC 验证失败和 **vault 数据永久丢失**（所有 API key、OAuth token、embedding key 等）。
+
+```bash
+# 重启前：杀掉所有 aleph 进程（debug + release）
+pkill -f "target/release/aleph" 2>/dev/null
+pkill -f "target/debug/aleph" 2>/dev/null
+sleep 2
+# 确认全部清除
+ps aux | grep "[a]leph" | grep -v zsh | grep -v cp | grep -v tail
+
+# 然后再启动
+target/release/aleph start
+```
+
+**绝对禁止**：
+- 在有旧 aleph 进程运行时启动新进程
+- 同时运行多个使用同一 `~/.aleph/data/` 的 aleph 实例
+- 用 `kill -9` 强制杀进程后不等待就立即重启（等 2 秒让文件锁释放）
+
 ---
 
 ## 📚 文档索引
