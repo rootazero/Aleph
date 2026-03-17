@@ -330,7 +330,10 @@ fn ProviderDetailPanel(
         spawn_local(async move {
             match RerankConfigApi::update(&state, rerank_clone.clone()).await {
                 Ok(_) => {
-                    config.set(Some(rerank_clone));
+                    // Clear api_key from local signal (key lives in vault, not in memory)
+                    let mut saved = rerank_clone;
+                    saved.api_key = String::new();
+                    config.set(Some(saved));
                     set_save_success.set(true);
                     set_timeout(move || set_save_success.set(false), std::time::Duration::from_secs(2));
                 }
@@ -627,7 +630,10 @@ fn AddCustomProviderPanel(
         spawn_local(async move {
             match RerankConfigApi::update(&state, rerank_clone.clone()).await {
                 Ok(_) => {
-                    config.set(Some(rerank_clone));
+                    // Clear api_key from local signal (key lives in vault, not in memory)
+                    let mut saved = rerank_clone;
+                    saved.api_key = String::new();
+                    config.set(Some(saved));
                     set_saving.set(false);
                     on_saved();
                 }
