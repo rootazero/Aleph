@@ -71,7 +71,7 @@ fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayConfig) {
 /// - File output to `~/.aleph/logs/aleph-server.log.YYYY-MM-DD`
 /// - Daily rotation and 7-day retention
 fn initialize_tracing(args: &Args) {
-    let filter = format!("aleph_server={},alephcore::gateway={},alephcore::agent_loop={},alephcore::providers::protocols::chatgpt=debug", args.log_level, args.log_level, args.log_level);
+    let filter = format!("aleph_server={},alephcore::gateway={},alephcore::agent_loop={}", args.log_level, args.log_level, args.log_level);
     if let Err(e) = aleph_logging::init_component_logging("server", 7, &filter) {
         eprintln!("Warning: Failed to initialize file logging: {}. Falling back to console only.", e);
         use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
