@@ -63,6 +63,8 @@ pub trait BrowserBackend: Send + Sync {
     async fn click(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError>;
     async fn type_text(&self, tab_id: &str, target: ActionTarget, text: &str) -> Result<(), BrowserError>;
     async fn fill(&self, tab_id: &str, target: ActionTarget, value: &str) -> Result<(), BrowserError>;
+    async fn hover(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError>;
+    async fn scroll(&self, tab_id: &str, target: ActionTarget, direction: ScrollDirection) -> Result<(), BrowserError>;
     async fn screenshot(&self, tab_id: &str, opts: ScreenshotOpts) -> Result<ScreenshotResult, BrowserError>;
     async fn snapshot(&self, tab_id: &str) -> Result<AriaSnapshot, BrowserError>;
     async fn evaluate(&self, tab_id: &str, js: &str) -> Result<serde_json::Value, BrowserError>;
@@ -106,11 +108,10 @@ pub struct ProfileConfig {
 
     #[serde(default)]
     pub driver: BrowserDriver,
-
-    #[serde(default)]
-    pub attach_only: bool,
 }
 ```
+
+Note: The `attach_only` field from the openclaw reference is not needed. The `ExistingSession` driver always attempts auto-launch if Chrome is not running (per the auto-launch flow below). If a future need arises for "attach but never launch" semantics, the field can be added then (YAGNI).
 
 ### Auto-created "user" Profile
 
@@ -121,7 +122,6 @@ profiles.insert("user".into(), ManagedProfile {
     config: ProfileConfig {
         browser: BrowserType::Chrome,
         driver: BrowserDriver::ExistingSession,
-        attach_only: true,
         color: Some("#00AA00".into()),
         ..Default::default()
     },
@@ -141,7 +141,6 @@ cdp_port = 18800
 [profiles.user]
 browser = "chrome"
 driver = "existing_session"
-attach_only = true
 color = "#00AA00"
 
 [chrome_mcp]
@@ -165,6 +164,10 @@ pub struct ChromeMcpDriver {
     config: ChromeMcpConfig,
 }
 ```
+
+**Why not reuse `McpClient::start_external_server` directly?** The existing MCP manager treats servers as long-lived singletons keyed by name. Chrome MCP sessions need profile-keyed caching (multiple profiles = multiple sessions), lazy creation on first tool call, and auto-rebuild after transport failure — semantics the general MCP manager does not provide. `ChromeMcpDriver` uses the low-level `McpClient` transport API but manages the session lifecycle itself.
+
+**Storage in `ProfileManager`**: `ChromeMcpDriver` is stored as `Arc<ChromeMcpDriver>` on `ProfileManager` (not inside the `RwLock<HashMap<String, ManagedProfile>>`), since `ChromeMcpDriver` manages its own internal async-safe locking. This avoids holding a `std::sync::RwLock` guard across async boundaries.
 
 Key behaviors:
 - **Lazy creation** — sessions created on first tool call, not at startup
@@ -218,6 +221,7 @@ existing-session mode via Chrome DevTools MCP has some restrictions vs. managed 
 | ref_id targeting | Yes | Yes |
 | CSS selector targeting | Yes | No (clear error message) |
 | Coordinate targeting | Yes | No (clear error message) |
+| hover / scroll | Yes | Yes (via Chrome MCP `hover`/`press_key`) |
 | Element bounds | Yes | No |
 | SSRF protection | Yes | Yes (URL check before navigate) |
 | Idle timeout reclaim | Yes | N/A (don't close user's Chrome) |
@@ -265,10 +269,10 @@ Error recovery:
 | File | Change |
 |------|--------|
 | `core/src/browser/mod.rs` | Add mod declarations + pub use |
-| `core/src/browser/profile.rs` | Add `BrowserDriver`, `ChromeMcpConfig`, new ProfileConfig fields |
+| `core/src/browser/profile.rs` | Add `BrowserDriver`, `ChromeMcpConfig`, `driver` field to `ProfileConfig`, `chrome_mcp` field to `BrowserSystemConfig` |
 | `core/src/browser/manager.rs` | Add `get_backend()` routing, auto-inject "user" profile, hold `ChromeMcpDriver` |
 | `core/src/browser/error.rs` | Add `AttachFailed`, `ChromeMcpError`, `ProfileNotFound` |
-| `core/src/builtin_tools/browser_tools/*.rs` | Route through `ProfileManager::get_backend()` instead of direct `BrowserRuntime` |
+| `core/src/builtin_tools/browser_tools/*.rs` | Implement actual backend routing via `ProfileManager::get_backend()` (tools are currently stubs with placeholder responses) |
 
 ### Unchanged Files
 
@@ -289,6 +293,12 @@ Error recovery:
 | ChromeMcpDriver session logic | Unit tests — mock MCP client, verify cache/dedup/cleanup |
 | BrowserBackend routing | Unit tests — verify driver type dispatches correctly |
 | End-to-end | `#[ignore]` integration tests — requires real Chrome + npx |
+
+## Security Considerations
+
+- **Remote debugging port**: `--remote-debugging-port=0` binds to `127.0.0.1` only (Chrome default). Any local process can connect to this port and access the browser session (cookies, passwords). This is Chrome's standard debugging interface and the same surface exposed by Chrome DevTools and any other CDP-based tool.
+- **First-use consent**: Aleph should log a one-time warning when existing-session mode is first used, informing the user that Chrome will be launched with remote debugging enabled.
+- **SSRF protection**: URL checks via `NetworkPolicy` apply to both managed and existing-session modes. Navigate operations are validated before forwarding to Chrome MCP.
 
 ## Out of Scope (YAGNI)
 
