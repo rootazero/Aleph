@@ -24,11 +24,22 @@ use crate::memory::rerank::RerankProviderType;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
-const VAULT_KEY: &str = "rerank:api_key";
+/// Serialize provider enum to lowercase string (matches serde rename_all = "lowercase")
+fn provider_id_str(provider: &rerank::RerankProviderType) -> String {
+    serde_json::to_value(provider)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(|| "jina".to_string())
+}
 
-/// Resolve API key from vault
-fn resolve_api_key(vault: &SharedTokenManager) -> Option<String> {
-    match vault.get_secret(VAULT_KEY) {
+/// Build vault key for a rerank provider
+fn vault_key(provider_name: &str) -> String {
+    format!("rerank:{}:api_key", provider_name)
+}
+
+/// Resolve API key from vault for a rerank provider
+fn resolve_api_key(provider_name: &str, vault: &SharedTokenManager) -> Option<String> {
+    match vault.get_secret(&vault_key(provider_name)) {
         Ok(Some(secret)) => Some(secret.expose().to_string()),
         Ok(None) => None,
         Err(e) => {
@@ -49,8 +60,9 @@ pub async fn handle_get(
     let mut rerank = serde_json::to_value(&cfg.memory.rerank)
         .unwrap_or_else(|_| json!({}));
 
-    // Inject API key from vault (api_key is #[serde(skip_serializing)] so won't be in the value)
-    if let Some(key) = resolve_api_key(&vault) {
+    // Inject API key from vault for the active provider
+    let provider_name = provider_id_str(&cfg.memory.rerank.provider);
+    if let Some(key) = resolve_api_key(&provider_name, &vault) {
         if let Some(obj) = rerank.as_object_mut() {
             obj.insert("api_key".into(), json!(key));
         }
@@ -84,9 +96,10 @@ pub async fn handle_update(
         }
     };
 
-    // Store API key in vault if provided
+    // Store API key in vault if provided (keyed by provider name)
+    let provider_name = provider_id_str(&rerank_config.provider);
     if !rerank_config.api_key.is_empty() {
-        if let Err(e) = vault.store_secret(VAULT_KEY, &rerank_config.api_key) {
+        if let Err(e) = vault.store_secret(&vault_key(&provider_name), &rerank_config.api_key) {
             error!(error = %e, "Failed to store rerank API key in vault");
         }
     }
@@ -142,9 +155,10 @@ pub async fn handle_test(
         }
     };
 
-    // If no api_key in request, fall back to vault
+    // If no api_key in request, fall back to vault (keyed by provider)
     if config.api_key.is_empty() {
-        if let Some(key) = resolve_api_key(&vault) {
+        let provider_name = provider_id_str(&config.provider);
+        if let Some(key) = resolve_api_key(&provider_name, &vault) {
             config.api_key = key;
         }
     }
