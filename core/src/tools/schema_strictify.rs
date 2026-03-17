@@ -69,6 +69,11 @@ pub fn strictify_schema(schema: &mut Value) {
     if obj.get("type").and_then(|v| v.as_str()) == Some("object") {
         obj.insert("additionalProperties".into(), Value::Bool(false));
 
+        // Ensure properties field exists (required by strict mode)
+        if !obj.contains_key("properties") {
+            obj.insert("properties".into(), Value::Object(serde_json::Map::new()));
+        }
+
         // Collect originally required keys
         let originally_required: std::collections::HashSet<String> = obj
             .get("required")
@@ -97,9 +102,23 @@ pub fn strictify_schema(schema: &mut Value) {
     }
 
     // Recurse into nested schemas
-    for key in &["properties", "items", "definitions", "$defs"] {
+    // "properties" and "definitions"/"$defs" are maps of name→schema, use strictify_nested.
+    // "items" can be a single schema (object) or array of schemas — handle both.
+    for key in &["properties", "definitions", "$defs"] {
         if let Some(nested) = obj.get_mut(*key) {
             strictify_nested(nested);
+        }
+    }
+    // "items" is a single schema, not a map — call strictify_schema directly.
+    if let Some(items) = obj.get_mut("items") {
+        if items.is_object() {
+            strictify_schema(items);
+        } else if items.is_array() {
+            if let Some(arr) = items.as_array_mut() {
+                for item in arr {
+                    strictify_schema(item);
+                }
+            }
         }
     }
     for key in &["allOf", "anyOf", "oneOf"] {

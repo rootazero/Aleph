@@ -26,6 +26,64 @@ pub struct ChatGptProtocol {
     client: Client,
 }
 
+/// Extract chatgpt_account_id from a Codex OAuth JWT token.
+///
+/// The token payload contains `{"https://api.openai.com/auth": {"chatgpt_account_id": "..."}}`
+fn extract_chatgpt_account_id(token: &str) -> Option<String> {
+    use base64::Engine;
+    let mut parts = token.split('.');
+    let _header = parts.next()?;
+    let payload = parts.next()?;
+    let _signature = parts.next()?;
+    if parts.next().is_some() {
+        return None; // Not a valid JWT (too many parts)
+    }
+
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
+        .ok()?;
+    let payload_json: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    payload_json
+        .get("https://api.openai.com/auth")
+        .and_then(|auth| auth.get("chatgpt_account_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+/// Recursively ensure all object schemas have a "properties" field.
+/// Codex Responses API rejects object schemas without it.
+fn ensure_properties_recursive(schema: &mut serde_json::Value) {
+    let Some(obj) = schema.as_object_mut() else { return };
+
+    if obj.get("type").and_then(|v| v.as_str()) == Some("object") {
+        if !obj.contains_key("properties") {
+            obj.insert("properties".into(), serde_json::Value::Object(serde_json::Map::new()));
+        }
+        if !obj.contains_key("required") {
+            obj.insert("required".into(), serde_json::Value::Array(vec![]));
+        }
+    }
+
+    // Recurse into nested schemas
+    let keys: Vec<String> = obj.keys().cloned().collect();
+    for key in keys {
+        if let Some(v) = obj.get_mut(&key) {
+            match v {
+                serde_json::Value::Object(_) => ensure_properties_recursive(v),
+                serde_json::Value::Array(arr) => {
+                    for item in arr {
+                        ensure_properties_recursive(item);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 impl ChatGptProtocol {
     /// Create a new Codex protocol adapter with the given HTTP client
     pub fn new(client: Client) -> Self {
@@ -141,31 +199,29 @@ impl ChatGptProtocol {
     ) -> ResponsesRequest {
         let input = Self::convert_messages(payload.messages);
 
-        // Convert tool definitions to Responses API format
+        // Convert tool definitions to Responses API format.
+        // Only clean schemars metadata — pass schema as-is to Codex.
+        // pi_agent_rust does the same: direct clone, no transformation.
+        let has_tools = payload.tools.map_or(false, |t| !t.is_empty());
         let tools = payload.tools.map(|tool_defs| {
             tool_defs
                 .iter()
                 .map(|td| {
-                    // Clean schemars-generated schema for Codex Responses API:
-                    // - Migrate draft-07 → 2020-12 (remove $schema, rename definitions)
-                    // - Remove title (not part of OpenAI tool schema)
-                    // - Ensure required "properties" field exists
                     let mut params = td.parameters.clone();
-                    crate::tools::schema_strictify::migrate_to_draft_2020_12(&mut params);
+                    // Clean schemars metadata + ensure Codex compatibility
                     if let Some(obj) = params.as_object_mut() {
+                        obj.remove("$schema");
                         obj.remove("title");
-                        if !obj.contains_key("properties") {
-                            obj.insert(
-                                "properties".to_string(),
-                                serde_json::Value::Object(serde_json::Map::new()),
-                            );
-                        }
                     }
+                    // Codex requires every object schema to have "properties"
+                    ensure_properties_recursive(&mut params);
+                    let desc = td.description.trim();
                     FunctionToolDef {
                         tool_type: "function".to_string(),
                         name: td.name.clone(),
-                        description: td.description.clone(),
+                        description: if desc.is_empty() { None } else { Some(desc.to_string()) },
                         parameters: params,
+                        strict: None, // No strict mode — let Codex handle schema naturally
                     }
                 })
                 .collect()
@@ -179,6 +235,13 @@ impl ChatGptProtocol {
             store: false,
             reasoning: Self::build_reasoning(payload),
             tools,
+            // Codex mode fields (per pi_agent_rust reference implementation)
+            tool_choice: Some("auto".to_string()),
+            parallel_tool_calls: Some(true),
+            text: Some(crate::providers::chatgpt::types::TextConfig {
+                verbosity: "medium".to_string(),
+            }),
+            include: Some(vec!["reasoning.encrypted_content".to_string()]),
         }
     }
 
@@ -364,20 +427,32 @@ impl ProtocolAdapter for ChatGptProtocol {
             AlephError::invalid_config("Codex access token not set — run OAuth login first")
         })?;
 
-        debug!(
-            endpoint = %endpoint,
-            model = %config.default_model(),
-            "Building Codex Responses API request"
-        );
+        // Dump the full request JSON for debugging tool calling issues
+        if let Ok(json) = serde_json::to_string_pretty(&request) {
+            debug!(
+                endpoint = %endpoint,
+                model = %config.default_model(),
+                request_body = %json,
+                "Building Codex Responses API request"
+            );
+        }
 
-        let builder = self
+        let mut builder = self
             .client
             .post(&endpoint)
             .header("Authorization", format!("Bearer {}", access_token))
             .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .json(&request);
+            .header("Accept", "text/event-stream");
 
+        // Codex mode headers (per pi_agent_rust reference implementation)
+        if let Some(account_id) = extract_chatgpt_account_id(access_token) {
+            builder = builder
+                .header("chatgpt-account-id", account_id)
+                .header("OpenAI-Beta", "responses=experimental")
+                .header("originator", "aleph");
+        }
+
+        let builder = builder.json(&request);
         Ok(builder)
     }
 
@@ -452,8 +527,20 @@ impl ProtocolAdapter for ChatGptProtocol {
                         ref arguments,
                         ..
                     } => {
-                        // Prefer the done event's complete arguments
                         fc_args.insert(item_id.clone(), arguments.clone());
+                    }
+                    // OutputItemDone contains the FINAL complete arguments —
+                    // this is the most reliable source (used by pi_agent_rust)
+                    StreamEvent::OutputItemDone {
+                        item: crate::providers::chatgpt::types::OutputItem::FunctionCall {
+                            ref id, ref call_id, ref name, ref arguments,
+                        },
+                        ..
+                    } => {
+                        fc_meta.insert(id.clone(), (call_id.clone(), name.clone()));
+                        if !arguments.is_empty() {
+                            fc_args.insert(id.clone(), arguments.clone());
+                        }
                     }
                     StreamEvent::Completed { ref response } => {
                         // Prefer extracting text from completed response for accuracy
