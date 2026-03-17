@@ -17,11 +17,11 @@ Two-layer tool execution permission system: **Global** (Policies) sets the ceili
 
 ### PermissionAction
 
-Reuse existing `PermissionAction` enum: `Allow` / `Ask` / `Deny`. Serializes to `"allow"` / `"ask"` / `"deny"`.
+Reuse existing `PermissionAction` enum (`core/src/extension/types/agents.rs`): `Allow` / `Ask` / `Deny`. Serializes to `"allow"` / `"ask"` / `"deny"`.
 
 ### ToolPermissionsConfig
 
-New config struct used by both global and agent-level:
+New config struct, defined in `core/src/config/types/policies/tool_permissions.rs`:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -32,6 +32,8 @@ pub struct ToolPermissionsConfig {
     pub overrides: HashMap<String, PermissionAction>,
 }
 ```
+
+Override keys are exact `UnifiedTool.name` matches (e.g., `shell`, `file_write`, `mcp__server_name__tool_name` for MCP tools).
 
 ### Global Config — `config.toml`
 
@@ -44,15 +46,42 @@ default = "allow"
 # file_delete = "ask"
 ```
 
+Add `tool_permissions` field to `PoliciesConfig` (`core/src/config/types/policies/mod.rs`):
+
+```rust
+pub struct PoliciesConfig {
+    // ... existing fields ...
+    #[serde(default)]
+    pub tool_permissions: ToolPermissionsConfig,
+}
+```
+
 ### Agent Config — agent definition
 
+New optional field on `AgentDefinition` (`core/src/config/types/agents_def.rs`):
+
+```rust
+pub struct AgentDefinition {
+    // ... existing fields ...
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_permissions: Option<ToolPermissionsConfig>,
+}
+```
+
+TOML path (within `[[agents.list]]`):
+
 ```toml
-[tool_permissions]
+[[agents.list]]
+id = "coder"
+
+[agents.list.tool_permissions]
 default = "allow"
 
-[tool_permissions.overrides]
+[agents.list.tool_permissions.overrides]
 # shell = "deny"
 ```
+
+When `None`, inherits global permissions entirely.
 
 ### Merge Logic
 
@@ -65,6 +94,22 @@ Where Allow > Ask > Deny, `min` takes the more restrictive:
 - Global Allow + Agent Deny → Deny
 - Global Allow + Agent Allow → Allow
 - Global Ask + Agent Allow → Ask
+
+## Relationship to Existing ToolSafetyPolicy
+
+`ToolSafetyPolicy` (`core/src/config/types/policies/tool_safety.rs`) infers safety levels from tool name keywords but is **never used by SafetyGuard** — `SafetyGuard::default_guard()` is hardcoded. `ToolPermissionsConfig` replaces `ToolSafetyPolicy` as the authoritative permission mechanism:
+
+- `ToolSafetyPolicy` remains for backward compatibility but is no longer on the execution path
+- `ToolPermissionsConfig` is the single source of truth for tool execution permissions
+- No interaction between the two — `ToolSafetyPolicy` may be deprecated in a future release
+
+## Relationship to PermissionManager
+
+`PermissionManager` (`core/src/permission/`) has a complete rule evaluation + EventBus confirmation system but is not used by the agent loop. This design deliberately keeps SafetyGuard as the agent loop's permission check because:
+
+1. **Simplicity**: SafetyGuard is synchronous, no EventBus dependency needed
+2. **Ask = Deny for now**: No interactive confirmation needed yet
+3. **Migration path**: When Ask becomes interactive, replace SafetyGuard with PermissionManager; `ToolPermissionsConfig` maps directly to `PermissionConfigMap` (both use `PermissionAction`)
 
 ## SafetyGuard Changes
 
@@ -91,14 +136,21 @@ pub struct SafetyGuard {
 
 ```rust
 impl SafetyGuard {
+    /// Build from merged global + agent permission config.
+    /// Retains default blocked patterns (rm -rf /, DROP DATABASE, etc.)
+    /// which are ALWAYS enforced regardless of permission settings.
     pub fn from_permissions(
         global: &ToolPermissionsConfig,
         agent: &ToolPermissionsConfig,
     ) -> Self {
         // 1. Start with default blocked patterns (rm -rf /, DROP DATABASE, etc.)
-        // 2. Merge: effective = min(global, agent) for each tool
-        // 3. effective_default = min(global.default, agent.default)
+        // 2. Collect all keys from global.overrides ∪ agent.overrides
+        // 3. For each key: effective = min(global, agent)
+        // 4. effective_default = min(global.default, agent.default)
     }
+
+    /// Existing default_guard() kept for backward compatibility / tests.
+    pub fn default_guard() -> Self { ... }
 }
 ```
 
@@ -106,21 +158,25 @@ impl SafetyGuard {
 
 ```rust
 pub enum SafetyError {
-    Blocked { tool: String, pattern: String },
-    NeedsConfirmation { tool: String },
-    Denied { tool: String },  // NEW
+    Blocked { tool: String, pattern: String },   // Dangerous pattern match
+    NeedsConfirmation { tool: String },           // Ask level (= Deny for now)
+    PolicyDenied { tool: String },                // NEW: Denied by permission policy
 }
 ```
+
+Named `PolicyDenied` (not `Denied`) to avoid confusion with `PermissionError::Denied`.
 
 ### check() Logic
 
 ```
-1. blocked_patterns match → Blocked (unchanged)
+1. blocked_patterns match → Blocked (unchanged, highest priority)
 2. Lookup tool_permissions[tool_name], fallback to default_permission
    - Allow → Ok(())
    - Ask → NeedsConfirmation (currently = Deny)
-   - Deny → Denied
+   - Deny → PolicyDenied
 ```
+
+`blocked_patterns` are NOT affected by permission settings — they always hard-block regardless of any Allow override.
 
 ### run_loop.rs Change
 
@@ -129,10 +185,12 @@ pub enum SafetyError {
 let safety = SafetyGuard::default_guard();
 
 // After:
-let global_perms = self.config.policies.tool_permissions();
-let agent_perms = agent.tool_permissions();
-let safety = SafetyGuard::from_permissions(&global_perms, &agent_perms);
+let global_perms = &self.global_tool_permissions;   // from gateway config
+let agent_perms = agent.tool_permissions();          // from agent definition
+let safety = SafetyGuard::from_permissions(global_perms, agent_perms);
 ```
+
+`ExecutionEngine` needs access to global `ToolPermissionsConfig`. Add it as a field read from `PoliciesConfig` at construction time.
 
 ## RPC Interface
 
@@ -161,6 +219,9 @@ Agent response includes `effective` and `global_overrides` for UI rendering:
 }
 ```
 
+- `effective`: merged permission for each key in `agent.overrides ∪ global.overrides` (not all tools — Panel uses `default_permission` for unlisted tools)
+- `global_overrides`: the global overrides map, so Panel knows which tools are globally forced
+
 Panel uses `global_overrides` to render globally-forced tools as greyed-out.
 
 ## Panel UI
@@ -170,15 +231,18 @@ Panel uses `global_overrides` to render globally-forced tools as greyed-out.
 Transform existing on/off toggle into three-state segmented control per tool:
 
 - **Allow** (green) / **Ask** (yellow) / **Deny** (red), current value highlighted
-- Group header: dropdown to set entire group to Allow or Deny
+- Group header: dropdown to set entire group to Allow or Deny (overrides all non-greyed-out tools in group)
 - Globally Denied tools: entire row greyed out, locked at Deny, tooltip "Globally denied in Policies"
 - Globally Ask tools: cannot select Allow, only Ask or Deny
+- Changes apply only to `tool_permissions` — existing skills whitelist/blacklist (tool visibility) remains on a separate tab or section
 
 ### PoliciesView — New "Tool Permissions" Section
 
 Added above existing Content Safety section. Same layout as ToolsTab (reuse group structure) but labeled as global defaults. No grey restrictions (this IS the ceiling).
 
 Includes a "Default" dropdown at the top for the global default permission level.
+
+UI hint: "Changes will take effect on next agent run" to set expectations about hot reload behavior.
 
 ### Data Flow
 
@@ -203,10 +267,11 @@ config.toml [policies]           agent definition
 ### Permission Denial in Agent Loop
 
 ```rust
-Err(SafetyError::Denied { tool }) => {
+Err(SafetyError::PolicyDenied { tool }) => {
+    callback.on_safety_block(&err);
     messages.push(UnifiedMessage::tool_result(
         tc.id, tc.name,
-        "DENIED: tool '{}' is not allowed by permission policy",
+        format!("DENIED: tool '{}' is not allowed by permission policy", tool),
         true,
     ));
     // Does NOT count toward consecutive_errors
@@ -227,17 +292,32 @@ Not counting toward `consecutive_errors` prevents permission denials from accide
 - New tool_permissions controls execution permission — independent layer
 - Tool not in whitelist → agent cannot see it (won't call)
 - Tool in whitelist but permission = Deny → agent sees it but call is rejected
+- `SafetyGuard::default_guard()` preserved for tests and backward compatibility
 
 ## Defaults
 
 - Global: `default = "allow"`, `overrides = {}`
-- Agent: `default = "allow"`, `overrides = {}`
+- Agent: `tool_permissions = None` (inherits global entirely)
 - Both unconfigured = all Allow, matching current behavior
+
+## File Locations
+
+| What | Where |
+|------|-------|
+| `ToolPermissionsConfig` struct | `core/src/config/types/policies/tool_permissions.rs` (new) |
+| Global config field | `PoliciesConfig` in `core/src/config/types/policies/mod.rs` |
+| Agent config field | `AgentDefinition` in `core/src/config/types/agents_def.rs` |
+| SafetyGuard changes | `core/src/agent_loop/safety.rs` |
+| run_loop integration | `core/src/gateway/execution_engine/run_loop.rs` |
+| Global RPC handlers | `core/src/gateway/handlers/config.rs` |
+| Agent RPC handlers | `core/src/gateway/handlers/agent_config.rs` |
+| Panel ToolsTab | `apps/panel/src/views/agents/tools.rs` |
+| Panel PoliciesView | `apps/panel/src/views/settings/policies.rs` |
 
 ## Future: Ask Confirmation Flow
 
 Currently Ask = Deny (auto-denied). When implementing interactive confirmation:
 1. Replace SafetyGuard with PermissionManager in agent loop
 2. PermissionManager already has EventBus-based confirmation flow
-3. Config format (ToolPermissionsConfig) remains unchanged
+3. Config format (ToolPermissionsConfig) maps to PermissionConfigMap
 4. UI remains unchanged — Ask button already present
