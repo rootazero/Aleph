@@ -4,7 +4,11 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::browser::backend::BrowserBackend;
+use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
 use crate::browser::manager::ProfileManager;
+use crate::browser::profile::BrowserDriver;
+use crate::browser::types::ScreenshotOpts;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -52,15 +56,55 @@ impl AlephTool for BrowserScreenshotTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.manager.record_activity(&args.profile);
 
-        // TODO: Route through PlaywrightBridge or BrowserRuntime
-        Ok(BrowserScreenshotOutput {
-            success: true,
-            image_base64: None,
-            message: Some(format!(
-                "Screenshot captured in profile '{}' (full_page={}, selector={:?})",
-                args.profile, args.full_page, args.selector
-            )),
-        })
+        let driver = self.manager.get_driver(&args.profile);
+        match driver {
+            Some(BrowserDriver::ExistingSession) => {
+                let chrome_mcp = self.manager.get_chrome_mcp_driver();
+                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
+                let tab_id = match super::get_active_tab(&backend).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Ok(BrowserScreenshotOutput {
+                            success: false,
+                            image_base64: None,
+                            message: Some(format!("{e}")),
+                        });
+                    }
+                };
+
+                let opts = ScreenshotOpts {
+                    full_page: args.full_page,
+                    ..Default::default()
+                };
+
+                match backend.screenshot(&tab_id, opts).await {
+                    Ok(result) => Ok(BrowserScreenshotOutput {
+                        success: true,
+                        image_base64: Some(result.data_base64),
+                        message: Some(format!(
+                            "Screenshot captured in profile '{}'",
+                            args.profile
+                        )),
+                    }),
+                    Err(e) => Ok(BrowserScreenshotOutput {
+                        success: false,
+                        image_base64: None,
+                        message: Some(format!("Screenshot failed: {e}")),
+                    }),
+                }
+            }
+            _ => {
+                // Placeholder for managed mode
+                Ok(BrowserScreenshotOutput {
+                    success: true,
+                    image_base64: None,
+                    message: Some(format!(
+                        "Screenshot captured in profile '{}' (full_page={}, selector={:?})",
+                        args.profile, args.full_page, args.selector
+                    )),
+                })
+            }
+        }
     }
 }
 

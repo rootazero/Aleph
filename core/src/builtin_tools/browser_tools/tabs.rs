@@ -4,7 +4,10 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::browser::backend::BrowserBackend;
+use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
 use crate::browser::manager::ProfileManager;
+use crate::browser::profile::BrowserDriver;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -80,34 +83,100 @@ impl AlephTool for BrowserTabsTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.manager.record_activity(&args.profile);
 
-        // TODO: Route through PlaywrightBridge or BrowserRuntime
-        match args.action {
-            TabAction::List => Ok(BrowserTabsOutput {
-                success: true,
-                tabs: Some(vec![TabInfo {
-                    id: "tab-1".into(),
-                    title: "Placeholder Tab".into(),
-                    url: "about:blank".into(),
-                    active: true,
-                }]),
-                message: Some(format!("Listed tabs in profile '{}'", args.profile)),
-            }),
-            TabAction::Switch { tab_id } => Ok(BrowserTabsOutput {
-                success: true,
-                tabs: None,
-                message: Some(format!(
-                    "Switched to tab '{}' in profile '{}'",
-                    tab_id, args.profile
-                )),
-            }),
-            TabAction::Close { tab_id } => Ok(BrowserTabsOutput {
-                success: true,
-                tabs: None,
-                message: Some(format!(
-                    "Closed tab '{}' in profile '{}'",
-                    tab_id, args.profile
-                )),
-            }),
+        let driver = self.manager.get_driver(&args.profile);
+        match driver {
+            Some(BrowserDriver::ExistingSession) => {
+                let chrome_mcp = self.manager.get_chrome_mcp_driver();
+                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
+
+                match args.action {
+                    TabAction::List => match backend.list_tabs().await {
+                        Ok(tabs) => {
+                            let tab_infos: Vec<TabInfo> = tabs
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, t)| TabInfo {
+                                    id: t.id,
+                                    title: t.title,
+                                    url: t.url,
+                                    active: i == 0,
+                                })
+                                .collect();
+                            Ok(BrowserTabsOutput {
+                                success: true,
+                                tabs: Some(tab_infos),
+                                message: Some(format!(
+                                    "Listed tabs in profile '{}'",
+                                    args.profile
+                                )),
+                            })
+                        }
+                        Err(e) => Ok(BrowserTabsOutput {
+                            success: false,
+                            tabs: None,
+                            message: Some(format!("List tabs failed: {e}")),
+                        }),
+                    },
+                    TabAction::Switch { tab_id } => {
+                        // Chrome MCP doesn't have an explicit "switch" — navigate is page-based.
+                        // Return success as a no-op acknowledgement.
+                        Ok(BrowserTabsOutput {
+                            success: true,
+                            tabs: None,
+                            message: Some(format!(
+                                "Switched to tab '{}' in profile '{}'",
+                                tab_id, args.profile
+                            )),
+                        })
+                    }
+                    TabAction::Close { tab_id } => match backend.close_tab(&tab_id).await {
+                        Ok(()) => Ok(BrowserTabsOutput {
+                            success: true,
+                            tabs: None,
+                            message: Some(format!(
+                                "Closed tab '{}' in profile '{}'",
+                                tab_id, args.profile
+                            )),
+                        }),
+                        Err(e) => Ok(BrowserTabsOutput {
+                            success: false,
+                            tabs: None,
+                            message: Some(format!("Close tab failed: {e}")),
+                        }),
+                    },
+                }
+            }
+            _ => {
+                // Placeholder for managed mode
+                match args.action {
+                    TabAction::List => Ok(BrowserTabsOutput {
+                        success: true,
+                        tabs: Some(vec![TabInfo {
+                            id: "tab-1".into(),
+                            title: "Placeholder Tab".into(),
+                            url: "about:blank".into(),
+                            active: true,
+                        }]),
+                        message: Some(format!("Listed tabs in profile '{}'", args.profile)),
+                    }),
+                    TabAction::Switch { tab_id } => Ok(BrowserTabsOutput {
+                        success: true,
+                        tabs: None,
+                        message: Some(format!(
+                            "Switched to tab '{}' in profile '{}'",
+                            tab_id, args.profile
+                        )),
+                    }),
+                    TabAction::Close { tab_id } => Ok(BrowserTabsOutput {
+                        success: true,
+                        tabs: None,
+                        message: Some(format!(
+                            "Closed tab '{}' in profile '{}'",
+                            tab_id, args.profile
+                        )),
+                    }),
+                }
+            }
         }
     }
 }

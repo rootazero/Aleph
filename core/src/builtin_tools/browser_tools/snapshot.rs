@@ -4,7 +4,10 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::browser::backend::BrowserBackend;
+use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
 use crate::browser::manager::ProfileManager;
+use crate::browser::profile::BrowserDriver;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -48,15 +51,54 @@ impl AlephTool for BrowserSnapshotTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.manager.record_activity(&args.profile);
 
-        // TODO: Route through PlaywrightBridge or BrowserRuntime
-        Ok(BrowserSnapshotOutput {
-            success: true,
-            aria_tree: Some("[placeholder] ARIA tree for current page".into()),
-            message: Some(format!(
-                "Snapshot captured in profile '{}'",
-                args.profile
-            )),
-        })
+        let driver = self.manager.get_driver(&args.profile);
+        match driver {
+            Some(BrowserDriver::ExistingSession) => {
+                let chrome_mcp = self.manager.get_chrome_mcp_driver();
+                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
+                let tab_id = match super::get_active_tab(&backend).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Ok(BrowserSnapshotOutput {
+                            success: false,
+                            aria_tree: None,
+                            message: Some(format!("{e}")),
+                        });
+                    }
+                };
+
+                match backend.snapshot(&tab_id).await {
+                    Ok(snap) => {
+                        let json_str = serde_json::to_string(&snap)
+                            .unwrap_or_else(|_| "{}".to_string());
+                        Ok(BrowserSnapshotOutput {
+                            success: true,
+                            aria_tree: Some(json_str),
+                            message: Some(format!(
+                                "Snapshot captured in profile '{}'",
+                                args.profile
+                            )),
+                        })
+                    }
+                    Err(e) => Ok(BrowserSnapshotOutput {
+                        success: false,
+                        aria_tree: None,
+                        message: Some(format!("Snapshot failed: {e}")),
+                    }),
+                }
+            }
+            _ => {
+                // Placeholder for managed mode
+                Ok(BrowserSnapshotOutput {
+                    success: true,
+                    aria_tree: Some("[placeholder] ARIA tree for current page".into()),
+                    message: Some(format!(
+                        "Snapshot captured in profile '{}'",
+                        args.profile
+                    )),
+                })
+            }
+        }
     }
 }
 

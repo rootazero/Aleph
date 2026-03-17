@@ -4,7 +4,11 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::browser::backend::BrowserBackend;
+use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
 use crate::browser::manager::ProfileManager;
+use crate::browser::profile::BrowserDriver;
+use crate::browser::types::ActionTarget;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -50,14 +54,50 @@ impl AlephTool for BrowserSelectTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.manager.record_activity(&args.profile);
 
-        // TODO: Route through PlaywrightBridge or BrowserRuntime
-        Ok(BrowserSelectOutput {
-            success: true,
-            message: Some(format!(
-                "Selected '{}' in '{}' in profile '{}'",
-                args.value, args.selector, args.profile
-            )),
-        })
+        let driver = self.manager.get_driver(&args.profile);
+        match driver {
+            Some(BrowserDriver::ExistingSession) => {
+                let chrome_mcp = self.manager.get_chrome_mcp_driver();
+                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
+                let tab_id = match super::get_active_tab(&backend).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Ok(BrowserSelectOutput {
+                            success: false,
+                            message: Some(format!("{e}")),
+                        });
+                    }
+                };
+
+                let target = ActionTarget::Selector {
+                    css: args.selector.clone(),
+                };
+
+                match backend.select(&tab_id, target, &args.value).await {
+                    Ok(()) => Ok(BrowserSelectOutput {
+                        success: true,
+                        message: Some(format!(
+                            "Selected '{}' in '{}' in profile '{}'",
+                            args.value, args.selector, args.profile
+                        )),
+                    }),
+                    Err(e) => Ok(BrowserSelectOutput {
+                        success: false,
+                        message: Some(format!("Select failed: {e}")),
+                    }),
+                }
+            }
+            _ => {
+                // Placeholder for managed mode
+                Ok(BrowserSelectOutput {
+                    success: true,
+                    message: Some(format!(
+                        "Selected '{}' in '{}' in profile '{}'",
+                        args.value, args.selector, args.profile
+                    )),
+                })
+            }
+        }
     }
 }
 

@@ -14,6 +14,17 @@ pub mod snapshot;
 pub mod tabs;
 pub mod type_text;
 
+use crate::browser::backend::BrowserBackend;
+use crate::browser::error::BrowserError;
+
+/// Get the active (first) tab from the backend, or return an error if none open.
+async fn get_active_tab(backend: &impl BrowserBackend) -> Result<String, BrowserError> {
+    let tabs = backend.list_tabs().await?;
+    tabs.first()
+        .map(|t| t.id.clone())
+        .ok_or_else(|| BrowserError::ActionFailed("No tabs open. Use browser_open first.".into()))
+}
+
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};
 pub use evaluate::{BrowserEvaluateArgs, BrowserEvaluateOutput, BrowserEvaluateTool};
 pub use fill_form::{BrowserFillFormArgs, BrowserFillFormOutput, BrowserFillFormTool};

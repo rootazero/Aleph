@@ -4,7 +4,11 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::browser::backend::BrowserBackend;
+use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
 use crate::browser::manager::ProfileManager;
+use crate::browser::profile::BrowserDriver;
+use crate::browser::types::ActionTarget;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -60,15 +64,63 @@ impl AlephTool for BrowserFillFormTool {
 
         let count = args.fields.len();
 
-        // TODO: Route through PlaywrightBridge or BrowserRuntime
-        Ok(BrowserFillFormOutput {
-            success: true,
-            filled_count: count,
-            message: Some(format!(
-                "Filled {} field(s) in profile '{}'",
-                count, args.profile
-            )),
-        })
+        let driver = self.manager.get_driver(&args.profile);
+        match driver {
+            Some(BrowserDriver::ExistingSession) => {
+                let chrome_mcp = self.manager.get_chrome_mcp_driver();
+                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
+                let tab_id = match super::get_active_tab(&backend).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Ok(BrowserFillFormOutput {
+                            success: false,
+                            filled_count: 0,
+                            message: Some(format!("{e}")),
+                        });
+                    }
+                };
+
+                let mut filled = 0;
+                for field in &args.fields {
+                    let target = ActionTarget::Selector {
+                        css: field.selector.clone(),
+                    };
+                    match backend.fill(&tab_id, target, &field.value).await {
+                        Ok(()) => filled += 1,
+                        Err(e) => {
+                            return Ok(BrowserFillFormOutput {
+                                success: false,
+                                filled_count: filled,
+                                message: Some(format!(
+                                    "Failed on field '{}': {e}",
+                                    field.selector
+                                )),
+                            });
+                        }
+                    }
+                }
+
+                Ok(BrowserFillFormOutput {
+                    success: true,
+                    filled_count: filled,
+                    message: Some(format!(
+                        "Filled {} field(s) in profile '{}'",
+                        filled, args.profile
+                    )),
+                })
+            }
+            _ => {
+                // Placeholder for managed mode
+                Ok(BrowserFillFormOutput {
+                    success: true,
+                    filled_count: count,
+                    message: Some(format!(
+                        "Filled {} field(s) in profile '{}'",
+                        count, args.profile
+                    )),
+                })
+            }
+        }
     }
 }
 
