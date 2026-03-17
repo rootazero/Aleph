@@ -30,7 +30,7 @@ const BASE_BEHAVIOR: &str = "\
 - Continue working until the user's request is fully resolved. Chain multiple tool calls if needed.\n\
 - When a tool call fails, analyze the error and retry with corrected parameters if possible.\n\
 - Provide concise summaries of actions taken and results obtained.\n\
-- NEVER use the system Python directly. Aleph has a shared virtual environment at `~/.aleph/venv/`. Use it for all global tools, packages, and quick scripts: `source ~/.aleph/venv/bin/activate && uv pip install <packages>`. If the venv does not exist, create it first: `uv venv ~/.aleph/venv`. For standalone Python projects, create `.venv` inside the project directory under the workspace.";
+- NEVER use the system Python directly. Aleph has a shared virtual environment at `~/.aleph/.venv/`. Use it for all global tools, packages, and quick scripts: `source ~/.aleph/.venv/bin/activate && uv pip install <packages>`. If the venv does not exist, create it first: `uv venv ~/.aleph/.venv`. For standalone Python projects, create `.venv` inside the project directory under the workspace.";
 
 /// Builds the system prompt by assembling sections.
 pub struct PromptBuilder {
