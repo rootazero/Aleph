@@ -525,10 +525,10 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "memory_config.get", memory_config::handle_get, config);
     register_handler!(server, "memory_config.update", memory_config::handle_update, config, event_bus);
 
-    // Rerank config (dedicated handlers, decoupled from memory_config)
-    register_handler!(server, "rerank_config.get", rerank_config::handle_get, config);
-    register_handler!(server, "rerank_config.update", rerank_config::handle_update, config, event_bus);
-    register_handler!(server, "rerank_config.test", rerank_config::handle_test);
+    // Rerank config (dedicated handlers, API key in vault)
+    register_handler!(server, "rerank_config.get", rerank_config::handle_get, config, shared_token_mgr);
+    register_handler!(server, "rerank_config.update", rerank_config::handle_update, config, event_bus, shared_token_mgr);
+    register_handler!(server, "rerank_config.test", rerank_config::handle_test, shared_token_mgr);
 
     // Security config
     register_handler!(server, "security_config.get", security_config::handle_get);
